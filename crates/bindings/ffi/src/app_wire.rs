@@ -60,7 +60,16 @@ pub(crate) fn command(
             return crate::conversion::native::native_host_command_result(result)
                 .map_err(|error| structural_error(error).into());
         }
-        AppCommandDto::Product(command) => command,
+        AppCommandDto::Product(command) => {
+            // Product clients allocate random nonces. Derived v5 identities are
+            // reserved for trusted owner-to-owner work, never client occupancy.
+            if command_id.get_version() != Some(uuid::Version::Random)
+                || command_id.get_variant() != uuid::Variant::RFC4122
+            {
+                return Err(AppCommandFailure::NotAdmitted(validation("command_id")));
+            }
+            command
+        }
     };
     if crate::connections_wire::handles_command(&command)
         || crate::conversation_wire::handles_command(&command)
@@ -84,7 +93,6 @@ pub(crate) fn command(
             } else {
                 crate::conversation_wire::command(&owners, &actor, command_id, command, &scope)
                     .await
-                    .map_err(Into::into)
             }
         });
     }

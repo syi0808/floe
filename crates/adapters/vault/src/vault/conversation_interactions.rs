@@ -82,8 +82,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .ok_or(AgentFailure::VaultUnavailable)?;
                 return Ok(DecisionAdmission::Rejoined(current));
             }
-            if super::conversations::command_identity_used(&transaction, decision.command_id)
-                .await?
+            if super::conversations::command_occupant(&transaction, decision.command_id)
+                .await?.is_some()
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -980,7 +980,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 true
             } else { false };
             drop(rows);
-            if !replay && super::conversations::command_identity_used(&transaction, request.command_id).await? { return Err(AgentFailure::Conflict); }
+            if !replay && super::conversations::command_occupant(&transaction, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
             let current = read_interaction(&transaction, self.person_id, request.interaction_id).await?.ok_or(AgentFailure::NotFound)?;
             let session = self.session_on(&transaction, request.session_id).await?;
             if current.session_id != request.session_id || session.person_id != self.person_id || session.scope.is_some()

@@ -157,11 +157,6 @@ pub enum AppProductCommandDto {
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
-    #[serde(rename = "conversation.session.recover")]
-    ConversationSessionRecover {
-        session_id: SessionRefDto,
-        expected_revision: u64,
-    },
     #[serde(rename = "vault.create")]
     VaultCreate {},
     #[serde(rename = "vault.unlock")]
@@ -315,9 +310,6 @@ impl AppProductCommandDto {
                 Ok(())
             }
             Self::ConversationSessionStart {} => Ok(()),
-            Self::ConversationSessionRecover {
-                expected_revision, ..
-            } => validate_revision(*expected_revision),
             Self::VaultCreate {} | Self::VaultUnlock {} | Self::VaultLock {} => Ok(()),
             Self::ConversationStartTurn {
                 expected_revision,

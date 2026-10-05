@@ -75,7 +75,7 @@ pub trait ConversationOwner: Send + Sync {
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>>;
     fn resume_session<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -86,14 +86,6 @@ pub trait ConversationOwner: Send + Sync {
         actor: &'a OwnerActor,
         session_id: Uuid,
         before_message_id: Option<Uuid>,
-        scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>>;
-    fn recover_session<'a>(
-        &'a self,
-        actor: &'a OwnerActor,
-        command_id: CommandId,
-        session_id: Uuid,
-        expected_revision: u64,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>>;
     fn start_turn<'a>(
@@ -486,19 +478,25 @@ where
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>> {
         Box::pin(async move {
             let _admission = self.inner.admission.read().await;
-            self.inner.check(actor)?;
+            self.inner
+                .check(actor)
+                .map_err(crate::SessionStartFailure::NotAdmitted)?;
             scope
-                .run(crate::start_session(
-                    self.inner.dependencies.repository.as_ref(),
-                    StartSessionRequest {
-                        principal: actor.person_id.to_string(),
-                        command_id,
-                    },
-                ))
+                .run(async {
+                    Ok(crate::start_session(
+                        self.inner.dependencies.repository.as_ref(),
+                        StartSessionRequest {
+                            principal: actor.person_id.to_string(),
+                            command_id,
+                        },
+                    )
+                    .await)
+                })
                 .await
+                .map_err(crate::SessionStartFailure::Indeterminate)?
         })
     }
     fn resume_session<'a>(
@@ -544,31 +542,6 @@ where
                 scope,
             )
             .await
-        })
-    }
-    fn recover_session<'a>(
-        &'a self,
-        actor: &'a OwnerActor,
-        command_id: CommandId,
-        session_id: Uuid,
-        expected_revision: u64,
-        scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>> {
-        Box::pin(async move {
-            let _admission = self.inner.admission.read().await;
-            self.inner.check(actor)?;
-            scope
-                .run(crate::recover_session(
-                    self.inner.dependencies.repository.as_ref(),
-                    RecoveryRequest {
-                        command_id,
-                        session_id,
-                        expected_session_revision: expected_revision,
-                        principal: actor.person_id.to_string(),
-                    },
-                ))
-                .await?;
-            self.get_session(actor, session_id, None, scope).await
         })
     }
     fn start_turn<'a>(

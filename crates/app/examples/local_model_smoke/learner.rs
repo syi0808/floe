@@ -150,9 +150,19 @@ fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {
         })
     })?;
     let session = owner_call(host, |owners, actor, scope| {
-        owners
-            .conversation
-            .start_session(actor, CommandId::new(), scope)
+        Box::pin(async move {
+            use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
+            // Uncertain admission fails this exercise without starting another Session.
+            match owners
+                .conversation
+                .start_session(actor, CommandId::new(), scope)
+                .await
+            {
+                Ok(A::Started(receipt) | A::Replayed(receipt)) => Ok(receipt),
+                Ok(A::NotApplied(reason)) => Err(reason.reason()),
+                Err(F::NotAdmitted(reason) | F::Indeterminate(reason)) => Err(reason),
+            }
+        })
     })?;
     let text = if with_expiry {
         "Please remember for later: fictional Alex prefers afternoon meetings. This preference expires at 2027-01-01T00:00:00Z, with no start date. Acknowledge this request without reading any external source."

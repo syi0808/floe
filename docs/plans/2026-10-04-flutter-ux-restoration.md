@@ -2092,3 +2092,87 @@ capacity and foreign-occupant proof, absent reads while Start remains pending, d
 New versus retry, lock/unlock ABA, and command settlement with stale snapshot adoption.
 This revised target must be resolved before implementation; the earlier table-replacement
 proposal is historical and must not be implemented alongside it.
+
+#### Session implementation constraints after focused review
+
+The focused revised-design review accepted the topology; the following precision is
+part of the chosen contract, not optional implementation guidance:
+
+- Load/reload settles-and-adopts pending Start. Every New gesture settles-without-
+  adopting, then creates a fresh Start. If settlement is Admitted, Indeterminate,
+  later NotAdmitted, malformed or otherwise incomplete, stop that action and retain
+  the ID; never fall back to Resume or a fresh Start. `ConversationController.retry`
+  is a turn retry and is not this operation. Process restart need not persist a Dart
+  tracker: Start creates only an empty Session, and ordinary Resume finds a committed
+  newest Session. No durable client tracker is introduced.
+- Vault carries StartAdmission as an Ok value (Started/Replayed or a kind-typed
+  structural NotApplied proof) through successful transaction completion. Exact
+  receipt precedes occupancy, which precedes capacity. Occupancy returns a validated
+  kind, not a boolean/Conflict; the helper itself validates both families. A corrupt
+  exact receipt is integrity failure, not a semantic Conflict. Errors after BEGIN,
+  failed commit/rollback, cancelled/dropped futures and post-commit checks are always
+  uncertain. Errors definitely before physical admission may be NotAdmitted. The
+  FFI changes only the Start classification; post-positive snapshot failure is Admitted.
+- Keep the physical guard through commit/rollback. The finisher latches on uncertain
+  completion and settles the guard only after the database future returns. Busy from
+  the shared try-lock is retryable and not a no-effect terminal proof. The latch
+  retires this store's availability; do not claim app readiness changed before the
+  app observes it. Retain existing lifetime capacity; no eviction is introduced.
+- Scope the v4 nonce rule to external Product command envelopes. Generic CommandId,
+  query references/events and NativeHost callback envelopes stay unchanged. Root
+  inspected current Dart callback production (also v4), but that is not a reason to
+  broaden this product-boundary correction. Audit each current product producer.
+- The gateway retains command single-flight independently of pure query calls. One
+  first attempt is one ID's first actual submission; a settlement replay is later.
+- Stop observation on controller epoch invalidation/disposal without cancelling a
+  Run. Add an explicit client observation token and release observation slots even
+  while the underlying owner work remains live. Query futures stopped by the token
+  may finish but cannot publish stale read-model/UI state. Do not discard a prepared
+  StartTurn identity merely to release an observer: an already-started bounded
+  admission handshake completes independently; once its receipt/failure resolves,
+  stopped observation skips polling and releases the slot. Stop before admission
+  prevents a new command, but stop after handoff is not Run cancellation. Keep the
+  unresolved-turn admission concern explicit rather than creating another scheduler.
+- Same-session older responses settle their command when valid but do not replace
+  messages, clear interactions or manufacture reload failure. Equal revision is
+  idempotent. Apply owner failure barriers from the chosen current snapshot and never
+  synchronize using a discarded older response. Guard all async controller continuations
+  with the adoption epoch, not only `_sealed` checks.
+
+Root additionally verified no current Vault DELETE/DROP path evicts Conversation
+occupant rows, AppRuntime's gateway is app-lifetime, and the orphan recovery driver
+already settles Working runs through its existing admission barrier. The capacity
+proof must be revised if eviction is ever introduced. Unrelated archive recovery,
+RecoveryPage, recovery_runs, interaction recovery and the driver are not deletion
+candidates. Old-profile checks use only isolated fixtures made with the old binary.
+
+### Session boundary implementation qualification (2026-10-05)
+
+Implemented the adjudicated Start admission/query/observation cutover. Removed the
+obsolete business Recover route, not archive recovery or executor reconciliation.
+Updated both direct example callers to fail their one-shot exercise on uncertain
+admission without silently allocating a new Session ID.
+
+Root qualification before publication:
+- Six disposable development-storage Vault probes passed: receipt replay/reopen,
+  lifetime capacity with replay priority, typed foreign occupancy and duplicate
+  corruption, corrupt/missing-family integrity failure, writer busy/commit failure,
+  and cancellation after BEGIN with availability latch/reopen. Foreign occupancy
+  and capacity used synthetic SQL fixtures, not complete foreign workflows.
+- Thirteen new disposable Flutter session checks passed, then the complete external
+  fixture suite passed 101 checks. The repository permanent S3 suite remains deferred.
+- Default final Rust workspace gate passed, including example compilation/doctests.
+  Its first attempt found two unmigrated example callers; both were corrected before
+  the successful run. No test-only external path or pause hook remains in source.
+- Development FFI build and actual ABI checks passed: exact positive Start replay,
+  reopen/Resume, v5 Product nonce refusal versus accepted v5 query reference, and
+  isolated old-family unlock refusal with UnsupportedVersion and no reset action.
+  Synthetic key/marker inventory was unchanged. This was not a user-data test.
+- Architecture DAG passed (23 nodes/126 edges); residual Recover names belong only
+  to the distinct Session archive recovery path. Flutter analysis had baseline infos
+  only, without errors/warnings. Formatting changes after the gates are whitespace-only.
+
+Exact-commit Apple builds and implementation adversarial review remain pending.
+No live app, provider, model or personal-data scenario is qualified by these checks.
+After this bounded correction, prioritize representative request-to-result agent
+scenarios alongside remaining UI parity instead of widening architecture cleanup.

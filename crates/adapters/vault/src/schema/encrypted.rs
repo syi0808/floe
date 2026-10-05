@@ -213,8 +213,8 @@ pub(super) const CONTEXT: &[SchemaObject] = &[
 pub(super) const CONVERSATION: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_schema",
-        9,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 9))",
+        10,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 10))",
     ),
     SchemaObject::table(
         "agent_conversation_executor",
@@ -239,10 +239,6 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     SchemaObject::table(
         "agent_conversation_resume_requests",
         "CREATE TABLE agent_conversation_resume_requests (origin_run_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending','claimed','superseded')), child_run_id TEXT, payload TEXT NOT NULL)",
-    ),
-    SchemaObject::table(
-        "agent_conversation_recovery_commands",
-        "CREATE TABLE agent_conversation_recovery_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), expected_revision INTEGER NOT NULL CHECK(expected_revision >= 0), result_revision INTEGER NOT NULL CHECK(result_revision >= 0))",
     ),
     SchemaObject::table(
         "agent_conversation_session_commands",

@@ -158,7 +158,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 Err(AgentFailure::Conflict)
             };
         }
-        if command_identity_used(transaction, request.command_id.as_uuid()).await? {
+        if command_occupant(transaction, request.command_id.as_uuid()).await?.is_some() {
             return Err(AgentFailure::Conflict);
         }
         let mut conflicting_command = transaction
@@ -446,7 +446,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     Err(AgentFailure::Conflict)
                 };
             }
-            if command_identity_used(&transaction, request.command_id.as_uuid()).await? { return Err(AgentFailure::Conflict); }
+            if command_occupant(&transaction, request.command_id.as_uuid()).await?.is_some() { return Err(AgentFailure::Conflict); }
             if self
                 .conversation_run_by_command_on(&transaction, request.command_id)
                 .await?
@@ -1007,73 +1007,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(entries)
     }
 
-    pub async fn recover_conversation_session(
-        &self,
-        command_id: CommandId,
-        session_id: Uuid,
-        person_id: PersonId,
-        expected_session_revision: u64,
-    ) -> Result<u64, AgentFailure> {
-        if !command_id.is_valid() || session_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        if person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            validate_schema(&transaction).await?;
-            let mut receipts = transaction.query("SELECT person_id, session_id, expected_revision, result_revision FROM agent_conversation_recovery_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
-            if let Some(row) = receipts.next().await.map_err(database_failure)? {
-                let revision = u64::try_from(row.get::<i64>(3).map_err(storage)?).map_err(|_| AgentFailure::StorageUnavailable)?;
-                if row.get::<String>(0).map_err(storage)? != person_id.to_string() || row.get::<String>(1).map_err(storage)? != session_id.to_string()
-                    || row.get::<i64>(2).map_err(storage)? != integer(expected_session_revision)? || receipts.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
-                return Ok(revision);
-            }
-            drop(receipts);
-            if command_identity_used(&transaction, command_id.as_uuid()).await? { return Err(AgentFailure::Conflict); }
-            let session = self.session_on(&transaction, session_id).await?;
-            if session.person_id != person_id
-                || session.scope.is_some()
-                || session.data_classes != [DataClass::Personal]
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            if session.revision != expected_session_revision {
-                return Err(AgentFailure::Conflict);
-            }
-            if let Some(active_turn) = session.active_turn {
-                let run_id = RunId::from_uuid(active_turn).ok_or(AgentFailure::VaultUnavailable)?;
-                let run = self
-                    .conversation_run_on(&transaction, run_id)
-                    .await?
-                    .ok_or(AgentFailure::VaultUnavailable)?;
-                if run.state == RunState::Working
-                    && run.executor_generation
-                        == self
-                            .active_conversation_executor_generation(&transaction)
-                            .await?
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            let mut count = transaction.query("SELECT count(*) FROM agent_conversation_recovery_commands WHERE person_id = ?", [person_id.to_string()]).await.map_err(database_failure)?;
-            if count.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)? >= 4096 { return Err(AgentFailure::BudgetExceeded); }
-            drop(count);
-            transaction.execute("INSERT INTO agent_conversation_recovery_commands (command_id, person_id, session_id, expected_revision, result_revision) VALUES (?, ?, ?, ?, ?)",
-                (command_id.as_uuid().to_string(), person_id.to_string(), session_id.to_string(), integer(expected_session_revision)?, integer(session.revision)?)).await.map_err(database_failure)?;
-            self.check_access()?;
-            Ok(session.revision)
-        }
-        .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
 
     async fn conversation_run_by_command_on(
         &self,
@@ -1626,31 +1559,54 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn start_conversation_session(
         &self,
         request: floe_conversation::StartSessionRequest,
-    ) -> Result<floe_conversation::SessionReceipt, AgentFailure> {
-        request.validate()?;
+    ) -> Result<floe_conversation::SessionStartAdmission, floe_conversation::SessionStartFailure>
+    {
+        use floe_conversation::{
+            ConversationCommandKind as K, SessionStartAdmission as A, SessionStartFailure as F,
+            SessionStartRefusal as R,
+        };
+        request.validate().map_err(F::NotAdmitted)?;
         if request.principal != self.person_id.to_string() {
-            return Err(AgentFailure::CapabilityDenied);
+            return Err(F::NotAdmitted(AgentFailure::CapabilityDenied));
         }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
+        let mut connection = self.connection().map_err(F::NotAdmitted)?;
+        let (mut writer, transaction) =
+            self.journal_transaction(&mut connection)
+                .await
+                .map_err(|failure| {
+                    if failure == AgentFailure::StorageBusy {
+                        F::NotAdmitted(failure)
+                    } else {
+                        F::Indeterminate(failure)
+                    }
+                })?;
+        let result: Result<A, AgentFailure> = async {
             validate_schema(&transaction).await?;
-            if let Some(receipt) = session_command_on(&transaction, self.person_id, request.command_id).await? {
-                let session = self.session_on(&transaction, receipt.session_id).await?;
-                if session.person_id != self.person_id || session.scope.is_some() || session.data_classes != [DataClass::Personal] { return Err(AgentFailure::StorageUnavailable); }
-                return Ok(receipt);
+            let existing = session_command_on(&transaction, self.person_id, request.command_id).await?;
+            // The fixed query validates both families and rejects double occupancy.
+            let occupant = command_occupant(&transaction, request.command_id.as_uuid()).await?;
+            if let Some(receipt) = existing {
+                if occupant != Some(K::SessionStart) {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                let session = self.session_on(&transaction, receipt.session_id).await
+                    .map_err(|failure| if failure == AgentFailure::NotFound {
+                        AgentFailure::VaultUnavailable
+                    } else { failure })?;
+                if session.person_id != self.person_id || session.scope.is_some()
+                    || session.data_classes != [DataClass::Personal] {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                return Ok(A::Replayed(receipt));
             }
-            if command_identity_used(&transaction, request.command_id.as_uuid()).await? { return Err(AgentFailure::Conflict); }
-            if self.conversation_run_by_command_on(&transaction, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
-            let mut rows = transaction.query("SELECT 1 FROM agent_conversation_commands WHERE command_id = ?", [request.command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
-            if rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
-            drop(rows);
+            if let Some(kind) = occupant {
+                if kind == K::SessionStart { return Err(AgentFailure::VaultUnavailable); }
+                return Ok(A::NotApplied(R::ForeignCommand(kind)));
+            }
             let mut rows = transaction.query("SELECT count(*) FROM agent_conversation_session_commands", ()).await.map_err(database_failure)?;
             let count = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)?;
-            if count < 0 || count >= MAX_COMMAND_ROWS { return Err(AgentFailure::BudgetExceeded); }
+            if count < 0 { return Err(AgentFailure::VaultUnavailable); }
+            if count >= MAX_COMMAND_ROWS { return Ok(A::NotApplied(R::Capacity)); }
             drop(rows);
             let session = AgentSession::new(self.person_id);
             let receipt = floe_conversation::project_session_receipt(session.clone())?;
@@ -1658,10 +1614,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transaction.execute("INSERT INTO agent_conversation_session_commands (command_id, person_id, session_id, initial_revision) VALUES (?, ?, ?, 0)",
                 (request.command_id.as_uuid().to_string(), self.person_id.to_string(), session.id.to_string())).await.map_err(database_failure)?;
             self.check_access()?;
-            Ok(receipt)
+            Ok(A::Started(receipt))
         }.await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
+        // Dropping this future during BEGIN/body/commit/rollback leaves the guard
+        // armed. The shared store is retired before another Start can claim absence.
+        let finished = self
+            .finish_registry_transaction_checked(transaction, result)
+            .await;
+        writer.settled();
+        finished.map_err(F::Indeterminate)
     }
     pub async fn resume_conversation_session(&self) -> Result<Option<AgentSession>, AgentFailure> {
         let connection = self.connection()?;
@@ -1695,7 +1656,7 @@ async fn session_command_on(
     if row.get::<String>(0).map_err(storage)? != person_id.to_string()
         || row.get::<i64>(2).map_err(storage)? != 0
     {
-        return Err(AgentFailure::Conflict);
+        return Err(AgentFailure::VaultUnavailable);
     }
     let receipt = floe_conversation::SessionReceipt {
         principal: person_id.to_string(),
@@ -1710,39 +1671,39 @@ async fn session_command_on(
     Ok(Some(receipt))
 }
 
-pub(super) async fn command_identity_used(
+/// One fixed occupancy read across the current Conversation identity owners.
+/// No row in these tables is evicted or changes owner kind. Start's structural
+/// NotApplied proof depends on those invariants, not merely on a rollback.
+pub(super) async fn command_occupant(
     connection: &turso::Connection,
     command_id: Uuid,
-) -> Result<bool, AgentFailure> {
-    for table in [
-        "agent_conversation_runs",
-        "agent_conversation_commands",
-        "agent_conversation_session_commands",
-        "agent_conversation_recovery_commands",
-        "agent_conversation_interaction_decisions",
-        "agent_conversation_interaction_refreshes",
-    ] {
-        let mut exists = connection
-            .query(
-                "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?",
-                [table],
-            )
-            .await
-            .map_err(database_failure)?;
-        if exists.next().await.map_err(database_failure)?.is_none() {
-            continue;
-        }
-        drop(exists);
-        let query = format!("SELECT 1 FROM {table} WHERE command_id = ?");
-        let mut rows = connection
-            .query(&query, [command_id.to_string()])
-            .await
-            .map_err(database_failure)?;
-        if rows.next().await.map_err(database_failure)?.is_some() {
-            return Ok(true);
-        }
+) -> Result<Option<floe_conversation::ConversationCommandKind>, AgentFailure> {
+    use floe_conversation::ConversationCommandKind as K;
+    for family in [crate::schema::Family::Conversation, crate::schema::Family::Interactions] {
+        crate::schema::inspect_family(connection, family).await
+            .map_err(crate::schema::SchemaFailure::into_agent)?;
     }
-    Ok(false)
+    let mut rows = connection.query(
+        "SELECT 'run' FROM agent_conversation_runs WHERE command_id = ?1
+         UNION ALL SELECT 'cancel' FROM agent_conversation_commands WHERE command_id = ?1
+         UNION ALL SELECT 'start' FROM agent_conversation_session_commands WHERE command_id = ?1
+         UNION ALL SELECT 'decision' FROM agent_conversation_interaction_decisions WHERE command_id = ?1
+         UNION ALL SELECT 'refresh' FROM agent_conversation_interaction_refreshes WHERE command_id = ?1",
+        [command_id.to_string()],
+    ).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else { return Ok(None); };
+    let kind = match row.get::<String>(0).map_err(storage)?.as_str() {
+        "run" => K::Run,
+        "cancel" => K::Cancel,
+        "start" => K::SessionStart,
+        "decision" => K::InteractionDecision,
+        "refresh" => K::InteractionRefresh,
+        _ => return Err(AgentFailure::VaultUnavailable),
+    };
+    if rows.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(Some(kind))
 }
 
 fn journal_event_byte_limit(event: &JournalEvent) -> usize {

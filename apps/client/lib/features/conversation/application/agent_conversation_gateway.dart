@@ -19,7 +19,13 @@ final class AgentConversationTurnRequest {
 abstract interface class AgentConversationGateway {
   ConversationRuntimeGateway get conversationRuntime;
   AgentInteractionGateway get interactionGateway;
+
+  /// A fresh user intent. It cannot overwrite an unresolved Start.
   Future<AgentSession> startConversation(String personId);
+
+  /// Complete the retained Start with its exact immutable ID, or null if absent.
+  /// This is explicitly a command operation, never part of a Session query.
+  Future<AgentSession?> settlePendingSessionStart(String personId);
   Future<AgentSession?> resumeConversation(String personId);
   Future<AgentSession> loadConversation(String personId, String sessionId);
   Future<AgentSession> loadEarlierConversation(
@@ -27,5 +33,4 @@ abstract interface class AgentConversationGateway {
     String sessionId,
     String beforeMessageId,
   );
-  Future<AgentSession> recoverConversation(AgentSession session);
 }

@@ -6,7 +6,7 @@ pub trait SessionRepository: Send + Sync {
     fn start_session<'a>(
         &'a self,
         request: crate::StartSessionRequest,
-    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>>;
 
     /// None means the validated store contains no resumable Session.
     fn resume_session<'a>(

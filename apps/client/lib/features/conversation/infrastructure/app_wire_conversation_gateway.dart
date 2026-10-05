@@ -33,91 +33,68 @@ final class AppWireConversationGateway implements AgentConversationGateway {
   AgentInteractionGateway get interactionGateway => _interactionGateway;
 
   final AppWireTransport _transport;
-  _PendingSessionCommand? _pending;
-  bool _busy = false;
+  _PendingSessionStart? _pending;
+  bool _commandBusy = false;
 
   @override
-  Future<AgentSession> startConversation(String personId) => _requiredSession(
-    personId,
-    {'kind': 'conversation.session.start'},
-    command: true,
-  );
+  Future<AgentSession> startConversation(String personId) async {
+    if (_commandBusy || _pending != null) {
+      throw const AgentVaultException('conflict');
+    }
+    final pending = _PendingSessionStart(personId, newAgentRequestId());
+    _pending = pending;
+    return _submit(pending);
+  }
+
+  @override
+  Future<AgentSession?> settlePendingSessionStart(String personId) async {
+    final pending = _pending;
+    if (pending == null) return null;
+    if (pending.personId != personId) {
+      throw const AgentVaultException('conflict');
+    }
+    return _submit(pending);
+  }
+
   @override
   Future<AgentSession?> resumeConversation(String personId) =>
-      _session(personId, {'kind': 'conversation.session.resume'});
+      _querySession(personId, {'kind': 'conversation.session.resume'});
+
   @override
   Future<AgentSession> loadConversation(String personId, String sessionId) =>
-      _requiredSession(personId, {
+      _requiredQuerySession(personId, {
         'kind': 'conversation.session.get',
         'session_id': sessionId,
       });
+
   @override
   Future<AgentSession> loadEarlierConversation(
     String personId,
     String sessionId,
     String beforeMessageId,
-  ) async {
-    // History is an independent pure read. It neither replays a retained
-    // session command nor blocks live session progression.
-    try {
-      final result = await ownerQuery(_transport, newAgentRequestId(), {
-        'kind': 'conversation.session.get',
-        'session_id': sessionId,
-        'before_message_id': beforeMessageId,
-      });
-      return _decode(result, personId, sessionId);
-    } on NativeTransportException catch (error) {
-      throw AgentVaultException.fromAppWire(
-        error.metadata['agent_failure'] ?? error.code,
-        stage: 'conversation_history',
-        metadata: error.metadata,
-        ownerFailure: error.ownerFailure,
-      );
-    }
-  }
+  ) => _requiredQuerySession(personId, {
+    'kind': 'conversation.session.get',
+    'session_id': sessionId,
+    'before_message_id': beforeMessageId,
+  }, stage: 'conversation_history');
 
-  @override
-  Future<AgentSession> recoverConversation(AgentSession session) =>
-      _requiredSession(session.personId, {
-        'kind': 'conversation.session.recover',
-        'session_id': session.id,
-        'expected_revision': session.revision,
-      }, command: true);
-
-  Future<AgentSession> _requiredSession(
+  Future<AgentSession> _requiredQuerySession(
     String personId,
     Map<String, Object?> payload, {
-    bool command = false,
+    String stage = 'conversation_session',
   }) async =>
-      await _session(personId, payload, command: command) ??
+      await _querySession(personId, payload, stage: stage) ??
       (throw const FormatException('Missing Conversation session result.'));
 
-  Future<AgentSession?> _session(
+  Future<AgentSession?> _querySession(
     String personId,
     Map<String, Object?> payload, {
-    bool command = false,
+    String stage = 'conversation_session',
   }) async {
-    if (_busy) throw const AgentVaultException('conflict');
-    _busy = true;
+    // Reads neither own the command lock nor observe/mutate its retained slot.
+    final requestId = newAgentRequestId();
     try {
-      final intent = ownerIntent(payload);
-      if (_pending case final pending?) {
-        if (pending.personId != personId)
-          throw const AgentVaultException('conflict');
-        final recovered = await _submit(pending);
-        if (pending.intent == intent) return recovered;
-      }
-      if (command) {
-        final pending = _PendingSessionCommand(
-          personId,
-          newAgentRequestId(),
-          intent,
-          Map.unmodifiable(payload),
-        );
-        _pending = pending;
-        return await _submit(pending);
-      }
-      final result = await ownerQuery(_transport, newAgentRequestId(), payload);
+      final result = await ownerQuery(_transport, requestId, payload);
       if (payload['kind'] == 'conversation.session.resume' &&
           result.length == 1 &&
           result['kind'] == 'conversation_session_absent') {
@@ -127,34 +104,42 @@ final class AppWireConversationGateway implements AgentConversationGateway {
     } on NativeTransportException catch (error) {
       throw AgentVaultException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,
-        requestId: _pending?.commandId,
-        stage: 'conversation_session',
+        requestId: requestId,
+        stage: stage,
+        metadata: error.metadata,
+        ownerFailure: error.ownerFailure,
+      );
+    }
+  }
+
+  Future<AgentSession> _submit(_PendingSessionStart pending) async {
+    if (_commandBusy) throw const AgentVaultException('conflict');
+    _commandBusy = true;
+    final wasSubmitted = pending.submitted;
+    pending.submitted = true;
+    try {
+      final result = await ownerCommand(_transport, pending.commandId, const {
+        'kind': 'conversation.session.start',
+      });
+      final session = _decode(result, pending.personId, null);
+      if (identical(_pending, pending)) _pending = null;
+      return session;
+    } on NativeTransportException catch (error) {
+      if (error.commandDisposition == NativeCommandDisposition.notApplied ||
+          (!wasSubmitted &&
+              error.commandDisposition ==
+                  NativeCommandDisposition.notAdmitted)) {
+        if (identical(_pending, pending)) _pending = null;
+      }
+      throw AgentVaultException.fromAppWire(
+        error.metadata['agent_failure'] ?? error.code,
+        requestId: pending.commandId,
+        stage: 'conversation_session_start',
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
       );
     } finally {
-      _busy = false;
-    }
-  }
-
-  Future<AgentSession> _submit(_PendingSessionCommand pending) async {
-    // A lost response keeps the exact command and identity for owner replay.
-    try {
-      final result = await ownerCommand(
-        _transport,
-        pending.commandId,
-        pending.payload,
-      );
-      final session = _decode(
-        result,
-        pending.personId,
-        pending.payload['session_id'] as String?,
-      );
-      _pending = null;
-      return session;
-    } on NativeTransportException catch (error) {
-      if (error.code != 'timeout' && error.code != 'ffi') _pending = null;
-      rethrow;
+      _commandBusy = false;
     }
   }
 
@@ -179,15 +164,9 @@ final class AppWireConversationGateway implements AgentConversationGateway {
   }
 }
 
-final class _PendingSessionCommand {
-  const _PendingSessionCommand(
-    this.personId,
-    this.commandId,
-    this.intent,
-    this.payload,
-  );
+final class _PendingSessionStart {
+  _PendingSessionStart(this.personId, this.commandId);
   final String personId;
   final String commandId;
-  final String intent;
-  final Map<String, Object?> payload;
+  bool submitted = false;
 }

@@ -11,8 +11,8 @@ use floe_kernel::{AgentFailure, OwnerActor, RunId, TraceContext};
 use crate::{
     CONVERSATION_CONSUMER, CommandQuery, ContinuationSnapshot, ConversationInteraction,
     ConversationPorts, ConversationRepository, InteractionRepository, InteractionResumeRef,
-    InteractionState, ManagerConfig, RecoveryReceipt, RecoveryRequest, RunReceipt, RunState,
-    RunTerminal, TurnAdmission, TurnAdmissionRequest, TurnMode, TurnRequest,
+    InteractionState, ManagerConfig, RunReceipt, RunState, RunTerminal, TurnAdmission,
+    TurnAdmissionRequest, TurnMode, TurnRequest,
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
@@ -660,21 +660,6 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         }
         Ok(origin)
     }
-}
-
-pub async fn recover_session<Repository: ConversationRepository>(
-    repository: &Repository,
-    request: RecoveryRequest,
-) -> Result<RecoveryReceipt, AgentFailure> {
-    request.validate()?;
-    let expected_session_id = request.session_id;
-    let expected_revision = request.expected_session_revision;
-    let receipt = repository.recover_session(request).await?;
-    receipt.validate()?;
-    if receipt.session_id != expected_session_id || receipt.session_revision != expected_revision {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    Ok(receipt)
 }
 
 pub async fn continuation<Repository: ConversationRepository>(

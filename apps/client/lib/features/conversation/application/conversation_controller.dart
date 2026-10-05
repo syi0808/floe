@@ -1,6 +1,9 @@
 import 'package:floe_client/features/vault/application/vault_controller.dart';
 
 import 'dart:async';
+
+import 'conversation_observation.dart';
+
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -85,6 +88,29 @@ final class ConversationController extends ChangeNotifier {
   AgentConversationTurnRequest? _conversationRun;
   late final VaultController vaultController;
   bool _sealed = false;
+  int _adoptionEpoch = 0;
+  ConversationObservation _observation = ConversationObservation();
+
+  bool _acceptsEpoch(int epoch) =>
+      !_disposed &&
+      !_sealed &&
+      vaultController.ready &&
+      epoch == _adoptionEpoch;
+
+  void _advanceEpoch() {
+    _observation.stop();
+    _observation = ConversationObservation();
+    _adoptionEpoch++;
+    _historyGeneration++;
+    loadingEarlier = false;
+    _interactionBusy.clear();
+    _busy = false;
+    _runSession = null;
+    _observedRunId = null;
+    _conversationRun = null;
+    progress = AgentProgress.idle;
+  }
+
   final Map<String, AgentInteractionSnapshot> _interactions = {};
   final Set<String> _interactionBusy = {};
   final Map<String, String> _interactionFailures = {};
@@ -137,6 +163,7 @@ final class ConversationController extends ChangeNotifier {
   Future<void> ensureInteraction(String interactionId) async {
     final gateway = _interactionGateway;
     final original = session;
+    final epoch = _adoptionEpoch;
     if (original == null ||
         _interactions.containsKey(interactionId) ||
         _interactionBusy.contains(interactionId) ||
@@ -149,18 +176,20 @@ final class ConversationController extends ChangeNotifier {
     _notify();
     try {
       final snapshot = await gateway.loadInteraction(interactionId);
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       if (snapshot == null) {
         _interactionFailures[interactionId] = 'interaction_unavailable';
         return;
       }
       _acceptInteractionSnapshot(snapshot, original);
     } on Object catch (error) {
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _interactionFailures[interactionId] = _interactionReason(error);
     } finally {
-      _interactionBusy.remove(interactionId);
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _interactionBusy.remove(interactionId);
+        _notify();
+      }
     }
   }
 
@@ -168,6 +197,7 @@ final class ConversationController extends ChangeNotifier {
   Future<void> refreshInteractions() async {
     final gateway = _interactionGateway;
     final original = session;
+    final epoch = _adoptionEpoch;
     if (original == null || _busy || _sealed || _disposed) {
       return;
     }
@@ -175,14 +205,14 @@ final class ConversationController extends ChangeNotifier {
     _notify();
     try {
       final snapshots = await gateway.loadSessionInteractions(original.id);
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _interactions.clear();
       _interactionFailures.clear();
       for (final snapshot in snapshots) {
         _acceptInteractionSnapshot(snapshot, original);
       }
     } on Object catch (error, stackTrace) {
-      if (_sealed || _disposed) return;
+      if (!_acceptsEpoch(epoch)) return;
       _recordError(
         'interaction_list',
         error,
@@ -191,8 +221,10 @@ final class ConversationController extends ChangeNotifier {
       );
       _failFromError(error, 'transport_unavailable');
     } finally {
-      _end();
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _end();
+        _notify();
+      }
     }
   }
 
@@ -203,13 +235,14 @@ final class ConversationController extends ChangeNotifier {
     final gateway = _interactionGateway;
     if (!canDecideInteraction(snapshot, decision)) return;
     final original = session!;
+    final epoch = _adoptionEpoch;
     _begin();
     _interactionBusy.add(snapshot.id);
     _interactionFailures.remove(snapshot.id);
     _notify();
     try {
       final result = await gateway.decideInteraction(snapshot, decision);
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _acceptInteractionSnapshot(result.snapshot, original);
       switch (result.outcome) {
         case AgentInteractionResolveOutcome.stale:
@@ -234,7 +267,7 @@ final class ConversationController extends ChangeNotifier {
         await _observeLinkedRun(result.linkedRun!, original);
       }
     } on Object catch (error, stackTrace) {
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _recordError(
         'interaction_decide',
         error,
@@ -244,9 +277,11 @@ final class ConversationController extends ChangeNotifier {
       _interactionFailures[snapshot.id] = _interactionReason(error);
       _failFromError(error, 'transport_unavailable');
     } finally {
-      _interactionBusy.remove(snapshot.id);
-      _end();
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _interactionBusy.remove(snapshot.id);
+        _end();
+        _notify();
+      }
     }
   }
 
@@ -254,13 +289,14 @@ final class ConversationController extends ChangeNotifier {
     final gateway = _interactionGateway;
     if (!canRefreshInteraction(snapshot)) return;
     final original = session!;
+    final epoch = _adoptionEpoch;
     _begin();
     _interactionBusy.add(snapshot.id);
     _interactionFailures.remove(snapshot.id);
     _notify();
     try {
       final result = await gateway.refreshInteraction(snapshot);
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _acceptInteractionSnapshot(result.snapshot, original);
       switch (result.outcome) {
         case AgentInteractionRefreshOutcome.stale:
@@ -282,7 +318,7 @@ final class ConversationController extends ChangeNotifier {
         await _observeLinkedRun(result.linkedRun!, original);
       }
     } on Object catch (error, stackTrace) {
-      if (_sealed || _disposed || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
       _recordError(
         'interaction_refresh',
         error,
@@ -292,9 +328,11 @@ final class ConversationController extends ChangeNotifier {
       _interactionFailures[snapshot.id] = _interactionReason(error);
       _failFromError(error, 'transport_unavailable');
     } finally {
-      _interactionBusy.remove(snapshot.id);
-      _end();
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _interactionBusy.remove(snapshot.id);
+        _end();
+        _notify();
+      }
     }
   }
 
@@ -320,6 +358,8 @@ final class ConversationController extends ChangeNotifier {
     AgentSession original,
     ConversationRuntimeGateway runtime,
   ) async {
+    final epoch = _adoptionEpoch;
+    final observation = _observation;
     _runSession = original;
     progress = AgentProgress.model;
     _notify();
@@ -327,14 +367,15 @@ final class ConversationController extends ChangeNotifier {
       final completion = await runtime.observeConversationRun(
         receipt,
         session!,
+        observation: observation,
         onRun: (run) {
+          if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
           _observedRunId = run.runId;
-          if (_disposed || _sealed || session?.id != original.id) return;
           _notify();
         },
       );
-      if (!_disposed && !_sealed && session?.id == original.id) {
-        _acceptSession(completion.session);
+      if (_acceptsEpoch(epoch) && session?.id == original.id) {
+        if (_acceptSession(completion.session) == null) return;
         _lastConversationRunId = completion.run.runId;
         needsReload = false;
         final issue = completion.run.report?.issues.firstOrNull;
@@ -343,8 +384,10 @@ final class ConversationController extends ChangeNotifier {
         }
       }
     } finally {
-      _runSession = null;
-      _observedRunId = null;
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _runSession = null;
+        _observedRunId = null;
+      }
     }
   }
 
@@ -409,78 +452,124 @@ final class ConversationController extends ChangeNotifier {
       _lastConversationRunId != null;
 
   Future<void> load({bool newSession = false}) async {
-    if (_disposed) return;
-    if (busy || _disposed || !vaultController.ready) return;
+    if (_disposed || busy || !vaultController.ready) return;
+    _advanceEpoch();
+    final epoch = _adoptionEpoch;
+    final observation = _observation;
     _sealed = false;
     _lastConversationRunId = null;
     _begin();
     progress = AgentProgress.loading;
     _notify();
     try {
-      final conversation = gateway;
+      await _conversationRuntime
+          .awaitStoppedObservation(observation: observation)
+          .timeout(loadTimeout);
+      if (!_acceptsEpoch(epoch)) return;
+      // Settlement is an explicit command operation. No failed/incomplete
+      // settlement falls through to a query or a fresh Start.
+      final settled = await gateway
+          .settlePendingSessionStart(personId)
+          .timeout(loadTimeout);
+      if (!_acceptsEpoch(epoch)) return;
       final resumed = newSession
           ? null
-          : await conversation
-                .resumeConversation(personId)
-                .timeout(loadTimeout);
-      if (_sealed || _disposed) return;
+          : settled ??
+                await observation.read(
+                  () =>
+                      gateway.resumeConversation(personId).timeout(loadTimeout),
+                );
+      if (!_acceptsEpoch(epoch)) return;
+      // Every New gesture is new; its prior settlement was acknowledgement only.
       final saved =
           resumed ??
-          await conversation.startConversation(personId).timeout(loadTimeout);
-      if (_sealed || _disposed || !vaultController.ready) return;
-      _acceptSession(saved);
-      await _conversationRuntime
-          .synchronizeConversation(saved)
-          .timeout(loadTimeout);
-      needsReload = false;
-      if (saved.activeTurn != null) {
-        _runSession = saved;
-        progress = AgentProgress.model;
-        final completion = await _conversationRuntime.observeSessionRun(
-          saved,
-          onRun: (run) {
-            _observedRunId = run.runId;
-            if (!_disposed && !_sealed) _notify();
-          },
+          await gateway.startConversation(personId).timeout(loadTimeout);
+      if (!_acceptsEpoch(epoch)) return;
+      await _observeLoadedSession(saved, epoch, observation);
+    } on Object catch (error, stackTrace) {
+      if (_acceptsEpoch(epoch)) {
+        _recordError('load', error, stackTrace);
+        _failFromError(
+          error,
+          session != null ? 'transport_unavailable' : 'storage_unavailable',
         );
-        if (!_disposed && !_sealed) _acceptSession(completion.session);
+      }
+    } finally {
+      if (!_disposed && epoch == _adoptionEpoch) {
         _runSession = null;
         _observedRunId = null;
+        _end();
+        progress = AgentProgress.idle;
+        _notify();
       }
-    } on Object catch (error, stackTrace) {
-      _recordError('load', error, stackTrace);
-      _failFromError(
-        error,
-        session != null ? 'transport_unavailable' : 'storage_unavailable',
-      );
-    } finally {
-      _runSession = null;
-      _observedRunId = null;
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
     }
   }
 
+  Future<void> _observeLoadedSession(
+    AgentSession saved,
+    int epoch,
+    ConversationObservation observation,
+  ) async {
+    if (!_acceptsEpoch(epoch)) return;
+    final accepted = _acceptSession(saved);
+    if (accepted == null) return;
+    await _conversationRuntime
+        .synchronizeConversation(accepted, observation: observation)
+        .timeout(loadTimeout);
+    if (!_acceptsEpoch(epoch)) return;
+    needsReload = false;
+    if (accepted.activeTurn != null) {
+      _runSession = accepted;
+      progress = AgentProgress.model;
+      _notify();
+      final completion = await _conversationRuntime.observeSessionRun(
+        accepted,
+        observation: observation,
+        onRun: (run) {
+          if (!_acceptsEpoch(epoch)) return;
+          _observedRunId = run.runId;
+          _notify();
+        },
+      );
+      if (_acceptsEpoch(epoch)) _acceptSession(completion.session);
+    }
+  }
+
+  /// Re-observe owner recovery; no business Recover command or implicit Start.
   Future<void> recover() async {
-    if (busy || _disposed || !needsRecovery) return;
+    if (busy || _disposed || !needsRecovery || !vaultController.ready) return;
+    final original = session!;
+    _advanceEpoch();
+    final epoch = _adoptionEpoch;
+    final observation = _observation;
     _begin();
     progress = AgentProgress.loading;
     _notify();
     try {
-      final original = session!;
-
-      final saved = await gateway.recoverConversation(original);
-      _acceptSession(saved);
-      await _conversationRuntime.synchronizeConversation(saved);
-      needsReload = false;
+      await _conversationRuntime
+          .awaitStoppedObservation(observation: observation)
+          .timeout(loadTimeout);
+      if (!_acceptsEpoch(epoch)) return;
+      final saved = await observation.read(
+        () => gateway
+            .loadConversation(personId, original.id)
+            .timeout(loadTimeout),
+      );
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
+      await _observeLoadedSession(saved, epoch, observation);
     } on Object catch (error, stackTrace) {
-      _recordError('recover', error, stackTrace, sessionId: session?.id);
-      _failFromError(error, 'transport_unavailable');
+      if (_acceptsEpoch(epoch)) {
+        _recordError('reobserve', error, stackTrace, sessionId: original.id);
+        _failFromError(error, 'transport_unavailable');
+      }
     } finally {
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _runSession = null;
+        _observedRunId = null;
+        _end();
+        progress = AgentProgress.idle;
+        _notify();
+      }
     }
   }
 
@@ -547,21 +636,24 @@ final class ConversationController extends ChangeNotifier {
     AgentSession original,
     AgentConversationTurnRequest request,
   ) async {
+    final epoch = _adoptionEpoch;
+    final observation = _observation;
     try {
       final completion = await runtime.runConversationTurn(
         request,
+        observation: observation,
         onRun: (run) {
+          if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
           _observedRunId = run.runId;
-          if (_disposed || _sealed || session?.id != original.id) return;
           progress = run.state == AppRunState.cancelling || _stopRequested
               ? AgentProgress.stopping
               : AgentProgress.model;
           _notify();
         },
       );
-      _runSession = null;
-      if (!_disposed && !_sealed && session?.id == original.id) {
-        _acceptSession(completion.session);
+      if (_acceptsEpoch(epoch) && session?.id == original.id) {
+        _runSession = null;
+        if (_acceptSession(completion.session) == null) return;
         _lastConversationRunId = completion.run.runId;
         needsReload = false;
         final issue = completion.run.report?.issues.firstOrNull;
@@ -570,7 +662,7 @@ final class ConversationController extends ChangeNotifier {
         }
       }
     } on Object catch (error, stackTrace) {
-      if (!_disposed && !_sealed) {
+      if (_acceptsEpoch(epoch)) {
         _recordError(
           'conversation_turn',
           error,
@@ -580,16 +672,19 @@ final class ConversationController extends ChangeNotifier {
         _failFromError(error, 'transport_unavailable');
       }
     } finally {
-      _conversationRun = null;
-      _runSession = null;
-      _end();
-      progress = AgentProgress.idle;
-      _notify();
+      if (!_disposed && epoch == _adoptionEpoch) {
+        _conversationRun = null;
+        _runSession = null;
+        _end();
+        progress = AgentProgress.idle;
+        _notify();
+      }
     }
   }
 
   Future<void> stop() async {
     final original = _runSession;
+    final epoch = _adoptionEpoch;
     if (original == null || _stopRequested) return;
     _stopRequested = true;
     progress = AgentProgress.stopping;
@@ -601,6 +696,7 @@ final class ConversationController extends ChangeNotifier {
         await _conversationRuntime.cancelConversationTurn(request);
       }
     } on Object {
+      if (!_acceptsEpoch(epoch)) return;
       failure = 'transport_unavailable';
       needsReload = true;
       _notify();
@@ -674,10 +770,18 @@ final class ConversationController extends ChangeNotifier {
     earlierFailure = null;
   }
 
-  void _acceptSession(AgentSession saved) {
-    if (_sealed) return;
+  AgentSession? _acceptSession(AgentSession saved) {
+    if (_sealed) return null;
     if (saved.personId != personId) {
       throw const FormatException('Agent Person mismatch.');
+    }
+    final current = session;
+    if (current != null && current.id == saved.id) {
+      if (saved.revision < current.revision) return null;
+      if (saved.revision == current.revision) {
+        _applySessionOutcome(current);
+        return current;
+      }
     }
     _clearInteractions();
     final first = saved.messages.firstOrNull?.messageId;
@@ -690,6 +794,16 @@ final class ConversationController extends ChangeNotifier {
     if (prefixEnd < 0) _resetHistory();
     session = saved;
     messages = [...earlier, ...saved.messages];
+    _applySessionOutcome(saved);
+    final lastUser = messages
+        .whereType<AgentTextMessage>()
+        .where((message) => message.kind == AgentMessageKind.user)
+        .lastOrNull;
+    _lastConversationText = lastUser?.text;
+    return saved;
+  }
+
+  void _applySessionOutcome(AgentSession saved) {
     _clearFailure();
     failure = saved.lastOutcome?.failure;
     if (saved.lastOutcome?.issue?.ownerFailure case final ownerFailure?) {
@@ -706,11 +820,6 @@ final class ConversationController extends ChangeNotifier {
       _fail(issue.reason, reloadRequired: true);
       throw AgentVaultException(issue.reason, reloadRequired: true);
     }
-    final lastUser = messages
-        .whereType<AgentTextMessage>()
-        .where((message) => message.kind == AgentMessageKind.user)
-        .lastOrNull;
-    _lastConversationText = lastUser?.text;
   }
 
   void _notify() {
@@ -720,6 +829,7 @@ final class ConversationController extends ChangeNotifier {
   void _vaultChanged() {
     if (_disposed) return;
     if (!vaultController.ready) {
+      _advanceEpoch();
       _sealed = true;
       _clearInteractions();
       session = null;
@@ -783,6 +893,7 @@ final class ConversationController extends ChangeNotifier {
       reloadRequired: owner.reloadRequired,
       sealSession: owner.sealSession,
     );
+    _notify();
   }
 
   void _failFromError(Object error, String fallback) {
@@ -839,6 +950,7 @@ final class ConversationController extends ChangeNotifier {
     failureRetryPolicy = retryPolicy;
     needsReload = reloadRequired ?? false;
     if (sealSession ?? false) {
+      _observation.stop();
       _sealed = true;
       session = null;
       messages = [];
@@ -848,6 +960,7 @@ final class ConversationController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _advanceEpoch();
     _disposed = true;
     _conversationRuntime.readModel.removeListener(_notify);
     vaultController.removeListener(_vaultChanged);

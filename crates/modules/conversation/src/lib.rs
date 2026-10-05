@@ -20,8 +20,8 @@ pub use application::{
     RunCancellationRegistry, admit_unscoped_session, admitted_session, cancel_run_command,
     compact_session, continuation, decide_interaction, expire_interaction, get_command, get_run,
     get_session, list_run_interactions, load_interaction, prepare_resume, project_continuation,
-    project_model_conversation_history, read_archive, recover_session, recovered_session,
-    resolve_interaction, resume_gate, resume_session, start_session, supersede_interaction,
+    project_model_conversation_history, read_archive, resolve_interaction, resume_gate,
+    resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, BlockedInteractionLink, CommandQuery, CompactionReceipt,
@@ -35,12 +35,12 @@ pub use domain::{
     MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
     MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES,
     NavigationDestination, NavigationOnlyTarget, PendingRunTerminal, PriorExhaustion,
-    RecoveryReceipt, RecoveryRequest, ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery,
-    RunReceipt, RunRecord, RunState, RunTerminal, SessionReadRequest, SessionReceipt,
-    SessionRequest, StartSessionRequest, StartTurn, SupersedeInteraction, TurnAdmission,
-    TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt, canonical_requirement_digest,
-    canonical_target_digest, decision_owner_command_id, interaction_publication_id,
-    next_state_after_decision, resume_command_id, state_after_resolution,
+    ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState,
+    RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest,
+    StartTurn, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode,
+    UnresolvedModelAttempt, canonical_requirement_digest, canonical_target_digest,
+    decision_owner_command_id, interaction_publication_id, next_state_after_decision,
+    resume_command_id, state_after_resolution,
 };
 pub use domain::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CanonicalTurnIntent, normalize_turn_text,
@@ -103,3 +103,7 @@ pub use application::{
 pub use application::{ConversationFailure, ConversationRecovery, project_conversation_failure};
 
 pub use application::validate_task_delegation_lineage;
+
+pub use domain::{
+    ConversationCommandKind, SessionStartAdmission, SessionStartFailure, SessionStartRefusal,
+};

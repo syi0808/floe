@@ -62,6 +62,43 @@ Manual mutation and refresh share a Person/command UUID namespace. The full muta
 
 New manual mutations and Action collection commits hold Day’s admission/drain guard and compare the active executor generation. A nonserializable `DayWriteFence` also binds the admitted actor and original owner/caller cancellation and deadline through the final commit check. Historical receipt replay is first, and a new scope cannot revive an old write. Action collection binds the exact execution, receipt digest, source revision/authority and resource; repeated collection rejoins its receipt and never repeats an external effect.
 
+## Conversation Session admission and observation
+
+Session Start owns creation and its positive receipt in one guarded Vault transaction.
+Exact receipt replay precedes the validated Conversation/Interactions command-kind
+occupancy check and the 4,096 retained Start-receipt capacity. The owner returns
+Started, Replayed or a typed structural NotApplied refusal. Occupant identities are
+immutable and receipts are not evicted; changing either policy requires revisiting
+that proof. An arbitrary Conflict, rollback failure or unreadable row is not proof
+of no effect. Pre-admission refusal is NotAdmitted; interrupted/post-BEGIN work is
+Indeterminate. Failure projecting a successfully admitted Session is Admitted. The
+physical writer guard stays armed until transaction completion; interruption retires
+the store's availability. This is not a claim that every Conversation write uses it.
+
+External Product command envelopes require UUID-v4 nonces so they cannot collide
+with internally derived command identities. NativeHost envelopes, query references
+and the generic CommandId type retain their existing contracts. Conversation stored
+family format 10 removes the obsolete Session recovery-command table; older family
+formats fail closed and require an explicitly selected fresh development profile,
+not an automatic reset, key replacement or migration.
+
+Resume, Get and history queries never settle or replay commands. The app-lifetime
+client gateway retains an uncertain Start's exact identity and exposes explicit
+settlement separately from fresh Start. A later NotAdmitted response cannot erase
+an earlier uncertain submission. Reload may adopt a settled Start; explicit New
+first settles the old request without adopting it and then creates a fresh one.
+Unresolved settlement stops the operation rather than silently resuming another
+Session or replacing the pending identity.
+
+There is no separate business Session Recover command. The executor-owned recovery
+driver reconciles Runs; the screen re-reads the exact Session and observes its Run.
+Client adoption epochs and monotonic Session revisions prevent obsolete responses
+from replacing current state. Stopping an observation or disposing a screen does
+not cancel a Run. Already handed-off bounded turn admission completes with its
+original identity before that observation releases its activity slot; a replacement
+load waits for this handshake before reading. Detached query completions cannot
+publish stale client state. Actual cancellation remains an explicit owner command.
+
 ## Provenance and coverage travel with evidence
 
 Source-backed model/tool inputs retain enough identity to determine:

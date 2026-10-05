@@ -1,6 +1,6 @@
 use crate::{
-    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, JournalEntry,
-    RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CommandQuery, JournalEntry, RunReceipt,
+    RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_agent_contract::{BoxFuture, ExecutionJournal};
 use floe_kernel::{AgentFailure, OwnerActor, RunId};
@@ -64,11 +64,6 @@ pub trait ConversationRepository: Send + Sync {
         &'a self,
         run_id: RunId,
     ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>>;
-
-    fn recover_session<'a>(
-        &'a self,
-        request: RecoveryRequest,
-    ) -> BoxFuture<'a, Result<RecoveryReceipt, AgentFailure>>;
 
     fn load_journal<'a>(
         &'a self,

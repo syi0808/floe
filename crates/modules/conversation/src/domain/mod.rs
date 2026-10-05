@@ -283,35 +283,6 @@ pub enum TurnAdmission {
     Resumed(RunReceipt),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveryRequest {
-    pub command_id: CommandId,
-    pub session_id: Uuid,
-    pub expected_session_revision: u64,
-    pub principal: String,
-}
-
-impl RecoveryRequest {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if !self.command_id.is_valid()
-            || self.session_id.is_nil()
-            || self.principal.trim() != self.principal
-            || self.principal.is_empty()
-            || self.principal.len() > 256
-            || self.principal.chars().any(char::is_control)
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveryReceipt {
-    pub session_id: Uuid,
-    pub session_revision: u64,
-}
-
 pub use floe_agent_contract::JournalEntry;
 
 #[derive(Clone, Debug)]
@@ -395,11 +366,7 @@ impl CompactionReceipt {
     }
 }
 
-impl RecoveryReceipt {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.session_id.is_nil() {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        Ok(())
-    }
-}
+mod session_start;
+pub use session_start::{
+    ConversationCommandKind, SessionStartAdmission, SessionStartFailure, SessionStartRefusal,
+};

@@ -33,7 +33,7 @@ pub use cancellation::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, RunCancellationRegistry, cancel_run_command,
 };
-pub use coordinator::{continuation, recover_session};
+pub use coordinator::continuation;
 pub use governed_session::{GovernedSessionRepository, GovernedSessionStore};
 pub use history_projection::{
     HistoryProjection, ProjectedModelConversation, project_model_conversation_history,
@@ -47,8 +47,7 @@ pub use query::{get_command, get_run};
 pub use recovery::{project_continuation, validate_run_journal};
 pub use resume::{ResumeSuppression, build_resume_required, resume_gate};
 pub use session::{
-    admit_unscoped_session, admitted_session, get_session, recovered_session, resume_session,
-    start_session,
+    admit_unscoped_session, admitted_session, get_session, resume_session, start_session,
 };
 
 mod start;

@@ -8,10 +8,26 @@ use crate::{SessionReadRequest, SessionReceipt, SessionRepository, SessionReques
 pub async fn start_session<Repository: SessionRepository>(
     repository: &Repository,
     request: crate::StartSessionRequest,
-) -> Result<SessionReceipt, AgentFailure> {
-    request.validate()?;
+) -> Result<crate::SessionStartAdmission, crate::SessionStartFailure> {
+    use crate::{
+        ConversationCommandKind, SessionStartAdmission as A, SessionStartFailure as F,
+        SessionStartRefusal,
+    };
+    request.validate().map_err(F::NotAdmitted)?;
     let principal = request.principal.clone();
-    verify_receipt(principal, None, repository.start_session(request).await?)
+    let admission = repository.start_session(request).await?;
+    match admission {
+        A::Started(receipt) => verify_receipt(principal, None, receipt)
+            .map(A::Started)
+            .map_err(F::Indeterminate),
+        A::Replayed(receipt) => verify_receipt(principal, None, receipt)
+            .map(A::Replayed)
+            .map_err(F::Indeterminate),
+        A::NotApplied(SessionStartRefusal::ForeignCommand(
+            ConversationCommandKind::SessionStart,
+        )) => Err(F::Indeterminate(AgentFailure::StorageUnavailable)),
+        A::NotApplied(reason) => Ok(A::NotApplied(reason)),
+    }
 }
 
 pub async fn resume_session<Repository: SessionRepository>(
@@ -71,33 +87,6 @@ pub async fn admitted_session(
     if session.id != receipt.session_id
         || session.person_id != person_id
         || session.revision != receipt.session_revision
-        || session.scope.is_some()
-        || session.data_classes != [floe_agent_contract::DataClass::Personal]
-    {
-        return Err(AgentFailure::StorageUnavailable);
-    }
-    Ok(session)
-}
-
-/// Recover a Session whose client lost track of it, and read it back.
-///
-/// The recovery decides what the Session now is; reading it back checks that
-/// what the store holds is that same Session, and is still a root conversation
-/// holding nothing but the Person's own data.
-pub async fn recovered_session<Repository, Store>(
-    repository: &Repository,
-    sessions: &Store,
-    person_id: PersonId,
-    request: crate::RecoveryRequest,
-) -> Result<AgentSession, AgentFailure>
-where
-    Repository: crate::ConversationRepository,
-    Store: SessionStore,
-{
-    let session_id = request.session_id;
-    let receipt = super::coordinator::recover_session(repository, request).await?;
-    let session = sessions.load(person_id, session_id).await?;
-    if session.revision != receipt.session_revision
         || session.scope.is_some()
         || session.data_classes != [floe_agent_contract::DataClass::Personal]
     {

@@ -1,5 +1,7 @@
 //! Mechanical Conversation owner request/result translation.
-use crate::app_wire::{AppWireResult, agent_failure, internal_error, validation};
+use crate::app_wire::{
+    AppCommandFailure, AppCommandResult, AppWireResult, agent_failure, internal_error, validation,
+};
 use floe_conversation::{EventPayload, EventRead};
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, RunId};
@@ -10,7 +12,6 @@ pub(crate) fn handles_command(command: &AppProductCommandDto) -> bool {
     matches!(
         command,
         AppProductCommandDto::ConversationSessionStart { .. }
-            | AppProductCommandDto::ConversationSessionRecover { .. }
             | AppProductCommandDto::ConversationStartTurn { .. }
             | AppProductCommandDto::ConversationCancelRun { .. }
             | AppProductCommandDto::ConversationInteractionResolve { .. }
@@ -35,33 +36,46 @@ pub(crate) async fn command(
     command_id: Uuid,
     command: AppProductCommandDto,
     scope: &ExecutionScope,
-) -> AppWireResult<AppCommandResultDto> {
+) -> AppCommandResult<AppCommandResultDto> {
     let service = owners.conversation.as_ref();
     let id = CommandId::from_uuid(command_id).ok_or_else(internal_error)?;
     match command {
         AppProductCommandDto::ConversationSessionStart {} => {
-            let receipt = service
+            use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
+            let admission = service
                 .start_session(actor, id, scope)
                 .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
+                .map_err(|failure| {
+                    let correlation = scope.trace_context().request_id();
+                    match failure {
+                        F::NotAdmitted(reason) => {
+                            AppCommandFailure::NotAdmitted(failure_dto(reason, correlation))
+                        }
+                        F::Indeterminate(reason) => {
+                            AppCommandFailure::Indeterminate(failure_dto(reason, correlation))
+                        }
+                    }
+                })?;
+            let receipt = match admission {
+                A::Started(receipt) | A::Replayed(receipt) => receipt,
+                A::NotApplied(reason) => {
+                    return Err(AppCommandFailure::NotApplied(failure_dto(
+                        reason.reason(),
+                        scope.trace_context().request_id(),
+                    )));
+                }
+            };
             let snapshot = service
                 .get_session(actor, receipt.session_id, None, scope)
                 .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
+                .map_err(|failure| {
+                    AppCommandFailure::Admitted(failure_dto(
+                        failure,
+                        scope.trace_context().request_id(),
+                    ))
+                })?;
             Ok(AppCommandResultDto::ConversationSession {
-                session: session_snapshot(snapshot)?,
-            })
-        }
-        AppProductCommandDto::ConversationSessionRecover {
-            session_id,
-            expected_revision,
-        } => {
-            let snapshot = service
-                .recover_session(actor, id, session_id.get(), expected_revision, scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppCommandResultDto::ConversationSession {
-                session: session_snapshot(snapshot)?,
+                session: session_snapshot(snapshot).map_err(AppCommandFailure::Admitted)?,
             })
         }
         AppProductCommandDto::ConversationStartTurn {
@@ -166,7 +180,7 @@ pub(crate) async fn command(
                 result: refresh_result(command_id, result, actor.runtime_epoch)?,
             })
         }
-        _ => Err(validation("command")),
+        _ => Err(validation("command").into()),
     }
 }
 pub(crate) async fn query(

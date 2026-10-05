@@ -13,9 +13,8 @@ use floe_conversation::{
     AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
     CompactionRequest, ConversationInteraction, ConversationRepository, DecisionAdmission,
     ExpireInteraction, ExpireOutcome, InteractionDecision, InteractionRepository, JournalEntry,
-    RecoveryReceipt, RecoveryRequest, RunReceipt, RunTerminal, SessionArchiveRepository,
-    SessionReadRequest, SessionReceipt, SessionRepository, SessionRequest, SupersedeInteraction,
-    TurnAdmission, TurnAdmissionRequest,
+    RunReceipt, RunTerminal, SessionArchiveRepository, SessionReadRequest, SessionReceipt,
+    SessionRepository, SessionRequest, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest,
 };
 use uuid::Uuid;
 
@@ -27,7 +26,10 @@ impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRe
     fn start_session<'a>(
         &'a self,
         request: floe_conversation::StartSessionRequest,
-    ) -> BoxFuture<'a, Result<SessionReceipt, AgentFailure>> {
+    ) -> BoxFuture<
+        'a,
+        Result<floe_conversation::SessionStartAdmission, floe_conversation::SessionStartFailure>,
+    > {
         Box::pin(async move { self.vault.start_conversation_session(request).await })
     }
 
@@ -398,31 +400,6 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                     .await?,
             ))
-        })
-    }
-
-    fn recover_session<'a>(
-        &'a self,
-        request: RecoveryRequest,
-    ) -> BoxFuture<'a, Result<RecoveryReceipt, AgentFailure>> {
-        Box::pin(async move {
-            request.validate()?;
-            if request.principal != self.vault.person_id().to_string() {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let session_revision = self
-                .vault
-                .recover_conversation_session(
-                    request.command_id,
-                    request.session_id,
-                    self.vault.person_id(),
-                    request.expected_session_revision,
-                )
-                .await?;
-            Ok(RecoveryReceipt {
-                session_id: request.session_id,
-                session_revision,
-            })
         })
     }
 

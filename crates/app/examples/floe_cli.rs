@@ -206,10 +206,15 @@ fn session(host: &Host, session_id: Option<Uuid>) -> Result<SessionSnapshot> {
             let id = match session_id {
                 Some(id) => id,
                 None => {
-                    owner
-                        .start_session(actor, CommandId::new(), scope)
-                        .await?
-                        .session_id
+                    use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
+                    // This one-shot CLI exits on uncertainty; it does not retry with a new ID.
+                    match owner.start_session(actor, CommandId::new(), scope).await {
+                        Ok(A::Started(receipt) | A::Replayed(receipt)) => receipt.session_id,
+                        Ok(A::NotApplied(reason)) => return Err(reason.reason()),
+                        Err(F::NotAdmitted(reason) | F::Indeterminate(reason)) => {
+                            return Err(reason);
+                        }
+                    }
                 }
             };
             owner.get_session(actor, id, None, scope).await
