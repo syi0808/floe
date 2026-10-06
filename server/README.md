@@ -111,16 +111,17 @@ root authentication failure). A failed read before first Put leaves no creation
 marker; an uncertain Put retains its initializing marker and key evidence.
 
 Profile startup and explicit token-retrieval failures also report a bounded
-operation and stage. Before the durable initializing marker is reserved, root
-profile filesystem `EACCES`/`EPERM` maps to `profile_access_denied`;
-`profile_in_use` is reserved for nonblocking process-lease contention;
-malformed or unsafe private metadata maps to `profile_invalid`; other profile
-I/O maps to `profile_io_failed`. Once the marker is reserved, bootstrap and
-every Ready-publication failure remain `creation_incomplete`, with the cause
-retained for error inspection. Existing key, `unsupported_layout` and
-`root_authentication_failed` categories remain distinct, and credential-store
-outcomes retain their key categories. CLI diagnostics omit filesystem paths and
-raw OS errors.
+operation and stage. For profile, lease and storage operations—including
+reopening an existing ready profile—actual filesystem `EACCES`/`EPERM` maps to
+`profile_access_denied`; `profile_in_use` is reserved for nonblocking
+process-lease contention; malformed or unsafe private metadata maps to
+`profile_invalid`; other profile I/O maps to `profile_io_failed`.
+`creation_incomplete` applies to identity-marker write/sync/close failures after
+its create-only open succeeds, fresh owner-startup failures, and every
+Ready-publication failure. An initial identity-marker open failure retains its
+access/I/O classification. Key-custody, `unsupported_layout` and
+`root_authentication_failed` categories remain distinct. CLI diagnostics omit
+filesystem paths and raw OS errors.
 
 The current encrypted root layout is owner-scoped (format 2). Older profiles are not migrated or reset: encrypted format 1 is refused as
 `unsupported_layout` before owner directories are created. Old plaintext profiles
