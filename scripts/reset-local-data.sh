@@ -8,8 +8,8 @@ Usage: scripts/reset-local-data.sh [--profile development|production] [--yes]
 Default: move only the isolated development client/server data to the Trash.
 Production requires --profile production and preserves development data/logs.
 This script never deletes Keychain entries or changes macOS privacy permissions.
-Recovered encrypted data still needs its original keys. No live app/CLI/server
-may be using either profile. Custom FLOE_SERVER_DATA locations are not included.
+Recovered encrypted data still needs its original keys. No live app/server may
+be using either profile. Custom FLOE_SERVER_DATA locations are not included.
 HELP
 }
 
@@ -28,7 +28,7 @@ done
 [[ "$profile" == development || "$profile" == production ]] || { usage >&2; exit 2; }
 [[ "$(uname -s)" == Darwin ]] || { printf '%s\n' 'This script supports macOS only.' >&2; exit 1; }
 
-for process_name in floe_client floe-server floe_cli; do
+for process_name in floe_client floe-server; do
   if pgrep -x "$process_name" >/dev/null; then
     printf 'Stop %s before resetting local data.\n' "$process_name" >&2
     exit 1
