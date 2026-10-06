@@ -19,60 +19,80 @@ const developmentMarker = "Floe isolated development storage v1\n"
 const storageProfile = "development"
 
 func profileStore(directory string, initialize bool) (credentials.Store, error) {
-	invalid := errors.New("development storage profile unavailable; existing data was preserved")
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
-		return nil, invalid
+		return nil, storageFailure("profile_invalid", operationProfileOpen, stageInput, errStorage)
 	}
 	// No adoption of a normal profile, including through FLOE_SERVER_DATA.
 	if initialize {
 		if err := os.Mkdir(directory, 0700); err != nil && !os.IsExist(err) {
-			return nil, invalid
+			return nil, profileStorageFailure(err, operationProfileOpen, stageProfileDirectory)
 		}
 	}
 	info, err := os.Lstat(directory)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return nil, invalid
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageProfileDirectory, err)
+		}
+		return nil, profileStorageFailure(err, operationProfileOpen, stageProfileDirectory)
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return nil, storageFailure("profile_invalid", operationProfileOpen, stageProfileDirectory, errStorage)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(stat.Uid) != os.Geteuid() {
-		return nil, invalid
+		return nil, storageFailure("profile_invalid", operationProfileOpen, stageProfileDirectory, errStorage)
 	}
 	marker := filepath.Join(directory, "floe-development-profile")
 	data, err := storage.ReadPrivate(marker, 64)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		if !initialize {
-			return nil, invalid
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageBuildProfileCheck, err)
 		}
 		entries, e := os.ReadDir(directory)
-		if e != nil || len(entries) != 0 {
-			return nil, invalid
+		if e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageFreshProfile)
+		}
+		if len(entries) != 0 {
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageFreshProfile, errStorage)
 		}
 		// Create-only marker: a concurrent initializer cannot replace it.
 		f, e := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if e != nil {
-			return nil, invalid
+			return nil, profileStorageFailure(e, operationProfileOpen, stageBuildProfileCheck)
 		}
 		_, e = f.WriteString(developmentMarker)
 		if e == nil {
 			e = f.Sync()
 		}
 		closeErr := f.Close()
-		if e != nil || closeErr != nil {
-			return nil, invalid
+		if e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageBuildProfileCheck)
+		}
+		if closeErr != nil {
+			return nil, profileStorageFailure(closeErr, operationProfileOpen, stageBuildProfileCheck)
 		}
 		parent, e := os.Open(directory)
 		if e != nil {
-			return nil, invalid
+			return nil, profileStorageFailure(e, operationProfileOpen, stageParentSync)
 		}
 		e = parent.Sync()
 		closeErr = parent.Close()
-		if e != nil || closeErr != nil {
-			return nil, invalid
+		if e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageParentSync)
 		}
-	} else if err != nil || string(data) != developmentMarker {
-		return nil, invalid
+		if closeErr != nil {
+			return nil, profileStorageFailure(closeErr, operationProfileOpen, stageParentSync)
+		}
+	} else if err != nil {
+		return nil, profileStorageFailure(err, operationProfileOpen, stageBuildProfileCheck)
+	} else if string(data) != developmentMarker {
+		return nil, storageFailure("profile_invalid", operationProfileOpen, stageBuildProfileCheck, errStorage)
 	}
-	return credentials.NewDevelopmentFileStore(directory, initialize)
+	store, err := credentials.NewDevelopmentFileStore(directory, initialize)
+	if err != nil {
+		return nil, custodyFailure(err, stageRootKey)
+	}
+	return store, nil
 }
 
 func freshProfile(directory string) error {
@@ -85,11 +105,14 @@ func freshProfile(directory string) error {
 		case "storage.lock", "floe-development-profile":
 		case "development-credentials":
 			path := filepath.Join(directory, entry.Name())
-			if storage.PrivateDirectory(path) != nil {
-				return errStorage
+			if err := storage.PrivateDirectory(path); err != nil {
+				return err
 			}
 			children, e := os.ReadDir(path)
-			if e != nil || len(children) != 0 {
+			if e != nil {
+				return e
+			}
+			if len(children) != 0 {
 				return errStorage
 			}
 		default:
@@ -97,7 +120,13 @@ func freshProfile(directory string) error {
 		}
 	}
 	marker, err := storage.ReadPrivate(filepath.Join(directory, "floe-development-profile"), 64)
-	if err != nil || string(marker) != developmentMarker {
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errStorage
+		}
+		return err
+	}
+	if string(marker) != developmentMarker {
 		return errStorage
 	}
 	return nil

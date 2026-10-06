@@ -22,28 +22,96 @@ const rootSealName = "storage-seal"
 const rootLayout = 2 // Owner-scoped authenticated payloads.
 const rootSealContent = "Floe encrypted server root owner-scoped v2\n"
 
-type StorageFailure struct{ code string }
+const (
+	operationProfileOpen   = "profile_open"
+	operationProfileReady  = "profile_ready_publish"
+	operationAdminToken    = "admin_token_read"
+	operationNodeStartup   = "node_startup"
+	stageInput             = "input_validation"
+	stageProfileDirectory  = "profile_directory"
+	stageParentSync        = "parent_directory_sync"
+	stageLeaseOpen         = "process_lease_open"
+	stageLeaseMetadata     = "process_lease_metadata"
+	stageLeaseAcquire      = "process_lease_acquire"
+	stageFreshProfile      = "fresh_profile_validation"
+	stageIdentity          = "profile_identity"
+	stageRootKey           = "root_key"
+	stageRootSeal          = "root_seal"
+	stageReadyMarker       = "ready_marker"
+	stageOwnerStorage      = "owner_storage"
+	stageTrustStorage      = "trust_storage"
+	stageAdminToken        = "administrator_token"
+	stageBuildProfileCheck = "build_profile_check"
+)
+
+type StorageFailure struct {
+	code      string
+	operation string
+	stage     string
+	cause     error
+}
 
 func (e *StorageFailure) Error() string {
-	return "server encrypted profile unavailable (" + e.code + "); existing data and keys were preserved"
+	if e == nil {
+		return "server encrypted profile unavailable"
+	}
+	return "server encrypted profile unavailable (" + e.code + "; operation=" + e.operation + "; stage=" + e.stage + "); existing data and keys were preserved"
 }
-func (e *StorageFailure) Code() string { return e.code }
-func storageFailure(code string) error { return &StorageFailure{code: code} }
+func (e *StorageFailure) Unwrap() error     { return e.cause }
+func (e *StorageFailure) Code() string      { return e.code }
+func (e *StorageFailure) Operation() string { return e.operation }
+func (e *StorageFailure) Stage() string     { return e.stage }
+func storageFailure(code, operation, stage string, cause error) error {
+	return &StorageFailure{code: code, operation: operation, stage: stage, cause: cause}
+}
 
-var errStorage = storageFailure("profile_invalid")
+var errStorage = errors.New("invalid encrypted profile metadata")
 
-func custodyFailure(err error) error {
+func profileStorageFailure(err error, operation, stage string) error {
+	switch {
+	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		return storageFailure("profile_access_denied", operation, stage, err)
+	case errors.Is(err, errStorage), errors.Is(err, storage.ErrUnsafePrivateFile), errors.Is(err, storage.ErrIntegrity):
+		return storageFailure("profile_invalid", operation, stage, err)
+	default:
+		return storageFailure("profile_io_failed", operation, stage, err)
+	}
+}
+
+func profileLeaseFailure(err error) error {
+	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+		return storageFailure("profile_in_use", operationProfileOpen, stageLeaseAcquire, err)
+	}
+	return profileStorageFailure(err, operationProfileOpen, stageLeaseAcquire)
+}
+
+func startupStorageFailure(err error, fallbackCode, stage string, fresh bool) error {
+	var pathErr *os.PathError
+	var linkErr *os.LinkError
+	var syscallErr *os.SyscallError
+	var errno syscall.Errno
+	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) || errors.Is(err, storage.ErrUnsafePrivateFile) ||
+		errors.As(err, &pathErr) || errors.As(err, &linkErr) || errors.As(err, &syscallErr) || errors.As(err, &errno) {
+		return profileStorageFailure(err, operationNodeStartup, stage)
+	}
+	if fresh {
+		return storageFailure("creation_incomplete", operationNodeStartup, stage, err)
+	}
+	return storageFailure(fallbackCode, operationNodeStartup, stage, err)
+}
+
+func custodyFailure(err error, stage string) error {
 	switch {
 	case errors.Is(err, credentials.ErrLocked):
-		return storageFailure("key_locked_or_denied")
+		return storageFailure("key_locked_or_denied", operationProfileOpen, stage, err)
 	case errors.Is(err, credentials.ErrBusy):
-		return storageFailure("key_busy")
+		return storageFailure("key_busy", operationProfileOpen, stage, err)
 	case errors.Is(err, context.DeadlineExceeded):
-		return storageFailure("key_timeout")
+		return storageFailure("key_timeout", operationProfileOpen, stage, err)
 	case errors.Is(err, context.Canceled):
-		return storageFailure("key_cancelled")
+		return storageFailure("key_cancelled", operationProfileOpen, stage, err)
 	default:
-		return storageFailure("key_unavailable")
+		return storageFailure("key_unavailable", operationProfileOpen, stage, err)
 	}
 }
 
@@ -82,20 +150,20 @@ func decodeRoot(data []byte) (rootIdentity, error) {
 	d := json.NewDecoder(bytes.NewReader(data))
 	d.DisallowUnknownFields()
 	if d.Decode(&id) != nil || d.Decode(new(any)) != io.EOF || id.Profile != storageProfile {
-		return id, errStorage
+		return id, storageFailure("profile_invalid", operationProfileOpen, stageIdentity, errStorage)
 	}
 	if id.Format != rootLayout {
-		return id, storageFailure("unsupported_layout")
+		return id, storageFailure("unsupported_layout", operationProfileOpen, stageIdentity, nil)
 	}
 	raw, err := hex.DecodeString(id.ID)
 	if err != nil || len(raw) != 32 || hex.EncodeToString(raw) != id.ID {
-		return id, errStorage
+		return id, storageFailure("profile_invalid", operationProfileOpen, stageIdentity, errStorage)
 	}
 	if id.State == "initializing" {
-		return id, storageFailure("creation_incomplete")
+		return id, storageFailure("creation_incomplete", operationProfileOpen, stageIdentity, nil)
 	}
 	if id.State != "ready" {
-		return id, errStorage
+		return id, storageFailure("profile_invalid", operationProfileOpen, stageIdentity, errStorage)
 	}
 	return id, nil
 }
@@ -104,8 +172,11 @@ func syncDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 func createRootIdentity(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
@@ -127,34 +198,43 @@ func createRootIdentity(path string, data []byte) error {
 }
 func openStorage(ctx context.Context, directory string, vault credentials.Store, writable bool) (out *admittedStorage, err error) {
 	if ctx == nil || vault == nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
-		return nil, errStorage
+		return nil, storageFailure("profile_invalid", operationProfileOpen, stageInput, errStorage)
 	}
 	if writable {
 		if err := os.Mkdir(directory, 0700); err != nil && !os.IsExist(err) {
-			return nil, errStorage
+			return nil, profileStorageFailure(err, operationProfileOpen, stageProfileDirectory)
 		}
 	}
-	if storage.PrivateDirectory(directory) != nil {
-		return nil, errStorage
+	if err := storage.PrivateDirectory(directory); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageProfileDirectory, err)
+		}
+		return nil, profileStorageFailure(err, operationProfileOpen, stageProfileDirectory)
 	}
-	if writable && syncDirectory(filepath.Dir(directory)) != nil {
-		return nil, errStorage
+	if writable {
+		if err := syncDirectory(filepath.Dir(directory)); err != nil {
+			return nil, profileStorageFailure(err, operationProfileOpen, stageParentSync)
+		}
 	}
 	var lock *os.File
 	if writable {
 		lock, err = os.OpenFile(filepath.Join(directory, "storage.lock"), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 		if err != nil {
-			return nil, errStorage
+			return nil, profileStorageFailure(err, operationProfileOpen, stageLeaseOpen)
 		}
 		info, e := lock.Stat()
-		st, ok := infoSys(info)
-		if e != nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
-			lock.Close()
-			return nil, errStorage
+		if e != nil {
+			_ = lock.Close()
+			return nil, profileStorageFailure(e, operationProfileOpen, stageLeaseMetadata)
 		}
-		if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
-			lock.Close()
-			return nil, errStorage
+		st, ok := infoSys(info)
+		if info == nil || !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || int(st.Uid) != os.Geteuid() || st.Nlink != 1 {
+			_ = lock.Close()
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageLeaseMetadata, errStorage)
+		}
+		if e := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
+			_ = lock.Close()
+			return nil, profileLeaseFailure(e)
 		}
 	}
 	defer func() {
@@ -165,20 +245,23 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	}()
 	path := filepath.Join(directory, rootIdentityName)
 	data, readErr := storage.ReadPrivate(path, 1024)
-	fresh := os.IsNotExist(readErr)
+	fresh := errors.Is(readErr, os.ErrNotExist)
 	var id rootIdentity
 	if fresh {
-		if !writable || freshProfile(directory) != nil {
-			return nil, errStorage
+		if !writable {
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageIdentity, readErr)
+		}
+		if e := freshProfile(directory); e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageFreshProfile)
 		}
 		random := make([]byte, 32)
 		if _, e := rand.Read(random); e != nil {
-			return nil, errStorage
+			return nil, storageFailure("profile_io_failed", operationProfileOpen, stageIdentity, e)
 		}
 		id = rootIdentity{Format: rootLayout, ID: hex.EncodeToString(random), Profile: storageProfile, State: "initializing"}
 	} else {
 		if readErr != nil {
-			return nil, errStorage
+			return nil, profileStorageFailure(readErr, operationProfileOpen, stageIdentity)
 		}
 		id, err = decodeRoot(data)
 		if err != nil {
@@ -187,46 +270,46 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	}
 	value, err := vault.Get(ctx, rootSlot(id))
 	if err != nil {
-		return nil, custodyFailure(err)
+		return nil, custodyFailure(err, stageRootKey)
 	}
 	if fresh {
 		if value != "" {
-			return nil, storageFailure("key_slot_occupied")
+			return nil, storageFailure("key_slot_occupied", operationProfileOpen, stageRootKey, nil)
 		}
 		// Get was read-only. Reserve the durable attempt immediately before Put.
 		// A locked/busy preflight read cannot strand an untouched profile.
 		encoded, _ := json.Marshal(id)
-		if createRootIdentity(path, encoded) != nil {
-			return nil, storageFailure("creation_incomplete")
+		if e := createRootIdentity(path, encoded); e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageIdentity)
 		}
 		key := make([]byte, 32)
 		if _, e := rand.Read(key); e != nil {
-			return nil, errStorage
+			return nil, storageFailure("profile_io_failed", operationProfileOpen, stageRootKey, e)
 		}
 		value = hex.EncodeToString(key)
 		clear(key)
 		if e := vault.Put(ctx, rootSlot(id), value); e != nil {
-			return nil, custodyFailure(e)
+			return nil, custodyFailure(e, stageRootKey)
 		}
 		observed, e := vault.Get(ctx, rootSlot(id))
 		if e != nil {
-			return nil, custodyFailure(e)
+			return nil, custodyFailure(e, stageRootKey)
 		}
 		if subtle.ConstantTimeCompare([]byte(observed), []byte(value)) != 1 {
-			return nil, storageFailure("key_readback_mismatch")
+			return nil, storageFailure("key_readback_mismatch", operationProfileOpen, stageRootKey, nil)
 		}
 	}
 	if value == "" {
-		return nil, storageFailure("key_missing")
+		return nil, storageFailure("key_missing", operationProfileOpen, stageRootKey, nil)
 	}
 	key, err := hex.DecodeString(value)
 	if err != nil || len(key) != 32 || hex.EncodeToString(key) != value {
-		return nil, storageFailure("key_malformed")
+		return nil, storageFailure("key_malformed", operationProfileOpen, stageRootKey, err)
 	}
 	defer clear(key)
 	files, err := storage.NewFiles(directory, id.ID, key, writable)
 	if err != nil {
-		return nil, errStorage
+		return nil, profileStorageFailure(err, operationProfileOpen, stageRootSeal)
 	}
 	defer func() {
 		if err != nil {
@@ -234,13 +317,23 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 		}
 	}()
 	if fresh {
-		if files.Write(rootSealName, []byte(rootSealContent)) != nil {
-			return nil, errStorage
+		if e := files.Write(rootSealName, []byte(rootSealContent)); e != nil {
+			return nil, profileStorageFailure(e, operationProfileOpen, stageRootSeal)
 		}
 	}
 	seal, err := files.Read(rootSealName, 128)
-	if err != nil || string(seal) != rootSealContent {
-		return nil, storageFailure("root_authentication_failed")
+	if err != nil {
+		switch {
+		case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM), errors.Is(err, storage.ErrUnsafePrivateFile):
+			return nil, profileStorageFailure(err, operationProfileOpen, stageRootSeal)
+		case errors.Is(err, storage.ErrIntegrity), errors.Is(err, os.ErrNotExist):
+			return nil, storageFailure("root_authentication_failed", operationProfileOpen, stageRootSeal, err)
+		default:
+			return nil, profileStorageFailure(err, operationProfileOpen, stageRootSeal)
+		}
+	}
+	if string(seal) != rootSealContent {
+		return nil, storageFailure("root_authentication_failed", operationProfileOpen, stageRootSeal, nil)
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -254,17 +347,26 @@ func (r *admittedStorage) publishReady() error {
 	if !r.fresh {
 		return nil
 	}
-	if r.files.Available() != nil {
-		return storageFailure("creation_incomplete")
+	if err := r.files.Available(); err != nil {
+		if errors.Is(err, storage.ErrUnavailable) {
+			return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
+		}
+		return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
 	}
 	identity := r.identity
 	identity.State = "ready"
 	encoded, err := json.Marshal(identity)
 	if err != nil {
-		return storageFailure("creation_incomplete")
+		return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
 	}
 	if err := storage.WritePrivate(r.identityPath, encoded); err != nil {
-		return storageFailure("creation_incomplete")
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) || errors.Is(err, storage.ErrUnsafePrivateFile) {
+			return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
+		}
+		if storage.IsIndeterminate(err) {
+			return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
+		}
+		return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
 	}
 	r.identity = identity
 	r.fresh = false
@@ -292,11 +394,17 @@ func AdministratorToken(ctx context.Context, directory string) (string, error) {
 	defer root.Close()
 	trustFiles, err := root.files.Scope("trust")
 	if err != nil {
-		return "", errStorage
+		return "", profileStorageFailure(err, operationAdminToken, stageTrustStorage)
 	}
 	token, err := trustFiles.Read("admin-token", 1024)
-	if err != nil || len(token) < 32 {
-		return "", errStorage
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, storage.ErrIntegrity) {
+			return "", storageFailure("profile_invalid", operationAdminToken, stageAdminToken, err)
+		}
+		return "", profileStorageFailure(err, operationAdminToken, stageAdminToken)
+	}
+	if len(token) < 32 {
+		return "", storageFailure("profile_invalid", operationAdminToken, stageAdminToken, errStorage)
 	}
 	return string(token), nil
 }

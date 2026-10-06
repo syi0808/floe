@@ -9,6 +9,19 @@ import (
 	"syscall"
 )
 
+// ErrUnsafePrivateFile marks a file or directory that fails the private-file
+// metadata checks. Filesystem errors are returned with their original cause so
+// the profile owner can distinguish access denial from malformed metadata.
+var ErrUnsafePrivateFile = errors.New("unsafe private-file metadata")
+
+type unsafePrivateFileError struct{ cause error }
+
+func (e unsafePrivateFileError) Error() string { return ErrUnsafePrivateFile.Error() }
+func (e unsafePrivateFileError) Unwrap() error { return e.cause }
+func (e unsafePrivateFileError) Is(target error) bool {
+	return target == ErrUnsafePrivateFile
+}
+
 type IndeterminateWrite struct{ Cause error }
 
 func (e IndeterminateWrite) Error() string { return "private write durability uncertain" }
@@ -16,12 +29,15 @@ func (e IndeterminateWrite) Unwrap() error { return e.Cause }
 func IsIndeterminate(err error) bool       { var e IndeterminateWrite; return errors.As(err, &e) }
 func PrivateDirectory(path string) error {
 	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return errors.New("invalid private directory")
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return ErrUnsafePrivateFile
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int(stat.Uid) != os.Geteuid() {
-		return errors.New("invalid private directory owner")
+		return ErrUnsafePrivateFile
 	}
 	return nil
 }
@@ -32,7 +48,7 @@ func openPrivate(path string, limit int64) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
-			return nil, ErrIntegrity
+			return nil, unsafePrivateFileError{cause: err}
 		}
 		return nil, err
 	}
@@ -42,7 +58,11 @@ func openPrivate(path string, limit int64) (*os.File, error) {
 		return nil, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > limit || !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
+		f.Close()
+		return nil, ErrUnsafePrivateFile
+	}
+	if info.Size() > limit {
 		f.Close()
 		return nil, ErrIntegrity
 	}
@@ -53,10 +73,13 @@ func ReadPrivate(path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	closeErr := f.Close()
 	if err != nil {
 		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	if int64(len(data)) > limit {
 		return nil, ErrIntegrity

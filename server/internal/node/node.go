@@ -54,38 +54,23 @@ func New(config Config) (*Node, error) {
 	}()
 	trustFiles, err := storageRoot.files.Scope("trust")
 	if err != nil {
-		if storageRoot.fresh {
-			return nil, storageFailure("creation_incomplete")
-		}
-		return nil, storageFailure("owner_storage_unavailable")
+		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
 	}
 	inferenceFiles, err := storageRoot.files.Scope("inference")
 	if err != nil {
-		if storageRoot.fresh {
-			return nil, storageFailure("creation_incomplete")
-		}
-		return nil, storageFailure("owner_storage_unavailable")
+		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
 	}
 	integrationFiles, err := storageRoot.files.Scope("integrations")
 	if err != nil {
-		if storageRoot.fresh {
-			return nil, storageFailure("creation_incomplete")
-		}
-		return nil, storageFailure("owner_storage_unavailable")
+		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
 	}
 	connectorFiles, err := storageRoot.files.Scope("connectors")
 	if err != nil {
-		if storageRoot.fresh {
-			return nil, storageFailure("creation_incomplete")
-		}
-		return nil, storageFailure("owner_storage_unavailable")
+		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
 	}
 	t, err := trust.Open(trustFiles, storageRoot.fresh)
 	if err != nil {
-		if storageRoot.fresh {
-			return nil, storageFailure("creation_incomplete")
-		}
-		return nil, storageFailure("trust_unavailable")
+		return nil, startupStorageFailure(err, "trust_unavailable", stageTrustStorage, storageRoot.fresh)
 	}
 	if err := storageRoot.publishReady(); err != nil {
 		return nil, err

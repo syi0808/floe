@@ -17,8 +17,12 @@ const storageProfile = "production"
 func profileStore(directory string, initialize bool) (credentials.Store, error) {
 	// A production binary never adopts development credentials or state.
 	for _, root := range []string{directory, filepath.Dir(directory)} {
-		if _, err := os.Lstat(filepath.Join(root, "floe-development-profile")); !os.IsNotExist(err) {
-			return nil, errors.New("storage profile does not match this build")
+		_, err := os.Lstat(filepath.Join(root, "floe-development-profile"))
+		if err == nil {
+			return nil, storageFailure("profile_invalid", operationProfileOpen, stageBuildProfileCheck, errStorage)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, profileStorageFailure(err, operationProfileOpen, stageBuildProfileCheck)
 		}
 	}
 	return credentials.Keychain{}, nil

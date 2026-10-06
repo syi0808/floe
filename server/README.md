@@ -110,6 +110,16 @@ non-secret custody categories (locked/denied, busy, timeout, missing, malformed 
 root authentication failure). A failed read before first Put leaves no creation
 marker; an uncertain Put retains its initializing marker and key evidence.
 
+Profile startup and explicit token-retrieval failures also report a bounded
+operation and stage. Root profile filesystem `EACCES`/`EPERM` maps to
+`profile_access_denied`; `profile_in_use` is reserved for nonblocking
+process-lease contention; malformed or unsafe private metadata maps to
+`profile_invalid`; other profile I/O maps to `profile_io_failed`. Existing
+key, `unsupported_layout`, `creation_incomplete` and
+`root_authentication_failed` categories remain distinct, and credential-store
+outcomes retain their key categories. CLI diagnostics omit filesystem paths and
+raw OS errors.
+
 The current encrypted root layout is owner-scoped (format 2). Older profiles are not migrated or reset: encrypted format 1 is refused as
 `unsupported_layout` before owner directories are created. Old plaintext profiles
 are refused as `profile_invalid`. Fresh creation keeps

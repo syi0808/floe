@@ -73,7 +73,7 @@ func serve(handler http.Handler, address string) {
 func profileFailure(err error, message string) {
 	var issue *node.StorageFailure
 	if errors.As(err, &issue) {
-		log.Fatalf("%s (%s). Existing files and keys were preserved.", message, issue.Code())
+		log.Fatalf("%s (category=%s; operation=%s; stage=%s). Existing files and keys were preserved.", message, issue.Code(), issue.Operation(), issue.Stage())
 	}
 	log.Fatal(message)
 }

@@ -20,6 +20,14 @@ var envelope = []byte{'F', 'L', 'O', 'E', 0, 'E', 'N', 'C', 1}
 var ErrUnavailable = errors.New("encrypted storage unavailable")
 var ErrIntegrity = errors.New("encrypted storage integrity failure")
 
+type unavailableCause struct{ cause error }
+
+func (e unavailableCause) Error() string { return ErrUnavailable.Error() }
+func (e unavailableCause) Unwrap() error { return e.cause }
+func (e unavailableCause) Is(target error) bool {
+	return target == ErrUnavailable
+}
+
 type fileRoot struct {
 	mu               sync.RWMutex
 	path, identity   string
@@ -225,9 +233,13 @@ func (f *Files) Scope(parts ...string) (*Files, error) {
 				}
 				e = parent.Sync()
 				closeErr := parent.Close()
-				if e != nil || closeErr != nil {
+				if e != nil {
 					f.root.unavailable.Store(true)
-					return nil, ErrUnavailable
+					return nil, unavailableCause{cause: e}
+				}
+				if closeErr != nil {
+					f.root.unavailable.Store(true)
+					return nil, unavailableCause{cause: closeErr}
 				}
 			}
 		}
