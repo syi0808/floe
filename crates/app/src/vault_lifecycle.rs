@@ -6,8 +6,8 @@ use crate::owner_handles::ReadyOwners;
 use crate::ready_generation::ReadyGeneration;
 use crate::storage_profile::{ProfileVaultKeys as PlatformVaultKeys, vault_keys};
 use crate::{
-    CallerContext, FloeCore, VaultLifecycleCommandFailure, VaultLifecycleFailureProjection,
-    VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
+    CallerContext, FloeCore, ModelProviderFactory, VaultLifecycleCommandFailure,
+    VaultLifecycleFailureProjection, VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
 };
 use floe_execution::{CancelReason, Cancellation};
 use floe_kernel::{
@@ -133,6 +133,7 @@ pub(crate) struct VaultBridge {
     root: PathBuf,
     core: Arc<FloeCore>,
     local_context: Arc<LocalContextHost>,
+    model_provider_factory: Arc<dyn ModelProviderFactory>,
     state: Mutex<BridgeState>,
     drained: Condvar,
     published: Arc<Mutex<Published>>,
@@ -142,11 +143,13 @@ impl VaultBridge {
         database_path: &str,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
+        model_provider_factory: Arc<dyn ModelProviderFactory>,
     ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
             core,
             local_context,
+            model_provider_factory,
             state: Mutex::new(BridgeState::default()),
             drained: Condvar::new(),
             published: Arc::new(Mutex::new(Published::default())),
@@ -244,6 +247,7 @@ impl VaultBridge {
                     self.core.clone(),
                     self.local_context.clone(),
                     self.published.clone(),
+                    self.model_provider_factory.clone(),
                 )?);
             }
             Ok(state)
@@ -330,6 +334,7 @@ impl Worker {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
         published: Arc<Mutex<Published>>,
+        model_provider_factory: Arc<dyn ModelProviderFactory>,
     ) -> Result<Self, AgentFailure> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -387,6 +392,7 @@ impl Worker {
                                         &core,
                                         &local_context,
                                         &published,
+                                        &model_provider_factory,
                                         &mut current,
                                         &job,
                                     ),
@@ -618,6 +624,7 @@ async fn execute(
     core: &Arc<FloeCore>,
     local_context: &Arc<LocalContextHost>,
     published: &Mutex<Published>,
+    model_provider_factory: &Arc<dyn ModelProviderFactory>,
     current: &mut Option<OpenGeneration>,
     job: &Job,
 ) -> Result<VaultState, AgentFailure> {
@@ -665,6 +672,7 @@ async fn execute(
                     vault,
                     core.clone(),
                     local_context.clone(),
+                    model_provider_factory.clone(),
                     job.caller.owner_actor(),
                     job.id,
                     job.cancellation.clone(),

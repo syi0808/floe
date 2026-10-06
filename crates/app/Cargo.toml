@@ -54,6 +54,11 @@ apple-native-keyring-store = { version = "1.0.2", default-features = false, feat
     "keychain",
 ] }
 
+[[test]]
+name = "conversation_integration"
+path = "tests/conversation_integration.rs"
+required-features = ["development-storage"]
+
 [[example]]
 name = "vault_keyring_smoke"
 required-features = ["os-keyring"]

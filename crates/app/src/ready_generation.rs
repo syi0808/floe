@@ -1,5 +1,5 @@
 //! Concrete construction and retirement of one encrypted owner generation.
-use crate::{FloeCore, LocalContextHost, ReadyOwners};
+use crate::{FloeCore, LocalContextHost, ModelProviderFactory, ReadyOwners};
 use floe_execution::Cancellation;
 use floe_kernel::{AgentFailure, OwnerActor};
 use floe_vault::{EncryptedAgentVault, VaultKeyProvider};
@@ -51,6 +51,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         vault: EncryptedAgentVault<Keys>,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
+        model_provider_factory: Arc<dyn ModelProviderFactory>,
         actor: OwnerActor,
         operation_id: Uuid,
         cancellation: Cancellation,
@@ -94,11 +95,10 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             sources.authorization_signer.clone(),
         )?;
         guard.generation = Some(activation.executor_generation);
+        let provider = model_provider_factory.create(sources.gateway_credentials.as_ref().clone());
         let model: Arc<dyn floe_agent_contract::ModelPort> =
             Arc::new(floe_inference::InferenceService::new(
-                floe_provider_adapters::gateway::CompositeModelProvider::new(
-                    sources.gateway_credentials.as_ref().clone(),
-                ),
+                provider,
                 sources.dependency_resolver.clone(),
                 sources.gateway_credentials.clone(),
             ));

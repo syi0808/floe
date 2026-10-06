@@ -8,6 +8,48 @@ use tokio::runtime::{Builder, Runtime};
 
 use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_lifecycle};
 
+/// Rust-only external model-adapter composition input. The selected factory is
+/// retained by this App host and used to build a provider for each Vault generation.
+pub trait ModelProviderFactory: Send + Sync + 'static {
+    fn create(
+        &self,
+        gateway_credentials: floe_provider_adapters::gateway::GatewayCredentialStore,
+    ) -> Arc<dyn floe_inference::ModelProvider>;
+}
+
+struct CompositeModelProviderFactory;
+
+impl ModelProviderFactory for CompositeModelProviderFactory {
+    fn create(
+        &self,
+        gateway_credentials: floe_provider_adapters::gateway::GatewayCredentialStore,
+    ) -> Arc<dyn floe_inference::ModelProvider> {
+        Arc::new(floe_provider_adapters::gateway::CompositeModelProvider::new(gateway_credentials))
+    }
+}
+
+/// Immutable Rust-only options for opening the default development/production
+/// installation. FFI and persisted app configuration do not carry this seam.
+#[derive(Clone)]
+pub struct AppOpenOptions {
+    model_provider_factory: Arc<dyn ModelProviderFactory>,
+}
+
+impl AppOpenOptions {
+    pub fn with_model_provider_factory(mut self, factory: impl ModelProviderFactory) -> Self {
+        self.model_provider_factory = Arc::new(factory);
+        self
+    }
+}
+
+impl Default for AppOpenOptions {
+    fn default() -> Self {
+        Self {
+            model_provider_factory: Arc::new(CompositeModelProviderFactory),
+        }
+    }
+}
+
 pub struct AppComposition {
     pub(crate) runtime: Runtime,
     pub(crate) core: Arc<FloeCore>,
@@ -65,12 +107,23 @@ pub fn open(path: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
         identity,
         runtime,
         store.with_installation_lock(lease.into_lock_file()),
+        AppOpenOptions::default(),
     )
 }
 
 /// Open the one internal installation and its encrypted product store. Its own
 /// root-key custody is independent of Agent Vault activation or provider credentials.
 pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, AppOpenError> {
+    open_default_with_options(support_directory, AppOpenOptions::default())
+}
+
+/// Open the one internal installation with an explicit Rust-only external
+/// model-provider factory. Both this entry and `open_default` share the same
+/// installation, store, and App composition path.
+pub fn open_default_with_options(
+    support_directory: &str,
+    options: AppOpenOptions,
+) -> Result<AppHost<AppComposition>, AppOpenError> {
     let runtime = runtime()?;
     let support_directory =
         crate::storage_profile::support_directory(std::path::Path::new(support_directory))?;
@@ -122,7 +175,7 @@ pub fn open_default(support_directory: &str) -> Result<AppHost<AppComposition>, 
         .ok_or_else(|| AppOpenError::Runtime("local database path is invalid".into()))?
         .to_owned();
     let store = store.with_installation_lock(installation.into_lease().into_lock_file());
-    compose(&path, identity, runtime, store)
+    compose(&path, identity, runtime, store, options)
 }
 
 fn installation_error(error: floe_provider_adapters::NativeInstallationError) -> AppOpenError {
@@ -143,6 +196,7 @@ fn compose(
     identity: crate::LocalIdentityClaim,
     runtime: Runtime,
     store: floe_vault::TursoStore,
+    options: AppOpenOptions,
 ) -> Result<AppHost<AppComposition>, AppOpenError> {
     let database = std::fs::canonicalize(path)
         .map_err(|_| AppOpenError::Host(HostError::IdentityUnavailable))?;
@@ -203,6 +257,7 @@ fn compose(
                 .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?,
             core,
             local_context,
+            options.model_provider_factory,
         ),
     };
     AppHost::with_caller(services, caller).map_err(AppOpenError::Host)

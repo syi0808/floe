@@ -44,7 +44,6 @@ struct SyntheticDeviceProvider {
     actor: OwnerActor,
 }
 impl floe_inference::ModelProvider for SyntheticDeviceProvider {
-    type Prepared = floe_provider_adapters::models::PreparedDeviceTransport;
     fn observe_primary<'a>(
         &'a self,
         request: &'a floe_agent_contract::ModelPlanRequest,
@@ -52,7 +51,7 @@ impl floe_inference::ModelProvider for SyntheticDeviceProvider {
     ) -> BoxFuture<
         'a,
         Result<
-            floe_inference::PrimaryObservation<Self::Prepared>,
+            floe_inference::PrimaryObservation<Box<dyn floe_inference::PreparedModelTransport>>,
             floe_inference::ModelObservationError,
         >,
     > {
@@ -74,14 +73,27 @@ impl floe_inference::ModelProvider for SyntheticDeviceProvider {
     ) -> BoxFuture<
         'a,
         Result<
-            floe_inference::LocalObservation<Self::Prepared>,
+            floe_inference::LocalObservation<Box<dyn floe_inference::PreparedModelTransport>>,
             floe_inference::ModelObservationError,
         >,
     > {
         Box::pin(async move {
-            floe_provider_adapters::models::DeviceModelProvider::encrypted()
+            let observation = floe_provider_adapters::models::DeviceModelProvider::encrypted()
                 .observe_local_fallback(request, scope)
-                .await
+                .await?;
+            Ok(match observation {
+                floe_inference::LocalObservation::Available(profile) => {
+                    floe_inference::LocalObservation::Available(
+                        floe_inference::PreparedModelProfile {
+                            capability: profile.capability,
+                            transport: Box::new(profile.transport),
+                        },
+                    )
+                }
+                floe_inference::LocalObservation::Unavailable(reason) => {
+                    floe_inference::LocalObservation::Unavailable(reason)
+                }
+            })
         })
     }
 }
