@@ -100,10 +100,7 @@ func rootIdentityCreateFailure(err error) error {
 }
 
 func readyMarkerFailure(err error) error {
-	if storage.IsIndeterminate(err) {
-		return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
-	}
-	return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
+	return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
 }
 
 func startupStorageFailure(err error, fallbackCode, stage string, fresh bool) error {
@@ -375,16 +372,13 @@ func (r *admittedStorage) publishReady() error {
 		return nil
 	}
 	if err := r.files.Available(); err != nil {
-		if errors.Is(err, storage.ErrUnavailable) {
-			return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
-		}
-		return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
+		return readyMarkerFailure(err)
 	}
 	identity := r.identity
 	identity.State = "ready"
 	encoded, err := json.Marshal(identity)
 	if err != nil {
-		return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
+		return readyMarkerFailure(err)
 	}
 	if err := storage.WritePrivate(r.identityPath, encoded); err != nil {
 		return readyMarkerFailure(err)
