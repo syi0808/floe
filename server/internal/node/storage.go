@@ -85,7 +85,31 @@ func profileLeaseFailure(err error) error {
 	return profileStorageFailure(err, operationProfileOpen, stageLeaseAcquire)
 }
 
+func profileLeaseOpenFailure(err error) error {
+	if errors.Is(err, syscall.ELOOP) {
+		return storageFailure("profile_invalid", operationProfileOpen, stageLeaseOpen, err)
+	}
+	return profileStorageFailure(err, operationProfileOpen, stageLeaseOpen)
+}
+
+func rootIdentityCreateFailure(err error) error {
+	if storage.IsIndeterminate(err) {
+		return storageFailure("creation_incomplete", operationProfileOpen, stageIdentity, err)
+	}
+	return profileStorageFailure(err, operationProfileOpen, stageIdentity)
+}
+
+func readyMarkerFailure(err error) error {
+	if storage.IsIndeterminate(err) {
+		return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
+	}
+	return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
+}
+
 func startupStorageFailure(err error, fallbackCode, stage string, fresh bool) error {
+	if fresh {
+		return storageFailure("creation_incomplete", operationNodeStartup, stage, err)
+	}
 	var pathErr *os.PathError
 	var linkErr *os.LinkError
 	var syscallErr *os.SyscallError
@@ -93,9 +117,6 @@ func startupStorageFailure(err error, fallbackCode, stage string, fresh bool) er
 	if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) || errors.Is(err, storage.ErrUnsafePrivateFile) ||
 		errors.As(err, &pathErr) || errors.As(err, &linkErr) || errors.As(err, &syscallErr) || errors.As(err, &errno) {
 		return profileStorageFailure(err, operationNodeStartup, stage)
-	}
-	if fresh {
-		return storageFailure("creation_incomplete", operationNodeStartup, stage, err)
 	}
 	return storageFailure(fallbackCode, operationNodeStartup, stage, err)
 }
@@ -183,18 +204,24 @@ func createRootIdentity(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(data)
+	n, err := f.Write(data)
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
 	if err == nil {
 		err = f.Sync()
 	}
 	closeErr := f.Close()
 	if err != nil {
-		return err
+		return storage.IndeterminateWrite{Cause: err}
 	}
 	if closeErr != nil {
-		return closeErr
+		return storage.IndeterminateWrite{Cause: closeErr}
 	}
-	return syncDirectory(filepath.Dir(path))
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
+		return storage.IndeterminateWrite{Cause: err}
+	}
+	return nil
 }
 func openStorage(ctx context.Context, directory string, vault credentials.Store, writable bool) (out *admittedStorage, err error) {
 	if ctx == nil || vault == nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
@@ -220,7 +247,7 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 	if writable {
 		lock, err = os.OpenFile(filepath.Join(directory, "storage.lock"), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 		if err != nil {
-			return nil, profileStorageFailure(err, operationProfileOpen, stageLeaseOpen)
+			return nil, profileLeaseOpenFailure(err)
 		}
 		info, e := lock.Stat()
 		if e != nil {
@@ -280,7 +307,7 @@ func openStorage(ctx context.Context, directory string, vault credentials.Store,
 		// A locked/busy preflight read cannot strand an untouched profile.
 		encoded, _ := json.Marshal(id)
 		if e := createRootIdentity(path, encoded); e != nil {
-			return nil, profileStorageFailure(e, operationProfileOpen, stageIdentity)
+			return nil, rootIdentityCreateFailure(e)
 		}
 		key := make([]byte, 32)
 		if _, e := rand.Read(key); e != nil {
@@ -360,13 +387,7 @@ func (r *admittedStorage) publishReady() error {
 		return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
 	}
 	if err := storage.WritePrivate(r.identityPath, encoded); err != nil {
-		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) || errors.Is(err, storage.ErrUnsafePrivateFile) {
-			return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
-		}
-		if storage.IsIndeterminate(err) {
-			return storageFailure("creation_incomplete", operationProfileReady, stageReadyMarker, err)
-		}
-		return profileStorageFailure(err, operationProfileReady, stageReadyMarker)
+		return readyMarkerFailure(err)
 	}
 	r.identity = identity
 	r.fresh = false

@@ -19,7 +19,7 @@ type unsafePrivateFileError struct{ cause error }
 func (e unsafePrivateFileError) Error() string { return ErrUnsafePrivateFile.Error() }
 func (e unsafePrivateFileError) Unwrap() error { return e.cause }
 func (e unsafePrivateFileError) Is(target error) bool {
-	return target == ErrUnsafePrivateFile
+	return target == ErrUnsafePrivateFile || target == ErrIntegrity
 }
 
 type IndeterminateWrite struct{ Cause error }
@@ -60,7 +60,7 @@ func openPrivate(path string, limit int64) (*os.File, error) {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || !ok || int(stat.Uid) != os.Geteuid() || stat.Nlink != 1 {
 		f.Close()
-		return nil, ErrUnsafePrivateFile
+		return nil, unsafePrivateFileError{cause: ErrIntegrity}
 	}
 	if info.Size() > limit {
 		f.Close()

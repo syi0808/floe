@@ -111,11 +111,13 @@ root authentication failure). A failed read before first Put leaves no creation
 marker; an uncertain Put retains its initializing marker and key evidence.
 
 Profile startup and explicit token-retrieval failures also report a bounded
-operation and stage. Root profile filesystem `EACCES`/`EPERM` maps to
-`profile_access_denied`; `profile_in_use` is reserved for nonblocking
-process-lease contention; malformed or unsafe private metadata maps to
-`profile_invalid`; other profile I/O maps to `profile_io_failed`. Existing
-key, `unsupported_layout`, `creation_incomplete` and
+operation and stage. Outside incomplete-creation lifecycle states, root profile
+filesystem `EACCES`/`EPERM` maps to `profile_access_denied`; `profile_in_use` is
+reserved for nonblocking process-lease contention; malformed or unsafe private
+metadata maps to `profile_invalid`; other profile I/O maps to
+`profile_io_failed`. After the durable initializing marker is reserved, fresh
+initialization failures and indeterminate ready-marker publication remain
+`creation_incomplete`. Existing key, `unsupported_layout` and
 `root_authentication_failed` categories remain distinct, and credential-store
 outcomes retain their key categories. CLI diagnostics omit filesystem paths and
 raw OS errors.
