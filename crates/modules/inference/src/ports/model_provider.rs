@@ -6,6 +6,7 @@ use floe_agent_contract::{
 };
 use floe_context_contract::DataClass;
 use floe_execution::{Cancellation, ExecutionScope};
+use std::sync::Arc;
 use tokio::time::Instant;
 use uuid::Uuid;
 
@@ -120,6 +121,24 @@ pub trait PreparedModelTransport: Send + Sync {
     ) -> BoxFuture<'a, Result<CanonicalModelResponse, AgentFailure>>;
 }
 
+impl<T: PreparedModelTransport + ?Sized> PreparedModelTransport for Box<T> {
+    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure> {
+        (**self).validate_request(request)
+    }
+
+    fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
+        (**self).dispatch_target()
+    }
+
+    fn generate<'a>(
+        &'a self,
+        request: CanonicalModelRequest,
+        target: AdmittedDispatchTarget,
+    ) -> BoxFuture<'a, Result<CanonicalModelResponse, AgentFailure>> {
+        (**self).generate(request, target)
+    }
+}
+
 pub struct PreparedModelProfile<P> {
     pub capability: ObservedModelCapability,
     pub transport: P,
@@ -189,17 +208,45 @@ impl From<ModelObservationError> for AgentFailure {
 }
 
 pub trait ModelProvider: Send + Sync {
-    type Prepared: PreparedModelTransport + Send + Sync + 'static;
-
     fn observe_primary<'a>(
         &'a self,
         request: &'a ModelPlanRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<PrimaryObservation<Self::Prepared>, ModelObservationError>>;
+    ) -> BoxFuture<
+        'a,
+        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    >;
 
     fn observe_local_fallback<'a>(
         &'a self,
         request: &'a ModelPlanRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<LocalObservation<Self::Prepared>, ModelObservationError>>;
+    ) -> BoxFuture<
+        'a,
+        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    >;
+}
+
+impl<T: ModelProvider + ?Sized> ModelProvider for Arc<T> {
+    fn observe_primary<'a>(
+        &'a self,
+        request: &'a ModelPlanRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    > {
+        (**self).observe_primary(request, scope)
+    }
+
+    fn observe_local_fallback<'a>(
+        &'a self,
+        request: &'a ModelPlanRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    > {
+        (**self).observe_local_fallback(request, scope)
+    }
 }

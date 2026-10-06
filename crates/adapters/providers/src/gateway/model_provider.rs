@@ -1,15 +1,11 @@
 //! Role-neutral composition. Inference alone selects Primary or fallback.
-use super::{
-    credentials::GatewayCredentialStore,
-    inference::{GatewayModelProvider, PreparedGatewayTransport},
-};
-use crate::models::device::{DeviceModelProvider, PreparedDeviceTransport};
-use floe_agent_contract::{AgentFailure, BoxFuture, ModelPlanRequest};
+use super::{credentials::GatewayCredentialStore, inference::GatewayModelProvider};
+use crate::models::device::DeviceModelProvider;
+use floe_agent_contract::{BoxFuture, ModelPlanRequest};
 use floe_execution::ExecutionScope;
 use floe_inference::{
-    AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, LocalObservation,
-    ModelObservationError, ModelProvider, PreparedModelProfile, PreparedModelTransport,
-    PrimaryObservation,
+    LocalObservation, ModelObservationError, ModelProvider, PreparedModelProfile,
+    PreparedModelTransport, PrimaryObservation,
 };
 
 pub struct CompositeModelProvider {
@@ -24,47 +20,22 @@ impl CompositeModelProvider {
         }
     }
 }
-pub enum PreparedCompositeTransport {
-    Gateway(PreparedGatewayTransport),
-    Device(PreparedDeviceTransport),
-}
-impl PreparedModelTransport for PreparedCompositeTransport {
-    fn validate_request(&self, request: &CanonicalModelRequest) -> Result<(), AgentFailure> {
-        match self {
-            Self::Gateway(transport) => transport.validate_request(request),
-            Self::Device(transport) => transport.validate_request(request),
-        }
-    }
-    fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
-        match self {
-            Self::Gateway(transport) => transport.dispatch_target(),
-            Self::Device(transport) => transport.dispatch_target(),
-        }
-    }
-    fn generate<'a>(
-        &'a self,
-        request: CanonicalModelRequest,
-        target: AdmittedDispatchTarget,
-    ) -> BoxFuture<'a, Result<CanonicalModelResponse, AgentFailure>> {
-        match self {
-            Self::Gateway(transport) => transport.generate(request, target),
-            Self::Device(transport) => transport.generate(request, target),
-        }
-    }
-}
 impl ModelProvider for CompositeModelProvider {
-    type Prepared = PreparedCompositeTransport;
     fn observe_primary<'a>(
         &'a self,
         request: &'a ModelPlanRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<PrimaryObservation<Self::Prepared>, ModelObservationError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    > {
         Box::pin(async move {
             Ok(match self.gateway.observe_primary(request, scope).await? {
                 PrimaryObservation::Available(profile) => {
+                    let transport: Box<dyn PreparedModelTransport> = Box::new(profile.transport);
                     PrimaryObservation::Available(PreparedModelProfile {
                         capability: profile.capability,
-                        transport: PreparedCompositeTransport::Gateway(profile.transport),
+                        transport,
                     })
                 }
                 PrimaryObservation::Absent(reason) => PrimaryObservation::Absent(reason),
@@ -75,14 +46,19 @@ impl ModelProvider for CompositeModelProvider {
         &'a self,
         request: &'a ModelPlanRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<LocalObservation<Self::Prepared>, ModelObservationError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+    > {
         Box::pin(async move {
             Ok(
                 match self.device.observe_local_fallback(request, scope).await? {
                     LocalObservation::Available(profile) => {
+                        let transport: Box<dyn PreparedModelTransport> =
+                            Box::new(profile.transport);
                         LocalObservation::Available(PreparedModelProfile {
                             capability: profile.capability,
-                            transport: PreparedCompositeTransport::Device(profile.transport),
+                            transport,
                         })
                     }
                     LocalObservation::Unavailable(reason) => LocalObservation::Unavailable(reason),

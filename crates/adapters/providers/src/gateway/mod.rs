@@ -7,7 +7,7 @@ mod model_provider;
 mod pairing;
 pub use credentials::{GatewayCredentialError, GatewayCredentialStore};
 pub use inference::{GatewayModelProvider, PreparedGatewayTransport};
-pub use model_provider::{CompositeModelProvider, PreparedCompositeTransport};
+pub use model_provider::CompositeModelProvider;
 
 mod proof;
 mod source_preview;
