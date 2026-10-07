@@ -31,10 +31,9 @@ final class PlatformAcquisitionServices {
   factory PlatformAcquisitionServices.forPlatform({
     required NativeContextHostTransport transport,
     required String deviceId,
-  }) =>
-      PlatformAcquisitionServices._(
-        () => _platformAcquisitionServices(transport, deviceId),
-      );
+  }) => PlatformAcquisitionServices._(
+    () => _platformAcquisitionServices(transport, deviceId),
+  );
 
   final Iterable<NativeAcquisitionService> Function() _serviceFactory;
   final List<NativeAcquisitionService> _ownedServices = [];
@@ -102,9 +101,7 @@ final class PlatformAcquisitionServices {
     }
   }
 
-  Future<void> _disposeFailedStartup(
-    NativeAcquisitionService service,
-  ) async {
+  Future<void> _disposeFailedStartup(NativeAcquisitionService service) async {
     try {
       await _disposeService(service).timeout(_nativeDisposalObservationBound);
     } on TimeoutException catch (error, stackTrace) {
@@ -182,9 +179,7 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
   final macOSContextGateway = Platform.isMacOS ? MacOSContextGateway() : null;
   if (Platform.isMacOS) {
     final attentionGateway = macOSContextGateway!;
-    final broker = AttentionAcquisitionBroker(
-      transport: transport,
-    );
+    final broker = AttentionAcquisitionBroker(transport: transport);
     yield AttentionAcquisitionService(
       broker: broker,
       reader: (request) async {
@@ -240,9 +235,7 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
       ? _androidContactsReader(androidNative, deviceId)
       : null;
   if (personalReader != null) {
-    final broker = PersonalAcquisitionBroker(
-      transport: transport,
-    );
+    final broker = PersonalAcquisitionBroker(transport: transport);
     yield PersonalAcquisitionService(broker: broker, reader: personalReader);
   }
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:floe_client/app/bootstrap.dart';
 import 'package:floe_client/app/floe_app.dart';

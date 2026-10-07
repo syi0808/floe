@@ -33,67 +33,73 @@ void main() {
       ]);
     });
 
-    test('disposes a failed optional service and continues registration', () async {
-      final events = <String>[];
-      final services = PlatformAcquisitionServices([
-        _NativeService(
-          'calendar',
-          events,
-          startFailure: StateError('registration failed'),
-        ),
-        _NativeService('personal', events),
-      ]);
+    test(
+      'disposes a failed optional service and continues registration',
+      () async {
+        final events = <String>[];
+        final services = PlatformAcquisitionServices([
+          _NativeService(
+            'calendar',
+            events,
+            startFailure: StateError('registration failed'),
+          ),
+          _NativeService('personal', events),
+        ]);
 
-      await services.start();
+        await services.start();
 
-      expect(events, [
-        'calendar.start',
-        'calendar.dispose',
-        'personal.start',
-      ]);
-      expect(
-        AppDiagnostics.records.any(
-          (record) => record.operation == 'calendar_startup',
-        ),
-        isTrue,
-      );
-      await services.close();
-      expect(events.last, 'personal.dispose');
-    });
-
-    test('close during registration prevents creation of later services', () async {
-      final events = <String>[];
-      final registrationBarrier = Completer<void>();
-      Iterable<NativeAcquisitionService> serviceSource() sync* {
-        events.add('calendar.create');
-        yield _NativeService(
-          'calendar',
-          events,
-          startBarrier: registrationBarrier.future,
+        expect(events, [
+          'calendar.start',
+          'calendar.dispose',
+          'personal.start',
+        ]);
+        expect(
+          AppDiagnostics.records.any(
+            (record) => record.operation == 'calendar_startup',
+          ),
+          isTrue,
         );
-        events.add('attention.create');
-        yield _NativeService('attention', events);
-      }
+        await services.close();
+        expect(events.last, 'personal.dispose');
+      },
+    );
 
-      final services = PlatformAcquisitionServices(serviceSource());
+    test(
+      'close during registration prevents creation of later services',
+      () async {
+        final events = <String>[];
+        final registrationBarrier = Completer<void>();
+        Iterable<NativeAcquisitionService> serviceSource() sync* {
+          events.add('calendar.create');
+          yield _NativeService(
+            'calendar',
+            events,
+            startBarrier: registrationBarrier.future,
+          );
+          events.add('attention.create');
+          yield _NativeService('attention', events);
+        }
 
-      final starting = services.start();
-      expect(events, ['calendar.create', 'calendar.start']);
+        final services = PlatformAcquisitionServices(serviceSource());
 
-      final firstClose = services.close();
-      final repeatedClose = services.close();
-      expect(identical(firstClose, repeatedClose), isTrue);
-      await firstClose;
-      expect(events.last, 'calendar.dispose');
+        final starting = services.start();
+        expect(events, ['calendar.create', 'calendar.start']);
 
-      registrationBarrier.complete();
-      await starting;
-      expect(events, [
-        'calendar.create',
-        'calendar.start',
-        'calendar.dispose',
-      ]);
-    });
+        final firstClose = services.close();
+        final repeatedClose = services.close();
+        expect(identical(firstClose, repeatedClose), isTrue);
+        await firstClose;
+        expect(events.last, 'calendar.dispose');
+
+        registrationBarrier.complete();
+        await starting;
+        expect(events, [
+          'calendar.create',
+          'calendar.start',
+          'calendar.dispose',
+        ]);
+      },
+    );
 
     test('start after close fails before creating native services', () async {
       final events = <String>[];
@@ -105,37 +111,37 @@ void main() {
       expect(events, isEmpty);
     });
 
-    test('attempts all disposals and exposes cleanup failure after the batch', () async {
-      final events = <String>[];
-      final disposalFailure = StateError('dispose failed');
-      final services = PlatformAcquisitionServices([
-        _NativeService(
-          'calendar',
-          events,
-          disposeFailure: disposalFailure,
-        ),
-        _NativeService('attention', events),
-        _NativeService('personal', events),
-      ]);
-      await services.start();
+    test(
+      'attempts all disposals and exposes cleanup failure after the batch',
+      () async {
+        final events = <String>[];
+        final disposalFailure = StateError('dispose failed');
+        final services = PlatformAcquisitionServices([
+          _NativeService('calendar', events, disposeFailure: disposalFailure),
+          _NativeService('attention', events),
+          _NativeService('personal', events),
+        ]);
+        await services.start();
 
-      final firstClose = services.close();
-      final repeatedClose = services.close();
-      expect(identical(firstClose, repeatedClose), isTrue);
-      await expectLater(firstClose, throwsA(same(disposalFailure)));
-      await expectLater(repeatedClose, throwsA(same(disposalFailure)));
+        final firstClose = services.close();
+        final repeatedClose = services.close();
+        expect(identical(firstClose, repeatedClose), isTrue);
+        await expectLater(firstClose, throwsA(same(disposalFailure)));
+        await expectLater(repeatedClose, throwsA(same(disposalFailure)));
 
-      expect(
-        events.where((event) => event.endsWith('.dispose')),
-        ['calendar.dispose', 'attention.dispose', 'personal.dispose'],
-      );
-      expect(
-        AppDiagnostics.records.any(
-          (record) => record.operation == 'calendar_dispose',
-        ),
-        isTrue,
-      );
-    });
+        expect(events.where((event) => event.endsWith('.dispose')), [
+          'calendar.dispose',
+          'attention.dispose',
+          'personal.dispose',
+        ]);
+        expect(
+          AppDiagnostics.records.any(
+            (record) => record.operation == 'calendar_dispose',
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 }
 
