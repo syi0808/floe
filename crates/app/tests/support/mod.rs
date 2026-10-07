@@ -58,8 +58,6 @@ pub struct ScriptSnapshot {
     pub plan_bindings: Vec<ScriptCallBinding>,
     pub generated: Vec<InferenceRequest>,
     pub generated_bindings: Vec<ScriptCallBinding>,
-    pub transport_boundaries: Vec<String>,
-    pub schedule_responses: Vec<String>,
     pub violations: Vec<String>,
 }
 
@@ -77,8 +75,6 @@ struct RecorderState {
     plan_bindings: Vec<ScriptCallBinding>,
     generated: Vec<InferenceRequest>,
     generated_bindings: Vec<ScriptCallBinding>,
-    transport_boundaries: Vec<String>,
-    schedule_responses: Vec<String>,
     violations: Vec<String>,
     identity: Option<(String, String)>,
     catalogs: std::collections::BTreeMap<String, AllowedCatalog>,
@@ -188,29 +184,6 @@ impl ScriptRecorder {
         }
     }
 
-    fn record_transport_boundary(&self, message: impl Into<String>) {
-        if let Ok(mut state) = self.0.lock() {
-            state.transport_boundaries.push(message.into());
-        }
-    }
-
-    fn record_schedule_response(
-        &self,
-        call_index: usize,
-        response: &Result<CanonicalModelResponse, AgentFailure>,
-    ) {
-        let summary = match response {
-            Ok(response) => match &response.output {
-                Ok(steps) => format!("generation {call_index} emitted {steps:?}"),
-                Err(failure) => format!("generation {call_index} returned model error {failure:?}"),
-            },
-            Err(failure) => format!("generation {call_index} failed before response: {failure:?}"),
-        };
-        if let Ok(mut state) = self.0.lock() {
-            state.schedule_responses.push(summary);
-        }
-    }
-
     fn record_generate(
         &self,
         plan: &ModelPlanRequest,
@@ -245,44 +218,6 @@ impl ScriptRecorder {
                 && task_id.is_none())
             || run_id.is_none()
         {
-            let task_receipt = request
-                .envelope
-                .conversation
-                .current_turn
-                .iter()
-                .rev()
-                .find_map(|entry| match entry {
-                    floe_agent_contract::ModelConversationEntry::DelegationExchange {
-                        request,
-                        receipt,
-                    } => {
-                        let accounting = match &receipt.execution {
-                            floe_agent_contract::TaskExecutionEvidence::Admitted(execution) => {
-                                format!(
-                                    "attempts={} tokens={} cost_micros={} unresolved={}",
-                                    execution.accounting.attempt_refs.len(),
-                                    execution.accounting.usage.tokens,
-                                    execution.accounting.usage.cost_micros,
-                                    execution.accounting.unresolved_attempts.len()
-                                )
-                            }
-                            floe_agent_contract::TaskExecutionEvidence::Unadmitted => {
-                                "unadmitted".into()
-                            }
-                        };
-                        Some(format!(
-                            "task={:?} state={:?} issue={:?} accounting={accounting}",
-                            request.task_id,
-                            receipt.snapshot.state,
-                            receipt.snapshot.issue.as_ref()
-                        ))
-                    }
-                    _ => None,
-                });
-            state.transport_boundaries.push(format!(
-                "generate_binding_rejected consumer={} expected_consumer={} run={run_id:?} task={task_id:?} embedded_task_receipt={task_receipt:?}",
-                plan.consumer, expected_consumer
-            ));
             state.violations.push(format!(
                 "model generate was bound to an unexpected consumer/run/task: consumer={}, run={run_id:?}, task={task_id:?}",
                 plan.consumer
@@ -333,8 +268,6 @@ impl ScriptRecorder {
             plan_bindings: state.plan_bindings.clone(),
             generated: state.generated.clone(),
             generated_bindings: state.generated_bindings.clone(),
-            transport_boundaries: state.transport_boundaries.clone(),
-            schedule_responses: state.schedule_responses.clone(),
             violations: state.violations.clone(),
         }
     }
@@ -377,13 +310,7 @@ impl ScriptedModel {
         request: &InferenceRequest,
         plan: &ModelPlanRequest,
     ) -> Result<(), AgentFailure> {
-        if let Err(failure) = request.validate() {
-            self.recorder.record_transport_boundary(format!(
-                "canonical_request_validation_failed consumer={} attempt={} failure={failure:?}",
-                plan.consumer, request.attempt_id
-            ));
-            return Err(failure);
-        }
+        request.validate()?;
         let expected_user_entries = request
             .envelope
             .conversation
@@ -672,19 +599,7 @@ struct ScriptedTransport {
 
 impl PreparedModelTransport for ScriptedTransport {
     fn validate_request(&self, request: &InferenceRequest) -> Result<(), AgentFailure> {
-        self.model.recorder.record_transport_boundary(format!(
-            "validate_request_enter consumer={} attempt={}",
-            self.plan.consumer, request.attempt_id
-        ));
-        let result = self.model.validate_canonical(request, &self.plan);
-        self.model.recorder.record_transport_boundary(format!(
-            "validate_request_{} consumer={} attempt={} failure={:?}",
-            if result.is_ok() { "ok" } else { "failed" },
-            self.plan.consumer,
-            request.attempt_id,
-            result.as_ref().err()
-        ));
-        result
+        self.model.validate_canonical(request, &self.plan)
     }
 
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
@@ -697,15 +612,7 @@ impl PreparedModelTransport for ScriptedTransport {
         target: AdmittedDispatchTarget,
     ) -> BoxFuture<'a, Result<CanonicalModelResponse, AgentFailure>> {
         Box::pin(async move {
-            self.model.recorder.record_transport_boundary(format!(
-                "generate_enter consumer={} attempt={}",
-                self.plan.consumer, request.attempt_id
-            ));
             self.validate_request(&request)?;
-            self.model.recorder.record_transport_boundary(format!(
-                "generate_preflight_ok consumer={} attempt={}",
-                self.plan.consumer, request.attempt_id
-            ));
             if !target.matches(&self.binding_digest, ProcessingBoundary::Device)
                 || self.capabilities
                     != ModelCapabilities::for_request(
@@ -716,35 +623,14 @@ impl PreparedModelTransport for ScriptedTransport {
                 self.model.recorder.record_violation(
                     "model dispatch target or capabilities did not match the admitted Device plan",
                 );
-                self.model.recorder.record_transport_boundary(format!(
-                    "generate_dispatch_check_failed consumer={} attempt={} failure=PolicyDenied",
-                    self.plan.consumer, request.attempt_id
-                ));
                 return Err(AgentFailure::PolicyDenied);
             }
-            self.model.recorder.record_transport_boundary(format!(
-                "generate_admission_ok consumer={} attempt={}",
-                self.plan.consumer, request.attempt_id
-            ));
-            let call_index = match self.model.recorder.record_generate(
+            let call_index = self.model.recorder.record_generate(
                 &self.plan,
                 &request,
                 self.run_id,
                 self.task_id,
-            ) {
-                Ok(call_index) => call_index,
-                Err(failure) => {
-                    self.model.recorder.record_transport_boundary(format!(
-                        "generate_recorder_failed consumer={} attempt={} failure={failure:?}",
-                        self.plan.consumer, request.attempt_id
-                    ));
-                    return Err(failure);
-                }
-            };
-            self.model.recorder.record_transport_boundary(format!(
-                "generate_recorded consumer={} attempt={} call_index={call_index}",
-                self.plan.consumer, request.attempt_id
-            ));
+            )?;
             match &self.model.output {
                 ModelOutput::Answer => Ok(response(vec![ModelStep::Answer {
                     text: SCRIPTED_REPLY.into(),
@@ -765,11 +651,7 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::ScheduleExpertFlow => {
-                    let response = self.model.schedule_flow_response(call_index, &request);
-                    self.model
-                        .recorder
-                        .record_schedule_response(call_index, &response);
-                    response
+                    self.model.schedule_flow_response(call_index, &request)
                 }
             }
         })

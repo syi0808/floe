@@ -271,25 +271,13 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
     let receipt = wait_terminal_run(&host, command.run_id);
     let script = recorder.snapshot();
     let transcript = read_session(&host, session_id);
-    let task_receipt_outcome = transcript.messages.iter().find_map(|message| match message {
-        SessionMessage::Delegation { task, .. }
-            if task.agent_id == "floe.builtin.schedule" =>
-        {
-            Some((task.task_id, task.state, task.issue.clone()))
-        }
-        _ => None,
-    });
     assert_eq!(
         receipt.state,
         RunState::Completed,
-        "run issue={:?}; TaskReceipt snapshot={:?}; tasks={:?}; plans={:?}; generations={:?}; transport boundaries={:?}; responses={:?}; violations={:?}",
+        "run issue={:?}; model plans={:?}; generations={:?}; violations={:?}",
         receipt.issue,
-        task_receipt_outcome,
-        receipt.task_refs,
         script.plan_bindings,
         script.generated_bindings,
-        script.transport_boundaries,
-        script.schedule_responses,
         script.violations
     );
     assert_eq!(receipt.output.as_deref(), Some(REPLY));
