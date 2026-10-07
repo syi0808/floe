@@ -87,10 +87,12 @@ include(flutter/generated_plugins.cmake)
 # Cargo performs its own incremental source and dependency tracking.
 get_filename_component(FLOE_REPOSITORY_ROOT
   "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
-set(FLOE_NATIVE_LIBRARY "${FLOE_REPOSITORY_ROOT}/target/debug/libfloe_ffi.so")
+set(FLOE_NATIVE_LIBRARY
+  "${CMAKE_CURRENT_BINARY_DIR}/floe_native/libfloe_ffi.so")
 add_custom_target(floe_ffi_build ALL
   COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/build_ffi.sh"
     "${CMAKE_BUILD_TYPE}" "${FLUTTER_TARGET_PLATFORM}"
+    "${FLOE_NATIVE_LIBRARY}"
   BYPRODUCTS "${FLOE_NATIVE_LIBRARY}"
   WORKING_DIRECTORY "${FLOE_REPOSITORY_ROOT}"
   VERBATIM
