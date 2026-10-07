@@ -28,6 +28,7 @@ impl AppQueryRequestDto {
 #[serde(untagged)]
 pub enum AppQueryDto {
     NativeHost(NativeHostQueryDto),
+    Runtime(RuntimeQueryDto),
     Product(AppProductQueryDto),
 }
 
@@ -35,7 +36,32 @@ impl AppQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
             Self::NativeHost(query) => query.validate(),
+            Self::Runtime(query) => query.validate(),
             Self::Product(query) => query.validate(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum RuntimeQueryDto {
+    #[serde(rename = "runtime.readiness")]
+    Readiness {},
+    #[serde(rename = "runtime.preparation.get")]
+    PreparationGet { operation_id: Uuid },
+}
+
+impl RuntimeQueryDto {
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Readiness {} => Ok(()),
+            Self::PreparationGet { operation_id } => {
+                if valid_runtime_uuid(*operation_id) {
+                    Ok(())
+                } else {
+                    Err("query.operation_id")
+                }
+            }
         }
     }
 }
@@ -99,10 +125,6 @@ pub enum AppProductQueryDto {
     },
     #[serde(rename = "conversation.session.resume")]
     ConversationSessionResume {},
-    #[serde(rename = "runtime.readiness")]
-    RuntimeReadiness {},
-    #[serde(rename = "runtime.preparation.get")]
-    RuntimePreparationGet { operation_id: Uuid },
     #[serde(rename = "conversation.get_command")]
     ConversationGetCommand { command_id: CommandIdDto },
     #[serde(rename = "conversation.get_run")]
@@ -158,13 +180,6 @@ impl AppProductQueryDto {
             Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
-            Self::RuntimeReadiness {} => return Ok(()),
-            Self::RuntimePreparationGet { operation_id } => {
-                if valid_runtime_uuid(*operation_id) {
-                    return Ok(());
-                }
-                return Err("query.operation_id");
-            }
             Self::ConversationGetCommand { .. }
             | Self::ConversationGetRun { .. }
             | Self::ConversationGetMessage { .. }
@@ -322,20 +337,33 @@ fn valid_runtime_uuid(id: Uuid) -> bool {
 
 #[cfg(test)]
 mod runtime_query_tests {
-    use super::AppProductQueryDto;
+    use super::{AppQueryDto, AppQueryRequestDto, RuntimeQueryDto};
+    use crate::{APP_WIRE_VERSION, RequestIdDto};
     use uuid::Uuid;
 
     #[test]
     fn preparation_history_query_requires_uuid_v4() {
-        let valid = AppProductQueryDto::RuntimePreparationGet {
-            operation_id: Uuid::new_v4(),
+        let valid_id = Uuid::new_v4();
+        let valid = AppQueryRequestDto {
+            schema_version: APP_WIRE_VERSION,
+            request_id: RequestIdDto::new(Uuid::new_v4()).expect("non-nil request ID"),
+            query: AppQueryDto::Runtime(RuntimeQueryDto::PreparationGet {
+                operation_id: valid_id,
+            }),
         };
         assert_eq!(valid.validate(), Ok(()));
+        let value = serde_json::to_value(valid).expect("serialize Runtime query envelope");
+        assert_eq!(value["query"]["kind"], "runtime.preparation.get");
+        assert_eq!(value["query"]["operation_id"], valid_id.to_string());
 
         let uuid_v7 = Uuid::parse_str("01890f47-2e80-7cc7-b0b5-f12c0a06e63f")
             .expect("valid UUID v7 test identity");
-        let invalid = AppProductQueryDto::RuntimePreparationGet {
-            operation_id: uuid_v7,
+        let invalid = AppQueryRequestDto {
+            schema_version: APP_WIRE_VERSION,
+            request_id: RequestIdDto::new(Uuid::new_v4()).expect("non-nil request ID"),
+            query: AppQueryDto::Runtime(RuntimeQueryDto::PreparationGet {
+                operation_id: uuid_v7,
+            }),
         };
         assert_eq!(invalid.validate(), Err("query.operation_id"));
     }

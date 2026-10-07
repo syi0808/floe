@@ -31,6 +31,7 @@ impl AppCommandRequestDto {
 #[serde(untagged)]
 pub enum AppCommandDto {
     NativeHost(NativeHostCommandDto),
+    Runtime(RuntimeCommandDto),
     Product(AppProductCommandDto),
 }
 
@@ -38,7 +39,25 @@ impl AppCommandDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
             Self::NativeHost(command) => command.validate(),
+            Self::Runtime(command) => command.validate(),
             Self::Product(command) => command.validate(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum RuntimeCommandDto {
+    #[serde(rename = "runtime.prepare")]
+    Prepare {},
+    #[serde(rename = "runtime.preparation.acknowledge")]
+    PreparationAcknowledge {},
+}
+
+impl RuntimeCommandDto {
+    fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Prepare {} | Self::PreparationAcknowledge {} => Ok(()),
         }
     }
 }
@@ -157,10 +176,6 @@ pub enum AppProductCommandDto {
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
-    #[serde(rename = "runtime.prepare")]
-    RuntimePrepare {},
-    #[serde(rename = "runtime.preparation.acknowledge")]
-    RuntimePreparationAcknowledge {},
     #[serde(rename = "conversation.start_turn")]
     ConversationStartTurn {
         session_id: SessionRefDto,
@@ -307,9 +322,7 @@ impl AppProductCommandDto {
                 }
                 Ok(())
             }
-            Self::ConversationSessionStart {}
-            | Self::RuntimePrepare {}
-            | Self::RuntimePreparationAcknowledge {} => Ok(()),
+            Self::ConversationSessionStart {} => Ok(()),
             Self::ConversationStartTurn {
                 expected_revision,
                 text,
@@ -347,6 +360,33 @@ impl AppProductCommandDto {
                 expected_revision, ..
             } => validate_revision(*expected_revision),
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_command_tests {
+    use super::{AppCommandDto, AppCommandRequestDto, RuntimeCommandDto};
+    use crate::{APP_WIRE_VERSION, CommandIdDto, RequestIdDto};
+    use uuid::Uuid;
+
+    #[test]
+    fn runtime_command_uses_existing_wire_kind_in_its_own_lane() {
+        let request = AppCommandRequestDto {
+            schema_version: APP_WIRE_VERSION,
+            request_id: RequestIdDto::new(Uuid::new_v4()).expect("request UUID"),
+            command_id: CommandIdDto::new(Uuid::new_v4()).expect("command UUID"),
+            command: AppCommandDto::Runtime(RuntimeCommandDto::Prepare {}),
+        };
+        assert_eq!(request.validate(), Ok(()));
+
+        let value = serde_json::to_value(&request).expect("serialize Runtime envelope");
+        assert_eq!(value["command"]["kind"], "runtime.prepare");
+        let decoded: AppCommandRequestDto =
+            serde_json::from_value(value).expect("decode Runtime command lane");
+        assert!(matches!(
+            decoded.command,
+            AppCommandDto::Runtime(RuntimeCommandDto::Prepare {})
+        ));
     }
 }
 

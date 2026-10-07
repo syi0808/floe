@@ -23,6 +23,8 @@ final class RuntimeController extends ChangeNotifier {
   bool _disposed = false;
   bool _closing = false;
   int _failureRevision = 0;
+  int _operationEpoch = 0;
+  bool _reobserveAfterBusy = false;
   final Set<String> _observedIncidents = {};
   Future<void>? _opening;
 
@@ -48,19 +50,18 @@ final class RuntimeController extends ChangeNotifier {
   String? get incidentId => _safeToken(_failure?.incidentId);
 
   /// Called once after native callback registrations. Day startup does not wait.
-  Future<void> open() => _opening ??= _run(() => _observe(allowPrepare: true));
+  Future<void> open() =>
+      _opening ??= _run((guard) => _observe(allowPrepare: true, guard: guard));
 
   /// Rejoin uncertain work with its original UUID; allocate a new UUID only
   /// after the prior result was acknowledged and the owner permits Retry.
   Future<void> recover() async {
     if (!canRecover) return;
-    await _run(
-      () => _observe(
-        allowPrepare:
-            _operationId == null &&
-            _failure?.safeActions.contains('retry') == true,
-      ),
-    );
+    // _run clears the current failure while the new observation is pending,
+    // so capture the owner's Retry decision before entering it.
+    final allowPrepare =
+        _operationId == null && _failure?.safeActions.contains('retry') == true;
+    await _run((guard) => _observe(allowPrepare: allowPrepare, guard: guard));
   }
 
   /// A feature can invalidate shared readiness only with the Runtime owner's
@@ -79,45 +80,71 @@ final class RuntimeController extends ChangeNotifier {
     _failureRevision++;
     _failure = error;
     _state = RuntimeReadinessState.unavailable;
+    _reobserveAfterBusy = true;
     notifyListeners();
-    if (!_busy) unawaited(_run(() => _observe(allowPrepare: false)));
+    _startPendingReobserve();
   }
 
-  Future<void> _observe({required bool allowPrepare}) async {
+  Future<void> _observe({
+    required bool allowPrepare,
+    required _RuntimeRunGuard guard,
+  }) async {
+    if (!_isCurrent(guard)) return;
     final operationId = _operationId;
     if (operationId != null) {
-      await _finishOperation(operationId, rejoin: _operationSubmitted);
+      await _finishOperation(
+        operationId,
+        rejoin: _operationSubmitted,
+        guard: guard,
+      );
       return;
     }
     final snapshot = await gateway.readiness(newAgentRequestId());
-    _apply(snapshot);
+    if (!_isCurrent(guard)) return;
+    _apply(snapshot, guard);
     if (snapshot.state == RuntimeReadinessState.ready ||
         snapshot.state == RuntimeReadinessState.unavailable ||
-        !allowPrepare) {
+        !allowPrepare ||
+        !_isCurrent(guard)) {
       return;
     }
     final id = newAgentRequestId();
+    if (!_isCurrent(guard)) return;
     _operationId = id;
     _operationSubmitted = false;
-    await _finishOperation(id, rejoin: false);
+    await _finishOperation(id, rejoin: false, guard: guard);
   }
 
-  Future<void> _finishOperation(String id, {required bool rejoin}) async {
-    RuntimePreparationResult result;
+  Future<void> _observeReadinessOnly(_RuntimeRunGuard guard) async {
+    if (!_isCurrent(guard)) return;
+    final snapshot = await gateway.readiness(newAgentRequestId());
+    if (!_isCurrent(guard)) return;
+    _apply(snapshot, guard);
+  }
+
+  Future<void> _finishOperation(
+    String id, {
+    required bool rejoin,
+    required _RuntimeRunGuard guard,
+  }) async {
+    if (!_isCurrent(guard)) return;
+    RuntimePreparationResult? result;
     try {
       _operationSubmitted = true;
-      result = rejoin ? await _rejoin(id) : await gateway.prepare(id);
+      result = rejoin ? await _rejoin(id, guard) : await gateway.prepare(id);
     } on AppOwnerException catch (error) {
-      if (!rejoin && _definitelyNotAdmitted(error)) {
+      if (_isCurrent(guard) && !rejoin && _definitelyNotAdmitted(error)) {
         _operationId = null;
         _operationSubmitted = false;
       }
       rethrow;
     }
-    _validateResult(result, id);
+    if (!_isCurrent(guard) || result == null) return;
+    RuntimePreparationResult currentResult = result;
+    _validateResult(currentResult, id);
 
     final elapsed = Stopwatch()..start();
-    while (!result.done) {
+    while (!currentResult.done) {
       if (elapsed.elapsed >= const Duration(seconds: 35)) {
         throw AppOwnerException(
           'deadline_exceeded',
@@ -126,12 +153,15 @@ final class RuntimeController extends ChangeNotifier {
         );
       }
       await Future<void>.delayed(const Duration(milliseconds: 80));
-      result = await gateway.getPreparation(id);
-      _validateResult(result, id);
+      if (!_isCurrent(guard)) return;
+      currentResult = await gateway.getPreparation(id);
+      if (!_isCurrent(guard)) return;
+      _validateResult(currentResult, id);
     }
 
-    final operationFailure = result.failure;
+    final operationFailure = currentResult.failure;
     final acknowledged = await gateway.acknowledge(id);
+    if (!_isCurrent(guard)) return;
     _validateResult(acknowledged, id, requireDone: true);
     if (acknowledged.failure != operationFailure) {
       throw const FormatException('Runtime preparation receipt changed.');
@@ -140,35 +170,39 @@ final class RuntimeController extends ChangeNotifier {
     _operationSubmitted = false;
 
     final snapshot = await gateway.readiness(newAgentRequestId());
+    if (!_isCurrent(guard)) return;
     if (operationFailure != null) {
-      _apply(snapshot);
-      final owner = snapshot.failure;
-      _state = snapshot.state == RuntimeReadinessState.ready
-          ? RuntimeReadinessState.unavailable
-          : snapshot.state;
-      _failure = AppOwnerException.fromAppWire(
-        operationFailure,
-        requestId: id,
-        stage: 'runtime_prepare',
-        ownerFailure: owner,
+      _apply(snapshot, guard);
+      throw _HistoricalPreparationFailure(
+        AppOwnerException.fromAppWire(
+          operationFailure,
+          requestId: id,
+          stage: 'runtime_prepare',
+          ownerFailure: snapshot.failure,
+        ),
       );
-      throw _failure!;
     }
-    _apply(snapshot);
+    _apply(snapshot, guard);
     if (snapshot.state != RuntimeReadinessState.ready) {
       throw _failure ?? const AppOwnerException('vault_unavailable');
     }
   }
 
-  Future<RuntimePreparationResult> _rejoin(String id) async {
+  Future<RuntimePreparationResult?> _rejoin(
+    String id,
+    _RuntimeRunGuard guard,
+  ) async {
     try {
       final result = await gateway.getPreparation(id);
+      if (!_isCurrent(guard)) return null;
       _validateResult(result, id);
       return result;
     } on AppOwnerException catch (error) {
+      if (!_isCurrent(guard)) return null;
       if (!_isNotFound(error)) rethrow;
       // A missing result does not prove non-admission. Reissue the exact
       // immutable prepare intent with the retained UUID.
+      if (!_isCurrent(guard)) return null;
       return gateway.prepare(id);
     }
   }
@@ -183,13 +217,21 @@ final class RuntimeController extends ChangeNotifier {
     }
   }
 
-  void _apply(RuntimeReadinessSnapshot snapshot) {
+  bool _apply(RuntimeReadinessSnapshot snapshot, _RuntimeRunGuard guard) {
+    if (!_isCurrent(guard)) return false;
     _state = snapshot.state;
     final owner = snapshot.failure;
     _failure = owner == null
         ? null
         : AppOwnerException.fromAppWire(owner.reason, ownerFailure: owner);
+    return true;
   }
+
+  bool _isCurrent(_RuntimeRunGuard guard) =>
+      !_disposed &&
+      !_closing &&
+      guard.epoch == _operationEpoch &&
+      guard.failureRevision == _failureRevision;
 
   bool _definitelyNotAdmitted(AppOwnerException error) =>
       error.commandDisposition == NativeCommandDisposition.notAdmitted ||
@@ -199,19 +241,27 @@ final class RuntimeController extends ChangeNotifier {
       error.failure == 'not_found' ||
       error.metadata['reason_code'] == 'not_found';
 
-  Future<void> _run(Future<void> Function() operation) async {
+  Future<void> _run(
+    Future<void> Function(_RuntimeRunGuard guard) operation, {
+    bool clearFailure = true,
+  }) async {
     if (_disposed || _closing || _busy) return;
-    final failureRevision = _failureRevision;
+    final guard = _RuntimeRunGuard(++_operationEpoch, _failureRevision);
     _busy = true;
-    _failure = null;
+    if (clearFailure) _failure = null;
     notifyListeners();
     try {
-      await operation();
+      await operation(guard);
     } on Object catch (error, stackTrace) {
-      final typed = error is AppOwnerException
-          ? error
-          : const AppOwnerException('storage_unavailable');
-      if (!_disposed && !_closing && failureRevision == _failureRevision) {
+      final historicalFailure = error is _HistoricalPreparationFailure
+          ? error.failure
+          : null;
+      final typed =
+          historicalFailure ??
+          (error is AppOwnerException
+              ? error
+              : const AppOwnerException('storage_unavailable'));
+      if (_isCurrent(guard) && historicalFailure == null) {
         _failure = typed;
         if (_state == RuntimeReadinessState.ready) {
           _state = RuntimeReadinessState.unavailable;
@@ -233,22 +283,52 @@ final class RuntimeController extends ChangeNotifier {
         safeActions: typed.safeActions,
       );
     } finally {
-      _busy = false;
-      if (!_disposed && !_closing) notifyListeners();
+      // A feature failure changes the revision, so the run token is stale for
+      // applying data. It still owns the busy slot until its await settles.
+      if (!_disposed && !_closing && guard.epoch == _operationEpoch) {
+        _busy = false;
+        notifyListeners();
+        _startPendingReobserve();
+      }
     }
+  }
+
+  void _startPendingReobserve() {
+    if (!_reobserveAfterBusy || _disposed || _closing || _busy) return;
+    _reobserveAfterBusy = false;
+    unawaited(_run(_observeReadinessOnly, clearFailure: false));
   }
 
   void closeAdmission() {
     if (_disposed || _closing) return;
     _closing = true;
+    _operationEpoch++;
+    _busy = false;
+    _reobserveAfterBusy = false;
     notifyListeners();
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _operationEpoch++;
+    _busy = false;
+    _reobserveAfterBusy = false;
     super.dispose();
   }
+}
+
+final class _RuntimeRunGuard {
+  const _RuntimeRunGuard(this.epoch, this.failureRevision);
+
+  final int epoch;
+  final int failureRevision;
+}
+
+final class _HistoricalPreparationFailure implements Exception {
+  const _HistoricalPreparationFailure(this.failure);
+
+  final AppOwnerException failure;
 }
 
 String? _safeToken(String? value) =>

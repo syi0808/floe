@@ -81,10 +81,12 @@ armed until transaction completion;
 interruption retires the store's availability. This is not a claim that every
 Conversation write uses it.
 
-External Product command envelopes require UUID-v4 nonces so they cannot collide
-with internally derived command identities. NativeHost envelopes, query references
-and the generic CommandId type retain their existing contracts. Conversation stored
-family format 10 removes the obsolete Session recovery-command table; older family
+External Product and Runtime control command envelopes require UUID-v4 nonces so
+they cannot collide with internally derived command identities. NativeHost command
+envelopes and other query references retain their existing contracts; Runtime
+preparation-history references also require UUID-v4. The generic CommandId type
+retains its existing contract. Conversation stored family format 10 removes the
+obsolete Session recovery-command table; older family
 formats fail closed and require an explicitly selected fresh development profile,
 not an automatic reset, key replacement or migration.
 

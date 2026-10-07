@@ -52,6 +52,7 @@ pub use calendar::{
 pub use commands::{
     AppCancelRunOutcomeDto, AppCommandDto, AppCommandReceiptDto, AppCommandRequestDto,
     AppCommandResultDto, AppCommandStatusDto, AppProductCommandDto, ContinuationRefDto,
+    RuntimeCommandDto,
 };
 
 pub use envelope::{ErrorCodeDto, ErrorDto, ResponseEnvelopeDto, ResponseOutcomeDto};
@@ -76,5 +77,5 @@ pub use local_context::{
 pub use queries::{
     AppMessageDto, AppMessageRoleDto, AppProductQueryDto, AppQueryDto, AppQueryRequestDto,
     AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto,
-    AppTurnReportDto,
+    AppTurnReportDto, RuntimeQueryDto,
 };

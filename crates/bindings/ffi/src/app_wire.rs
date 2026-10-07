@@ -57,6 +57,54 @@ pub(crate) fn command(
             return crate::conversion::native::native_host_command_result(result)
                 .map_err(|error| structural_error(error).into());
         }
+        AppCommandDto::Runtime(command) => {
+            // Runtime control is admitted by AppHost, then dispatched directly
+            // to its owner without entering the Product command lane.
+            if command_id.get_version() != Some(uuid::Version::Random)
+                || command_id.get_variant() != uuid::Variant::RFC4122
+            {
+                return Err(AppCommandFailure::NotAdmitted(validation("command_id")));
+            }
+            return match command {
+                RuntimeCommandDto::Prepare {} => {
+                    let result =
+                        services
+                            .prepare_runtime(caller, command_id)
+                            .map_err(|failure| match failure {
+                                floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
+                                    AppCommandFailure::NotAdmitted(agent_failure(reason))
+                                }
+                                floe_app::RuntimePreparationCommandFailure::Indeterminate(
+                                    reason,
+                                ) => AppCommandFailure::Indeterminate(agent_failure(reason)),
+                            })?;
+                    if result.operation_id != command_id {
+                        return Err(internal_error().into());
+                    }
+                    Ok(AppCommandResultDto::RuntimePreparation {
+                        result: runtime_preparation_result(result),
+                    })
+                }
+                RuntimeCommandDto::PreparationAcknowledge {} => {
+                    let result = services
+                        .acknowledge_runtime_preparation(caller, command_id)
+                        .map_err(|failure| match failure {
+                            floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
+                                AppCommandFailure::NotAdmitted(agent_failure(reason))
+                            }
+                            floe_app::RuntimePreparationCommandFailure::Indeterminate(reason) => {
+                                AppCommandFailure::Indeterminate(agent_failure(reason))
+                            }
+                        })?;
+                    if result.operation_id != command_id {
+                        return Err(internal_error().into());
+                    }
+                    Ok(AppCommandResultDto::RuntimePreparation {
+                        result: runtime_preparation_result(result),
+                    })
+                }
+            };
+        }
         AppCommandDto::Product(command) => {
             // Product clients allocate random nonces. Derived v5 identities are
             // reserved for trusted owner-to-owner work, never client occupancy.
@@ -142,42 +190,6 @@ pub(crate) fn command(
                 },
             })
         }
-        AppProductCommandDto::RuntimePrepare {} => {
-            let result = services
-                .prepare_runtime(caller, command_id)
-                .map_err(|failure| match failure {
-                    floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
-                        AppCommandFailure::NotAdmitted(agent_failure(reason))
-                    }
-                    floe_app::RuntimePreparationCommandFailure::Indeterminate(reason) => {
-                        AppCommandFailure::Indeterminate(agent_failure(reason))
-                    }
-                })?;
-            if result.operation_id != command_id {
-                return Err(internal_error().into());
-            }
-            Ok(AppCommandResultDto::RuntimePreparation {
-                result: runtime_preparation_result(result),
-            })
-        }
-        AppProductCommandDto::RuntimePreparationAcknowledge {} => {
-            let result = services
-                .acknowledge_runtime_preparation(caller, command_id)
-                .map_err(|failure| match failure {
-                    floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
-                        AppCommandFailure::NotAdmitted(agent_failure(reason))
-                    }
-                    floe_app::RuntimePreparationCommandFailure::Indeterminate(reason) => {
-                        AppCommandFailure::Indeterminate(agent_failure(reason))
-                    }
-                })?;
-            if result.operation_id != command_id {
-                return Err(internal_error().into());
-            }
-            Ok(AppCommandResultDto::RuntimePreparation {
-                result: runtime_preparation_result(result),
-            })
-        }
         AppProductCommandDto::DayRefresh { day } => {
             let refresh = services
                 .refresh_day(
@@ -214,6 +226,31 @@ pub(crate) fn query(
                 .map_err(agent_failure)?;
             return crate::conversion::native::native_host_query_result(result)
                 .map_err(structural_error);
+        }
+        AppQueryDto::Runtime(query) => {
+            // Runtime control is a first-class lane inside AppWire, distinct
+            // from both Product commands and native callbacks.
+            return match query {
+                RuntimeQueryDto::Readiness {} => {
+                    let readiness = services
+                        .runtime_readiness(caller, request_id)
+                        .map_err(agent_failure)?;
+                    Ok(AppQueryResultDto::RuntimeReadiness {
+                        readiness: runtime_readiness(readiness),
+                    })
+                }
+                RuntimeQueryDto::PreparationGet { operation_id } => {
+                    let result = services
+                        .get_runtime_preparation(caller, operation_id)
+                        .map_err(agent_failure)?;
+                    if result.operation_id != operation_id {
+                        return Err(internal_error());
+                    }
+                    Ok(AppQueryResultDto::RuntimePreparation {
+                        result: runtime_preparation_result(result),
+                    })
+                }
+            };
         }
         AppQueryDto::Product(query) => query,
     };
@@ -262,25 +299,6 @@ pub(crate) fn query(
                 snapshot: crate::conversion::day_snapshot_to_dto(result).map_err(|failure| {
                     structural_error(floe_protocol::wire::conversion_error(failure))
                 })?,
-            })
-        }
-        AppProductQueryDto::RuntimeReadiness {} => {
-            let readiness = services
-                .runtime_readiness(caller, request_id)
-                .map_err(agent_failure)?;
-            Ok(AppQueryResultDto::RuntimeReadiness {
-                readiness: runtime_readiness(readiness),
-            })
-        }
-        AppProductQueryDto::RuntimePreparationGet { operation_id } => {
-            let result = services
-                .get_runtime_preparation(caller, operation_id)
-                .map_err(agent_failure)?;
-            if result.operation_id != operation_id {
-                return Err(internal_error());
-            }
-            Ok(AppQueryResultDto::RuntimePreparation {
-                result: runtime_preparation_result(result),
             })
         }
         AppProductQueryDto::DayRefreshGet { operation_ref } => {
