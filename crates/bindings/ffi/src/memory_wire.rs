@@ -1,26 +1,11 @@
-//! Explicit safe Knowledge product wire conversion.
-use crate::app_wire::{AppWireResult, agent_failure, internal_error, validation};
-use floe_app::{AppComposition, CallerContext, KnowledgeCommands, KnowledgeQueries};
+//! Mechanical conversion between the Memory DTOs and Knowledge owner types.
+use crate::app_wire::{AppWireResult, internal_error, validation};
+use floe_app::{CallerContext, MemoryCommand, MemoryQuery, MemoryQueryResult};
 use floe_protocol::*;
 use uuid::Uuid;
 
-pub(crate) fn handles_command(value: &AppProductCommandDto) -> bool {
-    matches!(value, AppProductCommandDto::KnowledgeMemoryDecide { .. })
-}
-pub(crate) fn handles_query(value: &AppProductQueryDto) -> bool {
-    matches!(
-        value,
-        AppProductQueryDto::KnowledgeMemoryOverview {}
-            | AppProductQueryDto::KnowledgeMemoryReview {}
-    )
-}
-pub(crate) fn command(
-    app: &AppComposition,
-    caller: &CallerContext,
-    id: Uuid,
-    value: AppProductCommandDto,
-) -> AppWireResult<AppCommandResultDto> {
-    let AppProductCommandDto::KnowledgeMemoryDecide {
+pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<MemoryCommand> {
+    let AppProductCommandDto::MemoryDecide {
         candidate_id,
         decision,
     } = value
@@ -31,46 +16,62 @@ pub(crate) fn command(
         AgentMemoryReviewDecisionKindDto::Approve => floe_knowledge::KnowledgeDecisionKind::Approve,
         AgentMemoryReviewDecisionKindDto::Reject => floe_knowledge::KnowledgeDecisionKind::Reject,
     };
-    let value = app
-        .knowledge_decide(caller, id, candidate_id, kind)
-        .map_err(agent_failure)?;
-    if value.command_id.as_uuid() != id
-        || value.candidate_id != candidate_id
-        || value.decision != kind
+    Ok(MemoryCommand::Decide {
+        candidate_id,
+        decision: kind,
+    })
+}
+
+pub(crate) fn command_out(
+    request: &MemoryCommand,
+    command_id: Uuid,
+    value: floe_knowledge::MemoryDecisionAcknowledgement,
+) -> AppWireResult<AppCommandResultDto> {
+    let MemoryCommand::Decide {
+        candidate_id,
+        decision: kind,
+    } = request;
+    if value.command_id.as_uuid() != command_id
+        || value.candidate_id != *candidate_id
+        || value.decision != *kind
     {
         return Err(internal_error());
     }
     let result = MemoryDecisionAcknowledgementDto {
-        command_id: CommandIdDto::new(id).ok_or_else(internal_error)?,
-        candidate_id: reference(candidate_id)?,
-        decision,
+        command_id: CommandIdDto::new(command_id).ok_or_else(internal_error)?,
+        candidate_id: reference(*candidate_id)?,
+        decision: match kind {
+            floe_knowledge::KnowledgeDecisionKind::Approve => {
+                AgentMemoryReviewDecisionKindDto::Approve
+            }
+            floe_knowledge::KnowledgeDecisionKind::Reject => {
+                AgentMemoryReviewDecisionKindDto::Reject
+            }
+        },
         committed_at: value.committed_at,
         resulting_target_id: value.resulting_target_id.map(reference).transpose()?,
         resulting_revision: value.resulting_revision,
     };
     result.validate().map_err(|_| internal_error())?;
-    Ok(AppCommandResultDto::KnowledgeDecision {
+    Ok(AppCommandResultDto::MemoryDecision {
         acknowledgement: result,
     })
 }
-pub(crate) fn query(
-    app: &AppComposition,
-    caller: &CallerContext,
-    id: Uuid,
-    value: AppProductQueryDto,
-) -> AppWireResult<AppQueryResultDto> {
-    let query = match value {
-        AppProductQueryDto::KnowledgeMemoryOverview {} => {
-            floe_app::KnowledgeQuery::Overview { limit: 100 }
-        }
-        AppProductQueryDto::KnowledgeMemoryReview {} => floe_app::KnowledgeQuery::Review,
+pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<MemoryQuery> {
+    match value {
+        AppProductQueryDto::MemoryOverview {} => Ok(MemoryQuery::Overview { limit: 100 }),
+        AppProductQueryDto::MemoryReview {} => Ok(MemoryQuery::Review),
         _ => return Err(validation("query")),
-    };
-    match app
-        .knowledge_query(caller, id, query)
-        .map_err(agent_failure)?
-    {
-        floe_app::KnowledgeQueryResult::Overview(snapshot) => {
+    }
+}
+
+pub(crate) fn query_out(
+    query: &MemoryQuery,
+    result: MemoryQueryResult,
+    caller: &CallerContext,
+) -> AppWireResult<AppQueryResultDto> {
+    match result {
+        MemoryQueryResult::Overview(snapshot) if matches!(query, MemoryQuery::Overview { .. }) => {
             if snapshot.person_id.0 != caller.person_id() || snapshot.memories.len() > 100 {
                 return Err(internal_error());
             }
@@ -102,9 +103,9 @@ pub(crate) fn query(
                     })
                     .collect(),
             };
-            Ok(AppQueryResultDto::KnowledgeOverview { overview })
+            Ok(AppQueryResultDto::MemoryOverview { overview })
         }
-        floe_app::KnowledgeQueryResult::Review(snapshot) => {
+        MemoryQueryResult::Review(snapshot) if matches!(query, MemoryQuery::Review) => {
             if snapshot.person_id.0 != caller.person_id() {
                 return Err(internal_error());
             }
@@ -152,8 +153,9 @@ pub(crate) fn query(
                     .collect::<AppWireResult<Vec<_>>>()?,
             };
             review.validate().map_err(|_| internal_error())?;
-            Ok(AppQueryResultDto::KnowledgeReview { review })
+            Ok(AppQueryResultDto::MemoryReview { review })
         }
+        _ => Err(internal_error()),
     }
 }
 fn reference(id: Uuid) -> AppWireResult<UuidRefDto> {

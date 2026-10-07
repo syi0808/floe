@@ -4,8 +4,6 @@
 //! Business judgment belongs to the owning module; this crate only assembles.
 
 mod action_facade;
-#[cfg(unix)]
-mod action_services;
 mod api;
 mod bootstrap;
 #[cfg(unix)]
@@ -14,15 +12,9 @@ mod connection_observe;
 #[cfg(unix)]
 mod context_services;
 mod core;
-#[cfg(unix)]
-mod day_services;
 mod diagnostics;
 mod error;
-#[cfg(unix)]
-mod expert_services;
 mod host;
-#[cfg(unix)]
-mod knowledge_services;
 mod local_context;
 mod native_lane;
 #[cfg(unix)]
@@ -30,6 +22,8 @@ mod owner_handles;
 mod prompts;
 #[cfg(unix)]
 mod ready_generation;
+#[cfg(unix)]
+mod router;
 #[cfg(unix)]
 mod runtime_control;
 #[cfg(unix)]
@@ -40,8 +34,7 @@ mod storage_profile;
 pub use storage_profile::storage_profile_code;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle, SourceAuthority};
-/// Values carried by the remaining host service signatures. The S1
-/// Conversation and Connections bindings call their typed owners directly.
+/// Values carried by the host and typed product-router APIs.
 pub use floe_day::{
     AllDaySchedule, CalendarBatch, CalendarFailure, CalendarMirrorState, CalendarRange,
     CalendarRecord, CalendarSelection, CalendarSource, CalendarSyncStatus, Capture, CaptureId,
@@ -51,16 +44,24 @@ pub use floe_day::{
 };
 pub use floe_diagnostics::{PanicRecord, TraceContext, instrument, panic_record};
 
-pub use floe_actions::ActionAuthorityMode;
 pub use floe_context_contract::ConnectionId;
 pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 #[cfg(unix)]
-pub use action_services::{
-    ActionsCommand, ActionsCommandResult, ActionsCommands, ActionsQueries, ActionsQuery,
-    ActionsQueryResult,
+pub use api::{
+    ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
+    ActionProposalPreview, ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsCommand,
+    ActionsCommandResult, ActionsPage, ActionsQuery, ActionsQueryResult, ConnectionsCommand,
+    ConnectionsCommandOutcome, ConnectionsQuery, ConnectionsQueryOutcome, ConversationCommand,
+    ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome, DayCommand,
+    DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertCommand, ExpertCommandResult,
+    ExpertQuery, ExpertQueryResult, MemoryCommand, MemoryQuery, MemoryQueryResult, ProductCommand,
+    ProductCommandDisposition, ProductCommandFailure, ProductCommandOutcome, ProductCommandRequest,
+    ProductFailure, ProductObservation, ProductObservationOutcome, ProductQuery,
+    ProductQueryOutcome,
 };
+#[cfg(unix)]
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{
@@ -73,14 +74,7 @@ pub use context_services::{
     NativeHostQueries, NativeHostQuery, PersonalCompletion,
 };
 pub use core::{Classification, FloeCore};
-#[cfg(unix)]
-pub use day_services::{DayCommands, DayQueries};
 pub use error::{CoreError, ErrorCode};
-#[cfg(unix)]
-pub use expert_services::{
-    ExpertCommand, ExpertCommandResult, ExpertCommands, ExpertQueries, ExpertQuery,
-    ExpertQueryResult,
-};
 /// The acquisition values one local-context command carries.
 pub use floe_context::valid_native_subject_fingerprint;
 pub use floe_day::{DayMutation, DayMutationRequest, DayMutationResult, DayQuery};
@@ -93,10 +87,6 @@ pub use floe_provider_adapters::sources::native_acquisition::{
     attention_failure, personal_failure,
 };
 pub use host::{AppHost, HostRequest};
-#[cfg(unix)]
-pub use knowledge_services::{
-    KnowledgeCommands, KnowledgeQueries, KnowledgeQuery, KnowledgeQueryResult,
-};
 pub use local_context::{
     LocalContextHost, NativeHostKind, NativeHostOutcome, NativeHostRegistrationRef,
 };

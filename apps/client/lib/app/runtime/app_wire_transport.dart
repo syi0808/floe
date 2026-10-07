@@ -1,4 +1,60 @@
+import 'package:floe_client/app/runtime/owner_failure.dart';
+
 const appWireProtocolVersion = 2;
+
+/// AppWire command disposition shared by product and Runtime callers without
+/// exposing which transport implementation decoded the envelope.
+enum CommandOutcome { notApplied, notAdmitted, admitted, indeterminate }
+
+/// AppWire boundary failure shared by all transport implementations.
+final class AppWireTransportException implements Exception {
+  const AppWireTransportException(
+    this.code,
+    this.message, {
+    this.field,
+    this.metadata = const {},
+    this.ownerFailure,
+    this.commandOutcome,
+  });
+
+  final String code;
+  final String message;
+  final String? field;
+  final Map<String, String> metadata;
+  final OwnerFailure? ownerFailure;
+
+  /// Null for open, query, event and native-callback failures.
+  final CommandOutcome? commandOutcome;
+
+  factory AppWireTransportException.fromEnvelope(
+    Map<String, dynamic> envelope, {
+    CommandOutcome? commandOutcome,
+  }) {
+    final rawError = envelope['error'];
+    final error = rawError is Map
+        ? rawError.map((key, value) => MapEntry(key.toString(), value))
+        : envelope;
+    return AppWireTransportException(
+      error['code']?.toString() ?? 'internal',
+      error['message']?.toString() ?? 'Could not open Rust core.',
+      field: error['field']?.toString(),
+      commandOutcome: commandOutcome,
+      ownerFailure: error['owner_failure'] == null
+          ? null
+          : OwnerFailure.fromJson(error['owner_failure']),
+      metadata: error['metadata'] is Map
+          ? Map<String, String>.unmodifiable(
+              (error['metadata'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value.toString()),
+              ),
+            )
+          : const {},
+    );
+  }
+
+  @override
+  String toString() => message;
+}
 
 abstract interface class AppWireTransport {
   Future<Map<String, dynamic>> commandV2(

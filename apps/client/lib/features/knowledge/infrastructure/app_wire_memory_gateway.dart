@@ -1,6 +1,5 @@
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/knowledge/application/memory_gateway.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
@@ -24,18 +23,18 @@ final class AppWireMemoryGateway
 
   @override
   Future<AgentMemoryOverview> readMemory() async {
-    final result = await _query(const {'kind': 'knowledge.memory.overview'});
+    final result = await _query(const {'kind': 'memory.overview'});
     final overview = AgentMemoryOverview.fromJson(
-      _payload(result, 'knowledge.memory.overview', 'overview'),
+      _payload(result, 'memory.overview', 'overview'),
     );
     return overview;
   }
 
   @override
   Future<AgentMemoryReviewOverview> readMemoryReview() async {
-    final result = await _query(const {'kind': 'knowledge.memory.review'});
+    final result = await _query(const {'kind': 'memory.review'});
     return AgentMemoryReviewOverview.fromJson(
-      _payload(result, 'knowledge.memory.review', 'review'),
+      _payload(result, 'memory.review', 'review'),
     );
   }
 
@@ -52,7 +51,7 @@ final class AppWireMemoryGateway
       candidateId: candidateId,
       decision: decision,
       payload: Map<String, Object?>.unmodifiable({
-        'kind': 'knowledge.memory.decide',
+        'kind': 'memory.decide',
         'candidate_id': candidateId,
         'decision': decision.name,
       }),
@@ -80,7 +79,7 @@ final class AppWireMemoryGateway
         'request_id': requestId,
         'query': query,
       });
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _fromTransport(error, requestId, 'knowledge_query');
     }
   }
@@ -97,7 +96,7 @@ final class AppWireMemoryGateway
         'command': pending.payload,
       });
       final acknowledgement = AgentMemoryDecisionAcknowledgement.fromJson(
-        _payload(result, 'knowledge.memory.decision', 'acknowledgement'),
+        _payload(result, 'memory.decision', 'acknowledgement'),
       );
       if (acknowledgement.commandId != pending.commandId ||
           acknowledgement.candidateId != pending.candidateId ||
@@ -108,7 +107,7 @@ final class AppWireMemoryGateway
       }
       if (identical(_pending, pending)) _pending = null;
       return acknowledgement;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       // Only these correlated owner rejections are proven precommit. A
       // transport/decode/storage failure retains the immutable retry request.
       if ((error.code == 'conflict' &&
@@ -126,7 +125,7 @@ final class AppWireMemoryGateway
   }
 
   AppOwnerException _fromTransport(
-    NativeTransportException error,
+    AppWireTransportException error,
     String requestId,
     String stage,
   ) => AppOwnerException.fromAppWire(

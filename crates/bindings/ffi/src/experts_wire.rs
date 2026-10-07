@@ -1,54 +1,22 @@
 //! Mechanical translation between safe Experts product values and App calls.
 use crate::app_wire::{AppWireResult, agent_failure, internal_error, validation};
-use floe_app::{
-    AppComposition, CallerContext, ExpertCommand, ExpertCommandResult, ExpertCommands,
-    ExpertQueries, ExpertQuery, ExpertQueryResult,
-};
+use floe_app::{ExpertCommand, ExpertCommandResult, ExpertQuery, ExpertQueryResult};
 use floe_protocol::*;
 use uuid::Uuid;
 
-pub(crate) fn handles_command(command: &AppProductCommandDto) -> bool {
-    matches!(
-        command,
-        AppProductCommandDto::ExpertsSetInstallationEnabled { .. }
-            | AppProductCommandDto::ExpertsPrepareBindingReview { .. }
-            | AppProductCommandDto::ExpertsBindingReplace { .. }
-    )
-}
-
-pub(crate) fn handles_query(query: &AppProductQueryDto) -> bool {
-    matches!(
-        query,
-        AppProductQueryDto::ExpertsDirectory { .. }
-            | AppProductQueryDto::ExpertsInspectBinding { .. }
-            | AppProductQueryDto::ExpertsInspectBindingReview { .. }
-    )
-}
-
-pub(crate) fn command(
-    app: &AppComposition,
-    caller: &CallerContext,
-    command_id: Uuid,
-    command: AppProductCommandDto,
-) -> AppWireResult<AppCommandResultDto> {
-    if command_id.is_nil() {
-        return Err(validation("command_id"));
-    }
-    let (command, review_result) = match command {
+pub(crate) fn command_in(command: AppProductCommandDto) -> AppWireResult<ExpertCommand> {
+    let command = match command {
         AppProductCommandDto::ExpertsSetInstallationEnabled {
             installation_ref,
             expected_revision,
             enabled,
         } => {
             validate_revision(expected_revision)?;
-            (
-                ExpertCommand::SetInstallationEnabled {
-                    installation_ref: installation_ref.get(),
-                    expected_revision,
-                    enabled,
-                },
-                false,
-            )
+            ExpertCommand::SetInstallationEnabled {
+                installation_ref: installation_ref.get(),
+                expected_revision,
+                enabled,
+            }
         }
         AppProductCommandDto::ExpertsPrepareBindingReview {
             assignment_ref,
@@ -57,14 +25,11 @@ pub(crate) fn command(
         } => {
             validate_revision(expected_binding_revision)?;
             validate_requirement(&requirement_ref)?;
-            (
-                ExpertCommand::PrepareBindingReview {
-                    assignment_ref: assignment_ref.get(),
-                    requirement_ref,
-                    expected_binding_revision,
-                },
-                true,
-            )
+            ExpertCommand::PrepareBindingReview {
+                assignment_ref: assignment_ref.get(),
+                requirement_ref,
+                expected_binding_revision,
+            }
         }
         AppProductCommandDto::ExpertsBindingReplace {
             review_ref,
@@ -80,93 +45,79 @@ pub(crate) fn command(
             {
                 return Err(validation("command.candidate_refs"));
             }
-            (
-                ExpertCommand::ReplaceBinding {
-                    review_ref: binding_review_ref_from_dto(review_ref)?,
-                    expected_binding_revision,
-                    candidate_refs: candidate_refs.into_iter().map(|id| id.get()).collect(),
-                },
-                false,
-            )
+            ExpertCommand::ReplaceBinding {
+                review_ref: binding_review_ref_from_dto(review_ref)?,
+                expected_binding_revision,
+                candidate_refs: candidate_refs.into_iter().map(|id| id.get()).collect(),
+            }
         }
         _ => return Err(validation("command")),
     };
-    match (
-        review_result,
-        app.expert_command(caller, command_id, command)
-            .map_err(agent_failure)?,
-    ) {
-        (false, ExpertCommandResult::Directory(directory)) => {
+    Ok(command)
+}
+
+pub(crate) fn command_out(
+    command: &ExpertCommand,
+    result: ExpertCommandResult,
+) -> AppWireResult<AppCommandResultDto> {
+    match (command, result) {
+        (
+            ExpertCommand::PrepareBindingReview { .. },
+            ExpertCommandResult::BindingReview(review),
+        ) => Ok(AppCommandResultDto::ExpertsBindingReview {
+            review: binding_review_to_dto(review)?,
+        }),
+        (
+            ExpertCommand::SetInstallationEnabled { .. },
+            ExpertCommandResult::Directory(directory),
+        )
+        | (ExpertCommand::ReplaceBinding { .. }, ExpertCommandResult::Directory(directory)) => {
             Ok(AppCommandResultDto::ExpertsDirectory {
                 directory: directory_to_dto(directory)?,
-            })
-        }
-        (true, ExpertCommandResult::BindingReview(review)) => {
-            Ok(AppCommandResultDto::ExpertsBindingReview {
-                review: binding_review_to_dto(review)?,
             })
         }
         _ => Err(internal_error()),
     }
 }
 
-#[derive(Clone, Copy)]
-enum QueryResultKind {
-    Directory,
-    Binding,
-    Review,
-}
-
-pub(crate) fn query(
-    app: &AppComposition,
-    caller: &CallerContext,
-    request_id: Uuid,
-    query: AppProductQueryDto,
-) -> AppWireResult<AppQueryResultDto> {
-    if request_id.is_nil() {
-        return Err(validation("request_id"));
-    }
-    let (query, expected) = match query {
-        AppProductQueryDto::ExpertsDirectory {} => {
-            (ExpertQuery::Directory, QueryResultKind::Directory)
-        }
+pub(crate) fn query_in(query: AppProductQueryDto) -> AppWireResult<ExpertQuery> {
+    match query {
+        AppProductQueryDto::ExpertsDirectory {} => Ok(ExpertQuery::Directory),
         AppProductQueryDto::ExpertsInspectBinding {
             assignment_ref,
             requirement_ref,
         } => {
             validate_requirement(&requirement_ref)?;
-            (
-                ExpertQuery::InspectBinding {
-                    assignment_ref: assignment_ref.get(),
-                    requirement_ref,
-                },
-                QueryResultKind::Binding,
-            )
+            Ok(ExpertQuery::InspectBinding {
+                assignment_ref: assignment_ref.get(),
+                requirement_ref,
+            })
         }
-        AppProductQueryDto::ExpertsInspectBindingReview { review_ref } => (
-            ExpertQuery::InspectBindingReview {
+        AppProductQueryDto::ExpertsInspectBindingReview { review_ref } => {
+            Ok(ExpertQuery::InspectBindingReview {
                 review_ref: binding_review_ref_from_dto(review_ref)?,
-            },
-            QueryResultKind::Review,
-        ),
+            })
+        }
         _ => return Err(validation("query")),
-    };
-    match (
-        expected,
-        app.expert_query(caller, request_id, query)
-            .map_err(agent_failure)?,
-    ) {
-        (QueryResultKind::Directory, ExpertQueryResult::Directory(directory)) => {
+    }
+}
+
+pub(crate) fn query_out(
+    query: &ExpertQuery,
+    result: ExpertQueryResult,
+) -> AppWireResult<AppQueryResultDto> {
+    match (query, result) {
+        (ExpertQuery::Directory, ExpertQueryResult::Directory(directory)) => {
             Ok(AppQueryResultDto::ExpertsDirectory {
                 directory: directory_to_dto(directory)?,
             })
         }
-        (QueryResultKind::Binding, ExpertQueryResult::Binding(binding)) => {
+        (ExpertQuery::InspectBinding { .. }, ExpertQueryResult::Binding(binding)) => {
             Ok(AppQueryResultDto::ExpertsBinding {
                 binding: binding_inspection_to_dto(binding)?,
             })
         }
-        (QueryResultKind::Review, ExpertQueryResult::BindingReview(review)) => {
+        (ExpertQuery::InspectBindingReview { .. }, ExpertQueryResult::BindingReview(review)) => {
             Ok(AppQueryResultDto::ExpertsBindingReview {
                 review: binding_review_to_dto(review)?,
             })

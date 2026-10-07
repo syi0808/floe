@@ -23,6 +23,404 @@ pub trait HostServices: Send + Sync + 'static {
     fn shutdown(&self) -> Result<(), HostError>;
 }
 
+pub use floe_actions::{
+    ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
+    ActionProposalPreview, ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsPage,
+};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsCommand {
+    Submit {
+        intent: ActionIntent,
+    },
+    Decide {
+        action_ref: Uuid,
+        review_ref: ActionReviewRef,
+        decision: ActionDecisionKind,
+        expected_revision: u64,
+    },
+    Reconcile {
+        action_ref: Uuid,
+        expected_revision: u64,
+    },
+    SetAuthority {
+        mode: ActionAuthorityMode,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsQuery {
+    Destinations,
+    ProposalPreview {
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+    },
+    Authority,
+    Inspect {
+        action_ref: Uuid,
+    },
+    List {
+        cursor: Option<Uuid>,
+        limit: u16,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsCommandResult {
+    Action(ActionSnapshot),
+    Authority(ActionsAuthority),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ActionsQueryResult {
+    Destinations(Vec<ActionDestinationChoice>),
+    ProposalPreview(ActionProposalPreview),
+    Authority(ActionsAuthority),
+    Action(ActionSnapshot),
+    Page(ActionsPage),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExpertCommand {
+    SetInstallationEnabled {
+        installation_ref: Uuid,
+        expected_revision: u64,
+        enabled: bool,
+    },
+    PrepareBindingReview {
+        assignment_ref: Uuid,
+        requirement_ref: String,
+        expected_binding_revision: u64,
+    },
+    ReplaceBinding {
+        review_ref: floe_experts::BindingReviewRef,
+        expected_binding_revision: u64,
+        candidate_refs: Vec<Uuid>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExpertQuery {
+    Directory,
+    InspectBinding {
+        assignment_ref: Uuid,
+        requirement_ref: String,
+    },
+    InspectBindingReview {
+        review_ref: floe_experts::BindingReviewRef,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExpertCommandResult {
+    Directory(floe_experts::ExpertDirectorySnapshot),
+    BindingReview(floe_experts::BindingReview),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExpertQueryResult {
+    Directory(floe_experts::ExpertDirectorySnapshot),
+    Binding(floe_experts::BindingInspection),
+    BindingReview(floe_experts::BindingReview),
+}
+
+/// The admitted product command groups that share the App runtime dispatch
+/// path. Actions and Experts remain here until their planned owner cutovers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductCommand {
+    Conversation(ConversationCommand),
+    Connections(ConnectionsCommand),
+    Day(DayCommand),
+    Actions(ActionsCommand),
+    Experts(ExpertCommand),
+    Memory(MemoryCommand),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductCommandRequest {
+    pub command_id: floe_kernel::CommandId,
+    pub command: ProductCommand,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConversationCommand {
+    StartSession,
+    StartTurn {
+        session_id: Uuid,
+        expected_revision: u64,
+        text: String,
+        continuation_id: Option<Uuid>,
+        retry_of: Option<floe_kernel::RunId>,
+    },
+    CancelRun {
+        run_id: floe_kernel::RunId,
+    },
+    ResolveInteraction {
+        interaction_id: Uuid,
+        session_id: Uuid,
+        expected_revision: u64,
+        decision: floe_conversation::InteractionDecisionKind,
+        target_digest: [u8; 32],
+    },
+    RefreshInteraction {
+        interaction_id: Uuid,
+        session_id: Uuid,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionsCommand {
+    PairingStart {
+        address_text: String,
+    },
+    PairingCancel {
+        operation_ref: Uuid,
+        expected_revision: u64,
+    },
+    GatewayForget {
+        gateway_ref: Uuid,
+        expected_revision: u64,
+    },
+    IntegrationPrepareReview {
+        integration_ref: Uuid,
+        expected_revision: u64,
+    },
+    IntegrationStart {
+        integration_ref: Uuid,
+        review_ref: floe_access::ReviewRef,
+        expected_revision: u64,
+    },
+    OperationCancel {
+        operation_ref: Uuid,
+        expected_revision: u64,
+    },
+    SourcePrepareReview {
+        source_ref: Uuid,
+        expected_revision: u64,
+    },
+    SourceConfigure {
+        source_ref: Uuid,
+        review_ref: floe_access::ReviewRef,
+        selected_resource_refs: Vec<Uuid>,
+        expected_revision: u64,
+    },
+    Disconnect {
+        source_ref: Uuid,
+        expected_revision: u64,
+    },
+    ObservePrepareReview {
+        source_ref: Uuid,
+        expected_revision: u64,
+        requested_processing: floe_connections::ProcessingChoice,
+    },
+    ObserveEnable {
+        source_ref: Uuid,
+        review_ref: floe_access::ReviewRef,
+        expected_revision: u64,
+    },
+    ObservePause {
+        source_ref: Uuid,
+        expected_revision: u64,
+    },
+    GatewayManagementLaunch {
+        gateway_ref: Uuid,
+        expected_revision: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DayCommand {
+    Refresh(floe_day::DayQuery),
+    Mutate {
+        day: floe_day::DayQuery,
+        mutation: floe_day::DayMutation,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryCommand {
+    Decide {
+        candidate_id: Uuid,
+        decision: floe_knowledge::KnowledgeDecisionKind,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductQuery {
+    Conversation(ConversationQuery),
+    Connections(ConnectionsQuery),
+    Day(DayProductQuery),
+    Actions(ActionsQuery),
+    Experts(ExpertQuery),
+    Memory(MemoryQuery),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConversationQuery {
+    ResumeSession,
+    GetSession {
+        session_id: Uuid,
+        before_message_id: Option<Uuid>,
+    },
+    GetCommand {
+        command_id: floe_kernel::CommandId,
+    },
+    GetRun {
+        run_id: floe_kernel::RunId,
+    },
+    GetMessage {
+        message_id: Uuid,
+    },
+    GetInteraction {
+        interaction_id: Uuid,
+    },
+    ListInteractions {
+        session_id: Uuid,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionsQuery {
+    Overview,
+    PairingGet { operation_ref: Uuid },
+    GatewayGet { gateway_ref: Uuid },
+    IntegrationInspectReview { review_ref: floe_access::ReviewRef },
+    OperationGet { operation_ref: Uuid },
+    SourceInspectReview { review_ref: floe_access::ReviewRef },
+    ObserveInspectReview { review_ref: floe_access::ReviewRef },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DayProductQuery {
+    Snapshot(floe_day::DayQuery),
+    RefreshGet { operation_ref: Uuid },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryQuery {
+    Overview { limit: usize },
+    Review,
+}
+
+#[derive(Clone, Debug)]
+pub enum ProductCommandOutcome {
+    Conversation(ConversationCommandOutcome),
+    Connections(ConnectionsCommandOutcome),
+    Day(DayCommandOutcome),
+    Actions(ActionsCommandResult),
+    Experts(ExpertCommandResult),
+    Memory(floe_knowledge::MemoryDecisionAcknowledgement),
+}
+
+#[derive(Clone, Debug)]
+pub enum ConversationCommandOutcome {
+    Session(floe_conversation::SessionSnapshot),
+    Turn(floe_conversation::CommandReceipt),
+    CancelRun(floe_conversation::CancelRunReceipt),
+    Interaction(floe_conversation::InteractionResult),
+    InteractionRefresh(floe_conversation::InteractionResult),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionsCommandOutcome {
+    Pairing(floe_connections::PairingSnapshot),
+    Gateway(floe_connections::GatewaySummary),
+    IntegrationReview(floe_connections::IntegrationReview),
+    Operation(floe_connections::ConnectionOperationSnapshot),
+    SourceReview(floe_connections::SourceReview),
+    ObserveReview(floe_connections::ObserveReview),
+    SourceConfiguration(floe_connections::SourceConfigurationResult),
+    Source(floe_connections::SourceSummary),
+    Launch(floe_connections::ValidatedManagementLaunch),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DayCommandOutcome {
+    Refresh(floe_day::DayRefreshSnapshot),
+    Mutation(floe_day::DayMutationResult),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductQueryOutcome {
+    Conversation(ConversationQueryOutcome),
+    Connections(ConnectionsQueryOutcome),
+    Day(DayQueryOutcome),
+    Actions(ActionsQueryResult),
+    Experts(ExpertQueryResult),
+    Memory(MemoryQueryResult),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConversationQueryOutcome {
+    Session(Option<floe_conversation::SessionSnapshot>),
+    Command(Option<floe_conversation::RunReceipt>),
+    Run(Option<floe_conversation::RunReceipt>),
+    Message(Option<floe_conversation::MessageSnapshot>),
+    Interaction(Option<floe_conversation::InteractionSnapshot>),
+    Interactions(Vec<floe_conversation::InteractionSnapshot>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConnectionsQueryOutcome {
+    Overview(floe_connections::ConnectionsOverview),
+    Pairing(floe_connections::PairingSnapshot),
+    Gateway(floe_connections::GatewaySummary),
+    IntegrationReview(floe_connections::IntegrationReview),
+    Operation(floe_connections::ConnectionOperationSnapshot),
+    SourceReview(floe_connections::SourceReview),
+    ObserveReview(floe_connections::ObserveReview),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DayQueryOutcome {
+    Snapshot(floe_day::DaySnapshot),
+    Refresh(floe_day::DayRefreshSnapshot),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryQueryResult {
+    Overview(floe_knowledge::MemoryOverviewSnapshot),
+    Review(floe_knowledge::MemoryReviewDisplay),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductObservation {
+    pub runtime_epoch: Option<u64>,
+    pub cursor: Option<u64>,
+    pub limit: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductObservationOutcome {
+    Conversation(floe_conversation::EventRead),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProductCommandDisposition {
+    NotAdmitted,
+    NotApplied,
+    Admitted,
+    Indeterminate,
+}
+
+#[derive(Debug)]
+pub enum ProductFailure {
+    Conversation(floe_kernel::AgentFailure),
+    Connections(floe_kernel::AgentFailure),
+    Actions(floe_kernel::AgentFailure),
+    Experts(floe_kernel::AgentFailure),
+    Memory(floe_kernel::AgentFailure),
+    Day(crate::CoreError),
+}
+
+#[derive(Debug)]
+pub struct ProductCommandFailure {
+    pub disposition: ProductCommandDisposition,
+    pub failure: ProductFailure,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallerContext {
     person_id: Uuid,

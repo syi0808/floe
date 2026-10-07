@@ -3,7 +3,7 @@ import 'package:floe_client/features/connections/application/calendar_system_acc
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
@@ -70,7 +70,7 @@ final class ConnectionsController extends ChangeNotifier {
   void _reportStorageFailure(Object error) {
     final owner = switch (error) {
       ConnectionsRequestFailure() => error.ownerFailure,
-      NativeTransportException() => error.ownerFailure,
+      AppWireTransportException() => error.ownerFailure,
       _ => null,
     };
     if (owner != null) {
@@ -210,9 +210,9 @@ final class ConnectionsController extends ChangeNotifier {
       if (_disposed || !ready || generation != _readinessGeneration) return;
       if (error is ConnectionsCommandFailure &&
           error.commandId == pending.id &&
-          (error.disposition == NativeCommandDisposition.notApplied ||
+          (error.disposition == CommandOutcome.notApplied ||
               (!wasUncertain &&
-                  error.disposition == NativeCommandDisposition.notAdmitted))) {
+                  error.disposition == CommandOutcome.notAdmitted))) {
         _pendingCommands.remove(target);
       }
       _reportStorageFailure(error);
@@ -628,7 +628,7 @@ String? _safeToken(String? value) =>
 String _failureMessage(Object error, String fallback) {
   final reason = switch (error) {
     ConnectionsRequestFailure() => error.reason,
-    NativeTransportException() =>
+    AppWireTransportException() =>
       _safeToken(error.ownerFailure?.reason) ??
           _safeToken(error.metadata['reason_code']) ??
           _safeToken(error.code),

@@ -1,7 +1,5 @@
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart'
-    show NativeTransportException;
 import 'package:floe_client/app/runtime/owner_operation.dart'
     show ownerCommand, ownerQuery;
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
@@ -207,7 +205,7 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
   ) async {
     try {
       return await request();
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw AppRuntimeException(
         error.metadata['reason_code'] ??
             error.metadata['owner_code'] ??

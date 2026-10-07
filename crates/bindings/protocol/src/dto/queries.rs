@@ -89,10 +89,10 @@ pub enum AppProductQueryDto {
     DayRefreshGet { operation_ref: OperationRefDto },
     #[serde(rename = "day.snapshot")]
     DaySnapshot { day: super::DayQueryDto },
-    #[serde(rename = "knowledge.memory.overview")]
-    KnowledgeMemoryOverview {},
-    #[serde(rename = "knowledge.memory.review")]
-    KnowledgeMemoryReview {},
+    #[serde(rename = "memory.overview")]
+    MemoryOverview {},
+    #[serde(rename = "memory.review")]
+    MemoryReview {},
     #[serde(rename = "connections.overview")]
     ConnectionsOverview {},
     #[serde(rename = "connections.pairing.get")]
@@ -153,9 +153,9 @@ impl AppProductQueryDto {
             }
             Self::DayRefreshGet { .. } => return Ok(()),
             Self::DaySnapshot { .. } => return Ok(()),
-            Self::KnowledgeMemoryOverview {}
-            | Self::KnowledgeMemoryReview {}
-            | Self::ConnectionsOverview {} => return Ok(()),
+            Self::MemoryOverview {} | Self::MemoryReview {} | Self::ConnectionsOverview {} => {
+                return Ok(());
+            }
             Self::ConnectionsPairingGet { .. } | Self::ConnectionsOperationGet { .. } => {
                 return Ok(());
             }
@@ -231,12 +231,12 @@ pub enum AppQueryResultDto {
     DayRefresh {
         refresh: super::DayRefreshStateDto,
     },
-    #[serde(rename = "knowledge.memory.overview")]
-    KnowledgeOverview {
+    #[serde(rename = "memory.overview")]
+    MemoryOverview {
         overview: super::AgentMemoryOverviewDto,
     },
-    #[serde(rename = "knowledge.memory.review")]
-    KnowledgeReview {
+    #[serde(rename = "memory.review")]
+    MemoryReview {
         review: super::MemoryReviewDisplayDto,
     },
     #[serde(rename = "connections.gateway")]
@@ -366,6 +366,33 @@ mod runtime_query_tests {
             }),
         };
         assert_eq!(invalid.validate(), Err("query.operation_id"));
+    }
+}
+
+#[cfg(test)]
+mod memory_query_namespace_tests {
+    use super::AppProductQueryDto;
+
+    #[test]
+    fn memory_queries_use_only_the_product_namespace() {
+        let overview = serde_json::to_value(AppProductQueryDto::MemoryOverview {})
+            .expect("serialize Memory overview query");
+        let review = serde_json::to_value(AppProductQueryDto::MemoryReview {})
+            .expect("serialize Memory review query");
+        assert_eq!(overview["kind"], "memory.overview");
+        assert_eq!(review["kind"], "memory.review");
+        assert!(
+            serde_json::from_value::<AppProductQueryDto>(serde_json::json!({
+                "kind": "knowledge.memory.overview"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<AppProductQueryDto>(serde_json::json!({
+                "kind": "knowledge.memory.review"
+            }))
+            .is_err()
+        );
     }
 }
 

@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
@@ -49,7 +49,7 @@ final class _RuntimeGateway implements RuntimeGateway {
     if (prepareIds.length == 1 && firstPrepare == _FirstPrepare.lost) {
       throw const AppOwnerException(
         'interrupted',
-        commandDisposition: NativeCommandDisposition.indeterminate,
+        commandOutcome: CommandOutcome.indeterminate,
       );
     }
     if (prepareIds.length == 1 && firstPrepare == _FirstPrepare.malformed) {

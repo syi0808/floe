@@ -1,6 +1,5 @@
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
@@ -36,7 +35,7 @@ final class AppWireRuntimeGateway implements RuntimeGateway {
         state: state,
         failure: rawFailure == null ? null : OwnerFailure.fromJson(rawFailure),
       );
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _translate(error, requestId, 'runtime_readiness');
     }
   }
@@ -68,7 +67,7 @@ final class AppWireRuntimeGateway implements RuntimeGateway {
         },
       });
       return _decodePreparation(value, operationId);
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _translate(error, operationId, 'runtime_preparation_get');
     }
   }
@@ -86,7 +85,7 @@ final class AppWireRuntimeGateway implements RuntimeGateway {
         'command': command,
       });
       return _decodePreparation(value, operationId);
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _translate(error, operationId, stage);
     }
   }
@@ -110,7 +109,7 @@ final class AppWireRuntimeGateway implements RuntimeGateway {
   }
 
   AppOwnerException _translate(
-    NativeTransportException error,
+    AppWireTransportException error,
     String requestId,
     String stage,
   ) => AppOwnerException.fromAppWire(
@@ -121,6 +120,6 @@ final class AppWireRuntimeGateway implements RuntimeGateway {
     stage: stage,
     metadata: error.metadata,
     ownerFailure: error.ownerFailure,
-    commandDisposition: error.commandDisposition,
+    commandOutcome: error.commandOutcome,
   );
 }

@@ -16,7 +16,7 @@ import 'package:floe_client/features/conversation/application/agent_interaction_
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 
@@ -920,7 +920,7 @@ final class ConversationController extends ChangeNotifier {
 
   OwnerFailure? _ownerFailure(Object error) => switch (error) {
     AppOwnerException() => error.ownerFailure,
-    NativeTransportException() => error.ownerFailure,
+    AppWireTransportException() => error.ownerFailure,
     _ => null,
   };
 

@@ -151,8 +151,8 @@ pub enum AppProductCommandDto {
         day: super::DayQueryDto,
         mutation: super::DayMutationDto,
     },
-    #[serde(rename = "knowledge.memory.decide")]
-    KnowledgeMemoryDecide {
+    #[serde(rename = "memory.decide")]
+    MemoryDecide {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
@@ -284,7 +284,7 @@ impl AppProductCommandDto {
             } => validate_revision(*expected_revision),
             Self::DayRefresh { .. } => Ok(()),
             Self::DayMutate { mutation, .. } => mutation.validate(),
-            Self::KnowledgeMemoryDecide { candidate_id, .. } => {
+            Self::MemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
                     Err("command.candidate_id")
                 } else {
@@ -390,6 +390,31 @@ mod runtime_command_tests {
     }
 }
 
+#[cfg(test)]
+mod memory_command_namespace_tests {
+    use super::AppProductCommandDto;
+    use crate::AgentMemoryReviewDecisionKindDto;
+    use uuid::Uuid;
+
+    #[test]
+    fn memory_decision_uses_only_the_product_namespace() {
+        let command = AppProductCommandDto::MemoryDecide {
+            candidate_id: Uuid::new_v4(),
+            decision: AgentMemoryReviewDecisionKindDto::Approve,
+        };
+        let value = serde_json::to_value(&command).expect("serialize Memory command");
+        assert_eq!(value["kind"], "memory.decide");
+        assert!(
+            serde_json::from_value::<AppProductCommandDto>(serde_json::json!({
+                "kind": "knowledge.memory.decide",
+                "candidate_id": Uuid::new_v4(),
+                "decision": "approve"
+            }))
+            .is_err()
+        );
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContinuationRefDto {
@@ -478,8 +503,8 @@ pub enum AppCommandResultDto {
         command_id: Uuid,
         mutation: super::MutationResultDto,
     },
-    #[serde(rename = "knowledge.memory.decision")]
-    KnowledgeDecision {
+    #[serde(rename = "memory.decision")]
+    MemoryDecision {
         acknowledgement: super::MemoryDecisionAcknowledgementDto,
     },
     #[serde(rename = "experts.directory")]

@@ -15,8 +15,9 @@ pub mod conversion;
 mod day_wire;
 mod diagnostics;
 mod experts_wire;
-mod knowledge_wire;
+mod memory_wire;
 mod native_lane;
+mod product_wire;
 
 pub use abi::*;
 pub use bridge::{FloeHandle, FloeNativeHostLane};

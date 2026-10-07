@@ -9,68 +9,11 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 
 import 'package:floe_client/infrastructure/native/floe_native_bindings.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 const nativeProtocolVersion = 1;
 
-enum NativeCommandDisposition {
-  notApplied,
-  notAdmitted,
-  admitted,
-  indeterminate,
-}
-
 enum _NativeResponseKind { command, ordinary }
-
-final class NativeTransportException implements Exception {
-  const NativeTransportException(
-    this.code,
-    this.message, {
-    this.field,
-    this.metadata = const {},
-    this.ownerFailure,
-    this.commandDisposition,
-  });
-
-  final String code;
-  final String message;
-  final String? field;
-  final Map<String, String> metadata;
-  final OwnerFailure? ownerFailure;
-
-  /// Null only for open, query, event and native-callback failures.
-  /// Product command admission is never inferred from an error code.
-  final NativeCommandDisposition? commandDisposition;
-
-  factory NativeTransportException.fromEnvelope(
-    Map<String, dynamic> envelope, {
-    NativeCommandDisposition? commandDisposition,
-  }) {
-    final error = envelope['error'] is Map
-        ? _asMap(envelope['error'])
-        : envelope;
-    return NativeTransportException(
-      error['code']?.toString() ?? 'internal',
-      error['message']?.toString() ?? 'Could not open Rust core.',
-      field: error['field']?.toString(),
-      commandDisposition: commandDisposition,
-      ownerFailure: error['owner_failure'] == null
-          ? null
-          : OwnerFailure.fromJson(error['owner_failure']),
-      metadata: error['metadata'] is Map
-          ? Map<String, String>.unmodifiable(
-              (error['metadata'] as Map).map(
-                (key, value) => MapEntry(key.toString(), value.toString()),
-              ),
-            )
-          : const {},
-    );
-  }
-
-  @override
-  String toString() => message;
-}
 
 final class NativeTransport implements AppWireTransport {
   NativeTransport._(
@@ -203,10 +146,10 @@ final class NativeTransport implements AppWireTransport {
         : _NativeResponseKind.ordinary;
     if (_closed) {
       if (responseKind == _NativeResponseKind.command) {
-        throw const NativeTransportException(
+        throw const AppWireTransportException(
           'unavailable',
           'NativeTransport is already closed.',
-          commandDisposition: NativeCommandDisposition.notAdmitted,
+          commandOutcome: CommandOutcome.notAdmitted,
         );
       }
       throw StateError('NativeTransport is already closed.');
@@ -289,7 +232,7 @@ final class _NativeCallbackTransport implements NativeHostWireTransport {
         await ready.first.timeout(const Duration(seconds: 5)),
       );
       if (result['status'] != 'ok')
-        throw NativeTransportException(
+        throw AppWireTransportException(
           'ffi_native_host',
           result['message'] as String,
         );
@@ -368,14 +311,14 @@ Future<Map<String, dynamic>> _sendNativeWire(
     final result = _asMap(
       await responsePort.first.timeout(
         timeout,
-        onTimeout: () => throw const NativeTransportException(
+        onTimeout: () => throw const AppWireTransportException(
           'timeout',
           'The app request timed out; query the command or run state.',
         ),
       ),
     );
     if (result['status'] != 'ok')
-      throw NativeTransportException(
+      throw AppWireTransportException(
         'ffi',
         result['message']?.toString() ?? 'The Rust core request failed.',
       );
@@ -386,32 +329,32 @@ Future<Map<String, dynamic>> _sendNativeWire(
     }
     if (isCommand) return _commandResponse(envelope);
     if (envelope['status'] == 'error')
-      throw NativeTransportException.fromEnvelope(envelope);
+      throw AppWireTransportException.fromEnvelope(envelope);
     if (envelope['status'] != 'ok' || envelope['result'] is! Map)
       throw const FormatException('Invalid app-wire response envelope.');
     return _asMap(envelope['result']);
-  } on NativeTransportException catch (error) {
-    if (!isCommand || error.commandDisposition != null) rethrow;
-    throw NativeTransportException(
+  } on AppWireTransportException catch (error) {
+    if (!isCommand || error.commandOutcome != null) rethrow;
+    throw AppWireTransportException(
       error.code,
       error.message,
       field: error.field,
       metadata: error.metadata,
       ownerFailure: error.ownerFailure,
-      commandDisposition: handedOff
-          ? NativeCommandDisposition.indeterminate
-          : NativeCommandDisposition.notAdmitted,
+      commandOutcome: handedOff
+          ? CommandOutcome.indeterminate
+          : CommandOutcome.notAdmitted,
     );
   } on Object {
     if (!isCommand) rethrow;
-    throw NativeTransportException(
+    throw AppWireTransportException(
       handedOff ? 'invalid_response' : 'validation',
       handedOff
           ? 'The command acknowledgement could not be verified.'
           : 'The command was rejected before native handoff.',
-      commandDisposition: handedOff
-          ? NativeCommandDisposition.indeterminate
-          : NativeCommandDisposition.notAdmitted,
+      commandOutcome: handedOff
+          ? CommandOutcome.indeterminate
+          : CommandOutcome.notAdmitted,
     );
   } finally {
     reply?.close();
@@ -440,10 +383,10 @@ Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
     throw const FormatException('Invalid command response outcome.');
   }
   final disposition = switch (envelope['disposition']) {
-    'not_applied' => NativeCommandDisposition.notApplied,
-    'not_admitted' => NativeCommandDisposition.notAdmitted,
-    'admitted' => NativeCommandDisposition.admitted,
-    'indeterminate' => NativeCommandDisposition.indeterminate,
+    'not_applied' => CommandOutcome.notApplied,
+    'not_admitted' => CommandOutcome.notAdmitted,
+    'admitted' => CommandOutcome.admitted,
+    'indeterminate' => CommandOutcome.indeterminate,
     _ => throw const FormatException('Invalid command disposition.'),
   };
   final error = envelope['error'];
@@ -475,9 +418,9 @@ Map<String, dynamic> _commandResponse(Map<String, dynamic> envelope) {
   }
   // The typed error and optional owner projection must decode successfully
   // before a NotAdmitted proof is exposed to a command observer.
-  throw NativeTransportException.fromEnvelope(
+  throw AppWireTransportException.fromEnvelope(
     envelope,
-    commandDisposition: disposition,
+    commandOutcome: disposition,
   );
 }
 
@@ -539,8 +482,10 @@ Future<void> _nativeCallbackWorkerMain(
   }
 }
 
-NativeTransportException _exceptionFromEnvelope(Map<String, dynamic> envelope) {
-  return NativeTransportException.fromEnvelope(envelope);
+AppWireTransportException _exceptionFromEnvelope(
+  Map<String, dynamic> envelope,
+) {
+  return AppWireTransportException.fromEnvelope(envelope);
 }
 
 Map<String, dynamic> _asMap(Object? value) =>

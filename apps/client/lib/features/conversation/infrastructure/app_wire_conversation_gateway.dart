@@ -1,7 +1,6 @@
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
@@ -101,7 +100,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         return null;
       }
       return _decode(result, personId, payload['session_id'] as String?);
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw AppOwnerException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,
         requestId: requestId,
@@ -124,11 +123,10 @@ final class AppWireConversationGateway implements AgentConversationGateway {
       final session = _decode(result, pending.personId, null);
       if (identical(_pending, pending)) _pending = null;
       return session;
-    } on NativeTransportException catch (error) {
-      if (error.commandDisposition == NativeCommandDisposition.notApplied ||
+    } on AppWireTransportException catch (error) {
+      if (error.commandOutcome == CommandOutcome.notApplied ||
           (!wasSubmitted &&
-              error.commandDisposition ==
-                  NativeCommandDisposition.notAdmitted)) {
+              error.commandOutcome == CommandOutcome.notAdmitted)) {
         if (identical(_pending, pending)) _pending = null;
       }
       throw AppOwnerException.fromAppWire(

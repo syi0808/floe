@@ -1,364 +1,259 @@
-//! Mechanical conversion between the Connections owner and its safe product wire.
-use super::app_wire::{
-    AppCommandFailure, AppCommandResult, AppWireResult, agent_failure, internal_error, validation,
+//! Mechanical conversion between Connections DTOs and the typed App API.
+use super::app_wire::{AppWireResult, agent_failure, internal_error, validation};
+use floe_app::{
+    ConnectionsCommand, ConnectionsCommandOutcome, ConnectionsQuery, ConnectionsQueryOutcome,
 };
 use floe_connections as owner;
-use floe_execution::ExecutionScope;
-use floe_kernel::OwnerActor;
 use floe_protocol as dto;
-use uuid::Uuid;
-
-pub(crate) fn handles_command(command: &dto::AppProductCommandDto) -> bool {
-    use dto::AppProductCommandDto::*;
-    matches!(
-        command,
-        ConnectionsPairingStart { .. }
-            | ConnectionsPairingCancel { .. }
-            | ConnectionsGatewayForget { .. }
-            | ConnectionsIntegrationPrepareReview { .. }
-            | ConnectionsIntegrationStart { .. }
-            | ConnectionsOperationCancel { .. }
-            | ConnectionsSourcePrepareReview { .. }
-            | ConnectionsSourceConfigure { .. }
-            | ConnectionsDisconnect { .. }
-            | ConnectionsObservePrepareReview { .. }
-            | ConnectionsObserveSet { .. }
-            | ConnectionsGatewayManagementLaunch { .. }
-    )
-}
-pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
-    use dto::AppProductQueryDto::*;
-    matches!(
-        query,
-        ConnectionsOverview { .. }
-            | ConnectionsPairingGet { .. }
-            | ConnectionsGatewayGet { .. }
-            | ConnectionsIntegrationInspectReview { .. }
-            | ConnectionsOperationGet { .. }
-            | ConnectionsSourceInspectReview { .. }
-            | ConnectionsObserveInspectReview { .. }
-    )
-}
-
-fn command_failure(failure: owner::ConnectionsCommandFailure) -> AppCommandFailure {
-    match failure {
-        owner::ConnectionsCommandFailure::NotApplied(reason) => {
-            AppCommandFailure::NotApplied(agent_failure(reason))
+pub(crate) fn command_in(value: dto::AppProductCommandDto) -> AppWireResult<ConnectionsCommand> {
+    use dto::{AppProductCommandDto as C, ConnectionObserveSetMutationDto as Observe};
+    Ok(match value {
+        C::ConnectionsPairingStart { address_text } => {
+            ConnectionsCommand::PairingStart { address_text }
         }
-        owner::ConnectionsCommandFailure::NotAdmitted(reason) => {
-            AppCommandFailure::NotAdmitted(agent_failure(reason))
-        }
-        owner::ConnectionsCommandFailure::Admitted(reason) => {
-            AppCommandFailure::Admitted(agent_failure(reason))
-        }
-        owner::ConnectionsCommandFailure::Indeterminate(reason) => {
-            AppCommandFailure::Indeterminate(agent_failure(reason))
-        }
-    }
-}
-
-pub(crate) async fn command(
-    owners: &floe_app::ReadyOwners,
-    actor: &OwnerActor,
-    command_id: Uuid,
-    command: dto::AppProductCommandDto,
-    scope: &ExecutionScope,
-) -> AppCommandResult<dto::AppCommandResultDto> {
-    use dto::{AppCommandResultDto as R, AppProductCommandDto as C};
-    let service = &owners.connections;
-    Ok(match command {
-        C::ConnectionsPairingStart { address_text } => R::ConnectionsPairing {
-            pairing: pairing(
-                service
-                    .start_pairing(actor, command_id, &address_text, scope)
-                    .await
-                    .map_err(command_failure)?,
-            )?,
-        },
         C::ConnectionsPairingCancel {
             operation_ref,
             expected_revision,
-        } => R::ConnectionsPairing {
-            pairing: pairing(
-                service
-                    .cancel_pairing(
-                        actor,
-                        command_id,
-                        operation_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::PairingCancel {
+            operation_ref: operation_ref.get(),
+            expected_revision,
         },
         C::ConnectionsGatewayForget {
             gateway_ref,
             expected_revision,
-        } => R::ConnectionsGateway {
-            gateway: gateway(
-                service
-                    .forget_gateway(
-                        actor,
-                        command_id,
-                        gateway_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::GatewayForget {
+            gateway_ref: gateway_ref.get(),
+            expected_revision,
         },
         C::ConnectionsIntegrationPrepareReview {
             integration_ref,
             expected_revision,
-        } => R::ConnectionsIntegrationReview {
-            review: integration_review(
-                service
-                    .prepare_integration_review(
-                        actor,
-                        command_id,
-                        integration_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::IntegrationPrepareReview {
+            integration_ref: integration_ref.get(),
+            expected_revision,
         },
         C::ConnectionsIntegrationStart {
             integration_ref,
             review_ref,
             expected_revision,
-        } => R::ConnectionsOperation {
-            operation: operation(
-                service
-                    .start_integration(
-                        actor,
-                        command_id,
-                        integration_ref.get(),
-                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::IntegrationStart {
+            integration_ref: integration_ref.get(),
+            review_ref: review_in(review_ref)?,
+            expected_revision,
         },
         C::ConnectionsOperationCancel {
             operation_ref,
             expected_revision,
-        } => R::ConnectionsOperation {
-            operation: operation(
-                service
-                    .cancel_operation(
-                        actor,
-                        command_id,
-                        operation_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::OperationCancel {
+            operation_ref: operation_ref.get(),
+            expected_revision,
         },
         C::ConnectionsSourcePrepareReview {
             source_ref,
             expected_revision,
-        } => R::ConnectionsSourceReview {
-            review: source_review(
-                service
-                    .prepare_source_review(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::SourcePrepareReview {
+            source_ref: source_ref.get(),
+            expected_revision,
         },
         C::ConnectionsSourceConfigure {
             source_ref,
             review_ref,
             selected_resource_refs,
             expected_revision,
-        } => R::ConnectionsSourceConfiguration {
-            configuration: configuration(
-                service
-                    .configure_source(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
-                        selected_resource_refs
-                            .into_iter()
-                            .map(|value| value.get())
-                            .collect(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::SourceConfigure {
+            source_ref: source_ref.get(),
+            review_ref: review_in(review_ref)?,
+            selected_resource_refs: selected_resource_refs
+                .into_iter()
+                .map(|value| value.get())
+                .collect(),
+            expected_revision,
         },
         C::ConnectionsDisconnect {
             source_ref,
             expected_revision,
-        } => R::ConnectionsOperation {
-            operation: operation(
-                service
-                    .disconnect(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::Disconnect {
+            source_ref: source_ref.get(),
+            expected_revision,
         },
         C::ConnectionsObservePrepareReview {
             source_ref,
             expected_revision,
             requested_processing,
-        } => R::ConnectionsObserveReview {
-            review: observe_review(
-                service
-                    .prepare_observe_review(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        expected_revision,
-                        processing_in(requested_processing),
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::ObservePrepareReview {
+            source_ref: source_ref.get(),
+            expected_revision,
+            requested_processing: processing_in(requested_processing),
         },
-        C::ConnectionsObserveSet { mutation } => R::ConnectionsSource {
-            source: source(match mutation {
-                dto::ConnectionObserveSetMutationDto::Enable {
-                    source_ref,
-                    review_ref,
-                    expected_revision,
-                } => service
-                    .apply_observe(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        expected_revision,
-                        review_in(review_ref).map_err(AppCommandFailure::NotAdmitted)?,
-                        owner::ObserveDecision::Allow,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-                dto::ConnectionObserveSetMutationDto::Pause {
-                    source_ref,
-                    expected_revision,
-                } => service
-                    .pause_observe(
-                        actor,
-                        command_id,
-                        source_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            })?,
+        C::ConnectionsObserveSet { mutation } => match mutation {
+            Observe::Enable {
+                source_ref,
+                review_ref,
+                expected_revision,
+            } => ConnectionsCommand::ObserveEnable {
+                source_ref: source_ref.get(),
+                review_ref: review_in(review_ref)?,
+                expected_revision,
+            },
+            Observe::Pause {
+                source_ref,
+                expected_revision,
+            } => ConnectionsCommand::ObservePause {
+                source_ref: source_ref.get(),
+                expected_revision,
+            },
         },
         C::ConnectionsGatewayManagementLaunch {
             gateway_ref,
             expected_revision,
-        } => R::ConnectionsLaunch {
-            launch_action: launch(
-                service
-                    .request_management_launch(
-                        actor,
-                        command_id,
-                        gateway_ref.get(),
-                        expected_revision,
-                        scope,
-                    )
-                    .await
-                    .map_err(command_failure)?,
-            )?,
+        } => ConnectionsCommand::GatewayManagementLaunch {
+            gateway_ref: gateway_ref.get(),
+            expected_revision,
         },
-        _ => return Err(AppCommandFailure::NotAdmitted(validation("command.kind"))),
+        _ => return Err(validation("command.kind")),
     })
 }
 
-pub(crate) async fn query(
-    owners: &floe_app::ReadyOwners,
-    actor: &OwnerActor,
-    query: dto::AppProductQueryDto,
-    scope: &ExecutionScope,
-) -> AppWireResult<dto::AppQueryResultDto> {
-    use dto::{AppProductQueryDto as Q, AppQueryResultDto as R};
-    let service = &owners.connections;
-    Ok(match query {
-        Q::ConnectionsOverview {} => R::ConnectionsOverview {
-            overview: overview(
-                service
-                    .overview(actor, scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+pub(crate) fn command_out(
+    command: &ConnectionsCommand,
+    result: ConnectionsCommandOutcome,
+) -> AppWireResult<dto::AppCommandResultDto> {
+    use dto::AppCommandResultDto as R;
+    Ok(match (command, result) {
+        (
+            ConnectionsCommand::PairingStart { .. } | ConnectionsCommand::PairingCancel { .. },
+            ConnectionsCommandOutcome::Pairing(value),
+        ) => R::ConnectionsPairing {
+            pairing: pairing(value)?,
         },
-        Q::ConnectionsPairingGet { operation_ref } => R::ConnectionsPairing {
-            pairing: pairing(
-                service
-                    .get_pairing(actor, operation_ref.get(), scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (ConnectionsCommand::GatewayForget { .. }, ConnectionsCommandOutcome::Gateway(value)) => {
+            R::ConnectionsGateway {
+                gateway: gateway(value)?,
+            }
+        }
+        (
+            ConnectionsCommand::IntegrationPrepareReview { .. },
+            ConnectionsCommandOutcome::IntegrationReview(value),
+        ) => R::ConnectionsIntegrationReview {
+            review: integration_review(value)?,
         },
-        Q::ConnectionsGatewayGet { gateway_ref } => R::ConnectionsGateway {
-            gateway: gateway(
-                service
-                    .get_gateway(actor, gateway_ref.get(), scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (
+            ConnectionsCommand::IntegrationStart { .. }
+            | ConnectionsCommand::OperationCancel { .. }
+            | ConnectionsCommand::Disconnect { .. },
+            ConnectionsCommandOutcome::Operation(value),
+        ) => R::ConnectionsOperation {
+            operation: operation(value)?,
         },
-        Q::ConnectionsIntegrationInspectReview { review_ref } => R::ConnectionsIntegrationReview {
-            review: integration_review(
-                service
-                    .inspect_integration_review(actor, review_in(review_ref)?, scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (
+            ConnectionsCommand::SourcePrepareReview { .. },
+            ConnectionsCommandOutcome::SourceReview(value),
+        ) => R::ConnectionsSourceReview {
+            review: source_review(value)?,
         },
-        Q::ConnectionsOperationGet { operation_ref } => R::ConnectionsOperation {
-            operation: operation(
-                service
-                    .get_operation(actor, operation_ref.get(), scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (
+            ConnectionsCommand::SourceConfigure { .. },
+            ConnectionsCommandOutcome::SourceConfiguration(value),
+        ) => R::ConnectionsSourceConfiguration {
+            configuration: configuration(value)?,
         },
-        Q::ConnectionsSourceInspectReview { review_ref } => R::ConnectionsSourceReview {
-            review: source_review(
-                service
-                    .inspect_source_review(actor, review_in(review_ref)?, scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (
+            ConnectionsCommand::ObservePrepareReview { .. },
+            ConnectionsCommandOutcome::ObserveReview(value),
+        ) => R::ConnectionsObserveReview {
+            review: observe_review(value)?,
         },
-        Q::ConnectionsObserveInspectReview { review_ref } => R::ConnectionsObserveReview {
-            review: observe_review(
-                service
-                    .inspect_observe_review(actor, review_in(review_ref)?, scope)
-                    .await
-                    .map_err(agent_failure)?,
-            )?,
+        (
+            ConnectionsCommand::ObserveEnable { .. } | ConnectionsCommand::ObservePause { .. },
+            ConnectionsCommandOutcome::Source(value),
+        ) => R::ConnectionsSource {
+            source: source(value)?,
         },
+        (
+            ConnectionsCommand::GatewayManagementLaunch { .. },
+            ConnectionsCommandOutcome::Launch(value),
+        ) => R::ConnectionsLaunch {
+            launch_action: launch(value)?,
+        },
+        _ => return Err(internal_error()),
+    })
+}
+
+pub(crate) fn query_in(value: dto::AppProductQueryDto) -> AppWireResult<ConnectionsQuery> {
+    use dto::AppProductQueryDto as Q;
+    Ok(match value {
+        Q::ConnectionsOverview {} => ConnectionsQuery::Overview,
+        Q::ConnectionsPairingGet { operation_ref } => ConnectionsQuery::PairingGet {
+            operation_ref: operation_ref.get(),
+        },
+        Q::ConnectionsGatewayGet { gateway_ref } => ConnectionsQuery::GatewayGet {
+            gateway_ref: gateway_ref.get(),
+        },
+        Q::ConnectionsIntegrationInspectReview { review_ref } => {
+            ConnectionsQuery::IntegrationInspectReview {
+                review_ref: review_in(review_ref)?,
+            }
+        }
+        Q::ConnectionsOperationGet { operation_ref } => ConnectionsQuery::OperationGet {
+            operation_ref: operation_ref.get(),
+        },
+        Q::ConnectionsSourceInspectReview { review_ref } => ConnectionsQuery::SourceInspectReview {
+            review_ref: review_in(review_ref)?,
+        },
+        Q::ConnectionsObserveInspectReview { review_ref } => {
+            ConnectionsQuery::ObserveInspectReview {
+                review_ref: review_in(review_ref)?,
+            }
+        }
         _ => return Err(validation("query.kind")),
+    })
+}
+
+pub(crate) fn query_out(
+    query: &ConnectionsQuery,
+    result: ConnectionsQueryOutcome,
+) -> AppWireResult<dto::AppQueryResultDto> {
+    use dto::AppQueryResultDto as R;
+    Ok(match (query, result) {
+        (ConnectionsQuery::Overview, ConnectionsQueryOutcome::Overview(value)) => {
+            R::ConnectionsOverview {
+                overview: overview(value)?,
+            }
+        }
+        (ConnectionsQuery::PairingGet { .. }, ConnectionsQueryOutcome::Pairing(value)) => {
+            R::ConnectionsPairing {
+                pairing: pairing(value)?,
+            }
+        }
+        (ConnectionsQuery::GatewayGet { .. }, ConnectionsQueryOutcome::Gateway(value)) => {
+            R::ConnectionsGateway {
+                gateway: gateway(value)?,
+            }
+        }
+        (
+            ConnectionsQuery::IntegrationInspectReview { .. },
+            ConnectionsQueryOutcome::IntegrationReview(value),
+        ) => R::ConnectionsIntegrationReview {
+            review: integration_review(value)?,
+        },
+        (ConnectionsQuery::OperationGet { .. }, ConnectionsQueryOutcome::Operation(value)) => {
+            R::ConnectionsOperation {
+                operation: operation(value)?,
+            }
+        }
+        (
+            ConnectionsQuery::SourceInspectReview { .. },
+            ConnectionsQueryOutcome::SourceReview(value),
+        ) => R::ConnectionsSourceReview {
+            review: source_review(value)?,
+        },
+        (
+            ConnectionsQuery::ObserveInspectReview { .. },
+            ConnectionsQueryOutcome::ObserveReview(value),
+        ) => R::ConnectionsObserveReview {
+            review: observe_review(value)?,
+        },
+        _ => return Err(internal_error()),
     })
 }
 
@@ -867,4 +762,57 @@ fn launch(value: owner::ValidatedManagementLaunch) -> AppWireResult<dto::LaunchA
         validated_url: value.validated_url,
         expires_at: value.expires_at.to_rfc3339(),
     })
+}
+
+#[cfg(test)]
+mod router_input_tests {
+    use super::*;
+    use floe_app::ConnectionsCommand;
+    use uuid::Uuid;
+
+    #[test]
+    fn observe_wire_intents_convert_without_dispatching_from_ffi() {
+        let source = Uuid::new_v4();
+        let pause = command_in(dto::AppProductCommandDto::ConnectionsObserveSet {
+            mutation: dto::ConnectionObserveSetMutationDto::Pause {
+                source_ref: dto::ConnectionsSourceRefDto::new(source).unwrap(),
+                expected_revision: 7,
+            },
+        })
+        .expect("convert pause intent");
+        assert_eq!(
+            pause,
+            ConnectionsCommand::ObservePause {
+                source_ref: source,
+                expected_revision: 7,
+            }
+        );
+
+        let review_id = Uuid::new_v4();
+        let review_ref = dto::ReviewRefDto {
+            id: dto::UuidRefDto::new(review_id).unwrap(),
+            revision: 3,
+            digest: dto::DigestHex64Dto::new("ab".repeat(32)).unwrap(),
+        };
+        let enable = command_in(dto::AppProductCommandDto::ConnectionsObserveSet {
+            mutation: dto::ConnectionObserveSetMutationDto::Enable {
+                source_ref: dto::ConnectionsSourceRefDto::new(source).unwrap(),
+                review_ref: review_ref.clone(),
+                expected_revision: 7,
+            },
+        })
+        .expect("convert enable intent");
+        let ConnectionsCommand::ObserveEnable {
+            source_ref,
+            review_ref: converted_review,
+            expected_revision,
+        } = enable
+        else {
+            panic!("observe enable DTO converted to another command")
+        };
+        assert_eq!(source_ref, source);
+        assert_eq!(converted_review.id, review_id);
+        assert_eq!(converted_review.revision, 3);
+        assert_eq!(expected_revision, 7);
+    }
 }

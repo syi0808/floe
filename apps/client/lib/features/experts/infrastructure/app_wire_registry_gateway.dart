@@ -1,6 +1,5 @@
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
 
@@ -194,7 +193,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
         'request_id': requestId,
         'query': query,
       });
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _fromTransport(error, requestId, 'experts_query');
     }
   }
@@ -234,7 +233,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
       final decoded = decode(result);
       if (identical(_pendingCommand, pending)) _pendingCommand = null;
       return decoded;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       // Only these correlated owner rejections are proven precommit. A
       // transport/decode/storage failure retains the immutable retry request.
       if ((error.code == 'conflict' &&
@@ -255,7 +254,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
   }
 
   AppOwnerException _fromTransport(
-    NativeTransportException error,
+    AppWireTransportException error,
     String requestId,
     String stage,
   ) => AppOwnerException.fromAppWire(

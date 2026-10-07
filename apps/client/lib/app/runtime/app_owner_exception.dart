@@ -1,5 +1,5 @@
 import 'package:floe_client/app/runtime/owner_failure.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 
 /// An owner or AppWire operation failed. This is transport/domain evidence;
 /// only an owner projection explicitly in the Vault domain updates shared
@@ -23,7 +23,7 @@ class AppOwnerException implements Exception {
     this.reloadRequired,
     this.sealSession,
     this.ownerFailure,
-    this.commandDisposition,
+    this.commandOutcome,
   });
 
   factory AppOwnerException.fromAppWire(
@@ -32,7 +32,7 @@ class AppOwnerException implements Exception {
     String? requestId,
     String? stage,
     Map<String, String> metadata = const {},
-    NativeCommandDisposition? commandDisposition,
+    CommandOutcome? commandOutcome,
   }) => AppOwnerException(
     ownerFailure?.reason ?? failure,
     requestId: requestId,
@@ -48,12 +48,12 @@ class AppOwnerException implements Exception {
     correlationRequestId: ownerFailure?.correlationId,
     reloadRequired: ownerFailure?.reloadRequired,
     sealSession: ownerFailure?.sealSession,
-    commandDisposition: commandDisposition,
+    commandOutcome: commandOutcome,
   );
 
   final String failure;
   final OwnerFailure? ownerFailure;
-  final NativeCommandDisposition? commandDisposition;
+  final CommandOutcome? commandOutcome;
   final String? requestId;
   final String? stage;
   final Map<String, String> metadata;

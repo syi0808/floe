@@ -1,8 +1,8 @@
 use crate::bridge::FloeHandle;
-use floe_app::{DayCommands, DayQueries, NativeHostCommands, NativeHostQueries};
+use floe_app::{NativeHostCommands, NativeHostQueries};
 use floe_kernel::AgentFailure;
 use floe_protocol::*;
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 pub(crate) type AppWireResult<T> = Result<T, AppWireErrorDto>;
 pub(crate) type AppCommandResult<T> = Result<T, AppCommandFailure>;
 
@@ -45,7 +45,7 @@ pub(crate) fn command(
     let caller = host_request.caller();
     let services = host_request.services();
     let command_id = request.command_id.get();
-    let command = match request.command {
+    match request.command {
         AppCommandDto::NativeHost(command) => {
             let result = services
                 .apply_native_host(
@@ -54,8 +54,8 @@ pub(crate) fn command(
                         .map_err(|error| AppCommandFailure::NotAdmitted(structural_error(error)))?,
                 )
                 .map_err(agent_failure)?;
-            return crate::conversion::native::native_host_command_result(result)
-                .map_err(|error| structural_error(error).into());
+            crate::conversion::native::native_host_command_result(result)
+                .map_err(|error| structural_error(error).into())
         }
         AppCommandDto::Runtime(command) => {
             // Runtime control is admitted by AppHost, then dispatched directly
@@ -65,7 +65,7 @@ pub(crate) fn command(
             {
                 return Err(AppCommandFailure::NotAdmitted(validation("command_id")));
             }
-            return match command {
+            match command {
                 RuntimeCommandDto::Prepare {} => {
                     let result =
                         services
@@ -103,7 +103,7 @@ pub(crate) fn command(
                         result: runtime_preparation_result(result),
                     })
                 }
-            };
+            }
         }
         AppCommandDto::Product(command) => {
             // Product clients allocate random nonces. Derived v5 identities are
@@ -113,97 +113,8 @@ pub(crate) fn command(
             {
                 return Err(AppCommandFailure::NotAdmitted(validation("command_id")));
             }
-            command
+            crate::product_wire::command(&host_request, command_id, command)
         }
-    };
-    if crate::connections_wire::handles_command(&command)
-        || crate::conversation_wire::handles_command(&command)
-    {
-        let owners = services.ready_owners(caller).map_err(|failure| {
-            AppCommandFailure::NotAdmitted(if crate::conversation_wire::handles_command(&command) {
-                crate::conversation_wire::failure_dto(failure, command_id)
-            } else {
-                agent_failure(failure)
-            })
-        })?;
-        let actor = caller.owner_actor();
-        let scope = floe_app::host_scope(
-            command_id,
-            floe_execution::Cancellation::default(),
-            Duration::from_secs(35),
-        );
-        return services.execute_owner(async move {
-            if crate::connections_wire::handles_command(&command) {
-                crate::connections_wire::command(&owners, &actor, command_id, command, &scope).await
-            } else {
-                crate::conversation_wire::command(&owners, &actor, command_id, command, &scope)
-                    .await
-            }
-        });
-    }
-    if crate::actions_wire::handles_command(&command) {
-        return crate::actions_wire::command(services, caller, command_id, command)
-            .map_err(Into::into);
-    }
-    if crate::experts_wire::handles_command(&command) {
-        return crate::experts_wire::command(services, caller, command_id, command)
-            .map_err(Into::into);
-    }
-    if crate::knowledge_wire::handles_command(&command) {
-        return crate::knowledge_wire::command(services, caller, command_id, command)
-            .map_err(Into::into);
-    }
-    match command {
-        AppProductCommandDto::DayMutate { day, mutation } => {
-            let result = host_request
-                .services()
-                .mutate_day(
-                    host_request.caller(),
-                    floe_app::DayMutationRequest {
-                        command_id: command_id,
-                        day: crate::day_wire::read(day).map_err(|error| {
-                            AppCommandFailure::NotAdmitted(structural_error(error))
-                        })?,
-                        mutation: crate::day_wire::mutation(mutation).map_err(|error| {
-                            AppCommandFailure::NotAdmitted(structural_error(error))
-                        })?,
-                    },
-                )
-                .map_err(day_error)?;
-            if result.command_id != command_id {
-                return Err(internal_error().into());
-            }
-            Ok(AppCommandResultDto::DayMutation {
-                command_id: result.command_id,
-                mutation: floe_protocol::MutationResultDto {
-                    snapshot: crate::conversion::day_snapshot_to_dto(result.snapshot).map_err(
-                        |failure| structural_error(floe_protocol::wire::conversion_error(failure)),
-                    )?,
-                    changed_item: result
-                        .changed_item
-                        .map(crate::conversion::timeline_item_to_dto)
-                        .transpose()
-                        .map_err(|failure| {
-                            structural_error(floe_protocol::wire::conversion_error(failure))
-                        })?,
-                    capture: result.capture.map(crate::conversion::capture_to_dto),
-                },
-            })
-        }
-        AppProductCommandDto::DayRefresh { day } => {
-            let refresh = services
-                .refresh_day(
-                    caller,
-                    command_id,
-                    crate::day_wire::read(day)
-                        .map_err(|error| AppCommandFailure::NotAdmitted(structural_error(error)))?,
-                )
-                .map_err(day_error)?;
-            Ok(AppCommandResultDto::DayRefresh {
-                refresh: crate::day_wire::refresh(refresh).map_err(structural_error)?,
-            })
-        }
-        _ => Err(AppCommandFailure::NotAdmitted(validation("command"))),
     }
 }
 pub(crate) fn query(
@@ -216,7 +127,7 @@ pub(crate) fn query(
     let host_request = host.request(request_id).map_err(host_failure)?;
     let caller = host_request.caller();
     let services = host_request.services();
-    let query = match request.query {
+    match request.query {
         AppQueryDto::NativeHost(query) => {
             let result = services
                 .query_native_host(
@@ -224,13 +135,12 @@ pub(crate) fn query(
                     crate::context_wire::query(query).map_err(structural_error)?,
                 )
                 .map_err(agent_failure)?;
-            return crate::conversion::native::native_host_query_result(result)
-                .map_err(structural_error);
+            crate::conversion::native::native_host_query_result(result).map_err(structural_error)
         }
         AppQueryDto::Runtime(query) => {
             // Runtime control is a first-class lane inside AppWire, distinct
             // from both Product commands and native callbacks.
-            return match query {
+            match query {
                 RuntimeQueryDto::Readiness {} => {
                     let readiness = services
                         .runtime_readiness(caller, request_id)
@@ -250,66 +160,9 @@ pub(crate) fn query(
                         result: runtime_preparation_result(result),
                     })
                 }
-            };
-        }
-        AppQueryDto::Product(query) => query,
-    };
-    if crate::connections_wire::handles_query(&query)
-        || crate::conversation_wire::handles_query(&query)
-    {
-        let owners = services.ready_owners(caller).map_err(|failure| {
-            if crate::conversation_wire::handles_query(&query) {
-                crate::conversation_wire::failure_dto(failure, request_id)
-            } else {
-                agent_failure(failure)
             }
-        })?;
-        let actor = caller.owner_actor();
-        let scope = floe_app::host_scope(
-            request_id,
-            floe_execution::Cancellation::default(),
-            Duration::from_secs(35),
-        );
-        return services.execute_owner(async move {
-            if crate::connections_wire::handles_query(&query) {
-                crate::connections_wire::query(&owners, &actor, query, &scope).await
-            } else {
-                crate::conversation_wire::query(&owners, &actor, query, &scope).await
-            }
-        });
-    }
-    if crate::actions_wire::handles_query(&query) {
-        return crate::actions_wire::query(services, caller, request_id, query);
-    }
-    if crate::experts_wire::handles_query(&query) {
-        return crate::experts_wire::query(services, caller, request_id, query);
-    }
-    if crate::knowledge_wire::handles_query(&query) {
-        return crate::knowledge_wire::query(services, caller, request_id, query);
-    }
-    match query {
-        AppProductQueryDto::DaySnapshot { day } => {
-            let result = services
-                .read_day(
-                    caller,
-                    crate::day_wire::read(day).map_err(structural_error)?,
-                )
-                .map_err(day_error)?;
-            Ok(AppQueryResultDto::DaySnapshot {
-                snapshot: crate::conversion::day_snapshot_to_dto(result).map_err(|failure| {
-                    structural_error(floe_protocol::wire::conversion_error(failure))
-                })?,
-            })
         }
-        AppProductQueryDto::DayRefreshGet { operation_ref } => {
-            let refresh = services
-                .get_day_refresh(caller, operation_ref.get())
-                .map_err(day_error)?;
-            Ok(AppQueryResultDto::DayRefresh {
-                refresh: crate::day_wire::refresh(refresh).map_err(structural_error)?,
-            })
-        }
-        _ => Err(validation("query")),
+        AppQueryDto::Product(query) => crate::product_wire::query(&host_request, query),
     }
 }
 pub(crate) fn events(
@@ -321,20 +174,7 @@ pub(crate) fn events(
     let host_request = host
         .request(request.request_id.get())
         .map_err(host_failure)?;
-    let caller = host_request.caller();
-    let services = host_request.services();
-    let owners = services.ready_owners(caller).map_err(|failure| {
-        crate::conversation_wire::failure_dto(failure, request.request_id.get())
-    })?;
-    let actor = caller.owner_actor();
-    let scope = floe_app::host_scope(
-        request.request_id.get(),
-        floe_execution::Cancellation::default(),
-        Duration::from_secs(5),
-    );
-    services.execute_owner(async move {
-        crate::conversation_wire::events(&owners, &actor, request, &scope).await
-    })
+    crate::product_wire::observe(&host_request, request)
 }
 
 fn runtime_preparation_result(
@@ -389,7 +229,7 @@ pub(crate) fn structural_error(error: floe_protocol::ErrorDto) -> AppWireErrorDt
     }
 }
 
-fn day_error(error: floe_app::CoreError) -> AppWireErrorDto {
+pub(crate) fn day_error(error: floe_app::CoreError) -> AppWireErrorDto {
     structural_error(crate::bridge::core_error(error))
 }
 

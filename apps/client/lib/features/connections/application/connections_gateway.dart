@@ -1,6 +1,6 @@
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 
 abstract interface class ConnectionsGateway {
   Future<ConnectionsOverview> overview();
@@ -118,7 +118,7 @@ final class ConnectionsCommandFailure extends ConnectionsRequestFailure {
     required this.disposition,
   });
   final String commandId;
-  final NativeCommandDisposition disposition;
+  final CommandOutcome disposition;
 }
 
 final class ConnectionsReadFailure extends ConnectionsRequestFailure {

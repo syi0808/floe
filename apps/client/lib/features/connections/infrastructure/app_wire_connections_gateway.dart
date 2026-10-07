@@ -1,5 +1,4 @@
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/connections/application/connections_gateway.dart';
@@ -373,7 +372,7 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
       }
       return decoded;
     } on Object catch (error, stackTrace) {
-      final native = error is NativeTransportException ? error : null;
+      final native = error is AppWireTransportException ? error : null;
       final owner = native?.ownerFailure;
       final code = _safeFailureToken(native?.code) ?? 'invalid_response';
       final reason =
@@ -401,9 +400,7 @@ final class AppWireConnectionsGateway implements ConnectionsGateway {
           reason: reason,
           requestId: requestId,
           commandId: commandId,
-          disposition:
-              native?.commandDisposition ??
-              NativeCommandDisposition.indeterminate,
+          disposition: native?.commandOutcome ?? CommandOutcome.indeterminate,
           errorId: errorId,
           ownerFailure: owner,
         );

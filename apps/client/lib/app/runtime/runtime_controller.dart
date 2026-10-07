@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
@@ -234,8 +234,8 @@ final class RuntimeController extends ChangeNotifier {
       guard.failureRevision == _failureRevision;
 
   bool _definitelyNotAdmitted(AppOwnerException error) =>
-      error.commandDisposition == NativeCommandDisposition.notAdmitted ||
-      error.commandDisposition == NativeCommandDisposition.notApplied;
+      error.commandOutcome == CommandOutcome.notAdmitted ||
+      error.commandOutcome == CommandOutcome.notApplied;
 
   bool _isNotFound(AppOwnerException error) =>
       error.failure == 'not_found' ||

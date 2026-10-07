@@ -2,8 +2,6 @@ import 'dart:convert';
 
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
-import 'package:floe_client/app/runtime/native_transport.dart'
-    show NativeTransportException;
 import 'package:floe_client/app/runtime/owner_operation.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
@@ -61,7 +59,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       final snapshot = _refreshSnapshot(result);
       _acceptRefresh(intent, pending, snapshot, result);
       return snapshot;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       // The original body stays available when this screen is replaced.
       throw _runtimeError(error);
     }
@@ -198,7 +196,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
         throw const FormatException('Invalid Day result kind.');
       }
       return _asMap(result['snapshot'], 'Day snapshot');
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw _runtimeError(error);
     }
   }
@@ -262,7 +260,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       final decoded = decode(payload);
       if (_pendingMutation?.commandId == commandId) _pendingMutation = null;
       return decoded;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       // These exact Day owner rejections prove that its transaction did not
       // commit. Transport and post-commit conversion failures stay uncertain.
       if ((error.code == 'conflict' || error.code == 'not_found') &&
@@ -332,7 +330,7 @@ final class _DecodedMutation {
   final CaptureReceipt? capture;
 }
 
-AppRuntimeException _runtimeError(NativeTransportException error) =>
+AppRuntimeException _runtimeError(AppWireTransportException error) =>
     AppRuntimeException(
       error.metadata['owner_code'] ?? error.code,
       error.message,

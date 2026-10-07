@@ -1,5 +1,5 @@
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
-import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 
@@ -61,7 +61,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
       final result = await _client.submitInteractionResolve(command);
       _pendingDecisions.remove(snapshot.id);
       return result;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       if (error.code != 'timeout' && error.code != 'ffi')
         _pendingDecisions.remove(snapshot.id);
       rethrow;
@@ -88,7 +88,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
       final result = await _client.submitInteractionRefresh(command);
       _pendingRefreshes.remove(snapshot.id);
       return result;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       if (error.code != 'timeout' && error.code != 'ffi')
         _pendingRefreshes.remove(snapshot.id);
       rethrow;

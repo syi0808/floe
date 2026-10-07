@@ -149,7 +149,7 @@ final class AppRuntime {
   static Future<NativeTransport> _open(Future<NativeTransport> pending) async {
     try {
       return await pending;
-    } on NativeTransportException catch (error) {
+    } on AppWireTransportException catch (error) {
       throw AppRuntimeException(
         error.code,
         error.message,

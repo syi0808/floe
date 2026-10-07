@@ -1,260 +1,253 @@
-//! Mechanical Conversation owner request/result translation.
-use crate::app_wire::{
-    AppCommandFailure, AppCommandResult, AppWireResult, agent_failure, internal_error, validation,
+//! Mechanical conversion between Conversation DTOs and the typed App API.
+use crate::app_wire::{AppWireResult, agent_failure, internal_error, validation};
+use floe_app::{
+    CallerContext, ConversationCommand, ConversationCommandOutcome, ConversationQuery,
+    ConversationQueryOutcome,
 };
 use floe_conversation::{EventPayload, EventRead};
-use floe_execution::ExecutionScope;
-use floe_kernel::{AgentFailure, CommandId, OwnerActor, RunId};
+use floe_kernel::{AgentFailure, CommandId, RunId};
 use floe_protocol::*;
 use uuid::Uuid;
 
-pub(crate) fn handles_command(command: &AppProductCommandDto) -> bool {
-    matches!(
-        command,
-        AppProductCommandDto::ConversationSessionStart { .. }
-            | AppProductCommandDto::ConversationStartTurn { .. }
-            | AppProductCommandDto::ConversationCancelRun { .. }
-            | AppProductCommandDto::ConversationInteractionResolve { .. }
-            | AppProductCommandDto::ConversationInteractionRefresh { .. }
-    )
-}
-pub(crate) fn handles_query(query: &AppProductQueryDto) -> bool {
-    matches!(
-        query,
-        AppProductQueryDto::ConversationSessionResume { .. }
-            | AppProductQueryDto::ConversationSessionGet { .. }
-            | AppProductQueryDto::ConversationGetCommand { .. }
-            | AppProductQueryDto::ConversationGetRun { .. }
-            | AppProductQueryDto::ConversationGetMessage { .. }
-            | AppProductQueryDto::ConversationInteractionGet { .. }
-            | AppProductQueryDto::ConversationInteractionList { .. }
-    )
-}
-pub(crate) async fn command(
-    owners: &floe_app::ReadyOwners,
-    actor: &OwnerActor,
-    command_id: Uuid,
-    command: AppProductCommandDto,
-    scope: &ExecutionScope,
-) -> AppCommandResult<AppCommandResultDto> {
-    let service = owners.conversation.as_ref();
-    let id = CommandId::from_uuid(command_id).ok_or_else(internal_error)?;
-    match command {
-        AppProductCommandDto::ConversationSessionStart {} => {
-            use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
-            let admission = service
-                .start_session(actor, id, scope)
-                .await
-                .map_err(|failure| {
-                    let correlation = scope.trace_context().request_id();
-                    match failure {
-                        F::NotAdmitted(reason) => {
-                            AppCommandFailure::NotAdmitted(failure_dto(reason, correlation))
-                        }
-                        F::Indeterminate(reason) => {
-                            AppCommandFailure::Indeterminate(failure_dto(reason, correlation))
-                        }
-                    }
-                })?;
-            let receipt = match admission {
-                A::Started(receipt) | A::Replayed(receipt) => receipt,
-                A::NotApplied(reason) => {
-                    return Err(AppCommandFailure::NotApplied(failure_dto(
-                        reason.reason(),
-                        scope.trace_context().request_id(),
-                    )));
-                }
-            };
-            let snapshot = service
-                .get_session(actor, receipt.session_id, None, scope)
-                .await
-                .map_err(|failure| {
-                    AppCommandFailure::Admitted(failure_dto(
-                        failure,
-                        scope.trace_context().request_id(),
-                    ))
-                })?;
-            Ok(AppCommandResultDto::ConversationSession {
-                session: session_snapshot(snapshot).map_err(AppCommandFailure::Admitted)?,
-            })
-        }
+pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<ConversationCommand> {
+    Ok(match value {
+        AppProductCommandDto::ConversationSessionStart {} => ConversationCommand::StartSession,
         AppProductCommandDto::ConversationStartTurn {
             session_id,
             expected_revision,
             text,
             continuation_ref,
             retry_of,
-        } => {
-            let receipt = service
-                .start_turn(
-                    actor,
-                    floe_conversation::StartTurn {
-                        command_id: id,
-                        session_id: session_id.get(),
-                        expected_revision,
-                        text,
-                        continuation_ref: continuation_ref.map(|value| {
-                            floe_conversation::ContinuationToken { id: value.id.get() }
-                        }),
-                        retry_of: retry_of
-                            .map(|value| RunId::from_uuid(value.get()).ok_or_else(internal_error))
-                            .transpose()?,
-                    },
-                    scope,
-                )
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppCommandResultDto::CommandReceipt {
-                receipt: command_receipt(&receipt, actor.runtime_epoch)?,
-            })
-        }
-        AppProductCommandDto::ConversationCancelRun { run_id } => {
-            let run = RunId::from_uuid(run_id.get()).ok_or_else(internal_error)?;
-            let receipt = service
-                .cancel_run(actor, id, run, scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppCommandResultDto::CancelRunReceipt {
-                command_id: CommandIdDto::new(receipt.command_id.as_uuid())
-                    .ok_or_else(internal_error)?,
-                run_id: RunRefDto::new(receipt.run_id.as_uuid()).ok_or_else(internal_error)?,
-                runtime_epoch: actor.runtime_epoch,
-                outcome: AppCancelRunOutcomeDto::Accepted,
-            })
-        }
+        } => ConversationCommand::StartTurn {
+            session_id: session_id.get(),
+            expected_revision,
+            text,
+            continuation_id: continuation_ref.map(|reference| reference.id.get()),
+            retry_of: retry_of
+                .map(|reference| {
+                    RunId::from_uuid(reference.get()).ok_or_else(|| validation("command.retry_of"))
+                })
+                .transpose()?,
+        },
+        AppProductCommandDto::ConversationCancelRun { run_id } => ConversationCommand::CancelRun {
+            run_id: RunId::from_uuid(run_id.get()).ok_or_else(|| validation("command.run_id"))?,
+        },
         AppProductCommandDto::ConversationInteractionResolve {
             interaction_id,
             session_id,
             expected_revision,
             decision,
             reviewed_digest,
-        } => {
-            let result = service
-                .resolve_interaction(
-                    actor,
-                    floe_conversation::ResolveInteraction {
-                        command_id,
-                        interaction_id: interaction_id.get(),
-                        session_id: session_id.get(),
-                        expected_revision,
-                        decision: match decision {
-                            AppInteractionDecisionDto::Approve => {
-                                floe_conversation::InteractionDecisionKind::Approve
-                            }
-                            AppInteractionDecisionDto::Deny => {
-                                floe_conversation::InteractionDecisionKind::Deny
-                            }
-                            AppInteractionDecisionDto::Dismiss => {
-                                floe_conversation::InteractionDecisionKind::Dismiss
-                            }
-                        },
-                        target_digest: digest_bytes(&reviewed_digest)?,
-                    },
-                    scope,
-                )
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppCommandResultDto::InteractionOperation {
-                result: resolve_result(command_id, result, actor.runtime_epoch)?,
-            })
-        }
+        } => ConversationCommand::ResolveInteraction {
+            interaction_id: interaction_id.get(),
+            session_id: session_id.get(),
+            expected_revision,
+            decision: match decision {
+                AppInteractionDecisionDto::Approve => {
+                    floe_conversation::InteractionDecisionKind::Approve
+                }
+                AppInteractionDecisionDto::Deny => floe_conversation::InteractionDecisionKind::Deny,
+                AppInteractionDecisionDto::Dismiss => {
+                    floe_conversation::InteractionDecisionKind::Dismiss
+                }
+            },
+            target_digest: digest_bytes(&reviewed_digest)?,
+        },
         AppProductCommandDto::ConversationInteractionRefresh {
             interaction_id,
             session_id,
             expected_revision,
-        } => {
-            let result = service
-                .refresh_interaction(
-                    actor,
-                    floe_conversation::RefreshInteraction {
-                        command_id,
-                        interaction_id: interaction_id.get(),
-                        session_id: session_id.get(),
-                        expected_revision,
-                    },
-                    scope,
-                )
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppCommandResultDto::InteractionRefresh {
-                result: refresh_result(command_id, result, actor.runtime_epoch)?,
-            })
-        }
-        _ => Err(validation("command").into()),
-    }
+        } => ConversationCommand::RefreshInteraction {
+            interaction_id: interaction_id.get(),
+            session_id: session_id.get(),
+            expected_revision,
+        },
+        _ => return Err(validation("command.kind")),
+    })
 }
-pub(crate) async fn query(
-    owners: &floe_app::ReadyOwners,
-    actor: &OwnerActor,
-    query: AppProductQueryDto,
-    scope: &ExecutionScope,
-) -> AppWireResult<AppQueryResultDto> {
-    let service = owners.conversation.as_ref();
-    match query {
-        AppProductQueryDto::ConversationSessionResume {} => {
-            let session = service
-                .resume_session(actor, scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(match session {
-                Some(session) => AppQueryResultDto::ConversationSession {
-                    session: session_snapshot(session)?,
-                },
-                None => AppQueryResultDto::ConversationSessionAbsent {},
-            })
+
+pub(crate) fn command_out(
+    command: &ConversationCommand,
+    command_id: Uuid,
+    caller: &CallerContext,
+    result: ConversationCommandOutcome,
+) -> AppWireResult<AppCommandResultDto> {
+    Ok(match (command, result) {
+        (ConversationCommand::StartSession, ConversationCommandOutcome::Session(session)) => {
+            if session.person_id.0 != caller.person_id() {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::ConversationSession {
+                session: session_snapshot(session)?,
+            }
         }
+        (ConversationCommand::StartTurn { .. }, ConversationCommandOutcome::Turn(receipt)) => {
+            if receipt.command_id.as_uuid() != command_id {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::CommandReceipt {
+                receipt: command_receipt(&receipt, caller.runtime_epoch())?,
+            }
+        }
+        (
+            ConversationCommand::CancelRun { run_id },
+            ConversationCommandOutcome::CancelRun(receipt),
+        ) => {
+            if receipt.command_id.as_uuid() != command_id
+                || receipt.run_id.as_uuid() != run_id.as_uuid()
+            {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::CancelRunReceipt {
+                command_id: CommandIdDto::new(receipt.command_id.as_uuid())
+                    .ok_or_else(internal_error)?,
+                run_id: RunRefDto::new(receipt.run_id.as_uuid()).ok_or_else(internal_error)?,
+                runtime_epoch: caller.runtime_epoch(),
+                outcome: AppCancelRunOutcomeDto::Accepted,
+            }
+        }
+        (
+            ConversationCommand::ResolveInteraction {
+                interaction_id,
+                session_id,
+                ..
+            },
+            ConversationCommandOutcome::Interaction(value),
+        ) => {
+            if value.interaction.interaction_id != *interaction_id
+                || value.interaction.session_id != *session_id
+            {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::InteractionOperation {
+                result: resolve_result(command_id, value, caller.runtime_epoch())?,
+            }
+        }
+        (
+            ConversationCommand::RefreshInteraction {
+                interaction_id,
+                session_id,
+                ..
+            },
+            ConversationCommandOutcome::InteractionRefresh(value),
+        ) => {
+            if value.interaction.interaction_id != *interaction_id
+                || value.interaction.session_id != *session_id
+            {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::InteractionRefresh {
+                result: refresh_result(command_id, value, caller.runtime_epoch())?,
+            }
+        }
+        _ => return Err(internal_error()),
+    })
+}
+
+pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQuery> {
+    Ok(match value {
+        AppProductQueryDto::ConversationSessionResume {} => ConversationQuery::ResumeSession,
         AppProductQueryDto::ConversationSessionGet {
             session_id,
             before_message_id,
-        } => Ok(AppQueryResultDto::ConversationSession {
-            session: session_snapshot(
-                service
-                    .get_session(
-                        actor,
-                        session_id.get(),
-                        before_message_id.map(|id| id.get()),
-                        scope,
-                    )
-                    .await
-                    .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?,
-            )?,
-        }),
+        } => ConversationQuery::GetSession {
+            session_id: session_id.get(),
+            before_message_id: before_message_id.map(|id| id.get()),
+        },
         AppProductQueryDto::ConversationGetCommand { command_id } => {
-            let id = CommandId::from_uuid(command_id.get()).ok_or_else(internal_error)?;
-            Ok(
-                match service
-                    .read_command(actor, id, scope)
-                    .await
-                    .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?
-                {
-                    Some(run) => AppQueryResultDto::CommandReceipt {
-                        receipt: command_receipt(
-                            &floe_conversation::CommandReceipt::from(&run),
-                            actor.runtime_epoch,
-                        )?,
-                    },
-                    None => AppQueryResultDto::UnknownCommand { command_id },
-                },
-            )
+            ConversationQuery::GetCommand {
+                command_id: CommandId::from_uuid(command_id.get())
+                    .ok_or_else(|| validation("query.command_id"))?,
+            }
         }
-        AppProductQueryDto::ConversationGetRun { run_id } => {
-            let id = RunId::from_uuid(run_id.get()).ok_or_else(internal_error)?;
-            let run = service
-                .read_run(actor, id, scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?
-                .ok_or_else(|| agent_failure(AgentFailure::NotFound))?;
-            Ok(AppQueryResultDto::RunSnapshot {
-                run: run_snapshot(run, actor.runtime_epoch)?,
-            })
-        }
+        AppProductQueryDto::ConversationGetRun { run_id } => ConversationQuery::GetRun {
+            run_id: RunId::from_uuid(run_id.get()).ok_or_else(|| validation("query.run_id"))?,
+        },
         AppProductQueryDto::ConversationGetMessage { message_id } => {
-            let message = service
-                .read_message(actor, message_id.get(), scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?
-                .ok_or_else(|| agent_failure(AgentFailure::NotFound))?;
-            Ok(AppQueryResultDto::Message {
+            ConversationQuery::GetMessage {
+                message_id: message_id.get(),
+            }
+        }
+        AppProductQueryDto::ConversationInteractionGet { interaction_id } => {
+            ConversationQuery::GetInteraction {
+                interaction_id: interaction_id.get(),
+            }
+        }
+        AppProductQueryDto::ConversationInteractionList { session_id } => {
+            ConversationQuery::ListInteractions {
+                session_id: session_id.get(),
+            }
+        }
+        _ => return Err(validation("query.kind")),
+    })
+}
+
+pub(crate) fn query_out(
+    query: &ConversationQuery,
+    caller: &CallerContext,
+    result: ConversationQueryOutcome,
+) -> AppWireResult<AppQueryResultDto> {
+    Ok(match (query, result) {
+        (ConversationQuery::ResumeSession, ConversationQueryOutcome::Session(Some(session))) => {
+            if session.person_id.0 != caller.person_id() {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::ConversationSession {
+                session: session_snapshot(session)?,
+            }
+        }
+        (ConversationQuery::ResumeSession, ConversationQueryOutcome::Session(None)) => {
+            AppQueryResultDto::ConversationSessionAbsent {}
+        }
+        (
+            ConversationQuery::GetSession { session_id, .. },
+            ConversationQueryOutcome::Session(Some(session)),
+        ) => {
+            if session.id != *session_id || session.person_id.0 != caller.person_id() {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::ConversationSession {
+                session: session_snapshot(session)?,
+            }
+        }
+        (
+            ConversationQuery::GetCommand { command_id },
+            ConversationQueryOutcome::Command(Some(run)),
+        ) => {
+            if run.command_id != *command_id {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::CommandReceipt {
+                receipt: command_receipt(
+                    &floe_conversation::CommandReceipt::from(&run),
+                    caller.runtime_epoch(),
+                )?,
+            }
+        }
+        (ConversationQuery::GetCommand { command_id }, ConversationQueryOutcome::Command(None)) => {
+            AppQueryResultDto::UnknownCommand {
+                command_id: CommandIdDto::new(command_id.as_uuid()).ok_or_else(internal_error)?,
+            }
+        }
+        (ConversationQuery::GetRun { run_id }, ConversationQueryOutcome::Run(Some(run))) => {
+            if run.run_id != *run_id {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::RunSnapshot {
+                run: run_snapshot(run, caller.runtime_epoch())?,
+            }
+        }
+        (ConversationQuery::GetRun { .. }, ConversationQueryOutcome::Run(None)) => {
+            return Err(agent_failure(AgentFailure::NotFound));
+        }
+        (
+            ConversationQuery::GetMessage { message_id },
+            ConversationQueryOutcome::Message(Some(message)),
+        ) => {
+            if message.message_id != *message_id {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::Message {
                 message: AppMessageDto {
                     message_id: MessageRefDto::new(message.message_id)
                         .ok_or_else(internal_error)?,
@@ -266,37 +259,42 @@ pub(crate) async fn query(
                     },
                     text: message.text,
                 },
-            })
+            }
         }
-        AppProductQueryDto::ConversationInteractionGet { interaction_id } => Ok(
-            match service
-                .read_interaction(actor, interaction_id.get(), scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?
-            {
-                Some(snapshot) => AppQueryResultDto::Interaction {
-                    snapshot: interaction_snapshot(snapshot)?,
-                },
-                None => AppQueryResultDto::UnknownInteraction { interaction_id },
+        (ConversationQuery::GetMessage { .. }, ConversationQueryOutcome::Message(None)) => {
+            return Err(agent_failure(AgentFailure::NotFound));
+        }
+        (
+            ConversationQuery::GetInteraction { interaction_id },
+            ConversationQueryOutcome::Interaction(Some(snapshot)),
+        ) => {
+            if snapshot.interaction_id != *interaction_id {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::Interaction {
+                snapshot: interaction_snapshot(snapshot)?,
+            }
+        }
+        (
+            ConversationQuery::GetInteraction { interaction_id },
+            ConversationQueryOutcome::Interaction(None),
+        ) => AppQueryResultDto::UnknownInteraction {
+            interaction_id: InteractionRefDto::new(*interaction_id).ok_or_else(internal_error)?,
+        },
+        (
+            ConversationQuery::ListInteractions { session_id },
+            ConversationQueryOutcome::Interactions(interactions),
+        ) => AppQueryResultDto::InteractionList {
+            list: AppInteractionListDto {
+                session_id: SessionRefDto::new(*session_id).ok_or_else(internal_error)?,
+                interactions: interactions
+                    .into_iter()
+                    .map(interaction_snapshot)
+                    .collect::<AppWireResult<_>>()?,
             },
-        ),
-        AppProductQueryDto::ConversationInteractionList { session_id } => {
-            let interactions = service
-                .list_interactions(actor, session_id.get(), scope)
-                .await
-                .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
-            Ok(AppQueryResultDto::InteractionList {
-                list: AppInteractionListDto {
-                    session_id,
-                    interactions: interactions
-                        .into_iter()
-                        .map(interaction_snapshot)
-                        .collect::<AppWireResult<_>>()?,
-                },
-            })
-        }
-        _ => Err(validation("query")),
-    }
+        },
+        _ => return Err(internal_error()),
+    })
 }
 fn command_receipt(
     receipt: &floe_conversation::CommandReceipt,
@@ -752,35 +750,20 @@ fn run_projection(
     snapshot.validate().map_err(|_| internal_error())?;
     Ok(snapshot)
 }
-pub(crate) async fn events(
-    owners: &floe_app::ReadyOwners,
-    actor: &OwnerActor,
-    request: AppEventsRequestDto,
-    scope: &ExecutionScope,
+pub(crate) fn events_out(
+    caller: &CallerContext,
+    read: EventRead,
 ) -> AppWireResult<AppEventsResultDto> {
-    let read = owners
-        .conversation
-        .read_events(
-            actor,
-            floe_conversation::ReadConversationEvents {
-                runtime_epoch: request.runtime_epoch,
-                cursor: request.cursor,
-                limit: request.limit,
-            },
-            scope,
-        )
-        .await
-        .map_err(|failure| failure_dto(failure, scope.trace_context().request_id()))?;
     Ok(match read {
         EventRead::ResyncRequired { snapshot_cursor } => AppEventsResultDto::ResyncRequired {
-            runtime_epoch: actor.runtime_epoch,
+            runtime_epoch: caller.runtime_epoch(),
             snapshot_cursor,
         },
         EventRead::Events {
             next_cursor,
             events,
         } => AppEventsResultDto::Events {
-            runtime_epoch: actor.runtime_epoch,
+            runtime_epoch: caller.runtime_epoch(),
             next_cursor,
             events: events
                 .into_iter()
@@ -788,7 +771,7 @@ pub(crate) async fn events(
                     Ok(AppEventDto {
                         cursor: event.cursor,
                         aggregate_revision: event.aggregate_revision,
-                        runtime_epoch: actor.runtime_epoch,
+                        runtime_epoch: caller.runtime_epoch(),
                         event: match event.payload {
                             EventPayload::CommandUpdated {
                                 command_id,
@@ -801,11 +784,11 @@ pub(crate) async fn events(
                                         run_id,
                                         session_revision,
                                     },
-                                    actor.runtime_epoch,
+                                    caller.runtime_epoch(),
                                 )?,
                             },
                             EventPayload::RunUpdated(run) => AppEventKindDto::RunUpdated {
-                                run: run_event_snapshot(run, actor.runtime_epoch)?,
+                                run: run_event_snapshot(run, caller.runtime_epoch())?,
                             },
                         },
                     })
@@ -871,4 +854,36 @@ fn task_receipt_reference(
     };
     result.validate().map_err(|_| internal_error())?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod failure_projection_tests {
+    use super::*;
+
+    #[test]
+    fn vault_failure_and_model_provider_failure_keep_distinct_owner_projections() {
+        let correlation_id = Uuid::new_v4();
+
+        let vault = failure_dto(AgentFailure::VaultLocked, correlation_id);
+        assert_eq!(vault.code, AppWireErrorCodeDto::Unavailable);
+        let vault_owner = vault.owner_failure.expect("canonical Vault failure");
+        assert_eq!(vault_owner.domain, floe_kernel::AgentFailureDomain::Vault);
+        assert_eq!(vault_owner.reason, AgentFailure::VaultLocked);
+        assert_eq!(vault_owner.recovery, OwnerRecoveryDto::Reobserve);
+        assert_eq!(vault_owner.correlation_id.get(), correlation_id);
+
+        let provider = failure_dto(AgentFailure::ModelUnavailable, correlation_id);
+        assert_eq!(provider.code, AppWireErrorCodeDto::Unavailable);
+        let provider_owner = provider.owner_failure.expect("Conversation turn failure");
+        assert_eq!(provider_owner.domain, floe_kernel::AgentFailureDomain::Turn);
+        assert_eq!(
+            provider_owner.category,
+            floe_kernel::AgentFailureCategory::Transient
+        );
+        assert_eq!(provider_owner.reason, AgentFailure::ModelUnavailable);
+        assert_eq!(provider_owner.recovery, OwnerRecoveryDto::None);
+        assert!(!provider_owner.reload_required);
+        assert!(!provider_owner.seal_session);
+        assert_eq!(provider_owner.correlation_id.get(), correlation_id);
+    }
 }

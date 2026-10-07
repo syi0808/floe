@@ -2,7 +2,13 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use floe_app::{AppComposition, AppHost, RuntimeReadinessState};
+use floe_app::{
+    ActionsQuery, ActionsQueryResult, AppComposition, AppHost, ConnectionsCommand,
+    ConversationCommand, ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome,
+    DayProductQuery, ExpertQuery, ExpertQueryResult, MemoryQuery, MemoryQueryResult,
+    ProductCommand, ProductCommandDisposition, ProductCommandOutcome, ProductCommandRequest,
+    ProductFailure, ProductObservation, ProductQuery, ProductQueryOutcome, RuntimeReadinessState,
+};
 use floe_conversation::{RunState, SessionMessage};
 use floe_inference::ModelObservationError;
 use floe_kernel::AgentFailure;
@@ -80,6 +86,224 @@ fn text_turn_completes_and_persists_transcript_receipt_and_events() {
     );
     assert_eq!(snapshot.generated.len(), 1);
     assert!(snapshot.generated[0].catalog.tools.is_empty());
+}
+
+#[test]
+fn typed_product_router_keeps_command_identity_and_observer_drop_does_not_cancel_run() {
+    let (barrier, entered, _release) = GenerateBarrier::new();
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::WaitForCancellation(barrier),
+    );
+    let (_profile, host) = create_ready_app(&model);
+
+    let start_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let start = host
+        .request(Uuid::new_v4())
+        .expect("admit typed session command");
+    let started = start
+        .product_command(ProductCommandRequest {
+            command_id: start_id,
+            command: ProductCommand::Conversation(ConversationCommand::StartSession),
+        })
+        .expect("route session start");
+    let ConversationCommandOutcome::Session(session) = (match started {
+        ProductCommandOutcome::Conversation(value) => value,
+        _ => panic!("unexpected product result"),
+    }) else {
+        panic!("session start returned another Conversation result")
+    };
+    drop(start);
+
+    let turn_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let turn = host
+        .request(Uuid::new_v4())
+        .expect("admit typed turn command");
+    let result = turn
+        .product_command(ProductCommandRequest {
+            command_id: turn_id,
+            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
+                session_id: session.id,
+                expected_revision: session.revision,
+                text: USER_TEXT.into(),
+                continuation_id: None,
+                retry_of: None,
+            }),
+        })
+        .expect("route turn command");
+    let ConversationCommandOutcome::Turn(receipt) = (match result {
+        ProductCommandOutcome::Conversation(value) => value,
+        _ => panic!("unexpected product result"),
+    }) else {
+        panic!("turn command returned another Conversation result")
+    };
+    assert_eq!(receipt.command_id, turn_id);
+    drop(turn);
+    entered
+        .recv_timeout(WAIT_TIMEOUT)
+        .expect("scripted model reached the in-flight dispatch barrier");
+
+    let observer = host
+        .request(Uuid::new_v4())
+        .expect("admit bounded product observation");
+    let observed = observer
+        .observe_product(ProductObservation {
+            runtime_epoch: Some(observer.caller().runtime_epoch()),
+            cursor: Some(0),
+            limit: 10,
+        })
+        .expect("read bounded Conversation events");
+    assert!(matches!(
+        observed,
+        floe_app::ProductObservationOutcome::Conversation(_)
+    ));
+    drop(observer);
+
+    let query = host.request(Uuid::new_v4()).expect("admit Run query");
+    let current = query
+        .product_query(ProductQuery::Conversation(ConversationQuery::GetRun {
+            run_id: receipt.run_id,
+        }))
+        .expect("observe the admitted Run after observation disposal");
+    assert!(matches!(
+        current,
+        ProductQueryOutcome::Conversation(ConversationQueryOutcome::Run(Some(ref run)))
+            if run.state == RunState::Working
+    ));
+    drop(query);
+
+    let cancel_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let cancel = host
+        .request(Uuid::new_v4())
+        .expect("admit explicit cancellation");
+    let cancelled = cancel
+        .product_command(ProductCommandRequest {
+            command_id: cancel_id,
+            command: ProductCommand::Conversation(ConversationCommand::CancelRun {
+                run_id: receipt.run_id,
+            }),
+        })
+        .expect("route explicit cancellation");
+    let ConversationCommandOutcome::CancelRun(cancel_receipt) = (match cancelled {
+        ProductCommandOutcome::Conversation(value) => value,
+        _ => panic!("unexpected product result"),
+    }) else {
+        panic!("cancellation returned another Conversation result")
+    };
+    assert_eq!(cancel_receipt.command_id, cancel_id);
+    assert_eq!(
+        wait_terminal_run(&host, receipt.run_id).state,
+        RunState::Cancelled
+    );
+}
+
+#[test]
+fn typed_day_query_remains_available_before_runtime_readiness() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+    let request = host.request(Uuid::new_v4()).expect("admit Day query");
+    let query = floe_day::DayQuery {
+        date: chrono::NaiveDate::from_ymd_opt(2026, 10, 7).expect("valid date"),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+        now: chrono::DateTime::parse_from_rfc3339("2026-10-07T00:00:00Z")
+            .expect("valid instant")
+            .with_timezone(&chrono::Utc),
+    };
+    let result = request
+        .product_query(ProductQuery::Day(DayProductQuery::Snapshot(query)))
+        .expect("Day stays independent of Runtime readiness");
+    assert!(matches!(result, ProductQueryOutcome::Day(_)));
+}
+
+#[test]
+fn typed_product_router_keeps_actions_experts_and_memory_on_the_same_path() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+
+    let actions = host
+        .request(Uuid::new_v4())
+        .expect("admit Actions query")
+        .product_query(ProductQuery::Actions(ActionsQuery::List {
+            cursor: None,
+            limit: 10,
+        }))
+        .expect("route existing Actions query");
+    assert!(matches!(
+        actions,
+        ProductQueryOutcome::Actions(ActionsQueryResult::Page(_))
+    ));
+
+    let experts = host
+        .request(Uuid::new_v4())
+        .expect("admit Experts query")
+        .product_query(ProductQuery::Experts(ExpertQuery::Directory))
+        .expect("route existing Experts query");
+    assert!(matches!(
+        experts,
+        ProductQueryOutcome::Experts(ExpertQueryResult::Directory(_))
+    ));
+
+    let memory = host
+        .request(Uuid::new_v4())
+        .expect("admit Memory query")
+        .product_query(ProductQuery::Memory(MemoryQuery::Review))
+        .expect("route Memory query");
+    assert!(matches!(
+        memory,
+        ProductQueryOutcome::Memory(MemoryQueryResult::Review(_))
+    ));
+}
+
+#[test]
+fn typed_connections_observe_command_reaches_connections_owner_after_admission() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let request = host
+        .request(Uuid::new_v4())
+        .expect("admit Connections request");
+    let prepare = request.product_command(ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+        command: ProductCommand::Connections(ConnectionsCommand::ObservePrepareReview {
+            source_ref: Uuid::new_v4(),
+            expected_revision: 1,
+            requested_processing: floe_connections::ProcessingChoice::GatewayAllowed,
+        }),
+    });
+    let failure = prepare.expect_err("unknown source is rejected during Observe review");
+    assert_eq!(failure.disposition, ProductCommandDisposition::NotApplied);
+    assert!(matches!(failure.failure, ProductFailure::Connections(_)));
+
+    let result = request.product_command(ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+        command: ProductCommand::Connections(ConnectionsCommand::ObservePause {
+            source_ref: Uuid::new_v4(),
+            expected_revision: 1,
+        }),
+    });
+    let failure = result.expect_err("unknown source is rejected by Connections");
+    assert_eq!(failure.disposition, ProductCommandDisposition::NotAdmitted);
+    assert!(matches!(failure.failure, ProductFailure::Connections(_)));
+}
+
+#[test]
+fn app_host_rejects_a_product_request_before_admitting_a_nil_request_identity() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+
+    assert!(matches!(
+        host.request(Uuid::nil()),
+        Err(floe_app::HostError::InvalidRequest)
+    ));
+
+    let request_id = Uuid::new_v4();
+    let request = host
+        .request(request_id)
+        .expect("admit product request through AppHost");
+    assert_eq!(request.request_id(), request_id);
 }
 
 #[test]

@@ -2,105 +2,70 @@
 //! destinations, Task evidence, approval, execution and recovery.
 use chrono::{DateTime, Utc};
 use floe_actions as owner;
-use floe_app::{ActionsCommands, ActionsQueries};
+use floe_app::{
+    ActionsCommand, ActionsCommandResult, ActionsQuery, ActionsQueryResult, CallerContext,
+};
 use floe_protocol as dto;
 use uuid::Uuid;
 
 use super::app_wire::{AppWireResult, agent_failure, internal_error, validation};
 
-pub(crate) fn handles_command(command: &dto::AppProductCommandDto) -> bool {
-    use dto::AppProductCommandDto::*;
-    matches!(
-        command,
-        ActionsSubmit { .. }
-            | ActionsDecide { .. }
-            | ActionsReconcile { .. }
-            | ActionsSetAuthority { .. }
-    )
-}
-
-pub(crate) fn handles_query(query: &dto::AppProductQueryDto) -> bool {
-    use dto::AppProductQueryDto::*;
-    matches!(
-        query,
-        ActionsDestinations {}
-            | ActionsProposalPreview { .. }
-            | ActionsAuthority {}
-            | ActionsInspect { .. }
-            | ActionsList { .. }
-    )
-}
-
-pub(crate) fn command(
-    app: &floe_app::AppComposition,
-    caller: &floe_app::CallerContext,
-    command_id: Uuid,
-    command: dto::AppProductCommandDto,
-) -> AppWireResult<dto::AppCommandResultDto> {
-    if command_id.is_nil() {
-        return Err(validation("command_id"));
-    }
+pub(crate) fn command_in(command: dto::AppProductCommandDto) -> AppWireResult<ActionsCommand> {
     use dto::AppProductCommandDto as C;
-    let (request, expected_action, expects_authority) = match command {
-        C::ActionsSubmit { intent } => (
-            floe_app::ActionsCommand::Submit {
-                intent: intent_in(intent)?,
-            },
-            None,
-            false,
-        ),
+    match command {
+        C::ActionsSubmit { intent } => Ok(ActionsCommand::Submit {
+            intent: intent_in(intent)?,
+        }),
         C::ActionsDecide {
             action_ref,
             review_ref,
             decision,
             expected_revision,
-        } => (
-            floe_app::ActionsCommand::Decide {
-                action_ref: action_ref.get(),
-                review_ref: review_in(review_ref)?,
-                decision: decision_in(decision),
-                expected_revision: revision_in(expected_revision)?,
-            },
-            Some(action_ref.get()),
-            false,
-        ),
+        } => Ok(ActionsCommand::Decide {
+            action_ref: action_ref.get(),
+            review_ref: review_in(review_ref)?,
+            decision: decision_in(decision),
+            expected_revision: revision_in(expected_revision)?,
+        }),
         C::ActionsReconcile {
             action_ref,
             expected_revision,
-        } => (
-            floe_app::ActionsCommand::Reconcile {
-                action_ref: action_ref.get(),
-                expected_revision: revision_in(expected_revision)?,
-            },
-            Some(action_ref.get()),
-            false,
-        ),
+        } => Ok(ActionsCommand::Reconcile {
+            action_ref: action_ref.get(),
+            expected_revision: revision_in(expected_revision)?,
+        }),
         C::ActionsSetAuthority {
             mode,
             expected_revision,
-        } => (
-            floe_app::ActionsCommand::SetAuthority {
-                mode: authority_mode_in(mode),
-                expected_revision: revision_in(expected_revision)?,
-            },
-            None,
-            true,
-        ),
+        } => Ok(ActionsCommand::SetAuthority {
+            mode: authority_mode_in(mode),
+            expected_revision: revision_in(expected_revision)?,
+        }),
         _ => return Err(validation("command")),
-    };
-    match app
-        .actions_command(caller, command_id, request)
-        .map_err(agent_failure)?
-    {
-        floe_app::ActionsCommandResult::Action(value) if !expects_authority => {
-            if expected_action.is_some_and(|expected| value.action_ref != expected) {
+    }
+}
+
+pub(crate) fn command_out(
+    command: &ActionsCommand,
+    result: ActionsCommandResult,
+    caller: &CallerContext,
+) -> AppWireResult<dto::AppCommandResultDto> {
+    match (command, result) {
+        (ActionsCommand::Submit { .. }, ActionsCommandResult::Action(value)) => {
+            Ok(dto::AppCommandResultDto::Action {
+                action: snapshot_out(value)?,
+            })
+        }
+        (ActionsCommand::Decide { action_ref, .. }, ActionsCommandResult::Action(value))
+        | (ActionsCommand::Reconcile { action_ref, .. }, ActionsCommandResult::Action(value)) => {
+            if value.action_ref != *action_ref {
                 return Err(internal_error());
             }
             Ok(dto::AppCommandResultDto::Action {
                 action: snapshot_out(value)?,
             })
         }
-        floe_app::ActionsCommandResult::Authority(value) if expects_authority => {
+        (ActionsCommand::SetAuthority { .. }, ActionsCommandResult::Authority(value)) => {
             Ok(dto::AppCommandResultDto::ActionsAuthority {
                 authority: authority_out(value, caller)?,
             })
@@ -109,48 +74,41 @@ pub(crate) fn command(
     }
 }
 
-pub(crate) fn query(
-    app: &floe_app::AppComposition,
-    caller: &floe_app::CallerContext,
-    request_id: Uuid,
-    query: dto::AppProductQueryDto,
-) -> AppWireResult<dto::AppQueryResultDto> {
-    if request_id.is_nil() {
-        return Err(validation("request_id"));
-    }
+pub(crate) fn query_in(query: dto::AppProductQueryDto) -> AppWireResult<ActionsQuery> {
     use dto::AppProductQueryDto as Q;
-    let request = match query {
-        Q::ActionsDestinations {} => floe_app::ActionsQuery::Destinations,
+    match query {
+        Q::ActionsDestinations {} => Ok(ActionsQuery::Destinations),
         Q::ActionsProposalPreview {
             receipt,
             artifact_id,
-        } => floe_app::ActionsQuery::ProposalPreview {
+        } => Ok(ActionsQuery::ProposalPreview {
             receipt: task_receipt_in(receipt)?,
             artifact_id: artifact_id.get(),
-        },
-        Q::ActionsAuthority {} => floe_app::ActionsQuery::Authority,
-        Q::ActionsInspect { action_ref } => floe_app::ActionsQuery::Inspect {
+        }),
+        Q::ActionsAuthority {} => Ok(ActionsQuery::Authority),
+        Q::ActionsInspect { action_ref } => Ok(ActionsQuery::Inspect {
             action_ref: action_ref.get(),
-        },
+        }),
         Q::ActionsList { cursor, limit } => {
             if !(1..=100).contains(&limit) {
                 return Err(validation("query.limit"));
             }
-            floe_app::ActionsQuery::List {
+            Ok(ActionsQuery::List {
                 cursor: cursor.map(|value| value.get()),
                 limit,
-            }
+            })
         }
         _ => return Err(validation("query")),
-    };
-    let result = app
-        .actions_query(caller, request_id, request.clone())
-        .map_err(agent_failure)?;
-    match (request, result) {
-        (
-            floe_app::ActionsQuery::Destinations,
-            floe_app::ActionsQueryResult::Destinations(values),
-        ) => {
+    }
+}
+
+pub(crate) fn query_out(
+    query: &ActionsQuery,
+    result: ActionsQueryResult,
+    caller: &CallerContext,
+) -> AppWireResult<dto::AppQueryResultDto> {
+    match (query, result) {
+        (ActionsQuery::Destinations, ActionsQueryResult::Destinations(values)) => {
             let destinations = values
                 .into_iter()
                 .map(|value| {
@@ -164,10 +122,7 @@ pub(crate) fn query(
                 .map_err(|_| internal_error())?;
             Ok(dto::AppQueryResultDto::ActionsDestinations { destinations })
         }
-        (
-            floe_app::ActionsQuery::ProposalPreview { .. },
-            floe_app::ActionsQueryResult::ProposalPreview(value),
-        ) => {
+        (ActionsQuery::ProposalPreview { .. }, ActionsQueryResult::ProposalPreview(value)) => {
             let preview = match value {
                 owner::ActionProposalPreview::Ready {
                     title,
@@ -195,24 +150,21 @@ pub(crate) fn query(
             preview.validate().map_err(|_| internal_error())?;
             Ok(dto::AppQueryResultDto::ActionsProposalPreview { preview })
         }
-        (floe_app::ActionsQuery::Authority, floe_app::ActionsQueryResult::Authority(value)) => {
+        (ActionsQuery::Authority, ActionsQueryResult::Authority(value)) => {
             Ok(dto::AppQueryResultDto::ActionsAuthority {
                 authority: authority_out(value, caller)?,
             })
         }
-        (
-            floe_app::ActionsQuery::Inspect { action_ref },
-            floe_app::ActionsQueryResult::Action(value),
-        ) => {
-            if value.action_ref != action_ref {
+        (ActionsQuery::Inspect { action_ref }, ActionsQueryResult::Action(value)) => {
+            if value.action_ref != *action_ref {
                 return Err(internal_error());
             }
             Ok(dto::AppQueryResultDto::Action {
                 action: snapshot_out(value)?,
             })
         }
-        (floe_app::ActionsQuery::List { limit, .. }, floe_app::ActionsQueryResult::Page(value)) => {
-            if value.actions.len() > usize::from(limit) {
+        (ActionsQuery::List { limit, .. }, ActionsQueryResult::Page(value)) => {
+            if value.actions.len() > usize::from(*limit) {
                 return Err(internal_error());
             }
             let page = dto::ActionsPageDto {
