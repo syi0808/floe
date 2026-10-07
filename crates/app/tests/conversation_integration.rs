@@ -269,7 +269,14 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
     let session_id = start_session(&host);
     let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
     let receipt = wait_terminal_run(&host, command.run_id);
-    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(
+        receipt.state,
+        RunState::Completed,
+        "run issue={:?}; task refs={:?}; script={:?}",
+        receipt.issue,
+        receipt.task_refs,
+        recorder.snapshot()
+    );
     assert_eq!(receipt.output.as_deref(), Some(REPLY));
     assert_eq!(receipt.task_refs.len(), 1);
 

@@ -343,7 +343,13 @@ impl ScriptedModel {
                         .cards
                         .iter()
                         .find(|definition| definition.card.id == "floe.builtin.schedule")
-                        .ok_or(AgentFailure::InvalidInput)?;
+                        .ok_or_else(|| {
+                            self.recorder.record_violation(format!(
+                                "conversation script could not find Schedule card; cards={:?}",
+                                request.catalog.cards
+                            ));
+                            AgentFailure::InvalidInput
+                        })?;
                     Ok(response(vec![ModelStep::Delegate {
                         agent_id: schedule.card.id.clone(),
                         definition_revision: schedule.definition_revision,
@@ -356,20 +362,38 @@ impl ScriptedModel {
             }
             1 => {
                 let [calendar] = request.catalog.tools.as_slice() else {
+                    self.recorder.record_violation(format!(
+                        "Schedule script expected one source tool at generation {call_index}; tools={:?}",
+                        request.catalog.tools
+                    ));
                     return Err(AgentFailure::InvalidInput);
                 };
                 if calendar.id != "floe.source.calendar" {
+                    self.recorder.record_violation(format!(
+                        "Schedule script expected floe.source.calendar at generation {call_index}; observed tool={calendar:?}"
+                    ));
                     return Err(AgentFailure::InvalidInput);
                 }
-                let schema: serde_json::Value =
-                    serde_json::from_str(&calendar.input_schema)
-                        .map_err(|_| AgentFailure::InvalidInput)?;
-                let range_start_unix_ms = schema["properties"]["range_start_unix_ms"]["const"]
-                    .as_i64()
-                    .ok_or(AgentFailure::InvalidInput)?;
-                let range_end_unix_ms = schema["properties"]["range_end_unix_ms"]["const"]
-                    .as_i64()
-                    .ok_or(AgentFailure::InvalidInput)?;
+                let schema: serde_json::Value = serde_json::from_str(&calendar.input_schema)
+                    .map_err(|error| {
+                        self.recorder.record_violation(format!(
+                            "Schedule script received invalid tool schema at generation {call_index}: {error}; schema={}",
+                            calendar.input_schema
+                        ));
+                        AgentFailure::InvalidInput
+                    })?;
+                let pinned_range = |property: &str| {
+                    schema["properties"][property]["const"]
+                        .as_i64()
+                        .ok_or_else(|| {
+                            self.recorder.record_violation(format!(
+                                "Schedule script missing integer const for {property}; schema={schema}"
+                            ));
+                            AgentFailure::InvalidInput
+                        })
+                };
+                let range_start_unix_ms = pinned_range("range_start_unix_ms")?;
+                let range_end_unix_ms = pinned_range("range_end_unix_ms")?;
                 let input = serde_json::json!({
                     "range_start_unix_ms": range_start_unix_ms,
                     "range_end_unix_ms": range_end_unix_ms,
