@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 
@@ -181,10 +180,10 @@ func (fixture *consoleFixture) login(t *testing.T) (*http.Cookie, string) {
 type consoleState struct {
 	CSRF    string `json:"csrf"`
 	Pairing *struct {
-		ID              string   `json:"id"`
-		Phase           string   `json:"phase"`
-		AllowedActions  []string `json:"allowed_actions"`
-		IssuerFingerprint string `json:"issuer_fingerprint"`
+		ID                string   `json:"id"`
+		Phase             string   `json:"phase"`
+		AllowedActions    []string `json:"allowed_actions"`
+		IssuerFingerprint string   `json:"issuer_fingerprint"`
 	} `json:"pairing"`
 }
 
@@ -292,12 +291,12 @@ func TestConsoleSessionGuardsAndLogoutInvalidation(t *testing.T) {
 }
 
 type pairingStartResponse struct {
-	PairingID          string `json:"pairing_id"`
-	Proof              string `json:"proof"`
-	ChallengeID        string `json:"challenge_id"`
-	ChallengeB64URL    string `json:"challenge_b64url"`
-	ProducerSignature  string `json:"producer_signature"`
-	Issuer             struct {
+	PairingID         string `json:"pairing_id"`
+	Proof             string `json:"proof"`
+	ChallengeID       string `json:"challenge_id"`
+	ChallengeB64URL   string `json:"challenge_b64url"`
+	ProducerSignature string `json:"producer_signature"`
+	Issuer            struct {
 		KeyID       string `json:"key_id"`
 		PublicKey   string `json:"public_key"`
 		Fingerprint string `json:"fingerprint"`
@@ -322,11 +321,11 @@ func (fixture *consoleFixture) startPairing(t *testing.T) testEnrollment {
 	}
 	input := pairing.Request{
 		SchemaVersion:   1,
-		OperationID:    trust.NewID(),
-		Proof:          base64.RawURLEncoding.EncodeToString(proofBytes),
-		PersonID:       trust.NewID(),
-		DeviceID:       "synthetic-device",
-		IssuerKeyID:    trust.NewID(),
+		OperationID:     trust.NewID(),
+		Proof:           base64.RawURLEncoding.EncodeToString(proofBytes),
+		PersonID:        trust.NewID(),
+		DeviceID:        "synthetic-device",
+		IssuerKeyID:     trust.NewID(),
 		IssuerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	response := fixture.request(http.MethodPost, "/pair/start", input, nil, "", "", "")
@@ -459,11 +458,11 @@ func TestConsolePendingPairingCannotBeApproved(t *testing.T) {
 	}
 	input := pairing.Request{
 		SchemaVersion:   1,
-		OperationID:    trust.NewID(),
-		Proof:          base64.RawURLEncoding.EncodeToString(proof),
-		PersonID:       trust.NewID(),
-		DeviceID:       "synthetic-device",
-		IssuerKeyID:    trust.NewID(),
+		OperationID:     trust.NewID(),
+		Proof:           base64.RawURLEncoding.EncodeToString(proof),
+		PersonID:        trust.NewID(),
+		DeviceID:        "synthetic-device",
+		IssuerKeyID:     trust.NewID(),
 		IssuerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	started := fixture.request(http.MethodPost, "/pair/start", input, nil, "", "", "")
