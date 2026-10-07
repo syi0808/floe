@@ -245,6 +245,28 @@ impl ScriptRecorder {
                 && task_id.is_none())
             || run_id.is_none()
         {
+            let task_receipt = request
+                .envelope
+                .conversation
+                .current_turn
+                .iter()
+                .rev()
+                .find_map(|entry| match entry {
+                    floe_agent_contract::ModelConversationEntry::DelegationExchange {
+                        request,
+                        receipt,
+                    } => Some(format!(
+                        "task={:?} state={:?} issue={:?}",
+                        request.task_id,
+                        receipt.snapshot.state,
+                        receipt.snapshot.issue.as_ref()
+                    )),
+                    _ => None,
+                });
+            state.transport_boundaries.push(format!(
+                "generate_binding_rejected consumer={} expected_consumer={} run={run_id:?} task={task_id:?} embedded_task_receipt={task_receipt:?}",
+                plan.consumer, expected_consumer
+            ));
             state.violations.push(format!(
                 "model generate was bound to an unexpected consumer/run/task: consumer={}, run={run_id:?}, task={task_id:?}",
                 plan.consumer
