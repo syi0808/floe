@@ -269,13 +269,17 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
     let session_id = start_session(&host);
     let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
     let receipt = wait_terminal_run(&host, command.run_id);
+    let script = recorder.snapshot();
     assert_eq!(
         receipt.state,
         RunState::Completed,
-        "run issue={:?}; task refs={:?}; script={:?}",
+        "run issue={:?}; tasks={:?}; plans={:?}; generations={:?}; responses={:?}; violations={:?}",
         receipt.issue,
         receipt.task_refs,
-        recorder.snapshot()
+        script.plan_bindings,
+        script.generated_bindings,
+        script.schedule_responses,
+        script.violations
     );
     assert_eq!(receipt.output.as_deref(), Some(REPLY));
     assert_eq!(receipt.task_refs.len(), 1);
@@ -370,49 +374,46 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
     );
 
     let scripted = assert_script_clean(&recorder);
-    assert_eq!(scripted.plans.len(), 6);
-    assert_eq!(scripted.plan_bindings.len(), 6);
+    assert_eq!(scripted.plans.len(), 8);
+    assert_eq!(scripted.plan_bindings.len(), 8);
     assert_eq!(scripted.generated.len(), 4);
     assert_eq!(scripted.generated_bindings.len(), 4);
-    for binding in &scripted.generated_bindings {
-        assert_eq!(binding.run_id, Some(command.run_id.as_uuid()));
-        assert!(binding.attempt_id.is_some());
-    }
-    assert_eq!(
-        scripted.generated_bindings[0].consumer,
-        floe_conversation::CONVERSATION_CONSUMER
-    );
-    assert_eq!(
-        scripted.generated_bindings[1].consumer,
-        floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
-    );
-    assert_eq!(
-        scripted.generated_bindings[2].consumer,
-        floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
-    );
-    assert_eq!(
-        scripted.generated_bindings[3].consumer,
-        floe_conversation::CONVERSATION_CONSUMER
-    );
-    assert_eq!(scripted.generated_bindings[0].task_id, None);
-    assert_eq!(
-        scripted.generated_bindings[1].task_id,
-        Some(task_id.as_uuid())
-    );
-    assert_eq!(
-        scripted.generated_bindings[2].task_id,
-        Some(task_id.as_uuid())
-    );
-    assert_eq!(scripted.generated_bindings[3].task_id, None);
-    for binding in scripted.generated_bindings[..1]
-        .iter()
-        .chain(scripted.generated_bindings[3..].iter())
+    let expected_generation_bindings = [
+        (floe_conversation::CONVERSATION_CONSUMER, None),
+        (
+            floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+            Some(task_id.as_uuid()),
+        ),
+        (
+            floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+            Some(task_id.as_uuid()),
+        ),
+        (floe_conversation::CONVERSATION_CONSUMER, None),
+    ];
+    for (generation_index, (expected_consumer, expected_task_id)) in
+        expected_generation_bindings.into_iter().enumerate()
     {
-        let attempt_id = binding.attempt_id.expect("attempt binding");
-        assert!(receipt.attempt_refs.contains(&attempt_id));
-    }
-    for binding in &scripted.generated_bindings[1..3] {
-        let attempt_id = binding.attempt_id.expect("attempt binding");
-        assert!(task_receipt.accounting.attempt_refs.contains(&attempt_id));
+        let plan_index = generation_index * 2;
+        let plan_pair = &scripted.plans[plan_index..plan_index + 2];
+        let binding_pair = &scripted.plan_bindings[plan_index..plan_index + 2];
+        assert_eq!(plan_pair[0].0, PlanStage::Primary);
+        assert_eq!(plan_pair[1].0, PlanStage::LocalFallback);
+        for ((_, plan), binding) in plan_pair.iter().zip(binding_pair) {
+            assert_eq!(plan.consumer, expected_consumer);
+            assert_eq!(binding.consumer, expected_consumer);
+            assert_eq!(binding.run_id, Some(command.run_id.as_uuid()));
+            assert_eq!(binding.task_id, expected_task_id);
+        }
+
+        let generation = &scripted.generated_bindings[generation_index];
+        assert_eq!(generation.consumer, expected_consumer);
+        assert_eq!(generation.run_id, Some(command.run_id.as_uuid()));
+        assert_eq!(generation.task_id, expected_task_id);
+        let attempt_id = generation.attempt_id.expect("attempt binding");
+        if expected_task_id.is_some() {
+            assert!(task_receipt.accounting.attempt_refs.contains(&attempt_id));
+        } else {
+            assert!(receipt.attempt_refs.contains(&attempt_id));
+        }
     }
 }

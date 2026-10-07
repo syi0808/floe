@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, PersonId};
-use floe_context_contract::{ContextDependency, GrantConsumer};
+use floe_context_contract::ContextDependency;
 use serde::Serialize;
 use uuid::Uuid;
 

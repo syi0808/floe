@@ -109,10 +109,24 @@ impl ScriptRecorder {
             match state.plans.len() {
                 0 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
                 1 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
-                2 => Some((PlanStage::Primary, floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER)),
-                3 => Some((PlanStage::LocalFallback, floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER)),
-                4 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
-                5 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
+                2 => Some((
+                    PlanStage::Primary,
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                )),
+                3 => Some((
+                    PlanStage::LocalFallback,
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                )),
+                4 => Some((
+                    PlanStage::Primary,
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                )),
+                5 => Some((
+                    PlanStage::LocalFallback,
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                )),
+                6 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
+                7 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
                 _ => None,
             }
         } else {
@@ -225,6 +239,32 @@ impl ScriptRecorder {
         {
             state.violations.push(format!(
                 "model generate was bound to an unexpected consumer/run/task: consumer={}, run={run_id:?}, task={task_id:?}",
+                plan.consumer
+            ));
+            return Err(AgentFailure::InvalidInput);
+        }
+        let expected_plan_index = if state.schedule_flow {
+            state.generated.len() * 2 + 1
+        } else {
+            1
+        };
+        let Some(((stage, observed_plan), binding)) = state
+            .plans
+            .get(expected_plan_index)
+            .zip(state.plan_bindings.get(expected_plan_index))
+        else {
+            state
+                .violations
+                .push("model generate had no matching fallback plan observation".into());
+            return Err(AgentFailure::InvalidInput);
+        };
+        if *stage != PlanStage::LocalFallback
+            || observed_plan != plan
+            || binding.run_id != run_id
+            || binding.task_id != task_id
+        {
+            state.violations.push(format!(
+                "model generate did not match its observed fallback plan binding: consumer={}, run={run_id:?}, task={task_id:?}",
                 plan.consumer
             ));
             return Err(AgentFailure::InvalidInput);
