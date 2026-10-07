@@ -58,6 +58,7 @@ pub struct ScriptSnapshot {
     pub plan_bindings: Vec<ScriptCallBinding>,
     pub generated: Vec<InferenceRequest>,
     pub generated_bindings: Vec<ScriptCallBinding>,
+    pub schedule_responses: Vec<String>,
     pub violations: Vec<String>,
 }
 
@@ -75,6 +76,7 @@ struct RecorderState {
     plan_bindings: Vec<ScriptCallBinding>,
     generated: Vec<InferenceRequest>,
     generated_bindings: Vec<ScriptCallBinding>,
+    schedule_responses: Vec<String>,
     violations: Vec<String>,
     identity: Option<(String, String)>,
     catalogs: std::collections::BTreeMap<String, AllowedCatalog>,
@@ -170,6 +172,23 @@ impl ScriptRecorder {
         }
     }
 
+    fn record_schedule_response(
+        &self,
+        call_index: usize,
+        response: &Result<CanonicalModelResponse, AgentFailure>,
+    ) {
+        let summary = match response {
+            Ok(response) => match &response.output {
+                Ok(steps) => format!("generation {call_index} emitted {steps:?}"),
+                Err(failure) => format!("generation {call_index} returned model error {failure:?}"),
+            },
+            Err(failure) => format!("generation {call_index} failed before response: {failure:?}"),
+        };
+        if let Ok(mut state) = self.0.lock() {
+            state.schedule_responses.push(summary);
+        }
+    }
+
     fn record_generate(
         &self,
         plan: &ModelPlanRequest,
@@ -228,6 +247,7 @@ impl ScriptRecorder {
             plan_bindings: state.plan_bindings.clone(),
             generated: state.generated.clone(),
             generated_bindings: state.generated_bindings.clone(),
+            schedule_responses: state.schedule_responses.clone(),
             violations: state.violations.clone(),
         }
     }
@@ -611,7 +631,11 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::ScheduleExpertFlow => {
-                    self.model.schedule_flow_response(call_index, &request)
+                    let response = self.model.schedule_flow_response(call_index, &request);
+                    self.model
+                        .recorder
+                        .record_schedule_response(call_index, &response);
+                    response
                 }
             }
         })
