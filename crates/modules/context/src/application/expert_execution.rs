@@ -771,10 +771,15 @@ impl LocalSources<'_> {
             {
                 return Err(AgentFailure::StaleContext);
             }
-            let outcome = if connection.connector_id().as_str() == "calendar.event_kit" {
-                if connection.execution_owner_id().as_str()
-                    != floe_access::apple_execution_owner(&actor.device_id)
-                {
+            let outcome = if let Some(provider) =
+                floe_access::native_calendar_provider(connection.connector_id().as_str())
+            {
+                let expected_owner = floe_access::native_calendar_execution_owner(
+                    provider,
+                    &actor.device_id,
+                )
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
+                if connection.execution_owner_id().as_str() != expected_owner {
                     return Err(AgentFailure::PolicyDenied);
                 }
                 let connections = CalendarConnections {

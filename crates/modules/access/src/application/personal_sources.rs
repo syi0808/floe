@@ -20,6 +20,8 @@ pub fn apple_execution_owner(device_id: &str) -> String {
 pub fn is_device_local_source(connector: &str) -> bool {
     connector == ATTENTION_CONNECTOR
         || matches!(connector, "calendar.event_kit" | "calendar.android")
+        || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
+            && connector == "calendar.fixture")
         || matches!(
             connector,
             "contacts.apple" | "contacts.android" | "health.apple"

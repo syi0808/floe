@@ -281,7 +281,19 @@ pub struct NativeSetupObservation {
     pub connector_id: ConnectorId,
     pub state: NativeSetupState,
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeAvailabilityObservation {
+    pub connector_id: ConnectorId,
+    pub available: bool,
+}
 pub trait NativeSourceSetupPort: Send + Sync {
+    fn availability<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        connector_id: &'a ConnectorId,
+        scope: &'a OperationScope,
+    ) -> BoxFuture<'a, Result<NativeAvailabilityObservation, floe_kernel::AgentFailure>>;
+
     fn request_permission<'a>(
         &'a self,
         actor: &'a floe_kernel::OwnerActor,

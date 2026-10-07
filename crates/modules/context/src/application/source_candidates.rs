@@ -161,24 +161,25 @@ pub fn discover_source_candidates(
             }
         }
         "calendar.timeline" => {
-            let native_owner = floe_access::apple_execution_owner(request.device_id);
             for connection in request.source_connections {
                 let connector = connection.connector_id().as_str();
-                let expected_owner = if connector == "calendar.event_kit" {
-                    Some(native_owner.as_str())
-                } else {
-                    request.remote_execution_owner
-                };
+                let expected_owner = floe_access::local_calendar_execution_owner(
+                    connector,
+                    request.device_id,
+                )
+                .or_else(|| request.remote_execution_owner.map(str::to_owned));
+                let supported_connector =
+                    floe_access::native_calendar_provider(connector).is_some()
+                        || matches!(connector, "calendar.google" | "calendar.microsoft");
+                let connection_identity_matches = floe_access::local_calendar_connection_id(
+                    connector,
+                )
+                .is_none_or(|expected| connection.connection_id().as_str() == expected);
                 if connection.is_serving()
                     && connection.person_id() == request.person_id
-                    && expected_owner == Some(connection.execution_owner_id().as_str())
-                    && matches!(
-                        connector,
-                        "calendar.event_kit"
-                            | "calendar.google"
-                            | "calendar.microsoft"
-                            | "calendar.fixture"
-                    )
+                    && expected_owner.as_deref() == Some(connection.execution_owner_id().as_str())
+                    && connection_identity_matches
+                    && supported_connector
                 {
                     let resource = connection_view_resource(
                         CALENDAR_CONTEXT_VIEW_ID,
@@ -193,6 +194,8 @@ pub fn discover_source_candidates(
                         "Calendar".into(),
                         if connector == "calendar.event_kit" {
                             "Connected calendar device".into()
+                        } else if connector == "calendar.fixture" {
+                            "Synthetic QA calendar".into()
                         } else {
                             "Connected calendar account".into()
                         },

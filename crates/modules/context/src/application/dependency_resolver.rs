@@ -73,12 +73,12 @@ impl DependencyResolver for ContextDependencyResolver {
                         .ok_or(AgentFailure::PolicyDenied)?;
                     floe_access::validate_grant_dependency(grant, dependency)?;
                     let connector = dependency.source().connector().as_str();
-                    if matches!(connector, "calendar.event_kit" | "calendar.android") {
-                        let execution_owner = if connector == "calendar.event_kit" {
-                            floe_access::apple_execution_owner(&self.actor.device_id)
-                        } else {
-                            self.actor.device_id.clone()
-                        };
+                    if let Some(provider) = floe_access::native_calendar_provider(connector) {
+                        let execution_owner = floe_access::native_calendar_execution_owner(
+                            provider,
+                            &self.actor.device_id,
+                        )
+                        .ok_or(AgentFailure::CapabilityUnavailable)?;
                         if dependency.source().execution_owner().as_str() != execution_owner {
                             return Err(AgentFailure::PolicyDenied);
                         }

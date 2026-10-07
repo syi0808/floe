@@ -60,20 +60,23 @@ impl CandidateCatalog for ContextCandidateCatalog {
                     return Err(AgentFailure::InvalidInput);
                 }
             }
-            let connectors: &[&str] = match requirement.capability.as_str() {
-                "calendar.timeline" => &[
+            let mut connectors: Vec<&str> = match requirement.capability.as_str() {
+                "calendar.timeline" => vec![
                     "calendar.event_kit",
                     "calendar.google",
                     "calendar.microsoft",
-                    "calendar.fixture",
                 ],
-                "people.identity" => &["contacts.apple", "contacts.android"],
-                "attention.coarse" => &["attention.macos"],
-                "wellbeing.derived" => &["health.apple"],
-                _ => &[],
+                "people.identity" => vec!["contacts.apple", "contacts.android"],
+                "attention.coarse" => vec!["attention.macos"],
+                "wellbeing.derived" => vec!["health.apple"],
+                _ => vec![],
             };
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            if requirement.capability == "calendar.timeline" {
+                connectors.push("calendar.fixture");
+            }
             let mut sources = Vec::new();
-            for connector in connectors {
+            for connector in &connectors {
                 let connector =
                     ConnectorId::try_new(*connector).map_err(|_| AgentFailure::InvalidInput)?;
                 let rows = scope
@@ -98,7 +101,10 @@ impl CandidateCatalog for ContextCandidateCatalog {
             ) || requirement.capability == "calendar.timeline"
                 && sources
                     .iter()
-                    .any(|source| source.connector_id().as_str() != "calendar.event_kit");
+                    .any(|source| {
+                        floe_access::native_calendar_provider(source.connector_id().as_str())
+                            .is_none()
+                    });
             let remote = if requires_remote {
                 scope
                     .run(dependencies.transport.remote(&query.actor, scope))

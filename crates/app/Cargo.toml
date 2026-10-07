@@ -9,6 +9,13 @@ rust-version.workspace = true
 default = ["os-keyring"]
 os-keyring = ["floe-vault/os-keyring"]
 development-storage = ["floe-vault/development-storage"]
+qa-fixtures = [
+    "development-storage",
+    "floe-access/qa-fixtures",
+    "floe-connections/qa-fixtures",
+    "floe-context/qa-fixtures",
+    "floe-provider-adapters/qa-fixtures",
+]
 
 [dependencies]
 chrono.workspace = true

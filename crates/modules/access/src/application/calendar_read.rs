@@ -108,12 +108,17 @@ pub fn admits_native_calendar_read(
 ) -> Result<(), AgentFailure> {
     let connector = super::native_calendar::native_calendar_connector(provider)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
+    if super::native_calendar::native_calendar_connection_id(provider)
+        .is_some_and(|expected| expected != connection_id)
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
     let logical_resource = native_calendar_resource(connection_id)?;
-    let execution_owner = if provider == CalendarProvider::EventKit {
-        crate::apple_execution_owner(device_id)
-    } else {
-        device_id.to_owned()
-    };
+    let execution_owner = super::native_calendar::native_calendar_execution_owner(
+        provider,
+        device_id,
+    )
+    .ok_or(AgentFailure::CapabilityUnavailable)?;
     if admission.person_id != person_id
         || admission.source.person_id() != person_id
         || admission.source.connection_id().as_str() != connection_id

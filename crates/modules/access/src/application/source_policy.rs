@@ -28,6 +28,8 @@ pub fn source_view_ids(connector: &str) -> &'static [&'static str] {
         "calendar.event_kit" | "calendar.android" | "calendar.google" | "calendar.microsoft" => {
             &["calendar.timeline"]
         }
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        "calendar.fixture" => &["calendar.timeline"],
         "gmail" => &["mail.communication", "life.logistics"],
         "microsoft.mail" => &["mail.communication"],
         "slack.conversations" | "microsoft.teams" | "github.issues" | "google_drive.files" => {

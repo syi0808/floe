@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+qa-fixtures = [
+    "floe-access/qa-fixtures",
+    "floe-connections/qa-fixtures",
+]
+
 [dependencies]
 chrono.workspace = true
 jsonschema.workspace = true
