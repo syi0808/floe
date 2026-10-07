@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -80,7 +82,10 @@ type consoleFixture struct {
 
 func newConsoleFixture(t *testing.T) *consoleFixture {
 	t.Helper()
-	directory := t.TempDir()
+	directory := filepath.Join(t.TempDir(), "private-profile")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatalf("create private synthetic profile: %v", err)
+	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
