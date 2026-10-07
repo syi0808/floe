@@ -151,6 +151,43 @@ acquisition, authority, durable operation identity and reconciliation. Dart does
 not publish source evidence, import mirrors or run a separate acquisition policy.
 This describes the current owner-backed composition, not a build or behavior qualification claim.
 
+## Linux desktop QA
+
+Linux is a development QA host for the real Flutter UI and Rust core. It is not an
+Apple permission/provider emulator or a qualified production platform.
+
+```sh
+# From the repository root, run the development Gateway and Linux client together:
+./scripts/run-local.sh -d linux --debug
+
+# Or build the client bundle without starting services:
+cd apps/client
+flutter pub get
+flutter build linux --debug
+```
+
+The host requires the matching Flutter/Dart SDK, Rust/Cargo, Python 3, CMake,
+Ninja, a C++ compiler and GTK 3 development libraries. The runner builds
+`floe-ffi` from the same checkout with `--no-default-features --features development-storage`.
+It selects the exact cdylib reported by Cargo, validates its ELF architecture,
+and stages it into `bundle/lib/libfloe_ffi.so`; it does not assume a Cargo target
+cache path or copy an old library after a failed build. Cargo retains its own
+incremental tracking and `CARGO_TARGET_DIR` remains honored. Cross-target native
+builds are explicitly unsupported by this QA runner.
+
+Linux Release/Profile configuration fails explicitly until a Linux production
+OS-keyring backend is available. It never falls back to development custody.
+Use the same source snapshot for the client and Gateway. Their development
+endpoint defaults to `127.0.0.1:18431`; production defaults to port `8431`.
+
+The build-only selector `FLOE_LINUX_QA_FEATURE=qa-fixtures` is reserved for the
+explicit fixture feature. It fails if the FFI manifest does not yet declare that
+feature; an ordinary Debug build does not silently enable synthetic sources.
+The [active plan](../../docs/plans/2026-10-02-architecture-refactor.md) records
+fixture implementation and behavioral qualification separately from runner support.
+Do not override HOME/XDG or copy authentication files just to run this host;
+use the existing desktop session and its normal application data locations.
+
 ## Localization
 
 The client defaults to English regardless of the operating system language. App-owned UI strings live in `lib/l10n/app_en.arb`, including accessibility labels, errors, and parameterized/plural messages. User-authored tasks, notes, and imported calendar content are never translated.
