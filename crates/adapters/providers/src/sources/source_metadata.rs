@@ -5,7 +5,7 @@ use std::sync::Arc;
 use floe_connections::{
     ConnectionResource, ConnectionResourceGroup, NativeSetupObservation, NativeSetupRequest,
     NativeAvailabilityObservation, NativeSetupState, NativeSourceSetupPort,
-    SourceCatalogObservation, SourceCatalogPort, SourceConnection,
+    PersonalSourceSpec, SourceCatalogObservation, SourceCatalogPort, SourceConnection,
 };
 use floe_context::{NativeSubjectObservation, SourceMetadataTransport};
 use floe_context_contract::{CalendarProvider, ResourceHandle};
@@ -500,13 +500,23 @@ impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
 fn validate_source(actor: &OwnerActor, source: &SourceConnection) -> Result<(), AgentFailure> {
     actor.validate()?;
     source.validate().map_err(|_| AgentFailure::InvalidInput)?;
-    let provider = adapter_calendar_provider(source.connector_id().as_str())?;
-    let expected_owner = floe_access::local_calendar_execution_owner(provider, &actor.device_id)
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let connector = source.connector_id().as_str();
+    let (expected_owner, expected_connection) =
+        if let Some(provider) = floe_access::local_calendar_provider(connector) {
+            (
+                floe_access::local_calendar_execution_owner(provider, &actor.device_id)
+                    .ok_or(AgentFailure::CapabilityUnavailable)?,
+                floe_access::local_calendar_connection_id_for_connector(connector)
+                    .ok_or(AgentFailure::CapabilityUnavailable)?,
+            )
+        } else {
+            let spec = PersonalSourceSpec::for_connector(connector)
+                .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+            (spec.execution_owner(&actor.device_id)?, spec.connection)
+        };
     if source.person_id() != actor.person_id
         || source.execution_owner_id().as_str() != expected_owner
-        || floe_access::local_calendar_connection_id_for_connector(source.connector_id().as_str())
-            .is_some_and(|expected| source.connection_id().as_str() != expected)
+        || source.connection_id().as_str() != expected_connection
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -614,4 +624,79 @@ fn validate_resources(
         return Err(AgentFailure::InvalidInput);
     }
     Ok(resources)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_source;
+    use floe_connections::{PersonalSourceSpec, SourceConnection};
+    use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId};
+    use floe_kernel::{AgentFailure, OwnerActor, PersonId};
+
+    fn actor() -> OwnerActor {
+        OwnerActor {
+            person_id: PersonId::new(),
+            device_id: "qa-mac-device".into(),
+            runtime_epoch: 1,
+        }
+    }
+
+    fn source(
+        actor: &OwnerActor,
+        connector: &str,
+        owner_override: Option<&str>,
+    ) -> SourceConnection {
+        let spec = PersonalSourceSpec::for_connector(connector).unwrap();
+        let handles = if spec.mode == floe_connections::ResourceMode::Selected {
+            vec!["synthetic-resource".to_owned()]
+        } else {
+            Vec::new()
+        };
+        let owner = owner_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| spec.execution_owner(&actor.device_id).unwrap());
+        let resources = spec.resources(handles).unwrap();
+        SourceConnection::establish(
+            actor.person_id,
+            ConnectorId::try_new(spec.connector).unwrap(),
+            ConnectionId::try_new(spec.connection).unwrap(),
+            ExecutionOwnerId::try_new(owner).unwrap(),
+            spec.mode,
+            resources,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn apple_personal_source_metadata_keeps_personal_spec_owner_validation() {
+        let actor = actor();
+        for connector in ["contacts.apple", "health.apple", "attention.macos"] {
+            let source = source(&actor, connector, None);
+            assert!(validate_source(&actor, &source).is_ok(), "{connector}");
+        }
+    }
+
+    #[test]
+    fn personal_source_owner_mismatch_and_unknown_connectors_fail_closed() {
+        let actor = actor();
+        let mismatched = source(&actor, "contacts.apple", Some("apple:other-device"));
+        assert!(matches!(
+            validate_source(&actor, &mismatched),
+            Err(AgentFailure::PolicyDenied)
+        ));
+
+        let unsupported = SourceConnection::establish(
+            actor.person_id,
+            ConnectorId::try_new("unknown.personal").unwrap(),
+            ConnectionId::try_new("unknown.personal.local").unwrap(),
+            ExecutionOwnerId::try_new("owner:device").unwrap(),
+            floe_connections::ResourceMode::Selected,
+            vec![],
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_source(&actor, &unsupported),
+            Err(AgentFailure::CapabilityUnavailable)
+        ));
+    }
 }
