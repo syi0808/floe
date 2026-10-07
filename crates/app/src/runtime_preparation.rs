@@ -67,6 +67,25 @@ struct Published {
     preparation_failure: Option<AgentFailure>,
     failure_correlation: Option<Uuid>,
     current: Option<OpenGeneration>,
+    #[cfg(test)]
+    archive_gate: Option<Arc<ArchiveGate>>,
+}
+
+#[cfg(test)]
+struct ArchiveGate {
+    operation_id: Uuid,
+    entered: mpsc::SyncSender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+#[cfg(test)]
+impl ArchiveGate {
+    fn pause(&self, operation_id: Uuid) {
+        if operation_id == self.operation_id {
+            let _ = self.entered.send(());
+            let _ = self.release.lock().expect("archive test gate lock").recv();
+        }
+    }
 }
 #[derive(Default)]
 struct BridgeState {
@@ -106,6 +125,14 @@ impl RuntimePreparationHost {
             drained: Condvar::new(),
             published: Arc::new(Mutex::new(Published::default())),
         }
+    }
+
+    #[cfg(test)]
+    fn set_archive_gate(&self, gate: Arc<ArchiveGate>) {
+        self.published
+            .lock()
+            .expect("published Runtime state lock")
+            .archive_gate = Some(gate);
     }
 
     pub(crate) fn ready(&self, caller: &CallerContext) -> Result<Arc<ReadyOwners>, AgentFailure> {
@@ -629,6 +656,15 @@ impl Worker {
                             }
                         }
                     }
+                    #[cfg(test)]
+                    let archive_gate = published
+                        .lock()
+                        .ok()
+                        .and_then(|slot| slot.archive_gate.clone());
+                    #[cfg(test)]
+                    if let Some(gate) = archive_gate {
+                        gate.pause(job.id);
+                    }
                     // Completion/release cannot be acknowledged before the
                     // exact outcome is durable. A failed archive retries the
                     // same receipt, never the physical lifecycle operation.
@@ -1097,5 +1133,375 @@ fn set_worker_failure(
     if health.is_none() {
         *health = Some(failure);
         publish_worker_failure(published, failure, correlation_id);
+    }
+}
+
+#[cfg(all(test, feature = "development-storage"))]
+mod tests {
+    use super::*;
+    use crate::{AppComposition, AppHost, AppOpenOptions, HostError, RuntimeReadinessState};
+    use std::{
+        fs::{self, OpenOptions},
+        io::Write,
+        os::unix::fs::OpenOptionsExt,
+        path::PathBuf,
+        sync::{Arc, mpsc},
+        time::Instant,
+    };
+    use tempfile::TempDir;
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+    struct ArchiveGateRelease(Option<mpsc::Sender<()>>);
+
+    impl ArchiveGateRelease {
+        fn release(&mut self) {
+            if let Some(release) = self.0.take() {
+                release.send(()).expect("resume archive worker");
+            }
+        }
+    }
+
+    impl Drop for ArchiveGateRelease {
+        fn drop(&mut self) {
+            if let Some(release) = self.0.take() {
+                let _ = release.send(());
+            }
+        }
+    }
+
+    fn open_profile(profile: &TempDir) -> AppHost<AppComposition> {
+        crate::open_default_with_options(
+            profile.path().to_str().expect("UTF-8 test path"),
+            AppOpenOptions::default(),
+        )
+        .expect("open isolated Runtime profile")
+    }
+
+    fn completed_prepare(
+        host: &AppHost<AppComposition>,
+    ) -> (crate::CallerContext, Uuid, RuntimePreparationResult) {
+        let request = host.request(Uuid::new_v4()).expect("admit request");
+        let services = request.services();
+        let caller = request.caller().clone();
+        let operation_id = Uuid::new_v4();
+        services
+            .prepare_runtime(&caller, operation_id)
+            .expect("admit Runtime prepare");
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        let result = loop {
+            let result = services
+                .get_runtime_preparation(&caller, operation_id)
+                .expect("read Runtime preparation");
+            if result.done {
+                break result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Runtime prepare exceeded timeout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        services
+            .acknowledge_runtime_preparation(&caller, operation_id)
+            .expect("archive-before-ACK");
+        (caller, operation_id, result)
+    }
+
+    fn failed_prepare(
+        host: &AppHost<AppComposition>,
+        caller: &crate::CallerContext,
+    ) -> RuntimePreparationResult {
+        let request = host.request(Uuid::new_v4()).expect("admit request");
+        let services = request.services();
+        let operation_id = Uuid::new_v4();
+        services
+            .prepare_runtime(caller, operation_id)
+            .expect("admit failed Runtime prepare");
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let result = services
+                .get_runtime_preparation(caller, operation_id)
+                .expect("read failed Runtime preparation");
+            if result.done {
+                services
+                    .acknowledge_runtime_preparation(caller, operation_id)
+                    .expect("acknowledge archived failure");
+                return result;
+            }
+            assert!(Instant::now() < deadline, "failed prepare exceeded timeout");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn vault_paths(
+        bridge: &RuntimePreparationHost,
+        caller: &crate::CallerContext,
+    ) -> (PathBuf, PathBuf, PathBuf) {
+        let directory = bridge.root.join(caller.person_id().to_string());
+        let vault_id = fs::read_to_string(directory.join("vault.id")).expect("read vault id");
+        let key = bridge
+            .root
+            .join(".development-keys")
+            .join(format!("{}-{vault_id}.key", caller.person_id()));
+        (directory.clone(), key, directory.join("sessions.db"))
+    }
+
+    #[test]
+    fn terminal_worker_replays_completed_receipt_but_rejects_new_work_without_retry() {
+        let profile = TempDir::new().expect("isolated profile directory");
+        let host = open_profile(&profile);
+        let (caller, operation_id, completed) = completed_prepare(&host);
+        assert_eq!(completed.failure, None);
+
+        {
+            let request = host.request(Uuid::new_v4()).expect("admit test request");
+            let services = request.services();
+            let state = services
+                .runtime_preparation
+                .state
+                .lock()
+                .expect("Runtime bridge state");
+            let worker = state.worker.as_ref().expect("preparation worker");
+            *worker.health.lock().expect("worker health") = Some(AgentFailure::Interrupted);
+        }
+
+        let request = host.request(Uuid::new_v4()).expect("admit observation");
+        let services = request.services();
+        let readiness = services
+            .runtime_readiness(&caller, Uuid::new_v4())
+            .expect("observe terminal worker");
+        assert_eq!(readiness.state, RuntimeReadinessState::Unavailable);
+        let failure = readiness.failure.expect("terminal worker failure");
+        assert!(failure.safe_actions.is_empty());
+        assert_eq!(failure.recovery, crate::RuntimeRecovery::None);
+
+        let replayed = services
+            .prepare_runtime(&caller, operation_id)
+            .expect("completed archived operation remains replayable");
+        assert_eq!(replayed, completed);
+        let new_operation = services.prepare_runtime(&caller, Uuid::new_v4());
+        assert!(matches!(
+            new_operation,
+            Err(RuntimePreparationCommandFailure::NotAdmitted(
+                AgentFailure::Interrupted
+            ))
+        ));
+        drop(request);
+        host.shutdown().expect("retire terminal worker");
+    }
+
+    #[test]
+    fn missing_key_prepare_failure_preserves_the_existing_encrypted_data() {
+        let profile = TempDir::new().expect("isolated profile directory");
+        let host = open_profile(&profile);
+        let (caller, _, result) = completed_prepare(&host);
+        assert_eq!(result.failure, None);
+        let (root, key, database) = {
+            let request = host.request(Uuid::new_v4()).expect("admit inspection");
+            let bridge = &request.services().runtime_preparation;
+            let (directory, key, database) = vault_paths(bridge, &caller);
+            (directory, key, database)
+        };
+        assert!(key.is_file(), "successful creation stored its key");
+        host.shutdown().expect("close first App generation");
+        let database_before = fs::read(&database).expect("read encrypted database");
+        fs::remove_file(&key).expect("simulate missing custody key");
+
+        let reopened = open_profile(&profile);
+        let request = reopened
+            .request(Uuid::new_v4())
+            .expect("admit reopened request");
+        let caller_after_open = request.caller().clone();
+        assert_eq!(caller_after_open.person_id(), caller.person_id());
+        assert_eq!(caller_after_open.device_id(), caller.device_id());
+        assert_ne!(caller_after_open.runtime_epoch(), caller.runtime_epoch());
+        let failure = failed_prepare(&reopened, &caller_after_open);
+        assert_eq!(failure.failure, Some(AgentFailure::VaultUnavailable));
+        assert!(!key.exists(), "failed open did not recreate a missing key");
+        assert_eq!(
+            fs::read(&database).expect("read preserved database"),
+            database_before
+        );
+        assert!(root.join("vault.id").is_file(), "vault identity remains");
+        drop(request);
+        reopened.shutdown().expect("close failed preparation host");
+    }
+
+    #[test]
+    fn incomplete_creation_prepare_failure_preserves_key_database_and_marker() {
+        let profile = TempDir::new().expect("isolated profile directory");
+        let host = open_profile(&profile);
+        let (caller, _, result) = completed_prepare(&host);
+        assert_eq!(result.failure, None);
+        let (directory, key, database) = {
+            let request = host.request(Uuid::new_v4()).expect("admit inspection");
+            vault_paths(&request.services().runtime_preparation, &caller)
+        };
+        let vault_id = fs::read_to_string(directory.join("vault.id")).expect("read vault id");
+        let person = caller.person_id();
+        let pending = serde_json::json!({
+            "marker_version": 1,
+            "person_id": person,
+            "vault_id": vault_id,
+            "encrypted_layout_version": 3
+        });
+        let mut marker = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.join("creation.pending"))
+            .expect("write incomplete-creation evidence");
+        marker
+            .write_all(pending.to_string().as_bytes())
+            .expect("persist marker fixture");
+        marker.sync_all().expect("sync marker fixture");
+        host.shutdown().expect("close first App generation");
+        let key_before = fs::read(&key).expect("read existing key");
+        let database_before = fs::read(&database).expect("read encrypted database");
+
+        let reopened = open_profile(&profile);
+        let request = reopened
+            .request(Uuid::new_v4())
+            .expect("admit reopened request");
+        let caller_after_open = request.caller().clone();
+        let failure = failed_prepare(&reopened, &caller_after_open);
+        assert_eq!(failure.failure, Some(AgentFailure::IncompleteCreation));
+        assert_eq!(fs::read(&key).expect("preserved key"), key_before);
+        assert_eq!(
+            fs::read(&database).expect("preserved database"),
+            database_before
+        );
+        assert!(directory.join("creation.pending").is_file());
+        drop(request);
+        reopened.shutdown().expect("close incomplete-creation host");
+    }
+
+    #[test]
+    fn shutdown_budget_timeout_retains_admitted_receipt_until_archive_and_cleanup_finish() {
+        let profile = TempDir::new().expect("isolated profile directory");
+        let host = open_profile(&profile);
+        let operation_id = Uuid::new_v4();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut release = ArchiveGateRelease(Some(release_tx));
+        let gate = Arc::new(ArchiveGate {
+            operation_id,
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        });
+        let (caller, job, store) = {
+            let request = host.request(Uuid::new_v4()).expect("admit request");
+            let services = request.services();
+            let bridge = &services.runtime_preparation;
+            bridge.set_archive_gate(gate);
+            let caller = request.caller().clone();
+            let store = bridge.core.store.clone();
+            services
+                .prepare_runtime(&caller, operation_id)
+                .expect("admit immutable operation");
+            let state = bridge.state.lock().expect("Runtime bridge state");
+            let worker = state.worker.as_ref().expect("preparation worker");
+            let job = worker
+                .jobs
+                .lock()
+                .expect("worker jobs")
+                .get(&operation_id)
+                .expect("admitted operation is retained")
+                .clone();
+            (caller, job, store)
+        };
+        entered_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("worker reached the archive boundary");
+        assert!(!job.archived.load(Ordering::Acquire));
+        assert!(job.result.lock().expect("job result").is_none());
+
+        let timed_out = host.shutdown_with_budget_for_test(Duration::from_millis(100));
+        assert_eq!(timed_out, Err(HostError::Shutdown));
+        assert!(!host.retirement_complete_for_test());
+        assert!(!job.archived.load(Ordering::Acquire));
+        assert!(job.result.lock().expect("job result").is_none());
+
+        release.release();
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        loop {
+            let archived = job.archived.load(Ordering::Acquire);
+            let result = job.result.lock().expect("job result");
+            if archived && result.is_some() {
+                assert_eq!(*result, Some(Ok(())));
+                break;
+            }
+            drop(result);
+            assert!(Instant::now() < deadline, "archive did not resume");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let retirement_deadline = Instant::now() + TEST_TIMEOUT;
+        while !host.retirement_complete_for_test() {
+            assert!(
+                Instant::now() < retirement_deadline,
+                "cleanup did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let verify_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("verification runtime");
+        let receipt = verify_runtime
+            .block_on(store.load_vault_lifecycle_receipt(operation_id))
+            .expect("read durable operation receipt")
+            .expect("admitted ID was archived");
+        assert_eq!(receipt.operation_id, operation_id);
+        assert_eq!(receipt.person_id.0, caller.person_id());
+        assert_eq!(receipt.intent, "prepare");
+        assert_eq!(receipt.failure, None);
+        assert_eq!(receipt.state.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn sealed_generation_is_fenced_before_reopening_a_new_generation() {
+        let profile = TempDir::new().expect("isolated profile directory");
+        let host = open_profile(&profile);
+        let (caller, _, result) = completed_prepare(&host);
+        assert_eq!(result.failure, None);
+        let old_owners = {
+            let request = host
+                .request(Uuid::new_v4())
+                .expect("admit old owner request");
+            let services = request.services();
+            let owners = services
+                .ready_owners(&caller)
+                .expect("active owner generation");
+            services
+                .runtime_preparation
+                .shutdown()
+                .expect("seal and drain current generation");
+            assert!(owners.check(&caller.owner_actor()).is_err());
+            owners
+        };
+        host.shutdown().expect("finish old App retirement");
+        assert!(old_owners.check(&caller.owner_actor()).is_err());
+        // Retained owner handles keep the shared product-store lease alive;
+        // once fenced, release them before the next process generation opens.
+        drop(old_owners);
+
+        let reopened = open_profile(&profile);
+        let (reopened_caller, _, result) = completed_prepare(&reopened);
+        assert_eq!(reopened_caller.person_id(), caller.person_id());
+        assert_eq!(reopened_caller.device_id(), caller.device_id());
+        assert_ne!(reopened_caller.runtime_epoch(), caller.runtime_epoch());
+        assert_eq!(result.failure, None);
+        let request = reopened
+            .request(Uuid::new_v4())
+            .expect("admit new owner request");
+        let new_owners = request
+            .services()
+            .ready_owners(&reopened_caller)
+            .expect("new Runtime generation is ready");
+        assert!(new_owners.check(&reopened_caller.owner_actor()).is_ok());
+        drop(request);
+        reopened.shutdown().expect("close reopened App generation");
     }
 }

@@ -24,6 +24,8 @@ struct Lifecycle {
     active_requests: usize,
     shutdown_deadline: Option<Instant>,
     shutdown_failure: Option<HostError>,
+    #[cfg(test)]
+    retirement_complete: bool,
     close_hooks: Vec<Weak<dyn CloseAdmission>>,
 }
 pub(crate) trait CloseAdmission: Send + Sync {
@@ -44,6 +46,8 @@ impl HostAdmission {
                 active_requests: 0,
                 shutdown_deadline: None,
                 shutdown_failure: None,
+                #[cfg(test)]
+                retirement_complete: false,
                 close_hooks: Vec::new(),
             }),
             drained: Condvar::new(),
@@ -96,6 +100,10 @@ impl HostAdmission {
         let mut lifecycle = self.retirement_lock();
         if let Err(failure) = result {
             lifecycle.shutdown_failure.get_or_insert(failure);
+        }
+        #[cfg(test)]
+        {
+            lifecycle.retirement_complete = true;
         }
         lifecycle.state = HostState::Closed;
         self.drained.notify_all();
@@ -185,11 +193,20 @@ impl<Services: HostServices> AppHost<Services> {
         })
     }
     pub fn shutdown(&self) -> Result<(), HostError> {
+        self.shutdown_with_budget(HOST_SHUTDOWN_BUDGET)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shutdown_with_budget_for_test(&self, budget: Duration) -> Result<(), HostError> {
+        self.shutdown_with_budget(budget)
+    }
+
+    fn shutdown_with_budget(&self, budget: Duration) -> Result<(), HostError> {
         let mut lifecycle = self.admission.retirement_lock();
         match lifecycle.state {
             HostState::Open => {
                 lifecycle.state = HostState::Closing;
-                lifecycle.shutdown_deadline = Some(Instant::now() + HOST_SHUTDOWN_BUDGET);
+                lifecycle.shutdown_deadline = Some(Instant::now() + budget);
                 self.admission.drained.notify_all();
             }
             HostState::Closing => {}
@@ -214,6 +231,11 @@ impl<Services: HostServices> AppHost<Services> {
             };
         }
         lifecycle.shutdown_failure.map_or(Ok(()), Err)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retirement_complete_for_test(&self) -> bool {
+        self.admission.retirement_lock().retirement_complete
     }
 }
 impl<Services: HostServices> Drop for AppHost<Services> {
