@@ -533,8 +533,9 @@ impl ActiveDrive<'_> {
                 self.config.max_attempt_cost_micros.max(1),
                 None,
             );
-            let reservation_ceiling =
-                floe_execution::budget::ModelReservationCeiling::for_lease(model_scope.budget());
+            let reservation_ceiling = model_scope
+                .budget()
+                .remaining_reservation_ceiling()?;
             let model_request = ModelRequest {
                 attempt_id,
                 reservation_ceiling,

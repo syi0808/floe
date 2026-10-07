@@ -27,6 +27,7 @@ pub struct ModelReservationCeiling {
     pub cost_micros: u64,
 }
 impl ModelReservationCeiling {
+    /// Return the configured lease cap, not a snapshot of remaining allowance.
     pub fn for_lease(lease: &BudgetLease) -> Self {
         Self {
             tokens: lease.max_tokens(),
@@ -577,6 +578,63 @@ impl BudgetLease {
         self.max_cost_micros
     }
 
+    /// Snapshot a conservative ceiling for the next model attempt.
+    ///
+    /// This is not a reservation: concurrent scopes can consume part or all of
+    /// the returned allowance before dispatch. `begin_model_attempt` remains
+    /// the atomic reservation point and clamps to the live ledger, partition,
+    /// and ancestor quotas. Callers persist this ceiling before dispatch so a
+    /// journal can account for an unresolved attempt conservatively.
+    pub fn remaining_reservation_ceiling(&self) -> Result<ModelReservationCeiling, AgentFailure> {
+        let state = self.ledger.inner.lock().unwrap();
+        let (tokens, cost_micros) = self.available_allowance(&state);
+        if tokens == 0 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        Ok(ModelReservationCeiling {
+            tokens,
+            cost_micros,
+        })
+    }
+
+    fn available_allowance(&self, state: &BudgetState) -> (u64, u64) {
+        if state.model_attempts.len() >= MAX_MODEL_ATTEMPTS_PER_SCOPE
+            || (self.partition == BudgetPartition::Finalization
+                && (state.finalization.finalization_dispatched
+                    || state.finalization.finalization_in_flight))
+        {
+            return (0, 0);
+        }
+
+        let total_available_tokens = state
+            .max_tokens
+            .saturating_sub(BudgetLedger::total_outstanding_tokens(state));
+        let total_available_cost = state
+            .max_cost_micros
+            .saturating_sub(BudgetLedger::total_outstanding_cost(state));
+        let partition = match self.partition {
+            BudgetPartition::Work => &state.work,
+            BudgetPartition::Finalization => &state.finalization,
+        };
+        let partition_available_tokens =
+            partition.max_tokens.saturating_sub(partition.outstanding_tokens());
+        let partition_available_cost = partition
+            .max_cost_micros
+            .saturating_sub(partition.outstanding_cost());
+        let (quota_available_tokens, quota_available_cost) = self.quota.available();
+
+        (
+            self.max_tokens
+                .min(total_available_tokens)
+                .min(partition_available_tokens)
+                .min(quota_available_tokens),
+            self.max_cost_micros
+                .min(total_available_cost)
+                .min(partition_available_cost)
+                .min(quota_available_cost),
+        )
+    }
+
     pub fn finalization_lease(&self) -> Result<Self, AgentFailure> {
         if self.quota.parent.is_some() {
             return Err(AgentFailure::PolicyDenied);
@@ -618,52 +676,9 @@ impl BudgetLease {
         if state.model_attempts.len() >= MAX_MODEL_ATTEMPTS_PER_SCOPE {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let finalization_blocked = self.partition == BudgetPartition::Finalization
-            && (state.finalization.finalization_dispatched
-                || state.finalization.finalization_in_flight);
-        if finalization_blocked {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let total_available_tokens = state
-            .max_tokens
-            .saturating_sub(BudgetLedger::total_outstanding_tokens(&state));
-        let total_available_cost = state
-            .max_cost_micros
-            .saturating_sub(BudgetLedger::total_outstanding_cost(&state));
-        let (
-            partition_max_tokens,
-            partition_max_cost,
-            partition_outstanding_tokens,
-            partition_outstanding_cost,
-        ) = match self.partition {
-            BudgetPartition::Work => (
-                state.work.max_tokens,
-                state.work.max_cost_micros,
-                state.work.outstanding_tokens(),
-                state.work.outstanding_cost(),
-            ),
-            BudgetPartition::Finalization => (
-                state.finalization.max_tokens,
-                state.finalization.max_cost_micros,
-                state.finalization.outstanding_tokens(),
-                state.finalization.outstanding_cost(),
-            ),
-        };
-        let partition_available_tokens =
-            partition_max_tokens.saturating_sub(partition_outstanding_tokens);
-        let partition_available_cost =
-            partition_max_cost.saturating_sub(partition_outstanding_cost);
-        let (quota_available_tokens, quota_available_cost) = self.quota.available();
-        let allowance_tokens = (*tokens)
-            .min(self.max_tokens)
-            .min(total_available_tokens)
-            .min(partition_available_tokens)
-            .min(quota_available_tokens);
-        let allowance_cost = (*cost_micros)
-            .min(self.max_cost_micros)
-            .min(total_available_cost)
-            .min(partition_available_cost)
-            .min(quota_available_cost);
+        let (available_tokens, available_cost) = self.available_allowance(&state);
+        let allowance_tokens = (*tokens).min(available_tokens);
+        let allowance_cost = (*cost_micros).min(available_cost);
         if allowance_tokens == 0 {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -897,5 +912,241 @@ impl Drop for BudgetAttempt {
         state
             .model_attempts
             .insert(self.attempt_id, ModelAttemptState::Terminal(receipt));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BudgetConfig, BudgetLedger, MAX_MODEL_ATTEMPTS_PER_SCOPE, ModelReservationCeiling,
+        ModelUsage,
+    };
+    use floe_kernel::AgentFailure;
+    use uuid::Uuid;
+
+    #[test]
+    fn remaining_ceiling_tracks_sequential_positive_cost_attempts() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(200, 200), ModelUsage::default());
+        let task = ledger.work_lease().child_lease(100, 100);
+
+        for (expected_tokens, expected_cost) in [(50, 100), (50, 77), (50, 54)] {
+            let model_scope = task.child_lease(50, 100);
+            assert_eq!(
+                model_scope.remaining_reservation_ceiling().unwrap(),
+                ModelReservationCeiling {
+                    tokens: expected_tokens,
+                    cost_micros: expected_cost,
+                }
+            );
+            // The existing constructor continues to mean the configured cap.
+            assert_eq!(
+                ModelReservationCeiling::for_lease(&model_scope),
+                ModelReservationCeiling {
+                    tokens: 50,
+                    cost_micros: 100,
+                }
+            );
+
+            let ceiling = model_scope.remaining_reservation_ceiling().unwrap();
+            let mut tokens = ceiling.tokens;
+            let mut cost = ceiling.cost_micros;
+            let mut attempt = model_scope
+                .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+                .unwrap();
+            assert_eq!((tokens, cost), (ceiling.tokens, ceiling.cost_micros));
+            attempt.mark_dispatched();
+            attempt.settle_observed(Some(3), Some(23)).unwrap();
+        }
+
+        assert_eq!(
+            task.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 91,
+                cost_micros: 31,
+            }
+        );
+    }
+
+    #[test]
+    fn remaining_ceiling_observes_partition_ancestor_and_pending_allowances() {
+        let ledger = BudgetLedger::new(
+            BudgetConfig::new(100, 1_000).with_finalization_reserve(40, 400),
+            ModelUsage::default(),
+        );
+        let work = ledger.work_lease();
+        let wide_child = work.child_lease(1_000, 10_000);
+        assert_eq!(
+            wide_child.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 60,
+                cost_micros: 600,
+            }
+        );
+        assert_eq!(
+            ledger
+                .finalization_lease()
+                .unwrap()
+                .remaining_reservation_ceiling()
+                .unwrap(),
+            ModelReservationCeiling {
+                tokens: 40,
+                cost_micros: 400,
+            }
+        );
+
+        let mut tokens = 10;
+        let mut cost = 100;
+        let pending = work
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        assert_eq!(
+            wide_child.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 50,
+                cost_micros: 500,
+            }
+        );
+        drop(pending);
+        assert_eq!(
+            wide_child.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 60,
+                cost_micros: 600,
+            }
+        );
+
+        let ancestor = work.child_lease(30, 300);
+        let narrow_child = ancestor.child_lease(1_000, 10_000);
+        assert_eq!(
+            narrow_child.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 30,
+                cost_micros: 300,
+            }
+        );
+        let mut tokens = 5;
+        let mut cost = 50;
+        let mut attempt = ancestor
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        attempt.mark_dispatched();
+        attempt.settle_observed(Some(5), Some(50)).unwrap();
+        assert_eq!(
+            narrow_child.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 25,
+                cost_micros: 250,
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_reservation_stays_within_ceiling_after_concurrent_usage() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 1_000), ModelUsage::default());
+        let root = ledger.work_lease();
+        let model_scope = root.child_lease(80, 800);
+        let durable_ceiling = model_scope.remaining_reservation_ceiling().unwrap();
+        assert_eq!(
+            durable_ceiling,
+            ModelReservationCeiling {
+                tokens: 80,
+                cost_micros: 800,
+            }
+        );
+
+        let mut sibling_tokens = 50;
+        let mut sibling_cost = 700;
+        let mut sibling = root
+            .begin_model_attempt(Uuid::new_v4(), &mut sibling_tokens, &mut sibling_cost)
+            .unwrap();
+        sibling.mark_dispatched();
+        sibling.settle_observed(Some(10), Some(700)).unwrap();
+
+        let mut tokens = durable_ceiling.tokens;
+        let mut cost = durable_ceiling.cost_micros;
+        let mut attempt = model_scope
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        assert!(tokens <= durable_ceiling.tokens);
+        assert!(cost <= durable_ceiling.cost_micros);
+        assert_eq!((tokens, cost), (80, 300));
+        attempt.mark_dispatched();
+        attempt.settle_observed(Some(1), Some(100)).unwrap();
+    }
+
+    #[test]
+    fn remaining_ceiling_charges_unresolved_attempts_and_reports_token_exhaustion() {
+        let ledger = BudgetLedger::new(BudgetConfig::new(20, 100), ModelUsage::default());
+        let task = ledger.work_lease().child_lease(20, 100);
+        let model_scope = task.child_lease(10, 50);
+        let ceiling = model_scope.remaining_reservation_ceiling().unwrap();
+        let mut tokens = ceiling.tokens;
+        let mut cost = ceiling.cost_micros;
+        let mut unresolved = model_scope
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        unresolved.mark_dispatched();
+        drop(unresolved);
+
+        let snapshot = ledger.snapshot();
+        assert_eq!(snapshot.unknown_tokens, 10);
+        assert_eq!(snapshot.unknown_cost_micros, 50);
+        assert_eq!(
+            task.child_lease(10, 50)
+                .remaining_reservation_ceiling()
+                .unwrap(),
+            ModelReservationCeiling {
+                tokens: 10,
+                cost_micros: 50,
+            }
+        );
+
+        let next_scope = task.child_lease(10, 50);
+        let next_ceiling = next_scope.remaining_reservation_ceiling().unwrap();
+        let mut tokens = next_ceiling.tokens;
+        let mut cost = next_ceiling.cost_micros;
+        let mut settled = next_scope
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        settled.mark_dispatched();
+        settled.settle_observed(Some(10), Some(50)).unwrap();
+        assert_eq!(
+            task.child_lease(10, 50).remaining_reservation_ceiling(),
+            Err(AgentFailure::BudgetExceeded)
+        );
+
+        let zero_cost_ledger =
+            BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default());
+        let zero_cost_scope = zero_cost_ledger.work_lease();
+        let mut tokens = 1;
+        let mut cost = 100;
+        let mut attempt = zero_cost_scope
+            .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+            .unwrap();
+        attempt.mark_dispatched();
+        attempt.settle_observed(Some(1), Some(100)).unwrap();
+        assert_eq!(
+            zero_cost_scope.remaining_reservation_ceiling().unwrap(),
+            ModelReservationCeiling {
+                tokens: 99,
+                cost_micros: 0,
+            }
+        );
+
+        let attempt_ledger =
+            BudgetLedger::new(BudgetConfig::new(1, 0), ModelUsage::default());
+        let attempt_scope = attempt_ledger.work_lease();
+        for _ in 0..MAX_MODEL_ATTEMPTS_PER_SCOPE {
+            let mut tokens = 1;
+            let mut cost = 0;
+            let attempt = attempt_scope
+                .begin_model_attempt(Uuid::new_v4(), &mut tokens, &mut cost)
+                .unwrap();
+            drop(attempt);
+        }
+        assert_eq!(
+            attempt_scope.remaining_reservation_ceiling(),
+            Err(AgentFailure::BudgetExceeded)
+        );
     }
 }
