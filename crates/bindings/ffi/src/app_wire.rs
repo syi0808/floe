@@ -1,8 +1,5 @@
 use crate::bridge::FloeHandle;
-use floe_app::{
-    DayCommands, DayQueries, NativeHostCommands, NativeHostQueries, VaultLifecycleCommands,
-    VaultLifecycleQueries,
-};
+use floe_app::{DayCommands, DayQueries, NativeHostCommands, NativeHostQueries};
 use floe_kernel::AgentFailure;
 use floe_protocol::*;
 use std::{collections::BTreeMap, time::Duration};
@@ -145,31 +142,40 @@ pub(crate) fn command(
                 },
             })
         }
-        AppProductCommandDto::VaultCreate {}
-        | AppProductCommandDto::VaultUnlock {}
-        | AppProductCommandDto::VaultLock {} => {
-            let command = match command {
-                AppProductCommandDto::VaultCreate {} => floe_app::VaultLifecycleCommand::Create,
-                AppProductCommandDto::VaultUnlock {} => floe_app::VaultLifecycleCommand::Unlock,
-                AppProductCommandDto::VaultLock {} => floe_app::VaultLifecycleCommand::Lock,
-                _ => unreachable!(),
-            };
-            let result = host_request
-                .services()
-                .vault_command(host_request.caller(), command_id, command)
+        AppProductCommandDto::RuntimePrepare {} => {
+            let result = services
+                .prepare_runtime(caller, command_id)
                 .map_err(|failure| match failure {
-                    floe_app::VaultLifecycleCommandFailure::NotAdmitted(reason) => {
+                    floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
                         AppCommandFailure::NotAdmitted(agent_failure(reason))
                     }
-                    floe_app::VaultLifecycleCommandFailure::Indeterminate(reason) => {
+                    floe_app::RuntimePreparationCommandFailure::Indeterminate(reason) => {
                         AppCommandFailure::Indeterminate(agent_failure(reason))
                     }
                 })?;
             if result.operation_id != command_id {
                 return Err(internal_error().into());
             }
-            Ok(AppCommandResultDto::VaultOperation {
-                result: vault_result(result),
+            Ok(AppCommandResultDto::RuntimePreparation {
+                result: runtime_preparation_result(result),
+            })
+        }
+        AppProductCommandDto::RuntimePreparationAcknowledge {} => {
+            let result = services
+                .acknowledge_runtime_preparation(caller, command_id)
+                .map_err(|failure| match failure {
+                    floe_app::RuntimePreparationCommandFailure::NotAdmitted(reason) => {
+                        AppCommandFailure::NotAdmitted(agent_failure(reason))
+                    }
+                    floe_app::RuntimePreparationCommandFailure::Indeterminate(reason) => {
+                        AppCommandFailure::Indeterminate(agent_failure(reason))
+                    }
+                })?;
+            if result.operation_id != command_id {
+                return Err(internal_error().into());
+            }
+            Ok(AppCommandResultDto::RuntimePreparation {
+                result: runtime_preparation_result(result),
             })
         }
         AppProductCommandDto::DayRefresh { day } => {
@@ -258,29 +264,23 @@ pub(crate) fn query(
                 })?,
             })
         }
-        AppProductQueryDto::VaultStatus {} => {
-            let result = services
-                .vault_status(caller, request_id)
+        AppProductQueryDto::RuntimeReadiness {} => {
+            let readiness = services
+                .runtime_readiness(caller, request_id)
                 .map_err(agent_failure)?;
-            if result.operation_id != request_id {
-                return Err(internal_error());
-            }
-            Ok(AppQueryResultDto::VaultOperation {
-                result: vault_result(result),
+            Ok(AppQueryResultDto::RuntimeReadiness {
+                readiness: runtime_readiness(readiness),
             })
         }
-        AppProductQueryDto::VaultReadResult {
-            operation_id,
-            release,
-        } => {
+        AppProductQueryDto::RuntimePreparationGet { operation_id } => {
             let result = services
-                .read_vault_result(caller, operation_id, release)
+                .get_runtime_preparation(caller, operation_id)
                 .map_err(agent_failure)?;
             if result.operation_id != operation_id {
                 return Err(internal_error());
             }
-            Ok(AppQueryResultDto::VaultOperation {
-                result: vault_result(result),
+            Ok(AppQueryResultDto::RuntimePreparation {
+                result: runtime_preparation_result(result),
             })
         }
         AppProductQueryDto::DayRefreshGet { operation_ref } => {
@@ -319,18 +319,32 @@ pub(crate) fn events(
     })
 }
 
-fn vault_result(result: floe_app::VaultLifecycleResult) -> floe_protocol::VaultLifecycleResultDto {
-    floe_protocol::VaultLifecycleResultDto {
+fn runtime_preparation_result(
+    result: floe_app::RuntimePreparationResult,
+) -> floe_protocol::RuntimePreparationResultDto {
+    floe_protocol::RuntimePreparationResultDto {
         operation_id: result.operation_id,
         done: result.done,
-        state: result.state.map(crate::conversion::owners::vault_state_dto),
-        failure: result.failure_projection().map(|failure| {
-            crate::conversion::owners::failure_envelope(
-                failure,
-                &result.stage,
-                &result.operation_id.to_string(),
-            )
-        }),
+        failure: result.failure,
+    }
+}
+
+fn runtime_readiness(readiness: floe_app::RuntimeReadiness) -> floe_protocol::RuntimeReadinessDto {
+    floe_protocol::RuntimeReadinessDto {
+        state: match readiness.state {
+            floe_app::RuntimeReadinessState::Ready => {
+                floe_protocol::RuntimeReadinessStateDto::Ready
+            }
+            floe_app::RuntimeReadinessState::PreparationRequired => {
+                floe_protocol::RuntimeReadinessStateDto::PreparationRequired
+            }
+            floe_app::RuntimeReadinessState::Unavailable => {
+                floe_protocol::RuntimeReadinessStateDto::Unavailable
+            }
+        },
+        failure: readiness
+            .failure
+            .map(crate::conversion::owners::runtime_owner_failure),
     }
 }
 
@@ -443,22 +457,11 @@ pub(crate) fn agent_failure(failure: AgentFailure) -> AppWireErrorDto {
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".into());
     error.metadata.insert("reason_code".into(), reason_code);
-    if let Some(projection) = floe_app::VaultLifecycleFailureProjection::access_failure(failure) {
-        let incident = UuidRefDto::new(uuid::Uuid::new_v4()).expect("fresh incident identity");
-        error.owner_failure = Some(OwnerFailureDto {
-            domain: projection.domain,
-            category: projection.category,
-            reason: projection.failure,
-            incident_id: incident.clone(),
-            correlation_id: incident,
-            reload_required: projection.reload_required,
-            seal_session: projection.seal_session,
-            recovery: match projection.recovery {
-                floe_app::VaultLifecycleRecovery::None => OwnerRecoveryDto::None,
-                floe_app::VaultLifecycleRecovery::ReopenVault => OwnerRecoveryDto::Reopen,
-            },
-            safe_actions: projection.safe_actions,
-        });
+    let incident = uuid::Uuid::new_v4();
+    if let Some(projection) =
+        floe_app::RuntimeFailureProjection::access_failure(failure, incident, true)
+    {
+        error.owner_failure = Some(crate::conversion::owners::runtime_owner_failure(projection));
     }
     error
 }
@@ -469,10 +472,6 @@ pub(crate) fn internal_error() -> AppWireErrorDto {
         "app request could not complete",
         None,
     )
-}
-
-fn not_found() -> AppWireErrorDto {
-    wire_error(AppWireErrorCodeDto::NotFound, "record was not found", None)
 }
 
 fn wire_error(
@@ -486,5 +485,44 @@ fn wire_error(
         field: field.map(str::to_owned),
         metadata: BTreeMap::new(),
         owner_failure: None,
+    }
+}
+
+#[cfg(test)]
+mod runtime_wire_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_queries_and_commands_keep_current_state_separate_from_history() {
+        let operation_id = uuid::Uuid::new_v4();
+        let command = AppCommandResultDto::RuntimePreparation {
+            result: runtime_preparation_result(floe_app::RuntimePreparationResult {
+                operation_id,
+                done: true,
+                failure: None,
+            }),
+        };
+        let command = serde_json::to_value(command).expect("serialize Runtime command result");
+        assert_eq!(command["kind"], "runtime.preparation");
+        assert_eq!(command["operation_id"], operation_id.to_string());
+        assert_eq!(command["done"], true);
+
+        let failure = floe_app::RuntimeFailureProjection::access_failure(
+            AgentFailure::VaultLocked,
+            uuid::Uuid::new_v4(),
+            true,
+        )
+        .expect("project intrinsic Vault readiness failure");
+        let query = AppQueryResultDto::RuntimeReadiness {
+            readiness: runtime_readiness(floe_app::RuntimeReadiness {
+                state: floe_app::RuntimeReadinessState::PreparationRequired,
+                failure: Some(failure),
+            }),
+        };
+        let query = serde_json::to_value(query).expect("serialize current Runtime readiness");
+        assert_eq!(query["kind"], "runtime.readiness");
+        assert_eq!(query["state"], "preparation_required");
+        assert_eq!(query["failure"]["domain"], "vault");
+        assert_eq!(query["failure"]["reason"], "vault_locked");
     }
 }

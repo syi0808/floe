@@ -4,8 +4,9 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
+import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/connections/application/connections_gateway.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
@@ -14,13 +15,13 @@ import 'package:floe_client/features/conversation/application/agent_request_id.d
 final class ConnectionsController extends ChangeNotifier {
   ConnectionsController(
     this.gateway, {
-    required this.vault,
+    required this.runtime,
     required this.calendarSystemAccess,
   }) {
-    vault.addListener(_readinessChanged);
+    runtime.addListener(_readinessChanged);
     _readinessChanged();
   }
-  final VaultController vault;
+  final RuntimeController runtime;
   final ConnectionsGateway gateway;
   final CalendarSystemAccessGateway calendarSystemAccess;
   // This is a collection of independently versioned owner observations, not a
@@ -52,13 +53,13 @@ final class ConnectionsController extends ChangeNotifier {
   String? failure;
   bool _commandBusy = false;
   bool _wasReady = false;
-  bool get storageOpening => vault.busy;
-  String? get storageFailure => _safeToken(vault.reasonCode);
-  String? get storageIncidentId => _safeToken(vault.incidentId);
+  bool get storageOpening => runtime.busy;
+  String? get storageFailure => _safeToken(runtime.reasonCode);
+  String? get storageIncidentId => _safeToken(runtime.incidentId);
   int _readinessGeneration = 0;
   int? _activeCommandGeneration;
 
-  bool get ready => vault.ready;
+  bool get ready => runtime.ready;
   bool get busy => _commandBusy || !ready;
   bool get commandBusy => _commandBusy;
   bool get hasPendingPairingRequest =>
@@ -73,22 +74,21 @@ final class ConnectionsController extends ChangeNotifier {
       _ => null,
     };
     if (owner != null) {
-      vault.reportFailure(
-        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+      runtime.reportFailure(
+        AppOwnerException.fromAppWire(owner.reason, ownerFailure: owner),
       );
     }
   }
 
   String get storageMessage {
-    if (storageOpening) return 'Opening local secure storage…';
+    if (storageOpening) return 'Preparing local Runtime…';
     if (storageFailure case final reason?) {
-      return 'Local secure storage could not open ($reason).';
+      return 'Local Runtime is unavailable ($reason).';
     }
-    return switch (vault.state) {
-      AgentVaultState.locked => 'Local secure storage is locked.',
-      AgentVaultState.missing => 'Local secure storage is not ready yet.',
-      AgentVaultState.unavailable => 'Local secure storage is unavailable.',
-      _ => 'Waiting for local secure storage.',
+    return switch (runtime.state) {
+      RuntimeReadinessState.preparationRequired => 'Preparing local Runtime…',
+      RuntimeReadinessState.unavailable => 'Local Runtime is unavailable.',
+      _ => 'Checking local Runtime readiness…',
     };
   }
 
@@ -610,7 +610,7 @@ final class ConnectionsController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    vault.removeListener(_readinessChanged);
+    runtime.removeListener(_readinessChanged);
     _readinessGeneration++;
     _loadGeneration++;
     _pairingObservation?.cancel();

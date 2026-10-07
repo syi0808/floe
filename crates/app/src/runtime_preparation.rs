@@ -1,12 +1,12 @@
-//! The bounded host queue for encrypted Vault lifecycle only. Domain work runs
+//! The bounded host queue for Runtime preparation. Domain work runs
 //! through ready owner handles on the retained generation runtime.
 
 use crate::local_context::LocalContextHost;
-use crate::owner_handles::ReadyOwners;
+use crate::owner_handles::{ReadyOwners, execute_on_handle};
 use crate::ready_generation::ReadyGeneration;
 use crate::runtime_control::{
-    RuntimeControl, RuntimeFailureProjection, RuntimePreparationCommandFailure,
-    RuntimePreparationResult, RuntimeReadiness, RuntimeReadinessState, validate_runtime_caller,
+    RuntimeFailureProjection, RuntimePreparationCommandFailure, RuntimePreparationResult,
+    RuntimeReadiness, RuntimeReadinessState, validate_runtime_caller, validate_runtime_id,
 };
 use crate::storage_profile::{ProfileVaultKeys as PlatformVaultKeys, vault_keys};
 use crate::{CallerContext, FloeCore, ModelProviderFactory};
@@ -75,7 +75,7 @@ struct BridgeState {
     failure: Option<AgentFailure>,
     worker: Option<Worker>,
 }
-pub(crate) struct VaultBridge {
+pub(crate) struct RuntimePreparationHost {
     root: PathBuf,
     expected: CallerContext,
     runtime_handle: tokio::runtime::Handle,
@@ -86,7 +86,7 @@ pub(crate) struct VaultBridge {
     drained: Condvar,
     published: Arc<Mutex<Published>>,
 }
-impl VaultBridge {
+impl RuntimePreparationHost {
     pub(crate) fn new(
         database_path: &str,
         expected: CallerContext,
@@ -154,7 +154,7 @@ impl VaultBridge {
             .flatten();
         drop(state);
         if let Some(failure) = worker_failure {
-            set_worker_failure(&self.published, failure, correlation_id);
+            publish_worker_failure(&self.published, failure, correlation_id);
         }
         let mut slot = self
             .published
@@ -220,7 +220,12 @@ impl VaultBridge {
                 )),
             });
         }
-        match stored_vault_state(&self.root, PersonId(caller.person_id())) {
+        let root = self.root.clone();
+        let person = PersonId(caller.person_id());
+        let stored_state = execute_on_handle(&self.runtime_handle, async move {
+            stored_vault_state(&root, person)
+        });
+        match stored_state {
             Ok(_) => Ok(RuntimeReadiness {
                 state: RuntimeReadinessState::PreparationRequired,
                 failure: None,
@@ -243,32 +248,32 @@ impl VaultBridge {
     ) -> Result<RuntimePreparationResult, RuntimePreparationCommandFailure> {
         validate_runtime_caller(&self.expected, caller)
             .map_err(RuntimePreparationCommandFailure::NotAdmitted)?;
-        if id.is_nil() {
-            return Err(RuntimePreparationCommandFailure::NotAdmitted(
-                AgentFailure::InvalidInput,
-            ));
-        }
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted))?;
+        validate_runtime_id(id).map_err(RuntimePreparationCommandFailure::NotAdmitted)?;
+        let mut state = self.state.lock().map_err(|_| {
+            RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted)
+        })?;
         if state.closing {
             return Err(RuntimePreparationCommandFailure::NotAdmitted(
                 AgentFailure::Interrupted,
             ));
         }
         if let Some(worker) = state.worker.as_ref() {
-            if worker.health_failure().map_err(|_| {
-                RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted)
-            })?.is_some() {
-                return Err(RuntimePreparationCommandFailure::NotAdmitted(
-                    AgentFailure::Interrupted,
-                ));
-            }
             if let Some(result) = worker
                 .cached_result(caller, id)
                 .map_err(RuntimePreparationCommandFailure::NotAdmitted)?
             {
+                if result.done {
+                    return Ok(result);
+                }
+                if worker
+                    .health_failure()
+                    .map_err(RuntimePreparationCommandFailure::NotAdmitted)?
+                    .is_some()
+                {
+                    return Err(RuntimePreparationCommandFailure::Indeterminate(
+                        AgentFailure::Interrupted,
+                    ));
+                }
                 return Ok(result);
             }
         }
@@ -276,6 +281,19 @@ impl VaultBridge {
             .load_archived_receipt(id)
             .map_err(RuntimePreparationCommandFailure::Indeterminate)?;
         if let Some(receipt) = archived {
+            if receipt.operation_id != id {
+                return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                    AgentFailure::Conflict,
+                ));
+            }
+            if receipt.person_id.0 != caller.person_id()
+                || receipt.device_id != caller.device_id()
+                || receipt.runtime_epoch != caller.runtime_epoch()
+            {
+                return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                    AgentFailure::PolicyDenied,
+                ));
+            }
             if receipt.intent != PreparationIntent::Prepare.stage() {
                 return Err(RuntimePreparationCommandFailure::NotAdmitted(
                     AgentFailure::Conflict,
@@ -283,6 +301,19 @@ impl VaultBridge {
             }
             return preparation_receipt_result(caller, id, receipt)
                 .map_err(RuntimePreparationCommandFailure::NotAdmitted);
+        }
+        if let Some(worker) = state.worker.as_ref() {
+            if worker
+                .health_failure()
+                .map_err(|_| {
+                    RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted)
+                })?
+                .is_some()
+            {
+                return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                    AgentFailure::Interrupted,
+                ));
+            }
         }
         if state.worker.is_none() {
             state.worker = Some(
@@ -311,15 +342,16 @@ impl VaultBridge {
         id: Uuid,
     ) -> Result<RuntimePreparationResult, AgentFailure> {
         validate_runtime_caller(&self.expected, caller)?;
-        if id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
+        validate_runtime_id(id)?;
         let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
         if state.closing {
             return Err(AgentFailure::Interrupted);
         }
         if let Some(worker) = state.worker.as_ref() {
             if let Some(result) = worker.cached_result(caller, id)? {
+                if !result.done && worker.health_failure()?.is_some() {
+                    return Err(AgentFailure::Interrupted);
+                }
                 return Ok(result);
             }
         }
@@ -331,22 +363,35 @@ impl VaultBridge {
         &self,
         caller: &CallerContext,
         id: Uuid,
-    ) -> Result<RuntimePreparationResult, AgentFailure> {
-        validate_runtime_caller(&self.expected, caller)?;
-        if id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+    ) -> Result<RuntimePreparationResult, RuntimePreparationCommandFailure> {
+        validate_runtime_caller(&self.expected, caller)
+            .map_err(RuntimePreparationCommandFailure::NotAdmitted)?;
+        validate_runtime_id(id).map_err(RuntimePreparationCommandFailure::NotAdmitted)?;
+        let state = self.state.lock().map_err(|_| {
+            RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted)
+        })?;
         if state.closing {
-            return Err(AgentFailure::Interrupted);
+            return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                AgentFailure::Interrupted,
+            ));
         }
         if let Some(worker) = state.worker.as_ref() {
-            if let Some(result) = worker.acknowledge_cached(caller, id)? {
+            if let Some(result) = worker
+                .acknowledge_cached(caller, id)
+                .map_err(RuntimePreparationCommandFailure::NotAdmitted)?
+            {
                 return Ok(result);
             }
         }
         drop(state);
-        self.load_archived_preparation(caller, id)
+        let receipt = self
+            .load_archived_receipt(id)
+            .map_err(RuntimePreparationCommandFailure::Indeterminate)?
+            .ok_or(RuntimePreparationCommandFailure::NotAdmitted(
+                AgentFailure::NotFound,
+            ))?;
+        preparation_receipt_result(caller, id, receipt)
+            .map_err(RuntimePreparationCommandFailure::NotAdmitted)
     }
 
     fn load_archived_preparation(
@@ -364,18 +409,16 @@ impl VaultBridge {
         &self,
         id: Uuid,
     ) -> Result<Option<floe_vault::StoredVaultLifecycleReceipt>, AgentFailure> {
-        let result = self
-            .runtime_handle
-            .block_on(async {
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    self.core.store.load_vault_lifecycle_receipt(id),
-                )
-                .await
-            })
+        let store = self.core.store.clone();
+        execute_on_handle(&self.runtime_handle, async move {
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                store.load_vault_lifecycle_receipt(id),
+            )
+            .await
             .map_err(|_| AgentFailure::StorageUnavailable)?
-            .map_err(|_| AgentFailure::StorageUnavailable)?;
-        Ok(result)
+            .map_err(|_| AgentFailure::StorageUnavailable)
+        })
     }
 
     pub(crate) fn shutdown(&self) -> Result<(), AgentFailure> {
@@ -423,7 +466,7 @@ impl VaultBridge {
         failure.map_or(Ok(()), Err)
     }
 }
-impl Drop for VaultBridge {
+impl Drop for RuntimePreparationHost {
     fn drop(&mut self) {
         let _ = self.shutdown();
     }
@@ -467,7 +510,7 @@ impl Worker {
         let worker_health = health.clone();
         let jobs = Arc::new(Mutex::new(HashMap::<Uuid, Arc<Job>>::new()));
         let thread = std::thread::Builder::new()
-            .name("floe-vault-lifecycle".into())
+            .name("floe-runtime-preparation".into())
             .stack_size(crate::owner_handles::EXECUTOR_STACK_BYTES)
             .spawn(move || {
                 let mut current = None;
@@ -475,14 +518,11 @@ impl Worker {
                 let mut shutdown_failure = None;
                 // This receiver blocks only the dedicated queue thread; the
                 // runtime workers remain available for admitted owner work.
-                'work: while let Ok(job) = receiver.recv() {
+                while let Ok(job) = receiver.recv() {
                     // Lookup failure is not an execution outcome. Retain the
                     // queued identity and retry; never retire a live generation
                     // or overwrite an existing receipt because its read failed.
                     let saved = loop {
-                        if worker_closing.load(Ordering::Acquire) {
-                            break 'work;
-                        }
                         match runtime.block_on(async {
                             tokio::time::timeout(
                                 Duration::from_secs(5),
@@ -496,19 +536,24 @@ impl Worker {
                     };
                     let from_archive = saved.is_some();
                     let failed_before = fatal.is_some();
-                    let outcome = if worker_closing.load(Ordering::Acquire) {
+                    let outcome = if from_archive {
+                        let receipt = saved.ok_or(AgentFailure::StorageUnavailable);
+                        match receipt {
+                            Ok(receipt) => {
+                                job.archived.store(true, Ordering::Release);
+                                let valid = receipt_is_preparation(&job, &receipt);
+                                job.preparation_receipt.store(valid, Ordering::Release);
+                                receipt_outcome(&job, receipt)
+                            }
+                            Err(failure) => Err(failure),
+                        }
+                    } else if worker_closing.load(Ordering::Acquire) {
                         Err(AgentFailure::Interrupted)
                     } else if let Some(failure) = fatal {
                         Err(failure)
                     } else {
                         match catch_unwind(AssertUnwindSafe(|| {
                             runtime.block_on(async {
-                                if let Some(receipt) = saved {
-                                    job.archived.store(true, Ordering::Release);
-                                    let valid = receipt_is_preparation(&job, &receipt);
-                                    job.preparation_receipt.store(valid, Ordering::Release);
-                                    return receipt_outcome(&job, receipt);
-                                }
                                 tokio::time::timeout(
                                     LIFECYCLE_TIMEOUT,
                                     execute(
@@ -538,14 +583,11 @@ impl Worker {
                             }
                         }
                     };
-                    if !from_archive && !failed_before && let Some(failure) = fatal {
-                        let cleanup = retire(
-                            &runtime,
-                            &core,
-                            &published,
-                            &mut current,
-                            job.id,
-                        );
+                    if !from_archive
+                        && !failed_before
+                        && let Some(failure) = fatal
+                    {
+                        let cleanup = retire(&runtime, &core, &published, &mut current, job.id);
                         if let Err(cleanup_failure) = cleanup {
                             fatal = Some(cleanup_failure);
                         }
@@ -591,9 +633,6 @@ impl Worker {
                     // exact outcome is durable. A failed archive retries the
                     // same receipt, never the physical lifecycle operation.
                     while !job.archived.load(Ordering::Acquire) {
-                        if worker_closing.load(Ordering::Acquire) {
-                            break 'work;
-                        }
                         let receipt = stored_receipt(&job, outcome);
                         if runtime
                             .block_on(async {
@@ -603,7 +642,7 @@ impl Worker {
                                 )
                                 .await
                             })
-                        .is_ok_and(|value| value.is_ok())
+                            .is_ok_and(|value| value.is_ok())
                         {
                             job.archived.store(true, Ordering::Release);
                             job.preparation_receipt.store(true, Ordering::Release);
@@ -661,17 +700,17 @@ impl Worker {
             if self.closing.load(Ordering::Acquire) {
                 return Err(AgentFailure::Interrupted);
             }
-            if self.health_failure()?.is_some() {
-                // Runtime readiness carries the terminal cause without offering
-                // another prepare on this failed queue.
-                return Err(AgentFailure::Interrupted);
-            }
             let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
             if let Some(prior) = jobs.get(&id) {
                 if prior.caller != *caller || prior.intent != PreparationIntent::Prepare {
                     return Err(AgentFailure::Conflict);
                 }
             } else {
+                if self.health_failure()?.is_some() {
+                    // Readiness reports terminal queue health. Replay of a
+                    // completed ID was checked above and remains available.
+                    return Err(AgentFailure::Interrupted);
+                }
                 if jobs.len() >= MAX_RECEIPTS {
                     return Err(AgentFailure::BudgetExceeded);
                 }
@@ -707,10 +746,16 @@ impl Worker {
                 return Err(AgentFailure::PolicyDenied);
             }
             let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+            if result.is_none() && self.health_failure()?.is_some() {
+                return Err(AgentFailure::Interrupted);
+            }
             Ok(RuntimePreparationResult {
                 operation_id: id,
                 done: result.is_some(),
-                failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
+                failure: result
+                    .as_ref()
+                    .and_then(|value| value.as_ref().err())
+                    .copied(),
             })
         })();
         result.map_err(|failure| {
@@ -738,7 +783,10 @@ impl Worker {
         Ok(Some(RuntimePreparationResult {
             operation_id: id,
             done: result.is_some(),
-            failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
+            failure: result
+                .as_ref()
+                .and_then(|value| value.as_ref().err())
+                .copied(),
         }))
     }
 
@@ -764,7 +812,10 @@ impl Worker {
         let completed = RuntimePreparationResult {
             operation_id: id,
             done: true,
-            failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
+            failure: result
+                .as_ref()
+                .and_then(|value| value.as_ref().err())
+                .copied(),
         };
         drop(result);
         jobs.remove(&id);
@@ -772,7 +823,10 @@ impl Worker {
     }
 
     fn health_failure(&self) -> Result<Option<AgentFailure>, AgentFailure> {
-        let finished = self.thread.as_ref().is_some_and(|thread| thread.is_finished());
+        let finished = self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| thread.is_finished());
         let mut health = self.health.lock().map_err(|_| AgentFailure::Interrupted)?;
         if finished && health.is_none() {
             *health = Some(AgentFailure::Interrupted);
@@ -981,10 +1035,7 @@ fn receipt_outcome(
     }
 }
 
-fn receipt_is_preparation(
-    job: &Job,
-    receipt: &floe_vault::StoredVaultLifecycleReceipt,
-) -> bool {
+fn receipt_is_preparation(job: &Job, receipt: &floe_vault::StoredVaultLifecycleReceipt) -> bool {
     receipt.operation_id == job.id
         && receipt.person_id.0 == job.caller.person_id()
         && receipt.device_id == job.caller.device_id()
@@ -1020,6 +1071,20 @@ fn preparation_receipt_result(
     })
 }
 
+fn publish_worker_failure(
+    published: &Mutex<Published>,
+    failure: AgentFailure,
+    correlation_id: Uuid,
+) {
+    let mut slot = published
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.worker_failure.is_none() {
+        slot.worker_failure = Some(failure);
+        slot.failure_correlation = Some(correlation_id);
+    }
+}
+
 fn set_worker_failure(
     health: &Mutex<Option<AgentFailure>>,
     published: &Mutex<Published>,
@@ -1031,12 +1096,6 @@ fn set_worker_failure(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if health.is_none() {
         *health = Some(failure);
-        let mut slot = published
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if slot.worker_failure.is_none() {
-            slot.worker_failure = Some(failure);
-            slot.failure_correlation = Some(correlation_id);
-        }
+        publish_worker_failure(published, failure, correlation_id);
     }
 }

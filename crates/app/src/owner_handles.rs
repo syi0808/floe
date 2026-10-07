@@ -98,7 +98,7 @@ impl crate::AppComposition {
         &self,
         caller: &crate::CallerContext,
     ) -> Result<Arc<ReadyOwners>, AgentFailure> {
-        self.agent_vault.ready(caller)
+        self.runtime_preparation.ready(caller)
     }
     pub fn execute_owner<F>(&self, future: F) -> F::Output
     where
@@ -118,11 +118,19 @@ where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
+    execute_on_handle(runtime.handle(), future)
+}
+
+pub(crate) fn execute_on_handle<F>(handle: &tokio::runtime::Handle, future: F) -> F::Output
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
     // Enter the synchronous runtime boundary before spawning. A reentrant
     // caller must fail before work is detached from its host admission guard.
     // The caller polls only this dispatch envelope and the JoinHandle.
     let future = Box::pin(future);
-    match runtime.block_on(async move { tokio::spawn(future).await }) {
+    match handle.block_on(async move { tokio::spawn(future).await }) {
         Ok(output) => output,
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
         Err(_) => panic!("owner executor stopped before returning its result"),

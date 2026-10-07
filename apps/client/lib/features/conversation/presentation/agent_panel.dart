@@ -17,7 +17,8 @@ import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
+import 'package:floe_client/app/runtime/runtime_gateway.dart';
 
 class AgentPanel extends StatefulWidget {
   const AgentPanel({
@@ -81,7 +82,7 @@ class _AgentPanelState extends State<AgentPanel> {
 
   void _ensureConversationWhenReady() {
     final controller = widget.controller;
-    final ready = controller.vaultController.ready;
+    final ready = controller.runtimeController.ready;
     if (_wasReady && !ready) _sessionRequested = false;
     _wasReady = ready;
     if (!ready ||
@@ -93,7 +94,7 @@ class _AgentPanelState extends State<AgentPanel> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted &&
           identical(controller, widget.controller) &&
-          controller.vaultController.ready &&
+          controller.runtimeController.ready &&
           controller.session == null &&
           !controller.busy) {
         controller.load();
@@ -381,8 +382,8 @@ class _AgentPanelState extends State<AgentPanel> {
     ConversationController controller,
   ) {
     final status = _status(strings, controller);
-    final storageLocked = !controller.vaultController.ready;
-    final label = storageLocked
+    final runtimeUnavailable = !controller.runtimeController.ready;
+    final label = runtimeUnavailable
         ? strings.agentReload
         : controller.running
         ? strings.agentStop
@@ -391,16 +392,16 @@ class _AgentPanelState extends State<AgentPanel> {
         : controller.needsRecovery
         ? strings.agentRecover
         : strings.agentConnectedSend;
-    final icon = storageLocked || controller.needsReload
+    final icon = runtimeUnavailable || controller.needsReload
         ? LucideIcons.refreshCw
         : controller.running
         ? LucideIcons.square
         : controller.needsRecovery
         ? LucideIcons.rotateCcw
         : LucideIcons.arrowUp;
-    final VoidCallback? action = storageLocked
-        ? controller.vaultController.canRecover
-              ? controller.vaultController.recover
+    final VoidCallback? action = runtimeUnavailable
+        ? controller.runtimeController.canRecover
+              ? controller.runtimeController.recover
               : null
         : controller.running
         ? controller.progress == AgentProgress.stopping
@@ -475,7 +476,7 @@ class _AgentPanelState extends State<AgentPanel> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!storageLocked) ...[
+              if (!runtimeUnavailable) ...[
                 Expanded(
                   child: FloeInput(
                     label: controller.isGeneralConversation
@@ -556,16 +557,15 @@ class _AgentPanelState extends State<AgentPanel> {
         _ => strings.agentPreparing,
       };
     }
-    if (!controller.vaultController.ready) {
-      final reason = controller.vaultController.reasonCode;
+    if (!controller.runtimeController.ready) {
+      final reason = controller.runtimeController.reasonCode;
       if (reason != null) {
-        final incident = controller.vaultController.incidentId;
+        final incident = controller.runtimeController.incidentId;
         return 'Local secure storage is unavailable ($reason).'
             '${incident == null ? '' : ' Incident: $incident'}';
       }
-      return switch (controller.vaultController.state) {
-        AgentVaultState.missing => strings.agentStorageMissing,
-        AgentVaultState.locked => strings.agentStorageLocked,
+      return switch (controller.runtimeController.state) {
+        RuntimeReadinessState.preparationRequired => strings.agentPreparing,
         _ => strings.agentStorageUnavailable,
       };
     }

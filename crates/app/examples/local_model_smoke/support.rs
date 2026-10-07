@@ -83,10 +83,12 @@ impl floe_inference::ModelProvider for SyntheticDeviceProvider {
                 .await?;
             Ok(match observation {
                 floe_inference::LocalObservation::Available(profile) => {
+                    let transport: Box<dyn floe_inference::PreparedModelTransport> =
+                        Box::new(profile.transport);
                     floe_inference::LocalObservation::Available(
                         floe_inference::PreparedModelProfile {
                             capability: profile.capability,
-                            transport: Box::new(profile.transport),
+                            transport,
                         },
                     )
                 }

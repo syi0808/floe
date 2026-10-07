@@ -1,9 +1,11 @@
 import 'package:floe_client/app/runtime/owner_failure.dart';
+import 'package:floe_client/app/runtime/native_transport.dart';
 
-enum AgentVaultState { missing, locked, ready, unavailable }
-
-class AgentVaultException implements Exception {
-  const AgentVaultException(
+/// An owner or AppWire operation failed. This is transport/domain evidence;
+/// only an owner projection explicitly in the Vault domain updates shared
+/// Runtime readiness.
+class AppOwnerException implements Exception {
+  const AppOwnerException(
     this.failure, {
     this.requestId,
     this.stage,
@@ -21,15 +23,17 @@ class AgentVaultException implements Exception {
     this.reloadRequired,
     this.sealSession,
     this.ownerFailure,
+    this.commandDisposition,
   });
 
-  factory AgentVaultException.fromAppWire(
+  factory AppOwnerException.fromAppWire(
     String failure, {
     OwnerFailure? ownerFailure,
     String? requestId,
     String? stage,
     Map<String, String> metadata = const {},
-  }) => AgentVaultException(
+    NativeCommandDisposition? commandDisposition,
+  }) => AppOwnerException(
     ownerFailure?.reason ?? failure,
     requestId: requestId,
     stage: stage,
@@ -44,10 +48,12 @@ class AgentVaultException implements Exception {
     correlationRequestId: ownerFailure?.correlationId,
     reloadRequired: ownerFailure?.reloadRequired,
     sealSession: ownerFailure?.sealSession,
+    commandDisposition: commandDisposition,
   );
 
   final String failure;
   final OwnerFailure? ownerFailure;
+  final NativeCommandDisposition? commandDisposition;
   final String? requestId;
   final String? stage;
   final Map<String, String> metadata;
@@ -72,15 +78,6 @@ class AgentVaultException implements Exception {
 
   @override
   String toString() => requestId == null
-      ? 'AgentVaultException($failure)'
-      : 'AgentVaultException($failure, requestId: $requestId)';
-}
-
-abstract interface class AgentVaultGateway {
-  bool get hasPendingOperation;
-  Future<AgentVaultState> resumePendingOperation(String personId);
-  Future<AgentVaultState> vaultStatus(String personId);
-  Future<AgentVaultState> createVault(String personId);
-  Future<AgentVaultState> unlockVault(String personId);
-  Future<void> lockVault(String personId);
+      ? 'AppOwnerException($failure)'
+      : 'AppOwnerException($failure, requestId: $requestId)';
 }

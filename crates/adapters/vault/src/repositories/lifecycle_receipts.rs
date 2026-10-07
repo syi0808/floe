@@ -24,14 +24,20 @@ impl StoredVaultLifecycleReceipt {
         }
         .validate()
         .map_err(|_| invalid())?;
-        if self.operation_id.is_nil()
-            || !matches!(self.intent.as_str(), "create" | "unlock" | "lock")
-            || self.state.is_some() == self.failure.is_some()
-            || self
-                .state
-                .as_deref()
-                .is_some_and(|s| !matches!(s, "missing" | "locked" | "ready" | "unavailable"))
-        {
+        let valid_outcome = match (self.intent.as_str(), self.state.as_deref(), self.failure) {
+            // New App Runtime preparation receipts share this existing durable
+            // table while preserving the immutable operation outcome.
+            ("prepare", Some("completed"), None) | ("prepare", None, Some(_)) => true,
+            // Historical physical Vault receipts remain decodable and replayable.
+            (
+                "create" | "unlock" | "lock",
+                Some("missing" | "locked" | "ready" | "unavailable"),
+                None,
+            ) => true,
+            ("create" | "unlock" | "lock", None, Some(_)) => true,
+            _ => false,
+        };
+        if self.operation_id.is_nil() || !valid_outcome {
             return Err(invalid());
         }
         Ok(())

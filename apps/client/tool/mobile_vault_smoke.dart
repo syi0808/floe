@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -11,51 +10,37 @@ const _exercise = bool.fromEnvironment('FLOE_VAULT_SMOKE_EXERCISE');
 const _databasePath = String.fromEnvironment('FLOE_VAULT_SMOKE_DATABASE');
 const _personId = String.fromEnvironment('FLOE_VAULT_SMOKE_PERSON_ID');
 const _deviceId = String.fromEnvironment('FLOE_VAULT_SMOKE_DEVICE_ID');
-const _createVault = bool.fromEnvironment('FLOE_VAULT_SMOKE_CREATE_VAULT');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  var outcome = 'MOBILE_VAULT_SMOKE_FAILED';
+  var outcome = 'MOBILE_RUNTIME_SMOKE_FAILED';
   try {
     await _validateExplicitProfile();
     for (var attempt = 0; attempt < 2; attempt++) {
       final gateway = await _openProfile();
       try {
-        final previous = await gateway.vault.vaultStatus(_personId);
-        if (previous == AgentVaultState.missing &&
-            (!_createVault || attempt != 0)) {
-          throw StateError(
-            'An existing Vault is required unless first creation was explicitly requested.',
-          );
-        }
-        final state = previous == AgentVaultState.missing
-            ? await gateway.vault.createVault(_personId)
-            : await gateway.vault.unlockVault(_personId);
-        if (state != AgentVaultState.ready)
-          throw StateError('Vault is not ready');
+        await gateway.startRuntime();
+        if (!gateway.runtimeController.ready)
+          throw StateError('Runtime is not ready');
         if (attempt == 0) {
-          final contender = await _openProfile();
+          AppRuntime? contender;
           try {
-            var rejected = false;
-            try {
-              await contender.vault.unlockVault(_personId);
-            } on AgentVaultException catch (error) {
-              rejected = error.failure == 'conflict';
-            }
-            if (!rejected)
-              throw StateError('A second vault owner was admitted');
+            contender = await _openProfile();
+            await contender.startRuntime();
+            throw StateError('A second Runtime owner was admitted');
+          } on AppRuntimeException {
+            // The installation lock rejects a concurrent host.
           } finally {
-            await contender.close();
+            await contender?.close();
           }
         }
-        await gateway.vault.lockVault(_personId);
       } finally {
         await gateway.close();
       }
     }
-    outcome = 'MOBILE_VAULT_SMOKE_PASSED';
+    outcome = 'MOBILE_RUNTIME_SMOKE_PASSED';
   } catch (error) {
-    debugPrint('MOBILE_VAULT_SMOKE_ERROR: $error');
+    debugPrint('MOBILE_RUNTIME_SMOKE_ERROR: $error');
   }
   debugPrint(outcome);
   runApp(

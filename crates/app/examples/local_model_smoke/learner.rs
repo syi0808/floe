@@ -6,10 +6,7 @@ use std::{
 };
 
 use chrono::Utc;
-use floe_app::{
-    AppComposition, AppHost, ReadyOwners, VaultLifecycleCommand, VaultLifecycleCommands,
-    VaultLifecycleQueries, VaultState,
-};
+use floe_app::{AppComposition, AppHost, ReadyOwners, RuntimeReadinessState};
 use floe_conversation::{CommandReceipt, RunState, StartTurn};
 use floe_execution::{BoxFuture, Cancellation, ExecutionScope};
 use floe_kernel::{AgentFailure, CommandId, OwnerActor};
@@ -49,22 +46,22 @@ fn run_profile(profile: &Path, with_expiry: bool) -> Result<Value, AgentFailure>
     let host = floe_app::open(profile.to_str().ok_or(AgentFailure::InvalidInput)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     let outcome = (|| {
-        unlock(&host)?;
+        prepare_runtime(&host)?;
         exercise(&host, with_expiry)
     })();
     host.shutdown().map_err(|_| AgentFailure::Interrupted)?;
     outcome
 }
 
-fn unlock(host: &Host) -> Result<(), AgentFailure> {
+fn prepare_runtime(host: &Host) -> Result<(), AgentFailure> {
     let operation = Uuid::new_v4();
     let request = host
         .request(operation)
         .map_err(|_| AgentFailure::PolicyDenied)?;
     let mut result = request
         .services()
-        .vault_command(request.caller(), operation, VaultLifecycleCommand::Unlock)
-        .map_err(floe_app::VaultLifecycleCommandFailure::into_failure)?;
+        .prepare_runtime(request.caller(), operation)
+        .map_err(floe_app::RuntimePreparationCommandFailure::into_failure)?;
     let deadline = Instant::now() + Duration::from_secs(30);
     while !result.done {
         if Instant::now() >= deadline {
@@ -73,15 +70,21 @@ fn unlock(host: &Host) -> Result<(), AgentFailure> {
         std::thread::sleep(Duration::from_millis(50));
         result = request
             .services()
-            .read_vault_result(request.caller(), operation, false)?;
+            .get_runtime_preparation(request.caller(), operation)?;
     }
     request
         .services()
-        .read_vault_result(request.caller(), operation, true)?;
+        .acknowledge_runtime_preparation(request.caller(), operation)
+        .map_err(floe_app::RuntimePreparationCommandFailure::into_failure)?;
     if let Some(failure) = result.failure {
         return Err(failure);
     }
-    if result.state != Some(VaultState::Ready) {
+    if request
+        .services()
+        .runtime_readiness(request.caller(), Uuid::new_v4())?
+        .state
+        != RuntimeReadinessState::Ready
+    {
         return Err(AgentFailure::VaultUnavailable);
     }
     Ok(())

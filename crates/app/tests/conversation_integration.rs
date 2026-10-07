@@ -2,7 +2,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use floe_app::{AppComposition, AppHost, VaultLifecycleCommand};
+use floe_app::{AppComposition, AppHost, RuntimeReadinessState};
 use floe_conversation::{RunState, SessionMessage};
 use floe_inference::ModelObservationError;
 use floe_kernel::AgentFailure;
@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use support::{
     GenerateBarrier, IsolatedProfile, ModelOutput, PlanStage, PrimaryBehavior, ScriptedModel,
-    activate_vault, assert_script_clean, cancel_run, read_events, read_run, read_session,
+    assert_script_clean, cancel_run, prepare_runtime, read_events, read_run, read_session,
     start_session, start_turn, terminal_run_event, wait_terminal_run,
 };
 
@@ -21,10 +21,7 @@ const WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 fn create_ready_app(model: &ScriptedModel) -> (IsolatedProfile, AppHost<AppComposition>) {
     let profile = IsolatedProfile::new();
     let host = profile.open(model);
-    assert_eq!(
-        activate_vault(&host, VaultLifecycleCommand::Create),
-        floe_app::VaultState::Ready
-    );
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
     (profile, host)
 }
 
@@ -83,6 +80,93 @@ fn text_turn_completes_and_persists_transcript_receipt_and_events() {
     );
     assert_eq!(snapshot.generated.len(), 1);
     assert!(snapshot.generated[0].catalog.tools.is_empty());
+}
+
+#[test]
+fn runtime_preparation_is_idempotent_archived_before_ack_and_replayed_as_history() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let request = host
+        .request(Uuid::new_v4())
+        .expect("admit Runtime preparation request");
+    let services = request.services();
+    let caller = request.caller();
+    let operation_id = Uuid::new_v4();
+
+    let first = services
+        .prepare_runtime(caller, operation_id)
+        .expect("admit Runtime preparation");
+    let duplicate = services
+        .prepare_runtime(caller, operation_id)
+        .expect("join the same immutable preparation");
+    assert_eq!(first.operation_id, operation_id);
+    assert_eq!(duplicate.operation_id, operation_id);
+    if first.done {
+        assert!(duplicate.done, "a completed preparation stays completed");
+        assert_eq!(duplicate.failure, first.failure);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(55);
+    let completed = loop {
+        let result = services
+            .get_runtime_preparation(caller, operation_id)
+            .expect("observe the exact preparation");
+        if result.done {
+            break result;
+        }
+        assert!(Instant::now() < deadline, "Runtime preparation timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(completed.failure, None);
+
+    let acknowledged = services
+        .acknowledge_runtime_preparation(caller, operation_id)
+        .expect("acknowledge the durable result");
+    assert_eq!(acknowledged, completed);
+
+    let replayed = services
+        .prepare_runtime(caller, operation_id)
+        .expect("replay the archived result without re-execution");
+    let acknowledged_again = services
+        .acknowledge_runtime_preparation(caller, operation_id)
+        .expect("ACK remains idempotent after cache eviction");
+    assert_eq!(replayed, completed);
+    assert_eq!(acknowledged_again, completed);
+    assert_eq!(
+        services
+            .runtime_readiness(caller, Uuid::new_v4())
+            .expect("observe current readiness independently")
+            .state,
+        RuntimeReadinessState::Ready
+    );
+
+    let healthy_noop_id = Uuid::new_v4();
+    let noop = services
+        .prepare_runtime(caller, healthy_noop_id)
+        .expect("healthy generation accepts a no-op prepare");
+    assert_eq!(noop.operation_id, healthy_noop_id);
+    let deadline = Instant::now() + Duration::from_secs(55);
+    let noop = loop {
+        let result = services
+            .get_runtime_preparation(caller, healthy_noop_id)
+            .expect("observe the healthy no-op result");
+        if result.done {
+            break result;
+        }
+        assert!(Instant::now() < deadline, "Runtime no-op timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(noop.failure, None);
+    services
+        .acknowledge_runtime_preparation(caller, healthy_noop_id)
+        .expect("acknowledge the healthy no-op result");
+    assert_eq!(
+        services
+            .runtime_readiness(caller, Uuid::new_v4())
+            .expect("preparation history did not replace current state")
+            .state,
+        RuntimeReadinessState::Ready
+    );
 }
 
 #[test]
@@ -147,10 +231,7 @@ fn closing_and_reopening_profile_preserves_result_without_model_redispatch() {
     let recorder = model.recorder();
     let profile = IsolatedProfile::new();
     let host = profile.open(&model);
-    assert_eq!(
-        activate_vault(&host, VaultLifecycleCommand::Create),
-        floe_app::VaultState::Ready
-    );
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
     let session_id = start_session(&host);
     let command = start_turn(&host, session_id, USER_TEXT);
     let first_receipt = wait_terminal_run(&host, command.run_id);
@@ -166,10 +247,7 @@ fn closing_and_reopening_profile_preserves_result_without_model_redispatch() {
     drop(host);
 
     let reopened = profile.open(&model);
-    assert_eq!(
-        activate_vault(&reopened, VaultLifecycleCommand::Unlock),
-        floe_app::VaultState::Ready
-    );
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
     let resumed_session = support::with_ready(&reopened, |services, caller, owners| {
         let actor = caller.owner_actor();
         let scope = floe_app::host_scope(

@@ -155,11 +155,7 @@ class _ActionPermissionsState extends State<_ActionPermissions> {
             ),
             if (controller.error case final error?) ...[
               const SizedBox(height: FloeSpace.md),
-              Text(
-                error.isVaultLocked
-                    ? 'Vault locked. Unlock it to view or change Action permissions.'
-                    : error.message,
-              ),
+              Text(error.message),
               TextButton(
                 onPressed: controller.busy ? null : controller.load,
                 child: const Text('Reload Actions'),

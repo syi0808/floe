@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::owner_handles::{EXECUTOR_STACK_BYTES, execute_on_runtime};
 use tokio::runtime::{Builder, Runtime};
 
-use crate::{AppHost, FloeCore, HostError, HostServices, local_context, vault_lifecycle};
+use crate::{AppHost, FloeCore, HostError, HostServices, local_context, runtime_preparation};
 
 /// Rust-only external model-adapter composition input. The selected factory is
 /// retained by this App host and used to build a provider for each Vault generation.
@@ -55,7 +55,7 @@ pub struct AppComposition {
     pub(crate) core: Arc<FloeCore>,
     pub(crate) local_context: Arc<local_context::LocalContextHost>,
     #[cfg(unix)]
-    pub(crate) agent_vault: vault_lifecycle::VaultBridge,
+    pub(crate) runtime_preparation: runtime_preparation::RuntimePreparationHost,
 }
 
 impl HostServices for AppComposition {
@@ -63,7 +63,7 @@ impl HostServices for AppComposition {
         self.core.day.close_admission();
         let gateway = self.core.product_gateway.close();
         #[cfg(unix)]
-        let vault = self.agent_vault.shutdown();
+        let runtime = self.runtime_preparation.shutdown();
         let scope = crate::host_scope(
             uuid::Uuid::new_v4(),
             floe_execution::Cancellation::new(),
@@ -71,7 +71,7 @@ impl HostServices for AppComposition {
         );
         let day_owner = self.core.day.clone();
         let day = self.execute_owner(async move { day_owner.shutdown(&scope).await });
-        vault.map_err(|_| crate::HostError::Shutdown)?;
+        runtime.map_err(|_| crate::HostError::Shutdown)?;
         gateway.map_err(|_| crate::HostError::Shutdown)?;
         day.map_err(|_| crate::HostError::Shutdown)
     }
@@ -165,8 +165,8 @@ pub fn open_default_with_options(
             storage_error(error)
         }
     })?;
-    // Every build preserves failed admissions. VaultBridge alone owns typed
-    // Vault lifecycle failures; a build profile is never reset authority.
+    // Every build preserves failed admissions. Runtime preparation owns the
+    // host's Vault generation; a build profile is never reset authority.
     installation.complete().map_err(installation_error)?;
     let identity = crate::bootstrap::installation_identity(&installation);
     let path = installation
@@ -246,15 +246,18 @@ fn compose(
         day,
         product_gateway,
     });
+    let runtime_handle = runtime.handle().clone();
     let services = AppComposition {
         runtime,
         core: core.clone(),
         local_context: local_context.clone(),
         #[cfg(unix)]
-        agent_vault: vault_lifecycle::VaultBridge::new(
+        runtime_preparation: runtime_preparation::RuntimePreparationHost::new(
             database
                 .to_str()
                 .ok_or(AppOpenError::Host(HostError::IdentityUnavailable))?,
+            caller.clone(),
+            runtime_handle,
             core,
             local_context,
             options.model_provider_factory,

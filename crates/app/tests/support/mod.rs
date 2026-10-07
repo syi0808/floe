@@ -9,7 +9,7 @@ use floe_agent_contract::{
 };
 use floe_app::{
     AppComposition, AppHost, AppOpenOptions, CallerContext, ModelProviderFactory, ReadyOwners,
-    VaultLifecycleCommand, VaultLifecycleCommands, VaultLifecycleQueries, VaultState, host_scope,
+    RuntimeReadinessState, host_scope,
 };
 use floe_conversation::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CommandReceipt, EventPayload, EventRead,
@@ -29,7 +29,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 const OWNER_TIMEOUT: Duration = Duration::from_secs(15);
-const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(55);
+const PREPARATION_TIMEOUT: Duration = Duration::from_secs(55);
 const SCRIPTED_REPLY: &str = "A deterministic scripted reply.";
 
 #[derive(Clone, Copy)]
@@ -728,34 +728,34 @@ impl IsolatedProfile {
     }
 }
 
-pub fn activate_vault(
-    host: &AppHost<AppComposition>,
-    command: VaultLifecycleCommand,
-) -> VaultState {
+pub fn prepare_runtime(host: &AppHost<AppComposition>) -> RuntimeReadinessState {
     let request = host
         .request(Uuid::new_v4())
-        .expect("admit Vault lifecycle request");
+        .expect("admit Runtime preparation request");
     let services = request.services();
     let caller = request.caller();
     let operation_id = Uuid::new_v4();
     services
-        .vault_command(caller, operation_id, command)
-        .expect("admit Vault lifecycle command");
-    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+        .prepare_runtime(caller, operation_id)
+        .expect("admit Runtime preparation command");
+    let deadline = Instant::now() + PREPARATION_TIMEOUT;
     loop {
         let result = services
-            .read_vault_result(caller, operation_id, false)
-            .expect("read Vault lifecycle result");
+            .get_runtime_preparation(caller, operation_id)
+            .expect("read Runtime preparation result");
         if result.done {
             let completed = services
-                .read_vault_result(caller, operation_id, true)
-                .expect("release completed Vault lifecycle receipt");
+                .acknowledge_runtime_preparation(caller, operation_id)
+                .expect("acknowledge completed Runtime preparation");
             assert_eq!(completed.failure, None);
-            return completed.state.expect("activated Vault state");
+            return services
+                .runtime_readiness(caller, Uuid::new_v4())
+                .expect("observe Runtime readiness")
+                .state;
         }
         assert!(
             Instant::now() < deadline,
-            "Vault activation exceeded deadline"
+            "Runtime preparation exceeded deadline"
         );
         std::thread::yield_now();
     }
@@ -1074,7 +1074,7 @@ pub fn read_run(host: &AppHost<AppComposition>, run_id: RunId) -> Option<RunRece
 }
 
 pub fn wait_terminal_run(host: &AppHost<AppComposition>, run_id: RunId) -> RunReceipt {
-    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    let deadline = Instant::now() + PREPARATION_TIMEOUT;
     loop {
         if let Some(receipt) = read_run(host, run_id)
             && receipt.state.is_terminal()

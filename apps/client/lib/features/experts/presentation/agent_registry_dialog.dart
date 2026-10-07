@@ -9,19 +9,19 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
 
 class AgentRegistrySettings extends StatefulWidget {
   const AgentRegistrySettings({
     super.key,
     required this.controller,
-    required this.vault,
+    required this.runtime,
     this.focus,
     this.onBindingReplaced,
   });
 
   final AgentRegistryController controller;
-  final VaultController vault;
+  final RuntimeController runtime;
   final AgentExpertBindingTarget? focus;
   final Future<void> Function()? onBindingReplaced;
 
@@ -36,12 +36,12 @@ class _AgentRegistrySettingsState extends State<AgentRegistrySettings> {
   @override
   void initState() {
     super.initState();
-    widget.vault.addListener(_readinessChanged);
+    widget.runtime.addListener(_readinessChanged);
     _readinessChanged();
   }
 
   void _readinessChanged() {
-    final ready = widget.vault.ready;
+    final ready = widget.runtime.ready;
     if (!_wasReady && ready) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _load());
     }
@@ -50,16 +50,16 @@ class _AgentRegistrySettingsState extends State<AgentRegistrySettings> {
 
   @override
   void dispose() {
-    widget.vault.removeListener(_readinessChanged);
+    widget.runtime.removeListener(_readinessChanged);
     super.dispose();
   }
 
   @override
   void didUpdateWidget(AgentRegistrySettings oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.vault != widget.vault) {
-      oldWidget.vault.removeListener(_readinessChanged);
-      widget.vault.addListener(_readinessChanged);
+    if (oldWidget.runtime != widget.runtime) {
+      oldWidget.runtime.removeListener(_readinessChanged);
+      widget.runtime.addListener(_readinessChanged);
       _wasReady = false;
       _readinessChanged();
     }
@@ -70,7 +70,7 @@ class _AgentRegistrySettingsState extends State<AgentRegistrySettings> {
   }
 
   void _load() {
-    if (!mounted || !widget.vault.ready) return;
+    if (!mounted || !widget.runtime.ready) return;
     _replacementAcknowledged = false;
     widget.controller.load();
     final focus = widget.focus;

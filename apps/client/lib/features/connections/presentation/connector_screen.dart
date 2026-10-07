@@ -2,7 +2,7 @@ import 'package:floe_client/features/day/domain/day_models.dart';
 
 import 'service_presentation.dart';
 
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 
 import 'dart:async';
 
@@ -18,6 +18,7 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/presentation/gateway_connection_panel.dart';
+import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/connections/presentation/integration_detail_panel.dart';
 import 'package:floe_client/features/connections/presentation/source_connection_panel.dart';
 
@@ -100,21 +101,13 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
           Text(current.storageMessage),
           if (current.storageIncidentId case final incident?)
             SelectableText('Incident: $incident'),
-          if (current.vault.canRecover)
+          if (current.runtime.canRecover)
             FloeButton.outlined(
-              onPressed: current.vault.recover,
+              onPressed: current.runtime.recover,
               child: Text(
-                current.vault.gateway.hasPendingOperation
-                    ? 'Check the same storage request'
-                    : current.vault.failure?.safeActions.contains(
-                            'reopen_vault',
-                          ) ==
-                          true
-                    ? 'Reopen local storage'
-                    : current.vault.state == AgentVaultState.locked &&
-                          current.vault.failure == null
-                    ? 'Unlock local storage'
-                    : 'Retry local storage',
+                current.runtime.hasPendingOperation
+                    ? 'Check the same preparation request'
+                    : 'Retry Runtime preparation',
               ),
             ),
           const SizedBox(height: FloeSpace.sm),

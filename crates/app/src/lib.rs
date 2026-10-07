@@ -31,13 +31,13 @@ mod prompts;
 #[cfg(unix)]
 mod ready_generation;
 #[cfg(unix)]
+mod runtime_control;
+#[cfg(unix)]
+mod runtime_preparation;
+#[cfg(unix)]
 mod storage_profile;
 #[cfg(unix)]
-mod vault_lifecycle;
-#[cfg(unix)]
 pub use storage_profile::storage_profile_code;
-#[cfg(unix)]
-mod vault_services;
 
 pub use floe_context_contract::{CalendarProvider, CalendarScope, ResourceHandle, SourceAuthority};
 /// Values carried by the remaining host service signatures. The S1
@@ -105,8 +105,7 @@ pub use native_lane::{NativeHostLane, NativeHostLaneError};
 pub use owner_handles::{ReadyOwners, host_scope};
 
 #[cfg(unix)]
-pub use vault_services::{
-    VaultLifecycleCommand, VaultLifecycleCommandFailure, VaultLifecycleCommands,
-    VaultLifecycleFailureProjection, VaultLifecycleQueries, VaultLifecycleRecovery,
-    VaultLifecycleResult, VaultState,
+pub use runtime_control::{
+    RuntimeFailureProjection, RuntimePreparationCommandFailure, RuntimePreparationResult,
+    RuntimeReadiness, RuntimeReadinessState, RuntimeRecovery,
 };

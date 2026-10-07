@@ -1,4 +1,4 @@
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
@@ -45,7 +45,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
     if (previous != null &&
         (previous.sessionId != snapshot.sessionId ||
             previous.decision != decision)) {
-      throw AgentVaultException('conflict', requestId: previous.commandId);
+      throw AppOwnerException('conflict', requestId: previous.commandId);
     }
     final command =
         previous ??
@@ -74,7 +74,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
   ) async {
     final previous = _pendingRefreshes[snapshot.id];
     if (previous != null && previous.sessionId != snapshot.sessionId) {
-      throw AgentVaultException('conflict', requestId: previous.commandId);
+      throw AppOwnerException('conflict', requestId: previous.commandId);
     }
     final command =
         previous ??

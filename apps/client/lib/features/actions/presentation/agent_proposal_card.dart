@@ -464,9 +464,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 if (error != null) ...[
                   const SizedBox(height: 8),
                   Text(
-                    error!.isVaultLocked
-                        ? 'Vault locked. Unlock it to submit this proposal.'
-                        : error!.kind == CalendarActionErrorKind.conflict
+                    error!.kind == CalendarActionErrorKind.conflict
                         ? 'This proposal or its source access changed. Review the source access or request a new proposal.'
                         : error!.message,
                   ),

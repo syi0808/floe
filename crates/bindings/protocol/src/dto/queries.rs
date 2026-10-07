@@ -99,10 +99,10 @@ pub enum AppProductQueryDto {
     },
     #[serde(rename = "conversation.session.resume")]
     ConversationSessionResume {},
-    #[serde(rename = "vault.status")]
-    VaultStatus {},
-    #[serde(rename = "vault.read_result")]
-    VaultReadResult { operation_id: Uuid, release: bool },
+    #[serde(rename = "runtime.readiness")]
+    RuntimeReadiness {},
+    #[serde(rename = "runtime.preparation.get")]
+    RuntimePreparationGet { operation_id: Uuid },
     #[serde(rename = "conversation.get_command")]
     ConversationGetCommand { command_id: CommandIdDto },
     #[serde(rename = "conversation.get_run")]
@@ -117,7 +117,7 @@ pub enum AppProductQueryDto {
 
 impl AppProductQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
-        let (field, id) = match self {
+        match self {
             Self::ActionsDestinations {}
             | Self::ActionsAuthority {}
             | Self::ActionsInspect { .. } => return Ok(()),
@@ -158,15 +158,19 @@ impl AppProductQueryDto {
             Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
-            Self::VaultStatus {} => return Ok(()),
-            Self::VaultReadResult { operation_id, .. } => ("query.operation_id", operation_id),
+            Self::RuntimeReadiness {} => return Ok(()),
+            Self::RuntimePreparationGet { operation_id } => {
+                if valid_runtime_uuid(*operation_id) {
+                    return Ok(());
+                }
+                return Err("query.operation_id");
+            }
             Self::ConversationGetCommand { .. }
             | Self::ConversationGetRun { .. }
             | Self::ConversationGetMessage { .. }
             | Self::ConversationInteractionGet { .. }
             | Self::ConversationInteractionList { .. } => return Ok(()),
-        };
-        if id.is_nil() { Err(field) } else { Ok(()) }
+        }
     }
 }
 
@@ -272,9 +276,15 @@ pub enum AppQueryResultDto {
         session: super::ConversationSessionSnapshotDto,
     },
     ConversationSessionAbsent {},
-    VaultOperation {
+    #[serde(rename = "runtime.readiness")]
+    RuntimeReadiness {
         #[serde(flatten)]
-        result: super::VaultLifecycleResultDto,
+        readiness: super::RuntimeReadinessDto,
+    },
+    #[serde(rename = "runtime.preparation")]
+    RuntimePreparation {
+        #[serde(flatten)]
+        result: super::RuntimePreparationResultDto,
     },
     CommandReceipt {
         #[serde(flatten)]
@@ -302,6 +312,33 @@ pub enum AppQueryResultDto {
     UnknownInteraction {
         interaction_id: InteractionRefDto,
     },
+}
+
+fn valid_runtime_uuid(id: Uuid) -> bool {
+    !id.is_nil()
+        && id.get_version() == Some(uuid::Version::Random)
+        && id.get_variant() == uuid::Variant::RFC4122
+}
+
+#[cfg(test)]
+mod runtime_query_tests {
+    use super::AppProductQueryDto;
+    use uuid::Uuid;
+
+    #[test]
+    fn preparation_history_query_requires_uuid_v4() {
+        let valid = AppProductQueryDto::RuntimePreparationGet {
+            operation_id: Uuid::new_v4(),
+        };
+        assert_eq!(valid.validate(), Ok(()));
+
+        let uuid_v7 = Uuid::parse_str("01890f47-2e80-7cc7-b0b5-f12c0a06e63f")
+            .expect("valid UUID v7 test identity");
+        let invalid = AppProductQueryDto::RuntimePreparationGet {
+            operation_id: uuid_v7,
+        };
+        assert_eq!(invalid.validate(), Err("query.operation_id"));
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

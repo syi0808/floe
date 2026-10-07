@@ -8,7 +8,7 @@ import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
 
 final class AgentMemorySettingsCard extends StatelessWidget {
   const AgentMemorySettingsCard({
@@ -70,12 +70,12 @@ final class AgentMemorySettings extends StatefulWidget {
   const AgentMemorySettings({
     super.key,
     required this.controller,
-    required this.vault,
+    required this.runtime,
     required this.onBack,
   });
 
   final AgentMemoryController controller;
-  final VaultController vault;
+  final RuntimeController runtime;
   final VoidCallback onBack;
 
   @override
@@ -89,28 +89,29 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
   @override
   void initState() {
     super.initState();
-    widget.vault.addListener(_readinessChanged);
+    widget.runtime.addListener(_readinessChanged);
     _readinessChanged();
   }
 
   @override
   void didUpdateWidget(AgentMemorySettings oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.vault != widget.vault || oldWidget.controller != controller) {
-      oldWidget.vault.removeListener(_readinessChanged);
-      widget.vault.addListener(_readinessChanged);
+    if (oldWidget.runtime != widget.runtime ||
+        oldWidget.controller != controller) {
+      oldWidget.runtime.removeListener(_readinessChanged);
+      widget.runtime.addListener(_readinessChanged);
       _wasReady = false;
       _readinessChanged();
     }
   }
 
   void _readinessChanged() {
-    final ready = widget.vault.ready;
+    final ready = widget.runtime.ready;
     if (!_wasReady && ready) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted || !widget.vault.ready) return;
+        if (!mounted || !widget.runtime.ready) return;
         await controller.loadReview();
-        if (!mounted || !widget.vault.ready) return;
+        if (!mounted || !widget.runtime.ready) return;
         await controller.load();
       });
     }
@@ -119,7 +120,7 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
 
   @override
   void dispose() {
-    widget.vault.removeListener(_readinessChanged);
+    widget.runtime.removeListener(_readinessChanged);
     super.dispose();
   }
 

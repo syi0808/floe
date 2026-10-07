@@ -157,12 +157,10 @@ pub enum AppProductCommandDto {
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
-    #[serde(rename = "vault.create")]
-    VaultCreate {},
-    #[serde(rename = "vault.unlock")]
-    VaultUnlock {},
-    #[serde(rename = "vault.lock")]
-    VaultLock {},
+    #[serde(rename = "runtime.prepare")]
+    RuntimePrepare {},
+    #[serde(rename = "runtime.preparation.acknowledge")]
+    RuntimePreparationAcknowledge {},
     #[serde(rename = "conversation.start_turn")]
     ConversationStartTurn {
         session_id: SessionRefDto,
@@ -309,8 +307,9 @@ impl AppProductCommandDto {
                 }
                 Ok(())
             }
-            Self::ConversationSessionStart {} => Ok(()),
-            Self::VaultCreate {} | Self::VaultUnlock {} | Self::VaultLock {} => Ok(()),
+            Self::ConversationSessionStart {}
+            | Self::RuntimePrepare {}
+            | Self::RuntimePreparationAcknowledge {} => Ok(()),
             Self::ConversationStartTurn {
                 expected_revision,
                 text,
@@ -452,9 +451,10 @@ pub enum AppCommandResultDto {
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,
     },
-    VaultOperation {
+    #[serde(rename = "runtime.preparation")]
+    RuntimePreparation {
         #[serde(flatten)]
-        result: super::VaultLifecycleResultDto,
+        result: super::RuntimePreparationResultDto,
     },
     CommandReceipt {
         #[serde(flatten)]

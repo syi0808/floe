@@ -34,8 +34,8 @@ pub use refs::{
 mod knowledge;
 pub use knowledge::*;
 mod queries;
-mod vault;
-pub use vault::VaultLifecycleResultDto;
+mod runtime;
+pub use runtime::{RuntimePreparationResultDto, RuntimeReadinessDto, RuntimeReadinessStateDto};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;
@@ -43,8 +43,7 @@ pub const APP_WIRE_VERSION: u32 = 2;
 pub use agent::{
     ActionAuthorityModeDto, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
     AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionKindDto,
-    AgentMemorySummaryDto, AgentRetryPolicy, AgentVaultFailureDto, AgentVaultRecoveryActionDto,
-    AgentVaultStateDto,
+    AgentMemorySummaryDto, AgentRetryPolicy,
 };
 pub use calendar::{
     CalendarFailureDto, CalendarProviderDto, CalendarRangeDto, CalendarScopeDto,

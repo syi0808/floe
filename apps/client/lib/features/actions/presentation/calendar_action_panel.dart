@@ -73,12 +73,7 @@ class ReviewRequestPanel extends StatelessWidget {
             children: [
               Text(strings.calendarProposals, style: FloeType.title),
               const SizedBox(height: 12),
-              if (controller.error case final error?)
-                Text(
-                  error.isVaultLocked
-                      ? 'Vault locked. Unlock to review Actions.'
-                      : error.message,
-                ),
+              if (controller.error case final error?) Text(error.message),
               if (!controller.loaded &&
                   !controller.busy &&
                   controller.error == null)
@@ -167,12 +162,7 @@ class ActivityPanel extends StatelessWidget {
             const SizedBox(height: 10),
             const Text('Actions submitted by you or Experts appear here.'),
             const SizedBox(height: 28),
-            if (controller.error case final error?)
-              Text(
-                error.isVaultLocked
-                    ? 'Vault locked. Unlock to load Activity.'
-                    : error.message,
-              ),
+            if (controller.error case final error?) Text(error.message),
             if (!controller.loaded &&
                 !controller.busy &&
                 controller.error == null)
@@ -332,11 +322,7 @@ class ActionReviewDialog extends StatelessWidget {
             ],
             if (controller.error case final error?) ...[
               const SizedBox(height: 12),
-              Text(
-                error.isVaultLocked
-                    ? 'Vault locked. Unlock it to continue.'
-                    : error.message,
-              ),
+              Text(error.message),
             ],
             const SizedBox(height: 12),
             if (action.allowedActions.contains(ActionAllowedAction.approve) &&

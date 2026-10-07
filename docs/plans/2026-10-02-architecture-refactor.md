@@ -136,7 +136,7 @@ Prerequisite: P1.
 
 **Root qualification — bootstrap checkpoint (2026-10-07):** reviewed the candidate and corrected an unintended whole-app wait for Vault preparation, the native adapter’s dependency on AppRuntime, start/close races, and swallowed shutdown errors. The final native collection exposes only native transport/device inputs; bootstrap starts Vault asynchronously after registration so Day retains independent availability. `flutter test` passed all seven currently reconstructed Flutter tests (five native-collection lifetime tests and two synthetic-Calendar presentation/parser tests). `flutter analyze` reported 152 info-level lints, no warnings/errors, and exited 1; this is not a clean lint gate. The Linux `qa-fixtures` Debug bundle built successfully. The actual rebuilt Floe client and development Go server ran on the visible desktop with the existing profile: `qa-note`, the selected synthetic team calendar and active Use with Floe state survived startup, and the fixed Oct 8 synthetic event was displayed after a completed Calendar sync. The unchanged bundled Rust library SHA-256 remained `c022c50ad5b85cd65384e1be623479eb53402f91f33ba31b8410d730a34f6b5d`. No data/key reset or browser-based dashboard test was used. Full bootstrap failure-unwind/timeout behavior and a complete new-build shutdown/reopen cycle are not qualified by the native-collection unit tests or this startup observation. macOS/native permission checks and the full P2 readiness/router cutover remain pending.
 
-**Bounded checkpoint 2 — Rust-owned preparation, planned contract:**
+**Bounded checkpoint 2 — Rust-owned preparation, implemented contract (2026-10-07):**
 
 The next cutover removes the client's physical storage decisions without replacing the existing encrypted generation, serialized lifecycle queue or durable receipt store. This is a complete Runtime control slice; the general product router and Memory namespace remain the following checkpoint.
 
@@ -160,7 +160,11 @@ The next cutover removes the client's physical storage decisions without replaci
 
 **Checkpoint 2 required evidence:** fresh create and existing reopen through one prepare intent; duplicate prepare with the same ID; completed archive replay after cache acknowledgement without current-generation mutation; stale completion never asserting readiness; malformed response and lost acknowledgement retaining identity; wrong Person/device/epoch and non-v4 client IDs rejected; key/incomplete-creation failures preserving data; poisoned/permanently failed worker not offering impossible recovery; shared readiness invalidation from Conversation without reclassifying a provider failure; query and screen disposal performing no preparation/cancellation; final old-symbol/namespace search across App, protocol, FFI, Dart, examples and tests. Run dependency-closed checks, actual Linux startup/retention and the available platform gates; explicitly distinguish never-run failure/native scenarios.
 
-**Still pending in P2:** Rust Vault readiness lifecycle and its Flutter readiness projection, the typed App product router and its FFI/App caller cutover, transport-neutral command outcomes, and the `memory.*` product namespace migration. Those later cutovers retain the source anchors and deletion gates below.
+**Root qualification — Runtime preparation checkpoint (2026-10-07):** the local candidate moves preparation ownership to the App Runtime queue and moves Flutter to an app-runtime observer. The serialized Rust lane owns create/open, generation retirement and drain; preparation uses one immutable `prepare` receipt with UUID-v4 identity, while current readiness stays a separate query. The existing encrypted receipt store is retained with archive-before-ACK and idempotent explicit acknowledgement. Conversation projects intrinsic Vault readiness failures to Runtime without promoting provider/storage/turn failures. The old product lifecycle DTOs, App lifecycle service, Flutter Vault controller/gateway and physical-unlock UI were removed. Focused Rust integration/unit tests and Flutter observer tests cover same-ID replay, acknowledgement, healthy no-op/readiness separation, reopen of a persisted profile, scope and ID validation, uncertain-admission identity retention, malformed responses, and provider-failure isolation.
+
+The candidate is based on `0493793a3f19832fba3d01593c6079e6f8875572`; the final local review head is recorded by the delivered bundle. `cargo test --workspace --no-fail-fast`, `cargo build -p floe-ffi`, Flutter's 10 tests, the architecture boundary check, changed-Rust-file formatting, and `git diff --check` are the implementation gates. A workspace-wide `cargo fmt --all -- --check` also reports formatting differences in unchanged Vault connection/Conversation files; the changed Rust files pass the targeted check. `flutter analyze` has 153 info-level lints and no analyzer errors or warnings, and exits 1; this is not a clean lint gate. Native GUI startup/retention was not run in this executor: Flutter Linux build is blocked because CMake is unavailable, and the installed Flutter SDK does not expose a macOS build target. The poison-worker, injected key-loss and incomplete-creation preservation cases have not been exercised end to end here; no data/key reset or mobile-platform expansion was performed.
+
+**Still pending in P2:** the typed App product router and its FFI/App caller cutover, transport-neutral command outcomes, and the `memory.*` product namespace migration. Runtime readiness and Flutter projection are implemented in this checkpoint; the remaining qualification gaps are listed above. Those later cutovers retain the source anchors and deletion gates below.
 
 **Source anchors and disposition:**
 
@@ -170,17 +174,17 @@ The next cutover removes the client's physical storage decisions without replaci
 - `crates/app/src/api.rs` — 제품 intent/outcome canonical 계약
 - `crates/app/src/host.rs` — verified request admission 유지
 - `crates/app/src/owner_handles.rs` — scope/actor/generation 전달의 단일화
-- `crates/app/src/vault_lifecycle.rs` — 내부 queue·retirement 보존, 제품 노출 제거
-- `crates/app/src/vault_services.rs` — 제품 command/query 폐기 후 내부 lifecycle로 축소
+- `crates/app/src/runtime_preparation.rs` — Rust-owned prepare queue, readiness, retirement, drain and receipt handling
+- `crates/app/src/runtime_control.rs` — transport-neutral Runtime readiness/result contract; later product dispatch remains separate
 - `crates/app/src/knowledge_services.rs` — 중복 enum/forwarding 제거
 - `crates/bindings/ffi/src/app_wire.rs` — 직접 orchestration을 router로 이관
-- `crates/bindings/protocol/src/dto/vault.rs` — 제품 DTO 폐기
-- `apps/client/lib/app/runtime/app_runtime.dart` — readiness 관찰로 교체
-- `apps/client/lib/features/vault/application/vault_controller.dart` — 기능 caller 이관 후 삭제
+- `crates/bindings/protocol/src/dto/runtime.rs` — Runtime control DTOs; product DTO routing remains a later cutover
+- `apps/client/lib/app/runtime/app_runtime.dart` — readiness observation owner
+- `apps/client/lib/app/runtime/runtime_controller.dart` — readiness observation and preparation identity retention
 - `apps/client/lib/app/runtime/owner_operation.dart` — transport-neutral command outcome 적용
 - `apps/client/lib/app/startup_view.dart` — 준비·실패·다시 확인 제품 projection
 
-**Delete after caller cutover:** product vault.create/unlock/lock/status/read_result; Flutter features/vault 및 AgentVaultGateway 제품 의존; FFI와 App의 중복 routing / forwarding; knowledge.memory.* 이전 제품 namespace
+**Removed by checkpoint 2:** product vault.create/unlock/lock/status/read_result routes; Flutter `features/vault`, `VaultController` and `AgentVaultGateway` workflow. **Still to remove during later P2 caller cutover:** FFI/App duplicate product routing and `knowledge.memory.*` in favor of `memory.*`.
 
 **UI impact:** 앱은 자동 준비. profile 설정이나 수동 Vault unlock을 정상 onboarding으로 요구하지 않는다. 실패 화면은 데이터 보존, 이유·진단 ID·가능한 재시도를 안내한다. Memory 기능과 기존 navigation은 유지한다.
 

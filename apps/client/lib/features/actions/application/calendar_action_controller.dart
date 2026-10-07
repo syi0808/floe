@@ -4,8 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'package:floe_client/app/runtime/app_runtime.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/actions/application/action_command_replay.dart';
@@ -39,13 +39,10 @@ final class CalendarActionError {
   final CalendarActionErrorKind kind;
   final String code;
 
-  bool get isVaultLocked => kind == CalendarActionErrorKind.vaultLocked;
-
   String get message => switch (kind) {
-    CalendarActionErrorKind.vaultLocked =>
-      'Unlock your Floe vault to review or change Actions.',
+    CalendarActionErrorKind.vaultLocked => 'Runtime preparation is required before you can review or change Actions.',
     CalendarActionErrorKind.vaultUnavailable =>
-      'Actions are unavailable while the Floe vault is unavailable.',
+      'Actions are unavailable until Runtime preparation completes.',
     CalendarActionErrorKind.conflict =>
       'The Action changed. Refresh it before making another decision.',
     CalendarActionErrorKind.unavailable => 'The Action result could not be confirmed. Refresh or reconcile the same Action.',
@@ -57,20 +54,20 @@ final class CalendarActionError {
 /// UI state for the single Actions owner. Disposing this controller stops only
 /// its scheduled observations; it never cancels work owned by Rust.
 final class CalendarActionController extends ChangeNotifier {
-  CalendarActionController({required this.gateway, required this.vault})
+  CalendarActionController({required this.gateway, required this.runtime})
     : _commands = ActionCommandReplay.forGateway(gateway) {
-    vault.addListener(_readinessChanged);
+    runtime.addListener(_readinessChanged);
     _readinessChanged();
   }
-  final VaultController vault;
+  final RuntimeController runtime;
   bool _wasReady = false;
   int _readinessGeneration = 0;
   bool _current(int generation) =>
-      !_disposed && vault.ready && generation == _readinessGeneration;
+      !_disposed && runtime.ready && generation == _readinessGeneration;
 
   void _readinessChanged() {
-    if (_disposed || _wasReady == vault.ready) return;
-    _wasReady = vault.ready;
+    if (_disposed || _wasReady == runtime.ready) return;
+    _wasReady = runtime.ready;
     _readinessGeneration++;
     for (final timer in _observations.values) {
       timer.cancel();
@@ -84,7 +81,7 @@ final class CalendarActionController extends ChangeNotifier {
     _destinationsLoaded = false;
     _destinationsError = null;
     notifyListeners();
-    if (vault.ready && !_busy) unawaited(load());
+    if (runtime.ready && !_busy) unawaited(load());
   }
 
   final CalendarActionGateway gateway;
@@ -105,23 +102,19 @@ final class CalendarActionController extends ChangeNotifier {
   ActionAuthority? get authority => _authority;
   List<ActionDestinationChoice> get destinations => _destinations;
   String? get nextCursor => _nextCursor;
-  CalendarActionError? get error => vault.ready
+  CalendarActionError? get error => runtime.ready
       ? _error
       : CalendarActionError(
-          kind: vault.state == AgentVaultState.locked
+          kind: runtime.failure?.failure == 'vault_locked'
               ? CalendarActionErrorKind.vaultLocked
               : CalendarActionErrorKind.vaultUnavailable,
-          code:
-              vault.reasonCode ??
-              (vault.state == AgentVaultState.locked
-                  ? 'vault_locked'
-                  : 'storage_unavailable'),
+          code: runtime.reasonCode ?? 'storage_unavailable',
         );
   void _reportStorageFailure(Object error) {
     final owner = error is AppRuntimeException ? error.ownerFailure : null;
     if (owner != null) {
-      vault.reportFailure(
-        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+      runtime.reportFailure(
+        AppOwnerException.fromAppWire(owner.reason, ownerFailure: owner),
       );
     }
   }
@@ -132,11 +125,11 @@ final class CalendarActionController extends ChangeNotifier {
   /// Display availability observed from the owner. Every submitted command
   /// still needs the owner's current target and permission admission.
   bool get calendarChangesAvailable =>
-      vault.ready &&
+      runtime.ready &&
       _destinationsLoaded &&
       _destinationsError == null &&
       _destinations.isNotEmpty;
-  bool get busy => _busy || !vault.ready;
+  bool get busy => _busy || !runtime.ready;
   bool get loaded => _loaded;
 
   CalendarAction? find(String actionRef) {
@@ -186,7 +179,7 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration)
+        if (runtime.ready && generation != _readinessGeneration)
           unawaited(load());
       }
     }
@@ -213,14 +206,14 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration)
+        if (runtime.ready && generation != _readinessGeneration)
           unawaited(load());
       }
     }
   }
 
   Future<CalendarAction> inspect(String actionRef) async {
-    if (_disposed || !vault.ready)
+    if (_disposed || !runtime.ready)
       throw StateError('Actions storage is unavailable.');
     final generation = _readinessGeneration;
     try {
@@ -380,7 +373,7 @@ final class CalendarActionController extends ChangeNotifier {
       if (!_disposed) {
         _busy = false;
         notifyListeners();
-        if (vault.ready && generation != _readinessGeneration)
+        if (runtime.ready && generation != _readinessGeneration)
           unawaited(load());
       }
     }
@@ -527,7 +520,7 @@ final class CalendarActionController extends ChangeNotifier {
     _cancelObservation(action.actionRef);
     final delay = action.nextObservationAfterMs;
     if (_disposed ||
-        !vault.ready ||
+        !runtime.ready ||
         delay == null ||
         delay <= 0 ||
         delay > 60000)
@@ -539,7 +532,7 @@ final class CalendarActionController extends ChangeNotifier {
   }
 
   Future<void> _observeAfterDelay(String actionRef) async {
-    if (_disposed || !vault.ready) return;
+    if (_disposed || !runtime.ready) return;
     final generation = _readinessGeneration;
     try {
       await inspect(actionRef);
@@ -557,7 +550,7 @@ final class CalendarActionController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    vault.removeListener(_readinessChanged);
+    runtime.removeListener(_readinessChanged);
     for (final timer in _observations.values) {
       timer.cancel();
     }

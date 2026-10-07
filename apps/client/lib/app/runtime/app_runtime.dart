@@ -1,6 +1,7 @@
 import 'package:floe_client/infrastructure/native/calendar_system_access_gateway.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
+import 'package:floe_client/app/runtime/app_wire_runtime_gateway.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/connections/infrastructure/app_wire_connections_gateway.dart';
@@ -12,7 +13,6 @@ import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_ga
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_facade.dart';
 import 'package:floe_client/features/experts/infrastructure/app_wire_registry_gateway.dart';
-import 'package:floe_client/features/vault/infrastructure/app_wire_vault_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
@@ -60,7 +60,7 @@ final class AppRuntime {
     _transport,
   );
   late final AppReadModel readModel = AppReadModel();
-  late final vault = AppWireVaultGateway(_transport);
+  late final runtimeGateway = AppWireRuntimeGateway(_transport);
   late final conversation = AppWireConversationGateway(
     _transport,
     runtimeClient: client,
@@ -72,28 +72,28 @@ final class AppRuntime {
   late final actions = CalendarActionFacade(this);
   late final connectionsController = ConnectionsController(
     connections,
-    vault: vaultController,
+    runtime: runtimeController,
     calendarSystemAccess: const EventKitSystemAccessGateway(),
   );
-  late final vaultController = VaultController(
-    gateway: vault,
+  late final runtimeController = RuntimeController(
+    gateway: runtimeGateway,
     personId: personId,
   )..addListener(_readinessChanged);
   late final registryController = AgentRegistryController(
     gateway: registry,
-    canOperate: () => vaultController.ready,
-    onFatalFailure: vaultController.reportFailure,
+    canOperate: () => runtimeController.ready,
+    onFatalFailure: runtimeController.reportFailure,
   );
   late final memoryController = AgentMemoryController(
     memoryGateway: memory,
     reviewGateway: memory,
     personId: personId,
-    canOperate: () => vaultController.ready,
-    onFatalFailure: vaultController.reportFailure,
+    canOperate: () => runtimeController.ready,
+    onFatalFailure: runtimeController.reportFailure,
   );
   bool _wasReady = false;
   void _readinessChanged() {
-    final ready = vaultController.ready;
+    final ready = runtimeController.ready;
     if (_wasReady != ready) {
       registryController.clear();
       memoryController.clear();
@@ -102,7 +102,7 @@ final class AppRuntime {
   }
 
   late final owners = LocalOwnerGateways(
-    vault: vaultController,
+    runtime: runtimeController,
     registry: registryController,
     memory: memoryController,
     actions: actions,
@@ -160,10 +160,10 @@ final class AppRuntime {
     }
   }
 
-  Future<void> startVault() => vaultController.open();
+  Future<void> startRuntime() => runtimeController.open();
 
   /// Closes local Vault-backed presentation admission before app retirement.
-  void closeAdmission() => vaultController.closeAdmission();
+  void closeAdmission() => runtimeController.closeAdmission();
 
   Future<void>? _closing;
   Future<void> close() => _closing ??= _close();
@@ -176,8 +176,8 @@ final class AppRuntime {
       connectionsController.dispose();
       registryController.dispose();
       memoryController.dispose();
-      vaultController.removeListener(_readinessChanged);
-      vaultController.dispose();
+      runtimeController.removeListener(_readinessChanged);
+      runtimeController.dispose();
       readModel.dispose();
     }
   }

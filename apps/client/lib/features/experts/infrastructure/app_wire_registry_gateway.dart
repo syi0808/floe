@@ -1,4 +1,4 @@
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
@@ -142,7 +142,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
   @override
   Future<AgentRegistryCommandResult> retryPendingCommand() async {
     final pending = _pendingCommand;
-    if (pending == null) throw const AgentVaultException('conflict');
+    if (pending == null) throw const AppOwnerException('conflict');
     return switch (pending.kind) {
       AgentRegistryCommandKind.installationSetEnabled ||
       AgentRegistryCommandKind.bindingReplace => AgentDirectoryCommandResult(
@@ -207,7 +207,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
   }) async {
     final current = _pendingCommand;
     if (current != null) {
-      throw const AgentVaultException('conflict');
+      throw const AppOwnerException('conflict');
     }
     final pending = _PendingExpertCommand(
       kind: kind,
@@ -254,11 +254,11 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     }
   }
 
-  AgentVaultException _fromTransport(
+  AppOwnerException _fromTransport(
     NativeTransportException error,
     String requestId,
     String stage,
-  ) => AgentVaultException.fromAppWire(
+  ) => AppOwnerException.fromAppWire(
     error.ownerFailure?.reason ?? error.metadata['reason_code'] ?? error.code,
     requestId: requestId,
     stage: stage,
@@ -312,7 +312,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     if (!review.canReplace ||
         candidateRefs.length > 16 ||
         candidateRefs.toSet().length != candidateRefs.length) {
-      throw const AgentVaultException('conflict');
+      throw const AppOwnerException('conflict');
     }
     for (final reference in candidateRefs) {
       final candidate = review.candidates

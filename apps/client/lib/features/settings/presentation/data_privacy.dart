@@ -3,13 +3,13 @@ part of 'settings_screen.dart';
 class _DataPrivacy extends StatefulWidget {
   const _DataPrivacy({
     required this.controller,
-    required this.vault,
+    required this.runtime,
     required this.onManageMemory,
     this.platform,
   });
 
   final AgentMemoryController controller;
-  final VaultController vault;
+  final RuntimeController runtime;
   final VoidCallback onManageMemory;
   final TargetPlatform? platform;
 
@@ -27,7 +27,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   void initState() {
     super.initState();
     controller.addListener(_controllerChanged);
-    widget.vault.addListener(_controllerChanged);
+    widget.runtime.addListener(_controllerChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -40,15 +40,15 @@ class _DataPrivacyState extends State<_DataPrivacy> {
       memoryRequested = false;
       savedMemoryRequested = false;
     }
-    if (oldWidget.vault != widget.vault) {
-      oldWidget.vault.removeListener(_controllerChanged);
-      widget.vault.addListener(_controllerChanged);
+    if (oldWidget.runtime != widget.runtime) {
+      oldWidget.runtime.removeListener(_controllerChanged);
+      widget.runtime.addListener(_controllerChanged);
     }
     _load();
   }
 
   void _controllerChanged() {
-    if (!widget.vault.ready) {
+    if (!widget.runtime.ready) {
       memoryRequested = false;
       savedMemoryRequested = false;
       return;
@@ -57,12 +57,12 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   }
 
   Future<void> _load() async {
-    if (!mounted || !widget.vault.ready) return;
+    if (!mounted || !widget.runtime.ready) return;
     if (controller.hasReview && !memoryRequested && controller.canReadReview) {
       memoryRequested = true;
       await controller.loadReview();
     }
-    if (!mounted || !widget.vault.ready) return;
+    if (!mounted || !widget.runtime.ready) return;
     if (controller.hasMemory && !savedMemoryRequested && controller.canRead) {
       savedMemoryRequested = true;
       await controller.load();
@@ -72,13 +72,13 @@ class _DataPrivacyState extends State<_DataPrivacy> {
   @override
   void dispose() {
     controller.removeListener(_controllerChanged);
-    widget.vault.removeListener(_controllerChanged);
+    widget.runtime.removeListener(_controllerChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([controller, widget.vault]),
+    animation: Listenable.merge([controller, widget.runtime]),
     builder: (context, _) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -106,10 +106,10 @@ class _DataPrivacyState extends State<_DataPrivacy> {
             onManage: widget.onManageMemory,
           ),
         ],
-        if (!widget.vault.ready) ...[
+        if (!widget.runtime.ready) ...[
           const SizedBox(height: FloeSpace.sm),
           Text(
-            'Private data controls will appear when your vault is unlocked.',
+            'Private data controls will appear when Runtime is ready.',
             style: FloeType.body.copyWith(
               color: FloePalette.neutral600,
               height: 1.4,

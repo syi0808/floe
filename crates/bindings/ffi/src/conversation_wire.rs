@@ -816,6 +816,13 @@ pub(crate) async fn events(
 }
 
 pub(crate) fn failure_dto(reason: AgentFailure, correlation_id: Uuid) -> AppWireErrorDto {
+    if let Some(projection) =
+        floe_app::RuntimeFailureProjection::access_failure(reason, correlation_id, true)
+    {
+        let mut error = agent_failure(reason);
+        error.owner_failure = Some(crate::conversion::owners::runtime_owner_failure(projection));
+        return error;
+    }
     let value = floe_conversation::project_conversation_failure(reason, correlation_id);
     let mut error = agent_failure(reason);
     use floe_conversation::ConversationRecovery as R;

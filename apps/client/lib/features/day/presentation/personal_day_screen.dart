@@ -110,19 +110,19 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     widget.connectionsController?.addListener(_connectionsChanged);
     unawaited(_loadInitialDay());
-    final vault = widget.ownerGateways.vault;
+    final runtime = widget.ownerGateways.runtime;
     final actionGateway = widget.calendarActions;
-    if (actionGateway != null && vault != null) {
+    if (actionGateway != null && runtime != null) {
       actionController = CalendarActionController(
         gateway: actionGateway,
-        vault: vault,
+        runtime: runtime,
       );
       actionController!.addListener(_actionsChanged);
     }
     screenState = Listenable.merge([
       controller,
       ?actionController,
-      ?widget.ownerGateways.vault,
+      ?widget.ownerGateways.runtime,
     ]);
     final agentGateway = widget.agentGateway;
     if (agentGateway != null) {
@@ -268,7 +268,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return SettingsScreen(
         connectionsController: widget.connectionsController,
         actionController: actionController,
-        vault: widget.ownerGateways.vault,
+        runtime: widget.ownerGateways.runtime,
         registryController: widget.ownerGateways.registry,
         memoryController: widget.ownerGateways.memory,
         expertBindingTarget: expertBindingTarget,

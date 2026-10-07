@@ -1,4 +1,4 @@
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
 
 import 'dart:async';
 
@@ -15,7 +15,7 @@ import 'package:floe_client/features/conversation/application/agent_conversation
 import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
@@ -44,13 +44,13 @@ final class ConversationController extends ChangeNotifier {
     this.loadTimeout,
     this.owners,
   ) {
-    final vault = owners.vault;
-    if (vault == null || vault.personId != personId) {
+    final runtime = owners.runtime;
+    if (runtime == null || runtime.personId != personId) {
       throw ArgumentError(
-        'Conversation requires the admitted Person’s shared Vault readiness.',
+        'Conversation requires the admitted Person’s shared Runtime readiness.',
       );
     }
-    vaultController = vault..addListener(_vaultChanged);
+    runtimeController = runtime..addListener(_runtimeChanged);
     _conversationRuntime.readModel.addListener(_notify);
   }
 
@@ -87,7 +87,7 @@ final class ConversationController extends ChangeNotifier {
   String? _observedRunId;
   AgentConversationTurnRequest? _conversationRun;
   int _runUiGeneration = 0;
-  late final VaultController vaultController;
+  late final RuntimeController runtimeController;
   bool _sealed = false;
   int _adoptionEpoch = 0;
   ConversationObservation _observation = ConversationObservation();
@@ -95,7 +95,7 @@ final class ConversationController extends ChangeNotifier {
   bool _acceptsEpoch(int epoch) =>
       !_disposed &&
       !_sealed &&
-      vaultController.ready &&
+      runtimeController.ready &&
       epoch == _adoptionEpoch;
 
   void _advanceEpoch() {
@@ -125,9 +125,7 @@ final class ConversationController extends ChangeNotifier {
         _conversationRun != null && _observedRunId == null && runId != null;
     final transitioned =
         newTurn ||
-        (runId != null &&
-            previousRunId != runId &&
-            !firstPendingTurnSnapshot);
+        (runId != null && previousRunId != runId && !firstPendingTurnSnapshot);
     if (transitioned) {
       _runUiGeneration++;
       _stopRequested = false;
@@ -178,7 +176,7 @@ final class ConversationController extends ChangeNotifier {
       !_disposed &&
       !needsReload &&
       !needsRecovery &&
-      vaultController.ready &&
+      runtimeController.ready &&
       session?.id == snapshot.sessionId &&
       session?.personId == personId &&
       !_interactionBusy.contains(snapshot.id) &&
@@ -195,7 +193,7 @@ final class ConversationController extends ChangeNotifier {
       !_disposed &&
       !needsReload &&
       !needsRecovery &&
-      vaultController.ready &&
+      runtimeController.ready &&
       session?.id == snapshot.sessionId &&
       session?.personId == personId &&
       !_interactionBusy.contains(snapshot.id) &&
@@ -446,7 +444,7 @@ final class ConversationController extends ChangeNotifier {
   }
 
   String _interactionReason(Object error) {
-    if (error is AgentVaultException) {
+    if (error is AppOwnerException) {
       return error.reasonCode ?? error.failure;
     }
     return 'transport_unavailable';
@@ -462,12 +460,12 @@ final class ConversationController extends ChangeNotifier {
   bool get isConnectedConversation => isGeneralConversation;
   bool get isPersonalConversation => isGeneralConversation;
 
-  bool get busy => _busy || vaultController.busy;
+  bool get busy => _busy || runtimeController.busy;
   bool get running => _runSession != null;
   bool get needsRecovery => session?.activeTurn != null && !running;
   ConversationRuntimeGateway get _conversationRuntime =>
       gateway.conversationRuntime;
-  bool get _conversationBusy => _busy || !vaultController.ready;
+  bool get _conversationBusy => _busy || !runtimeController.ready;
   bool get canStartConversation => !_conversationBusy && !_disposed && !running;
   bool get canSend =>
       !_conversationBusy &&
@@ -493,7 +491,7 @@ final class ConversationController extends ChangeNotifier {
       _lastConversationRunId != null;
 
   Future<void> load({bool newSession = false}) async {
-    if (_disposed || busy || !vaultController.ready) return;
+    if (_disposed || busy || !runtimeController.ready) return;
     _advanceEpoch();
     final epoch = _adoptionEpoch;
     final observation = _observation;
@@ -581,7 +579,7 @@ final class ConversationController extends ChangeNotifier {
 
   /// Re-observe owner recovery; no business Recover command or implicit Start.
   Future<void> recover() async {
-    if (busy || _disposed || !needsRecovery || !vaultController.ready) return;
+    if (busy || _disposed || !needsRecovery || !runtimeController.ready) return;
     final original = session!;
     _advanceEpoch();
     final epoch = _adoptionEpoch;
@@ -759,7 +757,7 @@ final class ConversationController extends ChangeNotifier {
     final current = session;
     if (_disposed ||
         _sealed ||
-        !vaultController.ready ||
+        !runtimeController.ready ||
         busy ||
         loadingEarlier ||
         current == null ||
@@ -779,7 +777,7 @@ final class ConversationController extends ChangeNotifier {
       );
       if (_disposed ||
           _sealed ||
-          !vaultController.ready ||
+          !runtimeController.ready ||
           generation != _historyGeneration ||
           session?.id != current.id ||
           messages.isEmpty ||
@@ -875,9 +873,9 @@ final class ConversationController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
-  void _vaultChanged() {
+  void _runtimeChanged() {
     if (_disposed) return;
-    if (!vaultController.ready) {
+    if (!runtimeController.ready) {
       _advanceEpoch();
       _sealed = true;
       _clearInteractions();
@@ -921,15 +919,15 @@ final class ConversationController extends ChangeNotifier {
   }
 
   OwnerFailure? _ownerFailure(Object error) => switch (error) {
-    AgentVaultException() => error.ownerFailure,
+    AppOwnerException() => error.ownerFailure,
     NativeTransportException() => error.ownerFailure,
     _ => null,
   };
 
   void _applyOwnerFailure(OwnerFailure owner) {
-    if (!_sealed && vaultController.ready) {
-      vaultController.reportFailure(
-        AgentVaultException.fromAppWire(owner.reason, ownerFailure: owner),
+    if (!_sealed && runtimeController.ready) {
+      runtimeController.reportFailure(
+        AppOwnerException.fromAppWire(owner.reason, ownerFailure: owner),
       );
     }
     _fail(
@@ -951,7 +949,7 @@ final class ConversationController extends ChangeNotifier {
       _applyOwnerFailure(owner);
       return;
     }
-    final source = error is AgentVaultException ? error : null;
+    final source = error is AppOwnerException ? error : null;
     _fail(
       source?.reasonCode ?? source?.failure ?? fallback,
       recoveryAction: source?.recoveryAction,
@@ -1012,7 +1010,7 @@ final class ConversationController extends ChangeNotifier {
     _advanceEpoch();
     _disposed = true;
     _conversationRuntime.readModel.removeListener(_notify);
-    vaultController.removeListener(_vaultChanged);
+    runtimeController.removeListener(_runtimeChanged);
     super.dispose();
   }
 
@@ -1023,7 +1021,7 @@ final class ConversationController extends ChangeNotifier {
     String? sessionId,
   }) {
     if (error is _SessionOutcomeBarrier) return;
-    final vaultError = error is AgentVaultException ? error : null;
+    final vaultError = error is AppOwnerException ? error : null;
     final owner = _ownerFailure(error);
     AppDiagnostics.error(
       component: 'agent',
@@ -1065,7 +1063,8 @@ final class ConversationController extends ChangeNotifier {
           issue.metadata['reason_code'] ?? owner?.reason,
         ),
         incidentId: _diagnosticUuid(owner?.incidentId),
-        safeActions: owner?.safeActions
+        safeActions:
+            owner?.safeActions
                 .where((action) => RegExp(r'^[a-z_]{1,64}$').hasMatch(action))
                 .take(16)
                 .toList(growable: false) ??
@@ -1093,8 +1092,8 @@ final class ConversationController extends ChangeNotifier {
 }
 
 /// Marks only Session outcomes turned into a local admission/recovery barrier.
-/// Gateway AgentVaultExceptions remain ordinary reportable exceptions.
-final class _SessionOutcomeBarrier extends AgentVaultException {
+/// Gateway AppOwnerExceptions remain ordinary reportable exceptions.
+final class _SessionOutcomeBarrier extends AppOwnerException {
   const _SessionOutcomeBarrier(
     super.failure, {
     super.recoveryAction,

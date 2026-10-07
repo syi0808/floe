@@ -304,11 +304,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   ],
                   if (widget.controller.error case final error?) ...[
                     const SizedBox(height: 16),
-                    Text(
-                      error.isVaultLocked
-                          ? 'Vault locked. Unlock it before submitting an Action.'
-                          : error.message,
-                    ),
+                    Text(error.message),
                     FloeButton.text(
                       onPressed: widget.controller.busy
                           ? null

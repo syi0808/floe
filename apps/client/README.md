@@ -17,17 +17,17 @@ planner owns Gateway-primary/local-fallback selection; a denied or failed call c
 trigger a client-selected fallback. Health additionally requires its independent
 source-local privacy transform before any reasoning.
 
-The opt-in `tool/mobile_vault_smoke.dart` OS-keyring diagnostic uses a Release/Profile
+The opt-in `tool/mobile_vault_smoke.dart` Runtime/key-custody diagnostic uses a Release/Profile
 client/native build (not the isolated Debug file-key profile) and requires explicit Dart defines:
 `FLOE_VAULT_SMOKE_EXERCISE=true`, `FLOE_VAULT_SMOKE_DATABASE`,
 `FLOE_VAULT_SMOKE_PERSON_ID` and `FLOE_VAULT_SMOKE_DEVICE_ID`. The database must
 already exist at `<application support>/mobile-vault-smoke/people/<Person UUID>/floe.db`,
 and that diagnostic root must contain the matching existing `local_device_id`.
-No profile, directory or identity is created or reset. By default the Vault must also
-exist; `FLOE_VAULT_SMOKE_CREATE_VAULT=true` explicitly permits its first creation only.
-The exercise retains exclusive-owner rejection, lock and reopen validation, and never
-requests Contacts, Health or external-provider access. Run it only at an authorized
-Apple validation gate; it has not been executed during S1 caller migration.
+No profile, directory, identity or data is created or reset by the diagnostic setup.
+Runtime performs its normal Rust-owned create-or-open decision and the observer checks
+readiness; a second concurrent host must be rejected by installation admission. The
+exercise never calls physical Vault create/unlock/lock APIs and never requests Contacts,
+Health or external-provider access. Run it only at an authorized Apple validation gate.
 
 iOS Release/Profile uses device-only Keychain items available while unlocked and does not regenerate
 a missing key while opening an existing Vault.

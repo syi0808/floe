@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/features/knowledge/application/memory_gateway.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/domain/memory_review.dart';
@@ -18,7 +18,7 @@ final class AgentMemoryController extends ChangeNotifier {
   final AgentMemoryReviewGateway? reviewGateway;
   final String personId;
   final bool Function() canOperate;
-  final void Function(AgentVaultException failure) onFatalFailure;
+  final void Function(AppOwnerException failure) onFatalFailure;
 
   int _operationGeneration = 0;
   bool _disposed = false;
@@ -235,7 +235,7 @@ final class AgentMemoryController extends ChangeNotifier {
   }
 
   String _failure(Object error) =>
-      error is AgentVaultException ? error.failure : 'storage_unavailable';
+      error is AppOwnerException ? error.failure : 'storage_unavailable';
 
   bool _isCurrent(int generation, {bool requireCanOperate = true}) =>
       !_disposed &&
@@ -247,7 +247,7 @@ final class AgentMemoryController extends ChangeNotifier {
   }
 
   void _reportFatal(Object error, int generation) {
-    if (error is AgentVaultException &&
+    if (error is AppOwnerException &&
         (error.reloadRequired == true || error.sealSession == true) &&
         _isCurrent(generation)) {
       onFatalFailure(error);

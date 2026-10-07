@@ -1,6 +1,6 @@
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_operation.dart';
-import 'package:floe_client/app/runtime/agent_vault_gateway.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
@@ -39,7 +39,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
   @override
   Future<AgentSession> startConversation(String personId) async {
     if (_commandBusy || _pending != null) {
-      throw const AgentVaultException('conflict');
+      throw const AppOwnerException('conflict');
     }
     final pending = _PendingSessionStart(personId, newAgentRequestId());
     _pending = pending;
@@ -51,7 +51,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
     final pending = _pending;
     if (pending == null) return null;
     if (pending.personId != personId) {
-      throw const AgentVaultException('conflict');
+      throw const AppOwnerException('conflict');
     }
     return _submit(pending);
   }
@@ -102,7 +102,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
       }
       return _decode(result, personId, payload['session_id'] as String?);
     } on NativeTransportException catch (error) {
-      throw AgentVaultException.fromAppWire(
+      throw AppOwnerException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,
         requestId: requestId,
         stage: stage,
@@ -113,7 +113,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
   }
 
   Future<AgentSession> _submit(_PendingSessionStart pending) async {
-    if (_commandBusy) throw const AgentVaultException('conflict');
+    if (_commandBusy) throw const AppOwnerException('conflict');
     _commandBusy = true;
     final wasSubmitted = pending.submitted;
     pending.submitted = true;
@@ -131,7 +131,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
                   NativeCommandDisposition.notAdmitted)) {
         if (identical(_pending, pending)) _pending = null;
       }
-      throw AgentVaultException.fromAppWire(
+      throw AppOwnerException.fromAppWire(
         error.metadata['agent_failure'] ?? error.code,
         requestId: pending.commandId,
         stage: 'conversation_session_start',

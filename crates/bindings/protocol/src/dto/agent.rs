@@ -4,41 +4,6 @@ pub use floe_agent_contract::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentVaultFailureDto {
-    pub schema_version: u32,
-    pub domain: AgentFailureDomain,
-    pub category: AgentFailureCategory,
-    pub reason_code: String,
-    pub kind: String,
-    pub stage: String,
-    pub safe_actions: Vec<AgentFailureSafeAction>,
-    pub affected_refs: Vec<String>,
-    pub incident_id: String,
-    pub retry_policy: AgentRetryPolicy,
-    pub retryable: bool,
-    pub recovery_action: AgentVaultRecoveryActionDto,
-    /// Whether the client must reload the session before it can continue.
-    /// Decided by the owner, never re-derived from `recovery_action`.
-    pub reload_required: bool,
-    /// Whether the client must stop applying results for the current session.
-    pub seal_session: bool,
-    pub correlation_request_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentVaultRecoveryActionDto {
-    None,
-    RefreshSession,
-    RefreshContext,
-    ReviewSource,
-    ReopenVault,
-    Reconcile,
-    RetryRead,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentMemoryReviewDecisionKindDto {
@@ -79,15 +44,6 @@ pub struct AgentMemorySummaryDto {
 pub enum AgentMemoryOriginDto {
     UserProvided,
     Learned,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentVaultStateDto {
-    Missing,
-    Locked,
-    Ready,
-    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -12,7 +12,7 @@ import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
-import 'package:floe_client/features/vault/application/vault_controller.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
@@ -32,7 +32,7 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.connectionsController,
     this.actionController,
-    this.vault,
+    this.runtime,
     this.registryController,
     this.memoryController,
     this.expertBindingTarget,
@@ -42,7 +42,7 @@ class SettingsScreen extends StatefulWidget {
 
   final ConnectionsController? connectionsController;
   final CalendarActionController? actionController;
-  final VaultController? vault;
+  final RuntimeController? runtime;
   final AgentRegistryController? registryController;
   final AgentMemoryController? memoryController;
   final AgentExpertBindingTarget? expertBindingTarget;
@@ -62,9 +62,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<_SettingsPage> get _availablePages => [
     if (widget.actionController != null) _SettingsPage.actions,
-    if (widget.memoryController != null && widget.vault != null)
+    if (widget.memoryController != null && widget.runtime != null)
       _SettingsPage.dataPrivacy,
-    if (widget.registryController != null && widget.vault != null)
+    if (widget.registryController != null && widget.runtime != null)
       _SettingsPage.experts,
     _SettingsPage.remoteServer,
   ];
@@ -95,20 +95,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       controller: widget.actionController!,
     ),
     _SettingsPage.dataPrivacy => _DataPrivacy(
-      vault: widget.vault!,
+      runtime: widget.runtime!,
       controller: widget.memoryController!,
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
     _SettingsPage.experts => AgentRegistrySettings(
       controller: widget.registryController!,
-      vault: widget.vault!,
+      runtime: widget.runtime!,
       focus: widget.expertBindingTarget,
       onBindingReplaced: widget.onBindingReplaced,
     ),
     _SettingsPage.memory => AgentMemorySettings(
       controller: widget.memoryController!,
-      vault: widget.vault!,
+      runtime: widget.runtime!,
       onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
     ),
     _SettingsPage.remoteServer => ConnectorScreen(

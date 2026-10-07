@@ -17,7 +17,7 @@ final class ClientAppBootstrap {
   Future<void>? _closing;
 
   /// Opens the production runtime, registers native callbacks, then starts
-  /// Vault preparation without delaying the independent Day UI. Native
+  /// Runtime preparation without delaying the independent Day UI. Native
   /// registration failures remain diagnosed and do not prevent Day from opening.
   static Future<ClientAppBootstrap> openDefault() async {
     AppRuntime? openedRuntime;
@@ -34,7 +34,7 @@ final class ClientAppBootstrap {
       );
       bootstrap = openedBootstrap;
       await openedBootstrap._platformServices.start();
-      unawaited(runtime.startVault());
+      unawaited(runtime.startRuntime());
       return openedBootstrap;
     } on Object catch (error, stackTrace) {
       if (bootstrap != null) {
