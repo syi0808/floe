@@ -75,7 +75,19 @@ Future<void> _start() async {
   } on Object catch (error, stackTrace) {
     // runApp can fail after bootstrap succeeds but before its root widget owns
     // the app lifetime. close() joins the same future if disposal also ran.
-    if (bootstrap != null) await bootstrap.close();
+    if (bootstrap != null) {
+      try {
+        await bootstrap.close();
+      } on Object catch (cleanupError, cleanupStackTrace) {
+        AppDiagnostics.error(
+          component: 'app',
+          operation: 'startup_cleanup',
+          error: cleanupError,
+          stackTrace: cleanupStackTrace,
+          retryable: true,
+        );
+      }
+    }
     final errorId = AppDiagnostics.error(
       component: 'app',
       operation: 'startup',

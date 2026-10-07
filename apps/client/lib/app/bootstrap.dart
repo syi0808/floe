@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/infrastructure/app_wire_day_gateway.dart';
@@ -14,9 +16,9 @@ final class ClientAppBootstrap {
   final PlatformAcquisitionServices _platformServices;
   Future<void>? _closing;
 
-  /// Opens the production runtime, registers native callbacks, then prepares
-  /// Vault through that same runtime. Native registration failures remain
-  /// individually diagnosed and do not prevent Day from opening.
+  /// Opens the production runtime, registers native callbacks, then starts
+  /// Vault preparation without delaying the independent Day UI. Native
+  /// registration failures remain diagnosed and do not prevent Day from opening.
   static Future<ClientAppBootstrap> openDefault() async {
     AppRuntime? openedRuntime;
     ClientAppBootstrap? bootstrap;
@@ -25,14 +27,26 @@ final class ClientAppBootstrap {
       openedRuntime = runtime;
       final openedBootstrap = ClientAppBootstrap._(
         runtime,
-        PlatformAcquisitionServices.forRuntime(runtime),
+        PlatformAcquisitionServices.forPlatform(
+          transport: runtime.nativeHostTransport,
+          deviceId: runtime.deviceId,
+        ),
       );
       bootstrap = openedBootstrap;
-      await openedBootstrap._platformServices.startBefore(runtime.startVault);
+      await openedBootstrap._platformServices.start();
+      unawaited(runtime.startVault());
       return openedBootstrap;
     } on Object catch (error, stackTrace) {
       if (bootstrap != null) {
-        await bootstrap.close();
+        try {
+          await bootstrap.close();
+        } on Object catch (cleanupError, cleanupStackTrace) {
+          _recordCleanupFailure(
+            'startup_cleanup',
+            cleanupError,
+            cleanupStackTrace,
+          );
+        }
       } else if (openedRuntime != null) {
         await _closeOpenedRuntime(openedRuntime);
       }
@@ -44,25 +58,37 @@ final class ClientAppBootstrap {
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
+    Object? firstError;
+    StackTrace? firstStackTrace;
+
+    void rememberCleanupFailure(
+      String operation,
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      _recordCleanupFailure(operation, error, stackTrace);
+      firstError ??= error;
+      firstStackTrace ??= stackTrace;
+    }
+
     try {
       runtime.closeAdmission();
     } on Object catch (error, stackTrace) {
-      _recordCleanupFailure(
-        'runtime_close_admission',
-        error,
-        stackTrace,
-      );
+      rememberCleanupFailure('runtime_close_admission', error, stackTrace);
     }
     try {
       await _platformServices.close();
     } on Object catch (error, stackTrace) {
-      _recordCleanupFailure(
-        'native_acquisition_disposal',
-        error,
-        stackTrace,
-      );
+      rememberCleanupFailure('native_acquisition_disposal', error, stackTrace);
     } finally {
-      await _closeRuntime(runtime);
+      try {
+        await runtime.close();
+      } on Object catch (error, stackTrace) {
+        rememberCleanupFailure('runtime_close', error, stackTrace);
+      }
+    }
+    if (firstError case final error?) {
+      Error.throwWithStackTrace(error, firstStackTrace!);
     }
   }
 

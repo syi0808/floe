@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
-import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/infrastructure/native/android_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/apple_context_gateway.dart';
@@ -12,51 +11,54 @@ import 'package:floe_client/infrastructure/native/calendar_acquisition_broker.da
 import 'package:floe_client/infrastructure/native/eventkit_calendar_host.dart';
 import 'package:floe_client/infrastructure/native/macos_context_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_acquisition_service.dart';
+import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 import 'package:floe_client/infrastructure/native/personal_acquisition_broker.dart';
 
 const _nativeDisposalObservationBound = Duration(seconds: 5);
 
 /// Owns the platform callback services used by one app runtime.
 ///
-/// Production composes the OS-specific services with [forRuntime]. The
+/// Production composes the OS-specific services with [forPlatform]. The
 /// explicit-services constructor accepts resources assembled at this native
 /// boundary without changing the app runtime or product graph.
 final class PlatformAcquisitionServices {
   factory PlatformAcquisitionServices(
     Iterable<NativeAcquisitionService> services,
-  ) {
-    final captured = List<NativeAcquisitionService>.unmodifiable(services);
-    return PlatformAcquisitionServices._(
-      () => captured,
-      ownedServices: captured,
-    );
-  }
+  ) => PlatformAcquisitionServices._(() => services);
 
-  PlatformAcquisitionServices._(
-    this._serviceFactory, {
-    Iterable<NativeAcquisitionService> ownedServices =
-        const <NativeAcquisitionService>[],
-  }) : _ownedServices = List.of(ownedServices);
+  PlatformAcquisitionServices._(this._serviceFactory);
 
-  factory PlatformAcquisitionServices.forRuntime(AppRuntime runtime) =>
+  factory PlatformAcquisitionServices.forPlatform({
+    required NativeContextHostTransport transport,
+    required String deviceId,
+  }) =>
       PlatformAcquisitionServices._(
-        () => _platformAcquisitionServices(runtime),
+        () => _platformAcquisitionServices(transport, deviceId),
       );
 
   final Iterable<NativeAcquisitionService> Function() _serviceFactory;
-  final List<NativeAcquisitionService> _ownedServices;
+  final List<NativeAcquisitionService> _ownedServices = [];
   final Map<NativeAcquisitionService, Future<void>> _disposals = {};
   Future<void>? _starting;
   Future<void>? _closing;
+  bool _closed = false;
 
-  /// Registers applicable native callback lanes before preparing the runtime.
-  /// A single optional lane failure is diagnosed and isolated from other lanes.
-  Future<void> startBefore(Future<void> Function() prepareRuntime) =>
-      _starting ??= _startBefore(prepareRuntime);
+  /// Registers applicable native callback lanes. A single optional lane
+  /// failure is diagnosed and isolated from the remaining lanes.
+  Future<void> start() {
+    if (_closed) {
+      return Future<void>.error(
+        StateError('Native acquisition services are closed.'),
+      );
+    }
+    return _starting ??= _start();
+  }
 
-  Future<void> _startBefore(Future<void> Function() prepareRuntime) async {
-    for (final service in _serviceFactory()) {
-      if (!_ownedServices.contains(service)) _ownedServices.add(service);
+  Future<void> _start() async {
+    final services = _serviceFactory().iterator;
+    while (!_closed && services.moveNext()) {
+      final service = services.current;
+      _ownedServices.add(service);
       try {
         await service.start();
       } on Object catch (error, stackTrace) {
@@ -69,11 +71,16 @@ final class PlatformAcquisitionServices {
         );
         await _disposeFailedStartup(service);
       }
+      if (_closed) return;
     }
-    await prepareRuntime();
   }
 
-  Future<void> close() => _closing ??= _close();
+  Future<void> close() {
+    final closing = _closing;
+    if (closing != null) return closing;
+    _closed = true;
+    return _closing = _close();
+  }
 
   Future<void> _close() async {
     final pending = <Future<void>>[];
@@ -85,12 +92,13 @@ final class PlatformAcquisitionServices {
     } on TimeoutException catch (error, stackTrace) {
       AppDiagnostics.error(
         component: 'context',
-        operation: 'native_acquisition_disposal_timeout',
+        operation: 'native_acquisition_disposal_observation_timeout',
         error: error,
         stackTrace: stackTrace,
         failure: 'native_disposal_observation_timeout',
         retryable: true,
       );
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 
@@ -108,6 +116,9 @@ final class PlatformAcquisitionServices {
         failure: 'native_disposal_observation_timeout',
         retryable: true,
       );
+    } on Object {
+      // The failed service is unavailable; its disposal failure was recorded
+      // by _disposeService. Other native lanes can still start.
     }
   }
 
@@ -122,6 +133,7 @@ final class PlatformAcquisitionServices {
               stack,
               retryable: true,
             );
+            Error.throwWithStackTrace(error, stack);
           });
         } on Object catch (error, stackTrace) {
           _recordServiceFailure(
@@ -131,7 +143,7 @@ final class PlatformAcquisitionServices {
             stackTrace,
             retryable: true,
           );
-          return Future<void>.value();
+          return Future<void>.error(error, stackTrace);
         }
       });
 
@@ -153,18 +165,17 @@ final class PlatformAcquisitionServices {
 }
 
 Iterable<NativeAcquisitionService> _platformAcquisitionServices(
-  AppRuntime runtime,
+  NativeContextHostTransport transport,
+  String deviceId,
 ) sync* {
   final androidNative = Platform.isAndroid ? AndroidContextGateway() : null;
-  final calendarHost = EventKitCalendarHost(deviceId: runtime.deviceId);
+  final calendarHost = EventKitCalendarHost(deviceId: deviceId);
   if (Platform.isMacOS || Platform.isIOS || androidNative != null) {
     final reader = Platform.isMacOS || Platform.isIOS
         ? calendarHost.readAcquisition
         : androidNative!.readAcquisition;
     yield CalendarAcquisitionService(
-      broker: CalendarAcquisitionBroker(
-        transport: runtime.nativeHostTransport,
-      ),
+      broker: CalendarAcquisitionBroker(transport: transport),
       reader: reader,
     );
   }
@@ -172,19 +183,21 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
   if (Platform.isMacOS) {
     final attentionGateway = macOSContextGateway!;
     final broker = AttentionAcquisitionBroker(
-      transport: runtime.nativeHostTransport,
+      transport: transport,
     );
     yield AttentionAcquisitionService(
       broker: broker,
       reader: (request) async {
         final mode = request['mode'];
-        final deviceId = request['device_id'];
+        final requestDeviceId = request['device_id'];
         if (mode is! String ||
-            deviceId is! String ||
-            deviceId != runtime.deviceId) {
+            requestDeviceId is! String ||
+            requestDeviceId != deviceId) {
           throw PlatformException(code: 'permission_denied');
         }
-        final before = await attentionGateway.inspectAttentionSubject(deviceId);
+        final before = await attentionGateway.inspectAttentionSubject(
+          requestDeviceId,
+        );
         final beforeFingerprint = before['subject_fingerprint'];
         final expected = request['expected_native_subject_fingerprint'];
         if (beforeFingerprint is! String ||
@@ -197,7 +210,9 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
         } else if (mode != 'inspect_subject') {
           throw PlatformException(code: 'provider_unavailable');
         }
-        final after = await attentionGateway.inspectAttentionSubject(deviceId);
+        final after = await attentionGateway.inspectAttentionSubject(
+          requestDeviceId,
+        );
         final afterFingerprint = after['subject_fingerprint'];
         if (afterFingerprint != beforeFingerprint) {
           throw PlatformException(code: 'permission_denied');
@@ -206,7 +221,7 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
           'request_id': request['request_id'],
           'host_epoch': request['host_epoch'],
           'person_id': request['person_id'],
-          'device_id': deviceId,
+          'device_id': requestDeviceId,
           'mode': mode,
           'native_subject_fingerprint_before': beforeFingerprint,
           'native_subject_fingerprint_after': afterFingerprint,
@@ -217,16 +232,16 @@ Iterable<NativeAcquisitionService> _platformAcquisitionServices(
     );
   }
   final appleNativeGateway = Platform.isIOS
-      ? AppleContextGateway(deviceId: runtime.deviceId)
+      ? AppleContextGateway(deviceId: deviceId)
       : null;
   final personalReader = appleNativeGateway != null
-      ? _applePersonalReader(appleNativeGateway, runtime.deviceId)
+      ? _applePersonalReader(appleNativeGateway, deviceId)
       : androidNative != null
-      ? _androidContactsReader(androidNative, runtime.deviceId)
+      ? _androidContactsReader(androidNative, deviceId)
       : null;
   if (personalReader != null) {
     final broker = PersonalAcquisitionBroker(
-      transport: runtime.nativeHostTransport,
+      transport: transport,
     );
     yield PersonalAcquisitionService(broker: broker, reader: personalReader);
   }
