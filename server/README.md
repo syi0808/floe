@@ -13,6 +13,19 @@ The service loads `.env` without overwriting process environment. `FLOE_ENV_FILE
 
 Open `http://127.0.0.1:8431/manage/` and retrieve the administrator token with the same server binary and profile: `FLOE_SERVER_DATA=/absolute/profile/path floe-server --print-admin-token`. This explicit local command reads the existing encrypted token; it never initializes a profile or starts the server. Normal server logs never print it. Do not copy credentials into chat, logs or source control. The old shared-bearer/headless mode and `FLOE_INFERENCE_CONFIG`/`FLOE_INFERENCE_TOKEN` execution path have been removed.
 
+### Dashboard QA without token login
+
+For dashboard UI QA only, a `floe_dev` build accepts `--dev-qa-no-auth`. The flag is off by default; production builds reject it. The server still requires its literal `127.0.0.1` bind. Use a fresh, dedicated development profile rather than an existing or production profile:
+
+```sh
+cd server
+qa_data="$(mktemp -d)"
+chmod 700 "$qa_data"
+FLOE_SERVER_DATA="$qa_data" go run -tags floe_dev ./cmd/floe-server --dev-qa-no-auth
+```
+
+Open `http://127.0.0.1:18431/manage/` in Firefox. The server prints a prominent warning and the page displays a red QA-mode banner. The dashboard session remains CSRF-protected and is limited to `/manage`; `/v1` client and operator APIs retain their existing authentication. Dashboard session creation requires a top-level local navigation with browser Fetch Metadata, and the handler continues to check the exact Host and Origin. These sessions exist only in process memory, so restarting without the flag restores token-required login. Stop the QA process when finished and keep its temporary profile separate from other server state.
+
 ## Pairing and trust
 
 Floe generates and retains one private issuer key per newly admitted pairing operation, submits the public identity through `/pair/start`, verifies the signed producer challenge, and proves possession with `/pair/confirm`. All pairing operations use POST and schema 1. Start requires a stable `operation_id` and a privately staged random 32-byte base64url `proof`; subsequent requests use the exact `pairing_id`/`proof` fields. A bounded private receipt reserves each start identity before generating its challenge, so exact start replay returns the original challenge and proof after response loss. Changed identity or proof conflicts; an expired operation never creates another challenge. The operator compares the request and exact issuer fingerprint before approval. The uncommitted human enrollment challenge expires after five minutes.

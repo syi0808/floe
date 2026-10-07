@@ -22,8 +22,12 @@ function deferred() {
   return {promise, resolve};
 }
 
-function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:00.000Z')} = {}) {
-  const dom = new JSDOM(html, {
+function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:00.000Z'), qaMode = false} = {}) {
+  const page = qaMode
+    ? html.replace('name="floe-qa-no-auth" content="false"', 'name="floe-qa-no-auth" content="true"')
+      .replace('name="floe-qa-csrf" content=""', 'name="floe-qa-csrf" content="csrf-qa-session"')
+    : html;
+  const dom = new JSDOM(page, {
     url: `${origin}/manage/`,
     runScripts: 'outside-only',
   });
@@ -92,8 +96,8 @@ function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:
   };
 }
 
-function state({csrf = 'csrf-current-session', clients = [], pairing = null} = {}) {
-  return {csrf, clients, providers: {}, address: `${origin}`, pairing};
+function state({csrf = 'csrf-current-session', clients = [], pairing = null, qa_mode = false} = {}) {
+  return {csrf, clients, providers: {}, address: `${origin}`, pairing, qa_mode};
 }
 
 function pairing({
@@ -139,6 +143,23 @@ test('initial 401 leaves the dashboard locked on the login view', async (t) => {
   assert.equal(element(env.window, 'login-panel').hidden, false);
   assert.equal(element(env.window, 'dashboard').hidden, true);
   assert.match(element(env.window, 'notice').textContent, /session is unavailable or expired/i);
+  env.assertDrained();
+});
+
+test('development QA mode shows its warning and loads state without token login', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({qa_mode: true})))},
+  ], {qaMode: true});
+  t.after(() => env.close());
+  await env.settle();
+
+  assert.equal(element(env.window, 'qa-mode-warning').hidden, false);
+  assert.equal(element(env.window, 'login-panel').hidden, true);
+  assert.equal(element(env.window, 'logout').hidden, true);
+  assert.equal(env.requests.length, 1);
+  assert.equal(env.requests[0].path, '/manage/api/state');
+  assert.equal(env.requests[0].headers['X-Floe-CSRF'], 'csrf-qa-session');
+  assert.equal(element(env.window, 'dashboard-content').hidden, false);
   env.assertDrained();
 });
 

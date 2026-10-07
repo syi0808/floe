@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -74,6 +75,7 @@ type consoleFixture struct {
 	adminToken string
 	handler    *Handler
 	trust      *trust.Service
+	trustFiles *storage.Files
 }
 
 func newConsoleFixture(t *testing.T) *consoleFixture {
@@ -121,6 +123,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 		address:    dashboardTestAddress,
 		adminToken: string(adminToken),
 		trust:      trustService,
+		trustFiles: trustFiles,
 		handler: &Handler{
 			Address:       dashboardTestAddress,
 			Trust:         trustService,
@@ -132,6 +135,10 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 }
 
 func (fixture *consoleFixture) request(method, path string, body any, cookie *http.Cookie, origin, csrf, host string) *httptest.ResponseRecorder {
+	return fixture.requestWithHeaders(method, path, body, cookie, origin, csrf, host, nil)
+}
+
+func (fixture *consoleFixture) requestWithHeaders(method, path string, body any, cookie *http.Cookie, origin, csrf, host string, headers map[string]string) *httptest.ResponseRecorder {
 	var content bytes.Buffer
 	if body != nil {
 		if err := json.NewEncoder(&content).Encode(body); err != nil {
@@ -151,6 +158,9 @@ func (fixture *consoleFixture) request(method, path string, body any, cookie *ht
 	}
 	if csrf != "" {
 		request.Header.Set("X-Floe-CSRF", csrf)
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	if cookie != nil {
 		request.AddCookie(cookie)
@@ -179,6 +189,7 @@ func (fixture *consoleFixture) login(t *testing.T) (*http.Cookie, string) {
 
 type consoleState struct {
 	CSRF    string `json:"csrf"`
+	QAMode  bool   `json:"qa_mode"`
 	Pairing *struct {
 		ID                string   `json:"id"`
 		Phase             string   `json:"phase"`
@@ -238,6 +249,24 @@ func TestConsoleLoginCookieAndWrongToken(t *testing.T) {
 	state := fixture.getState(t, cookie)
 	if state.CSRF == "" {
 		t.Fatal("authenticated state omitted its CSRF token")
+	}
+	if state.QAMode {
+		t.Fatal("normal authenticated state reported QA mode")
+	}
+}
+
+func TestConsoleDashboardDefaultsToTokenLogin(t *testing.T) {
+	fixture := newConsoleFixture(t)
+	page := fixture.request(http.MethodGet, "/manage/", nil, nil, "", "", "")
+	if page.Code != http.StatusOK || strings.Contains(page.Body.String(), `name="floe-qa-no-auth" content="true"`) {
+		t.Fatalf("default dashboard page returned %d or advertised QA mode", page.Code)
+	}
+	if len(page.Result().Cookies()) != 0 {
+		t.Fatal("default dashboard page issued an operator session")
+	}
+	state := fixture.request(http.MethodGet, "/manage/api/state", nil, nil, "", "", "")
+	if state.Code != http.StatusUnauthorized || responseCode(t, state) != "unauthorized" {
+		t.Fatalf("default dashboard bypassed token login: %d %s", state.Code, state.Body.String())
 	}
 }
 

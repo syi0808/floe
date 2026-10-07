@@ -38,17 +38,25 @@ type TestRequest struct {
 	ID string `json:"id"`
 }
 type Handler struct {
-	Address       string
-	Trust         *trust.Service
-	Inference     *InferenceHandler
-	Setup         HostedSetup
-	Pairing       *pairing.Operations
-	Integrations  *integrations.Service
-	Sources       *authority.SourceService
-	Mirror        *authority.CalendarMirrorService
-	Configuration *inference.Configuration
-	Accounts      *inference.AccountManagement
-	Clients       *trust.ClientAdministration
+	Address             string
+	DevelopmentQANoAuth bool
+	Trust               *trust.Service
+	Inference           *InferenceHandler
+	Setup               HostedSetup
+	Pairing             *pairing.Operations
+	Integrations        *integrations.Service
+	Sources             *authority.SourceService
+	Mirror              *authority.CalendarMirrorService
+	Configuration       *inference.Configuration
+	Accounts            *inference.AccountManagement
+	Clients             *trust.ClientAdministration
+}
+
+func (handler *Handler) managementCookieName() string {
+	if handler.DevelopmentQANoAuth {
+		return "floe_management_qa"
+	}
+	return "floe_management"
 }
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -68,6 +76,22 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	if origin != "" && origin != "http://"+handler.Address {
 		failure(writer, http.StatusForbidden, "invalid_origin")
 		return
+	}
+	qaCSRF := ""
+	if handler.DevelopmentQANoAuth {
+		if isDevelopmentQADashboardPath(request.URL.Path) {
+			if !isDevelopmentQADashboardEntry(request) {
+				failure(writer, http.StatusForbidden, "qa_dashboard_navigation_required")
+				return
+			}
+			var ok bool
+			qaCSRF, ok = handler.prepareDevelopmentQADashboard(writer, request)
+			if !ok {
+				return
+			}
+		} else if strings.HasPrefix(request.URL.Path, "/manage/") && !handler.allowDevelopmentQAManagementRequest(writer, request) {
+			return
+		}
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/") || strings.HasPrefix(request.URL.Path, "/pair/") {
 		if origin != "" {
@@ -100,6 +124,9 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			name, contentType = "style.css", "text/css; charset=utf-8"
 		}
 		data, _ := assets.ReadFile("web/" + name)
+		if handler.DevelopmentQANoAuth && name == "index.html" {
+			data = developmentQADashboardHTML(data, qaCSRF)
+		}
 		writer.Header().Set("Content-Type", contentType)
 		_, _ = writer.Write(data)
 		return
@@ -109,6 +136,10 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if request.URL.Path == "/manage/api/login" && request.Method == http.MethodPost {
+		if handler.DevelopmentQANoAuth {
+			failure(writer, http.StatusForbidden, "qa_login_disabled")
+			return
+		}
 		var input struct {
 			Token string `json:"token"`
 		}
@@ -123,7 +154,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		writeResult(writer, result)
 		return
 	}
-	cookie, err := request.Cookie("floe_management")
+	cookie, err := request.Cookie(handler.managementCookieName())
 	if err != nil {
 		failure(writer, http.StatusUnauthorized, "unauthorized")
 		return
@@ -133,7 +164,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		failure(writer, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	operator, authErr := handler.Trust.AuthenticateOperatorSession(request.Context(), cookie.Value, request.Header.Get("X-Floe-CSRF"), request.Method != http.MethodGet)
+	operator, authErr := handler.Trust.AuthenticateDashboardOperatorSession(request.Context(), cookie.Value, request.Header.Get("X-Floe-CSRF"), request.Method != http.MethodGet || handler.DevelopmentQANoAuth)
 	if authErr != nil {
 		writeResult(writer, trust.Result(authErr))
 		return
@@ -199,7 +230,11 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 	switch request.URL.Path {
 	case "/manage/api/logout":
 		handler.Trust.LogoutOperator(token)
-		http.SetCookie(writer, &http.Cookie{Name: "floe_management", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+		path := "/"
+		if handler.DevelopmentQANoAuth {
+			path = "/manage"
+		}
+		http.SetCookie(writer, &http.Cookie{Name: handler.managementCookieName(), Path: path, MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		reply(writer, http.StatusOK, map[string]bool{"ok": true})
 	case "/manage/api/pair/approve":
 		dispatch(writer, request, func(in pairing.ApprovalRequest) operation.Result {
@@ -325,7 +360,7 @@ func (handler *Handler) managementState(request *http.Request, operator trust.Op
 	if err != nil {
 		return trust.Result(err)
 	}
-	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory})
+	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory, "qa_mode": handler.DevelopmentQANoAuth})
 }
 
 func (handler *Handler) ServeUnavailable(writer http.ResponseWriter) {

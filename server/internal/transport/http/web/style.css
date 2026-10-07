@@ -43,6 +43,8 @@ input:focus, select:focus, button:focus-visible, a:focus-visible { outline: 2px 
 .muted { font-weight: 400; color: var(--secondary); }
 .small { font-size: 12px; }
 .warning { background: #fff8ed; padding: 16px; border-radius: var(--sq-md); color: #a55e0d; }
+.qa-warning { border: 2px solid #d84b31; background: #fff0ec; color: #8b2515; }
+.qa-warning p { color: inherit; margin-bottom: 0; }
 .target { border-top: 1px solid var(--border); padding: 24px 0; }
 .target strong { display: block; font-size: 16px; }
 .target p { margin: 8px 0; overflow-wrap: anywhere; }

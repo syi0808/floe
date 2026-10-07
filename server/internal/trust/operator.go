@@ -19,8 +19,9 @@ type operatorSessions struct {
 }
 
 type OperatorSession struct {
-	CSRF    string
-	Expires time.Time
+	CSRF        string
+	Expires     time.Time
+	dashboardQA bool
 }
 
 func newOperatorSessions(adminHash string) *operatorSessions {
@@ -54,6 +55,10 @@ func (sessions *operatorSessions) Login(credential string) (string, operation.Re
 	if subtle.ConstantTimeCompare([]byte(Digest(credential)), []byte(sessions.adminHash)) != 1 {
 		return "", operation.Reject(operation.Unauthenticated, "unauthorized")
 	}
+	return sessions.issue(now, false)
+}
+
+func (sessions *operatorSessions) issue(now time.Time, dashboardQA bool) (string, operation.Result) {
 	for key, value := range sessions.active {
 		if !value.Expires.After(now) {
 			delete(sessions.active, key)
@@ -63,7 +68,7 @@ func (sessions *operatorSessions) Login(credential string) (string, operation.Re
 		return "", operation.Reject(operation.Limited, "too_many_sessions")
 	}
 	token := rand.Text() + rand.Text()
-	sessions.active[Digest(token)] = OperatorSession{CSRF: rand.Text() + rand.Text(), Expires: now.Add(12 * time.Hour)}
+	sessions.active[Digest(token)] = OperatorSession{CSRF: rand.Text() + rand.Text(), Expires: now.Add(12 * time.Hour), dashboardQA: dashboardQA}
 	return token, operation.Accept(map[string]bool{"ok": true})
 }
 
@@ -82,6 +87,16 @@ func (s *Service) OperatorSession(cookie string) (OperatorSession, bool) {
 	return s.operators.Lookup(cookie)
 }
 func (s *Service) AuthenticateOperatorSession(ctx context.Context, cookie, csrf string, mutation bool) (OperatorPrincipal, error) {
+	return s.authenticateOperatorSession(ctx, cookie, csrf, mutation, false)
+}
+
+// AuthenticateDashboardOperatorSession also accepts the scoped session that
+// the explicitly enabled floe_dev dashboard QA mode creates.
+func (s *Service) AuthenticateDashboardOperatorSession(ctx context.Context, cookie, csrf string, mutation bool) (OperatorPrincipal, error) {
+	return s.authenticateOperatorSession(ctx, cookie, csrf, mutation, true)
+}
+
+func (s *Service) authenticateOperatorSession(ctx context.Context, cookie, csrf string, mutation, dashboard bool) (OperatorPrincipal, error) {
 	if err := ctx.Err(); err != nil {
 		return OperatorPrincipal{}, err
 	}
@@ -89,7 +104,7 @@ func (s *Service) AuthenticateOperatorSession(ctx context.Context, cookie, csrf 
 		return OperatorPrincipal{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	session, ok := s.operators.Lookup(cookie)
-	if !ok || mutation && subtle.ConstantTimeCompare([]byte(csrf), []byte(session.CSRF)) != 1 {
+	if !ok || session.dashboardQA && !dashboard || mutation && subtle.ConstantTimeCompare([]byte(csrf), []byte(session.CSRF)) != 1 {
 		return OperatorPrincipal{}, fail(operation.Unauthenticated, "unauthorized")
 	}
 	return OperatorPrincipal{s, Digest(cookie), session.Expires}, nil

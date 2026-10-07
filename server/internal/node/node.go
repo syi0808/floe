@@ -18,7 +18,11 @@ import (
 	"sync"
 )
 
-type Config struct{ Directory, Address string }
+type Config struct {
+	Directory           string
+	Address             string
+	DevelopmentQANoAuth bool
+}
 type Node struct {
 	handler      *httptransport.Handler
 	integrations *integrations.Service
@@ -34,6 +38,9 @@ type Node struct {
 }
 
 func New(config Config) (*Node, error) {
+	if config.DevelopmentQANoAuth && !developmentQAModeSupported() {
+		return nil, errors.New("development QA dashboard mode requires a floe_dev build")
+	}
 	host, port, err := net.SplitHostPort(config.Address)
 	if err != nil || host != "127.0.0.1" || port == "" {
 		return nil, errors.New("node requires 127.0.0.1:port")
@@ -113,7 +120,7 @@ func New(config Config) (*Node, error) {
 	}
 	pairing := pairing.NewOperations(t, vault, nil)
 	clients := trust.NewClientAdministration(t, sources, pairing)
-	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
+	handler := &httptransport.Handler{Address: config.Address, DevelopmentQANoAuth: config.DevelopmentQANoAuth, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
 	failed = false
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Node{handler: handler, integrations: sources, clients: clients, runtime: runtime, storage: storageRoot, ctx: ctx, cancel: cancel}, nil

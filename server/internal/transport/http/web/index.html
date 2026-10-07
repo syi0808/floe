@@ -1,9 +1,10 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Floe · Local node</title><link rel="stylesheet" href="/manage/style.css"><script src="/manage/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="floe-qa-no-auth" content="false"><meta name="floe-qa-csrf" content=""><title>Floe · Local node</title><link rel="stylesheet" href="/manage/style.css"><script src="/manage/app.js" defer></script></head>
 <body>
 <header><div class="brand">floe<span>Local node</span></div><span class="badge">127.0.0.1 · private by default</span></header>
 <main>
+<section id="qa-mode-warning" class="warning qa-warning" role="alert" hidden><strong>DEVELOPMENT QA MODE · DASHBOARD TOKEN AUTHENTICATION IS DISABLED</strong><p>Anyone using this browser can administer this local floe_dev profile.</p></section>
 <div class="intro"><p class="eyebrow">Server settings</p><h1>Purpose-based routing</h1><p>Configure inference providers, then assign models to Floe's purposes. Personal connections are managed in the Floe app.</p></div>
 <p id="notice" role="status" aria-live="polite"></p>
 <section id="login-panel" class="card"><h2>Unlock this node</h2><p>Paste the administrator token from the private <code>admin-token</code> file in the server data directory. It is not a provider API key.</p><form id="login-form"><label>Administrator token<input id="admin-token" type="password" autocomplete="off" required></label><button>Unlock dashboard</button></form></section>

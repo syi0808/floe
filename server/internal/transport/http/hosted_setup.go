@@ -27,7 +27,7 @@ func (h *Handler) serveHostedSetup(w http.ResponseWriter, r *http.Request) {
 		failure(w, 405, "method_not_allowed")
 		return
 	}
-	cookie, err := r.Cookie("floe_management")
+	cookie, err := r.Cookie(h.managementCookieName())
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(401)
@@ -81,7 +81,7 @@ func (h *Handler) serveHostedSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	operator, err := h.Trust.AuthenticateOperatorSession(r.Context(), cookie.Value, csrf, r.Method == http.MethodPost)
+	operator, err := h.Trust.AuthenticateDashboardOperatorSession(r.Context(), cookie.Value, csrf, r.Method == http.MethodPost)
 	if err != nil {
 		failure(w, 401, "unauthorized")
 		return

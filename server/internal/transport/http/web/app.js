@@ -1,5 +1,7 @@
 const element = (id) => document.getElementById(id);
 const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
+const qaMode = document.querySelector('meta[name="floe-qa-no-auth"]')?.content === 'true';
+const qaCSRF = document.querySelector('meta[name="floe-qa-csrf"]')?.content || '';
 let csrf = '';
 let pairing = null;
 let unlocked = false;
@@ -105,7 +107,7 @@ async function loadState(generation) {
   try {
     const next = await api('state');
     if (generation !== sessionGeneration) return;
-    if (typeof next.csrf !== 'string' || !next.csrf || !Array.isArray(next.clients)
+    if (typeof next.csrf !== 'string' || !next.csrf || next.qa_mode !== qaMode || !Array.isArray(next.clients)
         || !next.providers || typeof next.providers !== 'object' || Array.isArray(next.providers)
         || typeof next.address !== 'string') throw new Error('invalid_state');
     state = next; csrf = next.csrf; unlocked = true; stateReady = true;
@@ -239,6 +241,7 @@ for (const operation of ['approve', 'reject']) element(operation).onclick = () =
   await api(`pair/${operation}`, body); await refresh();
   notice(operation === 'approve' ? 'App approved. Return to Floe to finish connecting.' : 'Request rejected.');
 });
+
 for (const operation of ['resume', 'abort']) element(operation).onclick = () => action(element(operation), async () => {
   if (!pairing || !pairing.allowed_actions.includes(operation)) return;
   if (!confirm(operation === 'resume'
@@ -265,7 +268,17 @@ setInterval(async () => {
   catch (error) { if (!error.stateUnavailable) notice(`Connection unavailable: ${error.message}.`); }
   finally { polling = false; }
 }, 5000);
-showShell();
-element('address').textContent = 'Checking administrator session…';
-refresh().catch(() => {});
+if (qaMode) {
+  csrf = qaCSRF;
+  unlocked = true;
+  element('qa-mode-warning').hidden = false;
+  element('login-panel').hidden = true;
+  element('logout').hidden = true;
+  showShell();
+  refresh().catch(() => {});
+} else {
+  showShell();
+  element('address').textContent = 'Checking administrator session…';
+  refresh().catch(() => {});
+}
 renderProvider();

@@ -16,9 +16,9 @@ import (
 )
 
 func main() {
-	printToken := len(os.Args) == 2 && os.Args[1] == "--print-admin-token"
-	if len(os.Args) > 1 && !printToken {
-		log.Fatal("Usage: floe-server [--print-admin-token]")
+	options, err := parseArgs(os.Args[1:])
+	if err != nil {
+		log.Fatalf("%v\nUsage: %s", err, usage())
 	}
 	if envfile.Load() != nil {
 		log.Fatal("Cannot load environment file")
@@ -31,7 +31,7 @@ func main() {
 		}
 		directory = node.DefaultDataDirectory(base)
 	}
-	if printToken {
+	if options.printAdminToken {
 		token, err := node.AdministratorToken(context.Background(), directory)
 		if err != nil {
 			profileFailure(err, "Cannot read administrator token from the existing encrypted profile")
@@ -43,13 +43,17 @@ func main() {
 	if address == "" {
 		address = node.DefaultAddress()
 	}
-	server, err := node.New(node.Config{Directory: directory, Address: address})
+	server, err := node.New(node.Config{Directory: directory, Address: address, DevelopmentQANoAuth: options.developmentQANoAuth})
 	if err != nil {
 		profileFailure(err, "Cannot start local server: verify the private profile, security state and loopback address")
 	}
 	defer server.Close()
 	log.Printf("Local dashboard: http://%s/manage/", address)
-	log.Print("Administrator token is encrypted. Use this binary with --print-admin-token and the same FLOE_SERVER_DATA to retrieve it privately.")
+	if options.developmentQANoAuth {
+		log.Printf("!!! DEVELOPMENT QA MODE: DASHBOARD TOKEN AUTHENTICATION IS DISABLED at http://%s/manage/. Anyone with access to this local browser can administer this floe_dev profile. !!!", address)
+	} else {
+		log.Print("Administrator token is encrypted. Use this binary with --print-admin-token and the same FLOE_SERVER_DATA to retrieve it privately.")
+	}
 	serve(server, address)
 }
 func serve(handler http.Handler, address string) {
