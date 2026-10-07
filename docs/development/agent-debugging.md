@@ -55,9 +55,9 @@ a missing log event does not prove that work was never admitted or completed.
 ## Regression checks
 
 The previous diagnostics and transport suites were removed in T0 after their
-assertions were recorded in the [bindings](../plans/t0-bindings-behavior-ledger.md)
-and [client runtime](../plans/t0-client-behavior-ledger-runtime.md) behavior ledgers.
+assertions were recorded in the [bindings](../testing/legacy-behavior/t0-bindings-behavior-ledger.md)
+and [client runtime](../testing/legacy-behavior/t0-client-behavior-ledger-runtime.md) behavior ledgers.
 Reconstruct regression coverage against the final owner and transport contracts
-in S3. The [active execution plan](../plans/2026-10-02-architecture-refactor.md)
+against the stabilized owner contracts. The [active execution plan](../plans/2026-10-02-architecture-refactor.md)
 controls compilation, build and test gates; no removed test command is a current
 verification result.

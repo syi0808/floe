@@ -13,7 +13,7 @@ Reasoning placement is also being used as a substitute for source privacy. First
 
 These are separate boundaries: product inference intent, source-processing authority, source-local privacy transformation, and reasoning capability selection. They must not be represented by one model-recipient permission mechanism.
 
-This decision fixes the governing architecture. Acceptance of this ADR is not a claim that its runtime cutovers are implemented. Current source remains implementation truth; the [reasoning/source-processing convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the single ordered migration.
+This decision fixes the governing architecture. Acceptance of this ADR is not a claim that its runtime cutovers are implemented. Current source remains implementation truth; the [active architecture plan](../plans/2026-10-02-architecture-refactor.md) owns the remaining ordered migration. The [original convergence plan](https://github.com/syi0808/floe/blob/45fe41af7c5d19a8c5675ecc342f1990ef6ebc00/docs/development/plans/reasoning-source-processing-convergence.md) is historical rationale and evaluation evidence.
 
 ## Decision
 
@@ -145,4 +145,4 @@ This ADR supersedes only the conflicting portions of the following decisions; th
 - [0030](0030-durable-interaction-and-linked-resume.md): model-recipient interactions/lineage, synthetic model-blocked replies and best-effort/manual post-resolution resume. Durable review, no live user wait and fresh linked Runs remain.
 - [0033](0033-run-scoped-agent-environment-and-grounded-manager.md): recipient-specific live authority and any immediate typed-grounding escalation based only on Foundation's pre-cutover evaluation.
 
-Implementation order and checkpoint evidence belong only to the [convergence plan](../development/plans/reasoning-source-processing-convergence.md). Current runtime documentation must identify unimplemented parts as accepted targets until their corresponding code lands.
+Current implementation order belongs to the [active architecture plan](../plans/2026-10-02-architecture-refactor.md); the [original convergence plan](https://github.com/syi0808/floe/blob/45fe41af7c5d19a8c5675ecc342f1990ef6ebc00/docs/development/plans/reasoning-source-processing-convergence.md) retains its historical checkpoint evidence. Current runtime documentation must identify unimplemented parts as accepted targets until their corresponding code lands.

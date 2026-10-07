@@ -1,9 +1,6 @@
 # Floe Client
 
-During the active architecture refactor, the [staged verification policy](../../docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence)
-governs execution. T0 removes the documented legacy suites using static inspection only;
-the run and opt-in diagnostic instructions below are not T0 verification commands.
-Replacement behavioral tests are deferred until S3, after structural closure.
+During the active [architecture completion](../../docs/plans/2026-10-02-architecture-refactor.md), screenless Rust Conversation integration is the primary regression layer. Flutter checks cover a small set of UI/FFI paths at completed slices; broad suite reconstruction is separate.
 
 ## Apple-first development
 
@@ -102,18 +99,14 @@ in Release/Profile. A `FLOE_CORE_LIBRARY_PATH` override must still match the Flu
 The Gateway's ordinary build excludes its development file-store implementation entirely.
 `run-local.sh --release` or `--profile` selects ordinary Gateway custody and port `8431`.
 
-Production encryption coverage is still an open gate: Agent Vault and the separate
-host Day/source database now have purpose-separated encrypted storage, while Gateway
-private files still need their encryption cutover. OS file permissions are not encryption. See the development-profile
-and encryption-coverage section of the [restoration plan](../../docs/plans/2026-10-04-flutter-ux-restoration.md)
-before treating a production build as qualified for personal data.
+Agent Vault and the separate host Day/source store are encrypted. Gateway private state also uses authenticated encrypted files; production Keychain/signing/native behavior still needs its own exact-snapshot qualification. OS permissions alone are not encryption. See the [server storage contract](../../server/README.md#encrypted-profile-storage) and the [active plan](../../docs/plans/2026-10-02-architecture-refactor.md).
 
 Native Calendar, Attention and Personal pumps keep host-issued registration refs
 inside native infrastructure. A separate callback isolate owns one independently acquired
 native lane sharing the verified Rust host; the product handle never crosses isolates.
 Shutdown disposes registrations before freeing the callback lane and closing the product
 core. Repeated close, late callback, startup abandonment and shutdown-during-permission
-races are required S3 behavioral coverage; current review is static only. Catalog inspection reads bounded resource metadata only;
+races require explicit behavioral coverage; source descriptions are not qualification. Catalog inspection reads bounded resource metadata only;
 Calendar and Contacts catalog calls never request OS permission. Only an explicit
 Connections integration start can admit a `request_permission` acquisition. Health
 reports that the OS request completed without claiming hidden read permission.
@@ -136,10 +129,10 @@ Calendar operation. Any live Calendar access or cleanup requires approval for th
 target and operation; it never authorizes TCC reset or unrelated Calendar edits.
 
 The legacy client, native-package and Runner test suites have been removed in T0.
-Their [behavior ledger](../../docs/plans/t0-client-behavior-ledger.md) preserves the
+Their [behavior ledger](../../docs/testing/legacy-behavior/t0-client-behavior-ledger.md) preserves the
 observed safety, failure and recovery cases for review. Shared JSON fixtures remain
 available. The old shared fixture builder was also removed in T0; any replacement
-follows the [S3 reconstruction policy](../../docs/development/test-performance.md#shared-cross-language-fixtures).
+follows the [fixture reconstruction policy](../../docs/development/test-performance.md#shared-cross-language-fixtures).
 Private profiles and copied native host bundles must remain isolated. The ledger
 does not claim the old behavior passed or that a replacement suite exists.
 
@@ -156,8 +149,7 @@ The app supplies `AppWireDayGateway` for Day reads, local mutations and explicit
 owner-backed refresh, and `CalendarActionFacade` for the Actions flow. Rust owns
 acquisition, authority, durable operation identity and reconciliation. Dart does
 not publish source evidence, import mirrors or run a separate acquisition policy.
-This is the current S2 source composition; G2 build and S3 behavioral validation
-remain separate gates.
+This describes the current owner-backed composition, not a build or behavior qualification claim.
 
 ## Localization
 
@@ -262,19 +254,14 @@ client.
 
 Calendar proposal and Action diagnostics must use the current owner-backed Day and
 Actions contracts at their authorized gate. No retained diagnostic command is
-evidence that the current S2 product flow has passed validation.
+evidence that the current product flow has passed validation.
 
-Follow the [architecture refactor verification gates](../../docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence):
+Follow the [active verification sequence](../../docs/plans/2026-10-02-architecture-refactor.md):
 
-- T0 permits static residual inspection, complete diff review and `git diff --check` only.
-  Do not run a formatter, compiler, analyzer, build, test, package resolver or architecture checker.
-- At the completed S1 boundary, G1 permits the recorded production compiler/type-check
-  phase using the required SDK. It does not permit a Flutter application build or tests.
-- After S2 structural closure, G2 requires the full production compilation/build gate,
-  including same-snapshot FFI, Flutter and affected Apple targets.
-- Only after S2, S3 restores test dependencies and targets for new behavioral tests.
-  G3 then includes `flutter analyze`, `flutter test` and final Apple/FFI builds.
+- T1 Rust Conversation integration runs without Flutter or real provider accounts.
+- T2 covers real Rust/Go wire and signed authority boundaries.
+- T3 uses production Flutter/FFI for bounded representative UI scenarios.
+- T4 qualifies actual macOS permission, native and production custody behavior.
+- Run format/compile/checks at the completed slice, not every file; final production builds must pass. Broad legacy-suite reconstruction follows stabilized contracts.
 
-The direct `flutter_test` dependency and old native test targets are absent at T0.
-Dependency resolution follows its authorized gate; retained lockfile entries are
-not evidence of a runnable old or new suite. `flutter_lints` remains in use.
+The historical Flutter/native tests were removed after behavior extraction. Inspect the current pubspec and targets before selecting a test command; retained lockfile entries are not proof of a runnable suite.

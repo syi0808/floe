@@ -76,4 +76,4 @@ Once the origin's review group is terminal with at least one verified resolution
 
 Health's unavailable local privacy transformer is a source limitation, not an approval request. A Gateway transport failure is a reasoning-service failure, not permission to retry on a local model. Explain the affected capability and supported remainder without implying an observation or successful action that did not occur.
 
-These are accepted experience requirements under [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md), not a claim that the current client/runtime already implements them. Implementation order and evidence belong to the [convergence plan](../development/plans/reasoning-source-processing-convergence.md).
+These are accepted experience requirements under [ADR 0034](../decisions/0034-gateway-reasoning-and-source-processing-authority.md), not a claim that the current client/runtime already implements them. Implementation order and evidence belong to the [active execution plan](../plans/2026-10-02-architecture-refactor.md).

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "status": "canonical allowed dependency policy; current repository graph is read from Cargo manifests",
   "edge_semantics": "A -> B means A may directly depend on B public API at compile time; adapters implement owner-defined ports.",
-  "contract_reference_note": "Direct pure kernel, agent_contract, context_contract, and execution values are declared where public owner ports name them. FFI invokes typed owner APIs with verified App host admission and bounded execution scopes; it does not import concrete Vault/provider/native credential adapters. Stage-specific allowed deltas follow docs/plans/2026-10-02-canonical-contracts.md.",
+  "contract_reference_note": "Direct pure contracts are declared where owner ports name them. The manifest allowlist is authoritative for compile dependencies, not runtime ownership. See docs/architecture/README.md and the single active docs/plans/2026-10-02-architecture-refactor.md for current scope; historical stage deltas are not current permissions.",
   "target": [
     {
       "id": "kernel",

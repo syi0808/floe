@@ -4,7 +4,7 @@ This document defines the current Rust test-performance and validation policy.
 It is a runbook, not a benchmark archive. Detailed experiments and superseded
 measurements belong in Git history.
 
-During the authorized architecture refactor, the [execution plan](../plans/2026-10-02-architecture-refactor.md) overrides the normal iteration commands below. T0 records and removes the old suite; G1 compiles the complete first slice; G2 builds the complete structure; S3 reconstructs tests before G3 qualification. An empty old suite is not a successful verification result.
+During the authorized architecture work, the [active plan](../plans/2026-10-02-architecture-refactor.md) governs cadence. T1 Conversation integration is the first repeatable behavior layer; T2/T3/T4 cover Rust/Go, Flutter and actual macOS boundaries. Broad suite reconstruction follows structural and behavior stabilization. An empty old suite is not a successful verification result.
 
 ## Rust validation phases
 
@@ -80,8 +80,8 @@ solely to reduce a binary count when doing so weakens isolation or ownership.
 ## Shared cross-language fixtures
 
 The old shared Go/Swift fixture builder and its test-only callers were removed
-in T0 after their behavior was recorded in the [root tooling ledger](../plans/t0-root-tools-behavior-ledger.md).
-S3 may restore a shared builder if the reconstructed boundary tests require it.
+in T0 after their behavior was recorded in the [root tooling ledger](../testing/legacy-behavior/t0-root-tools-behavior-ledger.md).
+A reconstructed boundary suite may restore a shared builder if the reconstructed boundary tests require it.
 Its tests must cover source/toolchain identity, output checksum validation,
 concurrent publication and failure cleanup before cache reuse is trusted.
 

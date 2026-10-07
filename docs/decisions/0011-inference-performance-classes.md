@@ -10,7 +10,7 @@ Product-purpose selection and Gateway-owned provider/model configuration remain 
 
 The previously separate fallback-policy decision is now fixed for Manager, shipped Experts and Learner: Gateway Primary, device-local Fallback only on valid planning-time Primary absence. Credential, inventory, transport, timeout and source-permission failures are not absence. Internal operator/profile configuration remains possible without becoming product intent or user authority.
 
-The original text below is retained as rationale where not superseded, including historical API/version references. This amendment does not assert that the replacement protocol or routing is already implemented; the [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the cutover.
+The original text below is retained as rationale where not superseded, including historical API/version references. This amendment does not assert that the replacement protocol or routing is already implemented; the [convergence plan](https://github.com/syi0808/floe/blob/45fe41af7c5d19a8c5675ecc342f1990ef6ebc00/docs/development/plans/reasoning-source-processing-convergence.md) owns the cutover.
 
 ## Context
 

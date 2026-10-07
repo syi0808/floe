@@ -11,11 +11,13 @@ This file is the entry point for repository documentation. Do not recursively re
 | What invariants must every architecture change preserve? | [Architecture invariants](architecture/invariants.md) |
 | How should Floe evolve while it is pre-stable? | [Architecture evolution](development/architecture-evolution.md) |
 | Why was a durable design choice made? | [Architecture decisions](decisions/README.md) |
+| What is the current execution sequence? | [The single active plan](plans/README.md) |
+| How is behavior verified and old behavior evidence retained? | [Testing](testing/README.md) |
 | How should an architecture-changing task be sequenced? | [Architecture evolution](development/architecture-evolution.md) and the repo-local architecture-change skill |
 | How should the product look and behave? | [Design system](../DESIGN.md) and [design specifications](design/README.md) |
-| How do I build/debug a surface? | The nearest component README, plus [development docs](development/) where applicable |
+| How do I build/debug a surface? | The nearest component README, plus [development docs](development) where applicable |
 | How do I select test gates, measure tests or reuse cross-language fixtures? | [Test performance](development/test-performance.md) |
-| How do I configure deployment/runtime infrastructure? | [Deployment docs](deployment/) and the relevant service README |
+| How do I configure deployment/runtime infrastructure? | [Deployment docs](deployment) and the relevant service README |
 
 ## Document classes
 

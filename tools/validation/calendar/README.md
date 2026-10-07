@@ -2,8 +2,8 @@
 
 The legacy deterministic native suites and response-loss test shim were removed
 in T0 after behavior extraction. Their assertions and external-effect limits are
-recorded in [the root tooling ledger](../../../docs/plans/t0-root-tools-behavior-ledger.md).
-New tests are reconstructed only after full architecture and build closure.
+recorded in [the root tooling ledger](../../../docs/testing/legacy-behavior/t0-root-tools-behavior-ledger.md).
+Reconstruction follows the active plan: focused Conversation integration comes first, with actual Calendar effects qualified at their completed owner slice.
 No current response-loss injection procedure is provided by this directory.
 
 `core-check.c` remains an opt-in C ABI diagnostic host. Compile it against the

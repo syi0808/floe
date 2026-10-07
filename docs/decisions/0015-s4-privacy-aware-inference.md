@@ -13,7 +13,7 @@ The original S4 rationale/evidence requirements below are historical where they 
 
 Health requires deterministic minimization followed by a mandatory device-local semantic privacy operation before any reasoning, whether local or Gateway. It is not an Agent Tool/ModelPort call and cannot fall back to a remote sanitizer or deterministic semantic classification. Wellbeing remains HighlySensitive; successful transform evidence and source GatewayAllowed permission are separate preconditions. This mandatory transform is Health-only, not a new rule for every sensitive connector.
 
-Raw/credential non-export, bounded inputs, real adapter contract verification, redacted diagnostics and failure visibility remain valid. Authentication feasibility statements and slice counts below are historical, not current provider support or implementation claims. The [convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation of the accepted amendment.
+Raw/credential non-export, bounded inputs, real adapter contract verification, redacted diagnostics and failure visibility remain valid. Authentication feasibility statements and slice counts below are historical, not current provider support or implementation claims. The [convergence plan](https://github.com/syi0808/floe/blob/45fe41af7c5d19a8c5675ecc342f1990ef6ebc00/docs/development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation of the accepted amendment.
 
 ## Context
 

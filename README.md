@@ -36,7 +36,7 @@ Use the repository's pinned toolchain inputs and [AGENTS.md](AGENTS.md). Rust re
 
 Rust validation phases, Cargo profile policy, test-layout guidance and performance-measurement rules live in [test performance](docs/development/test-performance.md) and the repo-local code-change verification skill. Cargo is the maintained Rust test runner; use the affected-crate loop during iteration and the documented workspace gate once the covered Rust changes are complete. Turso's FTS feature remains disabled because Floe does not use FTS SQL.
 
-During the active [architecture refactor](docs/plans/2026-10-02-architecture-refactor.md#8-verification-policy-and-final-evidence), executable checks run only at the authorized complete-slice gates. S2 implementation waits for full structural closure before G2 builds; S3 reconstructs behavioral tests before G3 qualification. Do not treat the removed old suites or an earlier compiler pass as validation of the current source.
+During the active [architecture completion](docs/plans/2026-10-02-architecture-refactor.md), use the current P0–P6 sequence. The first repeatable regression layer is the screenless Conversation integration harness, followed by targeted Rust/Go and Flutter boundaries. Check completed slices rather than every file, and do not treat an empty old suite or earlier compiler pass as current qualification.
 
 Outside that staged work, the normal affected-module loop includes:
 

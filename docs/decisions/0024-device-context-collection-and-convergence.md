@@ -13,7 +13,7 @@ Health/Wellbeing now requires deterministic minimization followed by a mandatory
 
 Local Agent labels in the original diagrams describe session/source ownership, not a requirement for local-only reasoning. Manager, shipped Experts and Learner instead share Gateway-primary/local-fallback selection under ADR 0034, with fallback only for valid planning-time Primary absence. Cross-device relay, sync and SharedContextGrant remain independently governed roadmap capabilities, not work implemented by this amendment. The mandatory transform scope is Health-only; it introduces neither a generic privacy framework nor Android local-model implementation.
 
-Conflicting statements and rollout examples below are preserved as historical rationale rather than current execution policy. The [reasoning/source-processing convergence plan](../development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation; accepting this amendment does not claim that its runtime cutovers or cross-device capabilities are already implemented.
+Conflicting statements and rollout examples below are preserved as historical rationale rather than current execution policy. The [reasoning/source-processing convergence plan](https://github.com/syi0808/floe/blob/45fe41af7c5d19a8c5675ecc342f1990ef6ebc00/docs/development/plans/reasoning-source-processing-convergence.md) owns the ordered implementation; accepting this amendment does not claim that its runtime cutovers or cross-device capabilities are already implemented.
 
 ## Context
 
