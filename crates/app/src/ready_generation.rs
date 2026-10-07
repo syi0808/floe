@@ -19,6 +19,8 @@ pub(crate) struct ReadyGeneration<Keys: VaultKeyProvider> {
     owners: Arc<ReadyOwners>,
     retired: AtomicBool,
     generation: u64,
+    #[cfg(all(test, feature = "development-storage"))]
+    shutdown_complete: Arc<AtomicBool>,
 }
 struct ActivationGuard<Keys: VaultKeyProvider> {
     vault: Arc<EncryptedAgentVault<Keys>>,
@@ -225,6 +227,8 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             owners,
             retired: AtomicBool::new(false),
             generation: activation.executor_generation,
+            #[cfg(all(test, feature = "development-storage"))]
+            shutdown_complete: Arc::new(AtomicBool::new(false)),
         })
     }
     pub(crate) fn owners(&self) -> Arc<ReadyOwners> {
@@ -236,6 +240,17 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         }
         self.vault.check_access()
     }
+
+    #[cfg(all(test, feature = "development-storage"))]
+    pub(crate) fn seal_vault_for_test(&self) {
+        self.vault.seal();
+    }
+
+    #[cfg(all(test, feature = "development-storage"))]
+    pub(crate) fn shutdown_completion_probe_for_test(&self) -> Arc<AtomicBool> {
+        self.shutdown_complete.clone()
+    }
+
     pub(crate) async fn shutdown(&self, operation_id: Uuid) -> Result<(), AgentFailure> {
         let _seal = RetirementSeal(self.vault.as_ref());
         self.retired.store(true, Ordering::Release);
@@ -250,13 +265,17 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             drain_owner(|| self.owners.knowledge.shutdown()),
         );
         self.vault.seal();
-        close
+        let result = close
             .and(gateway)
             .and(conversation)
             .and(connections)
             .and(actions)
             .and(experts)
-            .and(knowledge)
+            .and(knowledge);
+        #[cfg(all(test, feature = "development-storage"))]
+        self.shutdown_complete
+            .store(result.is_ok(), Ordering::Release);
+        result
     }
 }
 impl<Keys: VaultKeyProvider> Drop for ReadyGeneration<Keys> {

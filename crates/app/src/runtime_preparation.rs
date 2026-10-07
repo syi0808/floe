@@ -67,18 +67,37 @@ struct Published {
     preparation_failure: Option<AgentFailure>,
     failure_correlation: Option<Uuid>,
     current: Option<OpenGeneration>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "development-storage"))]
     archive_gate: Option<Arc<ArchiveGate>>,
+    #[cfg(all(test, feature = "development-storage"))]
+    generation_drain_gate: Option<Arc<GenerationDrainGate>>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "development-storage"))]
 struct ArchiveGate {
     operation_id: Uuid,
     entered: mpsc::SyncSender<()>,
     release: Mutex<mpsc::Receiver<()>>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "development-storage"))]
+struct GenerationDrainGate {
+    operation_id: Uuid,
+    entered: mpsc::SyncSender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+#[cfg(all(test, feature = "development-storage"))]
+impl GenerationDrainGate {
+    fn pause(&self, operation_id: Uuid) {
+        if operation_id == self.operation_id {
+            let _ = self.entered.send(());
+            let _ = self.release.lock().expect("drain test gate lock").recv();
+        }
+    }
+}
+
+#[cfg(all(test, feature = "development-storage"))]
 impl ArchiveGate {
     fn pause(&self, operation_id: Uuid) {
         if operation_id == self.operation_id {
@@ -127,12 +146,20 @@ impl RuntimePreparationHost {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "development-storage"))]
     fn set_archive_gate(&self, gate: Arc<ArchiveGate>) {
         self.published
             .lock()
             .expect("published Runtime state lock")
             .archive_gate = Some(gate);
+    }
+
+    #[cfg(all(test, feature = "development-storage"))]
+    fn set_generation_drain_gate(&self, gate: Arc<GenerationDrainGate>) {
+        self.published
+            .lock()
+            .expect("published Runtime state lock")
+            .generation_drain_gate = Some(gate);
     }
 
     pub(crate) fn ready(&self, caller: &CallerContext) -> Result<Arc<ReadyOwners>, AgentFailure> {
@@ -656,12 +683,12 @@ impl Worker {
                             }
                         }
                     }
-                    #[cfg(test)]
+                    #[cfg(all(test, feature = "development-storage"))]
                     let archive_gate = published
                         .lock()
                         .ok()
                         .and_then(|slot| slot.archive_gate.clone());
-                    #[cfg(test)]
+                    #[cfg(all(test, feature = "development-storage"))]
                     if let Some(gate) = archive_gate {
                         gate.pause(job.id);
                     }
@@ -933,6 +960,16 @@ async fn execute(
                 }
                 let fence = close_published(published, core, false);
                 let (_, generation) = current.take().ok_or(AgentFailure::Conflict)?;
+                #[cfg(all(test, feature = "development-storage"))]
+                if let Some(gate) = published.lock().ok().and_then(|mut slot| {
+                    slot.generation_drain_gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.operation_id == job.id)
+                        .then(|| slot.generation_drain_gate.take())
+                        .flatten()
+                }) {
+                    gate.pause(job.id);
+                }
                 let drain = tokio::time::timeout(DRAIN_TIMEOUT, generation.shutdown(job.id))
                     .await
                     .map_err(|_| AgentFailure::DeadlineExceeded)?;
@@ -1152,17 +1189,17 @@ mod tests {
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-    struct ArchiveGateRelease(Option<mpsc::Sender<()>>);
+    struct TestGateRelease(Option<mpsc::Sender<()>>);
 
-    impl ArchiveGateRelease {
+    impl TestGateRelease {
         fn release(&mut self) {
             if let Some(release) = self.0.take() {
-                release.send(()).expect("resume archive worker");
+                release.send(()).expect("resume gated worker");
             }
         }
     }
 
-    impl Drop for ArchiveGateRelease {
+    impl Drop for TestGateRelease {
         fn drop(&mut self) {
             if let Some(release) = self.0.take() {
                 let _ = release.send(());
@@ -1248,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_worker_replays_completed_receipt_but_rejects_new_work_without_retry() {
+    fn injected_terminal_health_replays_completed_receipt_but_rejects_new_work() {
         let profile = TempDir::new().expect("isolated profile directory");
         let host = open_profile(&profile);
         let (caller, operation_id, completed) = completed_prepare(&host);
@@ -1263,6 +1300,8 @@ mod tests {
                 .lock()
                 .expect("Runtime bridge state");
             let worker = state.worker.as_ref().expect("preparation worker");
+            // This simulates an already-published terminal health flag. It does
+            // not panic, poison, or crash the worker thread.
             *worker.health.lock().expect("worker health") = Some(AgentFailure::Interrupted);
         }
 
@@ -1384,7 +1423,7 @@ mod tests {
         let operation_id = Uuid::new_v4();
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::channel();
-        let mut release = ArchiveGateRelease(Some(release_tx));
+        let mut release = TestGateRelease(Some(release_tx));
         let gate = Arc::new(ArchiveGate {
             operation_id,
             entered: entered_tx,
@@ -1461,47 +1500,109 @@ mod tests {
     }
 
     #[test]
-    fn sealed_generation_is_fenced_before_reopening_a_new_generation() {
+    fn sealed_published_generation_is_fenced_and_drained_before_same_host_reprepare() {
         let profile = TempDir::new().expect("isolated profile directory");
         let host = open_profile(&profile);
         let (caller, _, result) = completed_prepare(&host);
         assert_eq!(result.failure, None);
-        let old_owners = {
-            let request = host
-                .request(Uuid::new_v4())
-                .expect("admit old owner request");
-            let services = request.services();
-            let owners = services
-                .ready_owners(&caller)
-                .expect("active owner generation");
-            services
-                .runtime_preparation
-                .shutdown()
-                .expect("seal and drain current generation");
-            assert!(owners.check(&caller.owner_actor()).is_err());
-            owners
-        };
-        host.shutdown().expect("finish old App retirement");
-        assert!(old_owners.check(&caller.owner_actor()).is_err());
-        // Retained owner handles keep the shared product-store lease alive;
-        // once fenced, release them before the next process generation opens.
-        drop(old_owners);
-
-        let reopened = open_profile(&profile);
-        let (reopened_caller, _, result) = completed_prepare(&reopened);
-        assert_eq!(reopened_caller.person_id(), caller.person_id());
-        assert_eq!(reopened_caller.device_id(), caller.device_id());
-        assert_ne!(reopened_caller.runtime_epoch(), caller.runtime_epoch());
-        assert_eq!(result.failure, None);
-        let request = reopened
+        let request = host
             .request(Uuid::new_v4())
-            .expect("admit new owner request");
-        let new_owners = request
-            .services()
-            .ready_owners(&reopened_caller)
-            .expect("new Runtime generation is ready");
-        assert!(new_owners.check(&reopened_caller.owner_actor()).is_ok());
+            .expect("admit same-host Runtime request");
+        assert_eq!(request.caller(), &caller, "caller epoch remains unchanged");
+        let services = request.services();
+        let bridge = &services.runtime_preparation;
+
+        let (old_generation, old_owners, old_drain_complete) = {
+            let slot = bridge.published.lock().expect("published Runtime state");
+            let (admitted, generation) =
+                slot.current.as_ref().expect("published current generation");
+            assert_eq!(admitted, &caller);
+            let owners = generation.owners();
+            assert!(owners.check(&caller.owner_actor()).is_ok());
+            let drain_complete = generation.shutdown_completion_probe_for_test();
+            assert!(!drain_complete.load(Ordering::Acquire));
+
+            // Only seal the published generation. Its owner admission and the
+            // worker's current pointer remain untouched for execute() to fence.
+            generation.seal_vault_for_test();
+            assert!(generation.check_access().is_err());
+            assert!(owners.check(&caller.owner_actor()).is_ok());
+            assert!(
+                slot.current
+                    .as_ref()
+                    .is_some_and(|(_, published)| { Arc::ptr_eq(published, generation) })
+            );
+            (Arc::downgrade(generation), owners, drain_complete)
+        };
+
+        let operation_id = Uuid::new_v4();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::channel();
+        let mut release = TestGateRelease(Some(release_tx));
+        bridge.set_generation_drain_gate(Arc::new(GenerationDrainGate {
+            operation_id,
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }));
+
+        services
+            .prepare_runtime(&caller, operation_id)
+            .expect("admit a new prepare ID in the same caller epoch");
+        entered_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("execute fenced old admission before starting its drain");
+        assert!(old_owners.check(&caller.owner_actor()).is_err());
+        assert!(!old_drain_complete.load(Ordering::Acquire));
+        assert!(
+            bridge
+                .published
+                .lock()
+                .expect("published Runtime state")
+                .current
+                .is_none(),
+            "old generation is unpublished while its drain is paused"
+        );
+        // Owner handles retain the product-store lease, so release the test's
+        // references before execute() drains and activates the replacement.
+        drop(old_owners);
+        release.release();
+
+        let deadline = Instant::now() + TEST_TIMEOUT;
+        let result = loop {
+            let result = services
+                .get_runtime_preparation(&caller, operation_id)
+                .expect("read same-host prepare result");
+            if result.done {
+                break result;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "same-host prepare exceeded timeout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(result.failure, None);
+        assert!(
+            old_drain_complete.load(Ordering::Acquire),
+            "execute awaited successful retirement of the old generation"
+        );
+        assert!(
+            old_generation.upgrade().is_none(),
+            "old generation was released after its drain"
+        );
+        services
+            .acknowledge_runtime_preparation(&caller, operation_id)
+            .expect("archive-before-ACK for replacement prepare");
+
+        let readiness = services
+            .runtime_readiness(&caller, Uuid::new_v4())
+            .expect("observe replacement generation readiness");
+        assert_eq!(readiness.state, RuntimeReadinessState::Ready);
+        let new_owners = services
+            .ready_owners(&caller)
+            .expect("replacement generation is ready");
+        assert!(new_owners.check(&caller.owner_actor()).is_ok());
         drop(request);
-        reopened.shutdown().expect("close reopened App generation");
+        host.shutdown().expect("close same App host");
     }
 }
