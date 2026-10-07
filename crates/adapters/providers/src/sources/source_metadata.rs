@@ -64,7 +64,7 @@ impl NativeSourceMetadataAdapter {
         let (now, deadline) = deadline(scope)?;
         let request = CalendarAcquisitionRequest {
             request_id: Uuid::new_v4(),
-            host_epoch: self.calendar.host_epoch(actor.person_id)?,
+            host_epoch: self.calendar_host_epoch(actor, provider)?,
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),
             connection_id: source.connection_id().as_str().to_owned(),
@@ -108,14 +108,25 @@ impl NativeSourceMetadataAdapter {
         request: CalendarAcquisitionRequest,
         scope: &ExecutionScope,
     ) -> Result<CalendarAcquisitionResult, AgentFailure> {
-        let response = scope
-            .run(self.calendar.submit(
-                request.clone(),
-                chrono::Utc::now().timestamp_millis(),
-                scope.cancellation().clone(),
-            ))
-            .await?;
-        if self.calendar.host_epoch(request.person_id).as_deref() != Ok(request.host_epoch.as_str())
+        let response = if fixture_calendar_provider(request.provider) {
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            {
+                super::fixture_calendar::respond(&request)?
+            }
+            #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
+            {
+                return Err(AgentFailure::CapabilityUnavailable);
+            }
+        } else {
+            scope
+                .run(self.calendar.submit(
+                    request.clone(),
+                    chrono::Utc::now().timestamp_millis(),
+                    scope.cancellation().clone(),
+                ))
+                .await?
+        };
+        if self.calendar_host_epoch_for_request(&request)?.as_str() != request.host_epoch
             || response.request_id != request.request_id
             || response.host_epoch != request.host_epoch
             || response.person_id != request.person_id
@@ -133,6 +144,35 @@ impl NativeSourceMetadataAdapter {
         validate_subject(&response.native_subject_fingerprint_before)?;
         validate_subject(&response.native_subject_fingerprint_after)?;
         Ok(response)
+    }
+
+    fn calendar_host_epoch(
+        &self,
+        actor: &OwnerActor,
+        provider: CalendarProvider,
+    ) -> Result<String, AgentFailure> {
+        match provider {
+            CalendarProvider::EventKit => self.calendar.host_epoch(actor.person_id),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            CalendarProvider::Fixture => {
+                Ok(super::fixture_calendar::host_epoch(&actor.device_id))
+            }
+            _ => Err(AgentFailure::CapabilityUnavailable),
+        }
+    }
+
+    fn calendar_host_epoch_for_request(
+        &self,
+        request: &CalendarAcquisitionRequest,
+    ) -> Result<String, AgentFailure> {
+        match request.provider {
+            CalendarProvider::EventKit => self.calendar.host_epoch(request.person_id),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            CalendarProvider::Fixture => {
+                Ok(super::fixture_calendar::host_epoch(&request.device_id))
+            }
+            _ => Err(AgentFailure::CapabilityUnavailable),
+        }
     }
 
     async fn submit_personal(
@@ -304,20 +344,7 @@ impl SourceCatalogPort for NativeSourceMetadataAdapter {
         Box::pin(scope.run(async move {
             validate_source(actor, source)?;
             let (resources, complete) = match source.connector_id().as_str() {
-                "calendar.event_kit" => {
-                    let response = self
-                        .calendar_metadata(
-                            actor,
-                            source,
-                            CalendarAcquisitionMode::InspectCatalog,
-                            Vec::new(),
-                            scope,
-                        )
-                        .await?;
-                    (validate_resources(response.available_calendars)?, true)
-                }
-                #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-                "calendar.fixture" => {
+                connector if floe_access::local_calendar_provider(connector).is_some() => {
                     let response = self
                         .calendar_metadata(
                             actor,
@@ -392,13 +419,13 @@ impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
             }
             let (now, deadline) = deadline(scope)?;
             let permission = match request.connector_id.as_str() {
-                "calendar.event_kit" | "calendar.fixture" => {
+                connector if floe_access::local_calendar_provider(connector).is_some() => {
                     let provider = adapter_calendar_provider(request.connector_id.as_str())?;
                     let response = self
                         .submit_calendar(
                             CalendarAcquisitionRequest {
                                 request_id: request.operation_id,
-                                host_epoch: self.calendar.host_epoch(actor.person_id)?,
+                                host_epoch: self.calendar_host_epoch(actor, provider)?,
                                 person_id: actor.person_id,
                                 device_id: actor.device_id.clone(),
                                 connection_id: request.connection_id.as_str().to_owned(),
@@ -473,25 +500,12 @@ impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
 fn validate_source(actor: &OwnerActor, source: &SourceConnection) -> Result<(), AgentFailure> {
     actor.validate()?;
     source.validate().map_err(|_| AgentFailure::InvalidInput)?;
-    let expected_owner = match source.connector_id().as_str() {
-        "calendar.event_kit" => floe_access::local_calendar_execution_owner(
-            source.connector_id().as_str(),
-            &actor.device_id,
-        )
-        .ok_or(AgentFailure::CapabilityUnavailable)?,
-        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-        "calendar.fixture" => floe_access::local_calendar_execution_owner(
-            source.connector_id().as_str(),
-            &actor.device_id,
-        )
-        .ok_or(AgentFailure::CapabilityUnavailable)?,
-        "contacts.apple" | "health.apple" => format!("apple:{}", actor.device_id),
-        "attention.macos" => format!("macos:{}", actor.device_id),
-        _ => return Err(AgentFailure::CapabilityUnavailable),
-    };
+    let provider = adapter_calendar_provider(source.connector_id().as_str())?;
+    let expected_owner = floe_access::local_calendar_execution_owner(provider, &actor.device_id)
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
     if source.person_id() != actor.person_id
         || source.execution_owner_id().as_str() != expected_owner
-        || floe_access::local_calendar_connection_id(source.connector_id().as_str())
+        || floe_access::local_calendar_connection_id_for_connector(source.connector_id().as_str())
             .is_some_and(|expected| source.connection_id().as_str() != expected)
     {
         return Err(AgentFailure::PolicyDenied);
@@ -500,11 +514,23 @@ fn validate_source(actor: &OwnerActor, source: &SourceConnection) -> Result<(), 
 }
 
 fn adapter_calendar_provider(connector: &str) -> Result<CalendarProvider, AgentFailure> {
-    match connector {
-        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
+    match floe_access::local_calendar_provider(connector) {
+        Some(CalendarProvider::EventKit) => Ok(CalendarProvider::EventKit),
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-        "calendar.fixture" => Ok(CalendarProvider::Fixture),
+        Some(CalendarProvider::Fixture) => Ok(CalendarProvider::Fixture),
         _ => Err(AgentFailure::CapabilityUnavailable),
+    }
+}
+
+fn fixture_calendar_provider(provider: CalendarProvider) -> bool {
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    {
+        provider == CalendarProvider::Fixture
+    }
+    #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
+    {
+        let _ = provider;
+        false
     }
 }
 

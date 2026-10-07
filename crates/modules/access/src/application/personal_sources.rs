@@ -19,9 +19,7 @@ pub fn apple_execution_owner(device_id: &str) -> String {
 /// served by the Person's paired server and re-admitted against it.
 pub fn is_device_local_source(connector: &str) -> bool {
     connector == ATTENTION_CONNECTOR
-        || matches!(connector, "calendar.event_kit" | "calendar.android")
-        || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
-            && connector == "calendar.fixture")
+        || crate::local_calendar_provider(connector).is_some()
         || matches!(
             connector,
             "contacts.apple" | "contacts.android" | "health.apple"

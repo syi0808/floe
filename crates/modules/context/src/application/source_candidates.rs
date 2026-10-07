@@ -163,17 +163,15 @@ pub fn discover_source_candidates(
         "calendar.timeline" => {
             for connection in request.source_connections {
                 let connector = connection.connector_id().as_str();
-                let expected_owner = floe_access::local_calendar_execution_owner(
+                let expected_owner = floe_access::local_calendar_execution_owner_for_connector(
                     connector,
                     request.device_id,
                 )
                 .or_else(|| request.remote_execution_owner.map(str::to_owned));
                 let supported_connector =
-                    floe_access::native_calendar_provider(connector).is_some()
+                    floe_access::local_calendar_provider(connector).is_some()
                         || matches!(connector, "calendar.google" | "calendar.microsoft");
-                let connection_identity_matches = floe_access::local_calendar_connection_id(
-                    connector,
-                )
+                let connection_identity_matches = floe_access::local_calendar_connection_id_for_connector(connector)
                 .is_none_or(|expected| connection.connection_id().as_str() == expected);
                 if connection.is_serving()
                     && connection.person_id() == request.person_id
@@ -191,7 +189,11 @@ pub fn discover_source_candidates(
                         connection.connection_id().as_str(),
                         connection.execution_owner_id().as_str(),
                         resource.as_str(),
-                        "Calendar".into(),
+                        if connector == "calendar.fixture" {
+                            "Synthetic QA Calendar".into()
+                        } else {
+                            "Calendar".into()
+                        },
                         if connector == "calendar.event_kit" {
                             "Connected calendar device".into()
                         } else if connector == "calendar.fixture" {

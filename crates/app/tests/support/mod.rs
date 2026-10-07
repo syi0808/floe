@@ -43,6 +43,7 @@ pub enum ModelOutput {
     Answer,
     UnsupportedManagerToolCall,
     WaitForCancellation(Arc<GenerateBarrier>),
+    ScheduleExpertFlow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,46 +55,85 @@ pub enum PlanStage {
 #[derive(Clone, Debug)]
 pub struct ScriptSnapshot {
     pub plans: Vec<(PlanStage, ModelPlanRequest)>,
+    pub plan_bindings: Vec<ScriptCallBinding>,
     pub generated: Vec<InferenceRequest>,
+    pub generated_bindings: Vec<ScriptCallBinding>,
     pub violations: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptCallBinding {
+    pub consumer: String,
+    pub run_id: Option<Uuid>,
+    pub task_id: Option<Uuid>,
+    pub attempt_id: Option<Uuid>,
 }
 
 #[derive(Default)]
 struct RecorderState {
     plans: Vec<(PlanStage, ModelPlanRequest)>,
+    plan_bindings: Vec<ScriptCallBinding>,
     generated: Vec<InferenceRequest>,
+    generated_bindings: Vec<ScriptCallBinding>,
     violations: Vec<String>,
     identity: Option<(String, String)>,
-    catalog: Option<AllowedCatalog>,
+    catalogs: std::collections::BTreeMap<String, AllowedCatalog>,
+    schedule_flow: bool,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScriptRecorder(Arc<Mutex<RecorderState>>);
 
 impl ScriptRecorder {
+    fn new(schedule_flow: bool) -> Self {
+        Self(Arc::new(Mutex::new(RecorderState {
+            schedule_flow,
+            ..RecorderState::default()
+        })))
+    }
+
     fn record_plan(
         &self,
         stage: PlanStage,
         request: &ModelPlanRequest,
+        run_id: Option<Uuid>,
+        task_id: Option<Uuid>,
     ) -> Result<(), ModelObservationError> {
         let mut state = self
             .0
             .lock()
             .map_err(|_| ModelObservationError::StorageUnavailable)?;
-        let expected = match state.plans.len() {
-            0 => PlanStage::Primary,
-            1 => PlanStage::LocalFallback,
-            _ => {
-                state
-                    .violations
-                    .push("unexpected additional model plan observation".into());
-                return Err(ModelObservationError::InvalidIdentity);
+        let expected = if state.schedule_flow {
+            match state.plans.len() {
+                0 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
+                1 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
+                2 => Some((PlanStage::Primary, floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER)),
+                3 => Some((PlanStage::LocalFallback, floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER)),
+                4 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
+                5 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
+                _ => None,
+            }
+        } else {
+            match state.plans.len() {
+                0 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
+                1 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
+                _ => None,
             }
         };
-        if stage != expected
+        let Some((expected_stage, expected_consumer)) = expected else {
+            state
+                .violations
+                .push("unexpected additional model plan observation".into());
+            return Err(ModelObservationError::InvalidIdentity);
+        };
+        if stage != expected_stage
+            || request.consumer != expected_consumer
             || request.purpose != CONVERSATION_PURPOSE
-            || request.consumer != CONVERSATION_CONSUMER
             || request.required_capabilities.validate().is_err()
+            || run_id.is_none()
+            || (request.consumer == CONVERSATION_CONSUMER && task_id.is_some())
+            || (request.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
+                && task_id.is_none())
         {
             state
                 .violations
@@ -115,6 +155,12 @@ impl ScriptRecorder {
             _ => {}
         }
         state.plans.push((stage, request.clone()));
+        state.plan_bindings.push(ScriptCallBinding {
+            consumer: request.consumer.clone(),
+            run_id,
+            task_id,
+            attempt_id: None,
+        });
         Ok(())
     }
 
@@ -124,23 +170,64 @@ impl ScriptRecorder {
         }
     }
 
-    fn record_generate(&self, request: &InferenceRequest) -> Result<(), AgentFailure> {
+    fn record_generate(
+        &self,
+        plan: &ModelPlanRequest,
+        request: &InferenceRequest,
+        run_id: Option<Uuid>,
+        task_id: Option<Uuid>,
+    ) -> Result<usize, AgentFailure> {
         let mut state = self.0.lock().map_err(|_| AgentFailure::Interrupted)?;
-        if state.generated.len() >= 1 {
+        let expected = if state.schedule_flow {
+            [
+                CONVERSATION_CONSUMER,
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                CONVERSATION_CONSUMER,
+            ]
+            .get(state.generated.len())
+            .copied()
+        } else if state.generated.is_empty() {
+            Some(CONVERSATION_CONSUMER)
+        } else {
+            None
+        };
+        let Some(expected_consumer) = expected else {
             state
                 .violations
                 .push("unexpected additional model generate call".into());
             return Err(AgentFailure::InvalidInput);
+        };
+        if plan.consumer != expected_consumer
+            || (plan.consumer == CONVERSATION_CONSUMER && task_id.is_some())
+            || (plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
+                && task_id.is_none())
+            || run_id.is_none()
+        {
+            state.violations.push(format!(
+                "model generate was bound to an unexpected consumer/run/task: consumer={}, run={run_id:?}, task={task_id:?}",
+                plan.consumer
+            ));
+            return Err(AgentFailure::InvalidInput);
         }
+        let index = state.generated.len();
         state.generated.push(request.clone());
-        Ok(())
+        state.generated_bindings.push(ScriptCallBinding {
+            consumer: plan.consumer.clone(),
+            run_id,
+            task_id,
+            attempt_id: Some(request.attempt_id),
+        });
+        Ok(index)
     }
 
     pub fn snapshot(&self) -> ScriptSnapshot {
         let state = self.0.lock().expect("script recorder mutex poisoned");
         ScriptSnapshot {
             plans: state.plans.clone(),
+            plan_bindings: state.plan_bindings.clone(),
             generated: state.generated.clone(),
+            generated_bindings: state.generated_bindings.clone(),
             violations: state.violations.clone(),
         }
     }
@@ -159,11 +246,12 @@ impl ScriptedModel {
         expected_input: impl Into<String>,
         output: ModelOutput,
     ) -> Self {
+        let schedule_flow = matches!(&output, ModelOutput::ScheduleExpertFlow);
         Self {
             primary,
             expected_input: expected_input.into(),
             output,
-            recorder: ScriptRecorder::default(),
+            recorder: ScriptRecorder::new(schedule_flow),
         }
     }
 
@@ -196,15 +284,29 @@ impl ScriptedModel {
             &request.envelope.run_instructions.output_format,
             &request.catalog,
         )?;
-        if plan.purpose != CONVERSATION_PURPOSE
-            || plan.consumer != CONVERSATION_CONSUMER
-            || request.envelope.run_instructions.purpose != CONVERSATION_PURPOSE
-            || !request.catalog.tools.is_empty()
+        let schedule_flow = matches!(&self.output, ModelOutput::ScheduleExpertFlow);
+        let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
+        let consumer_is_expert =
+            plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
+        let valid_catalog = if !schedule_flow || consumer_is_conversation {
+            request.catalog.tools.is_empty()
+        } else if consumer_is_expert {
+            request.catalog.tools.len() == 1
+                && request.catalog.tools[0].id == "floe.source.calendar"
+                && request.catalog.cards.is_empty()
+        } else {
+            false
+        };
+        if (!schedule_flow && !consumer_is_conversation)
+            || (schedule_flow && !consumer_is_conversation && !consumer_is_expert)
+            || plan.purpose != CONVERSATION_PURPOSE
+            || request.envelope.run_instructions.purpose != plan.purpose
+            || !valid_catalog
             || capabilities != plan.required_capabilities
             || expected_user_entries != 1
         {
             self.recorder.record_violation(
-                "canonical request did not match expected input, purpose, or Manager catalog",
+                "canonical request did not match expected input, purpose, or consumer catalog",
             );
             return Err(AgentFailure::InvalidInput);
         }
@@ -213,17 +315,87 @@ impl ScriptedModel {
             .0
             .lock()
             .map_err(|_| AgentFailure::Interrupted)?;
-        if let Some(expected_catalog) = &state.catalog {
+        if let Some(expected_catalog) = state.catalogs.get(&plan.consumer) {
             if expected_catalog != &request.catalog {
                 state
                     .violations
-                    .push("canonical request changed the expected Manager catalog".into());
+                    .push("canonical request changed its consumer catalog".into());
                 return Err(AgentFailure::InvalidInput);
             }
         } else {
-            state.catalog = Some(request.catalog.clone());
+            state
+                .catalogs
+                .insert(plan.consumer.clone(), request.catalog.clone());
         }
         Ok(())
+    }
+
+    fn schedule_flow_response(
+        &self,
+        call_index: usize,
+        request: &InferenceRequest,
+    ) -> Result<CanonicalModelResponse, AgentFailure> {
+        match call_index {
+            0 => {
+                if request.catalog.tools.is_empty() {
+                    let schedule = request
+                        .catalog
+                        .cards
+                        .iter()
+                        .find(|definition| definition.card.id == "floe.builtin.schedule")
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    Ok(response(vec![ModelStep::Delegate {
+                        agent_id: schedule.card.id.clone(),
+                        definition_revision: schedule.definition_revision,
+                        message: self.expected_input.clone(),
+                        context_refs: vec![],
+                    }]))
+                } else {
+                    Err(AgentFailure::InvalidInput)
+                }
+            }
+            1 => {
+                let [calendar] = request.catalog.tools.as_slice() else {
+                    return Err(AgentFailure::InvalidInput);
+                };
+                if calendar.id != "floe.source.calendar" {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                let schema: serde_json::Value =
+                    serde_json::from_str(&calendar.input_schema)
+                        .map_err(|_| AgentFailure::InvalidInput)?;
+                let range_start_unix_ms = schema["properties"]["range_start_unix_ms"]["const"]
+                    .as_i64()
+                    .ok_or(AgentFailure::InvalidInput)?;
+                let range_end_unix_ms = schema["properties"]["range_end_unix_ms"]["const"]
+                    .as_i64()
+                    .ok_or(AgentFailure::InvalidInput)?;
+                let input = serde_json::json!({
+                    "range_start_unix_ms": range_start_unix_ms,
+                    "range_end_unix_ms": range_end_unix_ms,
+                    "limit": 8,
+                });
+                Ok(response(vec![ModelStep::CallTool {
+                    tool_id: calendar.id.clone(),
+                    definition_revision: calendar.definition_revision,
+                    input: serde_json::to_string(&input)
+                        .map_err(|_| AgentFailure::InvalidInput)?,
+                }]))
+            }
+            2 => Ok(response(vec![ModelStep::Answer {
+                text: "The selected synthetic calendar has one planning event this week.".into(),
+                artifacts: vec![],
+            }])),
+            3 => Ok(response(vec![ModelStep::Answer {
+                text: SCRIPTED_REPLY.into(),
+                artifacts: vec![],
+            }])),
+            _ => {
+                self.recorder
+                    .record_violation("unexpected scripted schedule flow generation index");
+                Err(AgentFailure::InvalidInput)
+            }
+        }
     }
 }
 
@@ -258,14 +430,19 @@ impl ModelProvider for ScriptedModelProvider {
     fn observe_primary<'a>(
         &'a self,
         request: &'a ModelPlanRequest,
-        _: &'a ExecutionScope,
+        scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
         Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
     > {
         let model = self.model.clone();
         Box::pin(async move {
-            model.recorder.record_plan(PlanStage::Primary, request)?;
+            model.recorder.record_plan(
+                PlanStage::Primary,
+                request,
+                scope.root_run_id().map(RunId::as_uuid),
+                scope.task_id().map(|task_id| task_id.as_uuid()),
+            )?;
             match model.primary {
                 PrimaryBehavior::NoGateway => Ok(PrimaryObservation::Absent(
                     PrimaryAbsence::NoGatewayConfigured,
@@ -296,7 +473,12 @@ impl ModelProvider for ScriptedModelProvider {
             }
             model
                 .recorder
-                .record_plan(PlanStage::LocalFallback, request)?;
+                .record_plan(
+                    PlanStage::LocalFallback,
+                    request,
+                    scope.root_run_id().map(RunId::as_uuid),
+                    scope.task_id().map(|task_id| task_id.as_uuid()),
+                )?;
             let binding_digest = device_binding(request)?;
             let purpose = ModelPurpose::new(request.purpose.clone())
                 .ok_or(ModelObservationError::InvalidIdentity)?;
@@ -305,6 +487,8 @@ impl ModelProvider for ScriptedModelProvider {
             let transport = ScriptedTransport {
                 model: model.clone(),
                 plan: request.clone(),
+                run_id: scope.root_run_id().map(RunId::as_uuid),
+                task_id: scope.task_id().map(|task_id| task_id.as_uuid()),
                 binding_digest,
                 capabilities: request.required_capabilities.clone(),
             };
@@ -343,6 +527,8 @@ fn device_binding(
 struct ScriptedTransport {
     model: ScriptedModel,
     plan: ModelPlanRequest,
+    run_id: Option<Uuid>,
+    task_id: Option<Uuid>,
     binding_digest: floe_agent_contract::ModelBindingDigest,
     capabilities: ModelCapabilities,
 }
@@ -375,7 +561,12 @@ impl PreparedModelTransport for ScriptedTransport {
                 );
                 return Err(AgentFailure::PolicyDenied);
             }
-            self.model.recorder.record_generate(&request)?;
+            let call_index = self.model.recorder.record_generate(
+                &self.plan,
+                &request,
+                self.run_id,
+                self.task_id,
+            )?;
             match &self.model.output {
                 ModelOutput::Answer => Ok(response(vec![ModelStep::Answer {
                     text: SCRIPTED_REPLY.into(),
@@ -394,6 +585,9 @@ impl PreparedModelTransport for ScriptedTransport {
                         text: SCRIPTED_REPLY.into(),
                         artifacts: vec![],
                     }]))
+                }
+                ModelOutput::ScheduleExpertFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
                 }
             }
         })
@@ -518,6 +712,240 @@ pub fn with_ready<T>(
         .ready_owners(caller)
         .expect("get active generation's real owners");
     operation(services, caller, owners)
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub fn configure_fixture_calendar(
+    host: &AppHost<AppComposition>,
+    selected_calendar_label: &str,
+) -> floe_connections::SourceSummary {
+    let selected_calendar_label = selected_calendar_label.to_owned();
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let overview_scope = host_scope(
+                    Uuid::new_v4(),
+                    Cancellation::new(),
+                    Duration::from_secs(30),
+                );
+                let overview = owners
+                    .connections
+                    .overview(&actor, &overview_scope)
+                    .await?;
+                let integration = overview
+                    .integrations
+                    .iter()
+                    .find(|integration| {
+                        integration.service_kind
+                            == floe_connections::IntegrationServiceKind::SyntheticQaCalendar
+                    })
+                    .ok_or(AgentFailure::CapabilityUnavailable)?;
+
+                let integration_review = owners
+                    .connections
+                    .prepare_integration_review(
+                        &actor,
+                        Uuid::new_v4(),
+                        integration.integration_ref,
+                        integration.revision,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())?;
+                let operation = owners
+                    .connections
+                    .start_integration(
+                        &actor,
+                        Uuid::new_v4(),
+                        integration.integration_ref,
+                        integration_review.review_ref,
+                        integration.revision,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())?;
+
+                let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+                let operation = loop {
+                    if Instant::now() >= deadline {
+                        return Err(AgentFailure::DeadlineExceeded);
+                    }
+                    let snapshot = owners
+                        .connections
+                        .get_operation(
+                            &actor,
+                            operation.operation_ref,
+                            &host_scope(
+                                Uuid::new_v4(),
+                                Cancellation::new(),
+                                Duration::from_secs(15),
+                            ),
+                        )
+                        .await?;
+                    match snapshot.state {
+                        floe_connections::ConnectionOperationState::Completed => break snapshot,
+                        floe_connections::ConnectionOperationState::Failed
+                        | floe_connections::ConnectionOperationState::Cancelled
+                        | floe_connections::ConnectionOperationState::RepairRequired => {
+                            return Err(AgentFailure::CapabilityUnavailable);
+                        }
+                        _ => tokio::time::sleep(Duration::from_millis(25)).await,
+                    }
+                };
+                let source = operation
+                    .source
+                    .ok_or(AgentFailure::CapabilityUnavailable)?;
+                let source_review = owners
+                    .connections
+                    .prepare_source_review(
+                        &actor,
+                        Uuid::new_v4(),
+                        source.source_ref,
+                        source.revision,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())?;
+                let resource = source_review
+                    .permitted_choices
+                    .iter()
+                    .find(|choice| choice.label == selected_calendar_label)
+                    .ok_or(AgentFailure::NotFound)?;
+                let configured = owners
+                    .connections
+                    .configure_source(
+                        &actor,
+                        Uuid::new_v4(),
+                        source.source_ref,
+                        source_review.review_ref,
+                        vec![resource.resource_ref],
+                        source.revision,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())?;
+                let configured = match configured {
+                    floe_connections::SourceConfigurationResult::Configured { source } => source,
+                    floe_connections::SourceConfigurationResult::NotSavedReviewRequired { .. } => {
+                        return Err(AgentFailure::AccessReviewRequired);
+                    }
+                };
+                let observe_review = owners
+                    .connections
+                    .prepare_observe_review(
+                        &actor,
+                        Uuid::new_v4(),
+                        configured.source_ref,
+                        configured.revision,
+                        floe_connections::ProcessingChoice::DeviceOnly,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())?;
+                owners
+                    .connections
+                    .apply_observe(
+                        &actor,
+                        Uuid::new_v4(),
+                        configured.source_ref,
+                        configured.revision,
+                        observe_review.review_ref,
+                        floe_connections::ObserveDecision::Allow,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())
+            })
+            .expect("configure synthetic Calendar through real Connections and Access owners")
+    })
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = || {
+                    host_scope(
+                        Uuid::new_v4(),
+                        Cancellation::new(),
+                        Duration::from_secs(30),
+                    )
+                };
+                let directory = owners.experts.directory(&actor, &scope()).await?;
+                let assignment = directory
+                    .assignments
+                    .iter()
+                    .find(|assignment| {
+                        assignment.display_name == "Schedule Expert" && assignment.enabled
+                    })
+                    .ok_or(AgentFailure::NotFound)?;
+                let requirement = assignment
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.requirement_ref == "floe.source.calendar")
+                    .ok_or(AgentFailure::NotFound)?;
+                let review = owners
+                    .experts
+                    .prepare_binding_review(
+                        &actor,
+                        CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
+                        assignment.assignment_ref,
+                        requirement.requirement_ref.clone(),
+                        assignment.binding_revision,
+                        &scope(),
+                    )
+                    .await?;
+                let candidate = review
+                    .candidate_refs_and_labels
+                    .iter()
+                    .find(|candidate| {
+                        candidate.label == "Synthetic QA Calendar"
+                            && candidate.availability
+                                == floe_experts::CandidateAvailability::Available
+                    })
+                    .ok_or(AgentFailure::NotFound)?;
+                owners
+                    .experts
+                    .replace_binding(
+                        &actor,
+                        CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
+                        review.review_ref,
+                        review.binding_revision,
+                        vec![candidate.candidate_ref],
+                        &scope(),
+                    )
+                    .await?;
+                Ok::<(), AgentFailure>(())
+            })
+            .expect("bind Schedule Expert through the real Experts owner")
+    });
 }
 
 pub fn start_session(host: &AppHost<AppComposition>) -> Uuid {

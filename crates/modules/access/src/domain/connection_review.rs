@@ -81,15 +81,14 @@ impl SourceExpectation {
                 return Err(AgentFailure::PolicyDenied);
             }
         } else if self.provider_revision.is_some()
-            || !matches!(
-                self.source.connector().as_str(),
-                "calendar.event_kit"
-                    | "calendar.android"
-                    | "contacts.apple"
-                    | "contacts.android"
-                    | "attention.macos"
-                    | "health.apple"
-            )
+            || !(crate::local_calendar_provider(self.source.connector().as_str()).is_some()
+                || matches!(
+                    self.source.connector().as_str(),
+                    "contacts.apple"
+                        | "contacts.android"
+                        | "attention.macos"
+                        | "health.apple"
+                ))
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -312,7 +311,7 @@ fn validate_source_device(
     {
         return Err(AgentFailure::InvalidInput);
     }
-    if let Some(expected) = crate::local_calendar_execution_owner(
+    if let Some(expected) = crate::local_calendar_execution_owner_for_connector(
         source.connector().as_str(),
         device_id,
     ) {

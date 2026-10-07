@@ -17,8 +17,8 @@ pub struct CalendarReviewClassification {
 
 pub fn current_calendar_connector(connection: &floe_connections::SourceConnection) -> Option<&str> {
     let connector = connection.connector_id().as_str();
-    if floe_access::native_calendar_provider(connector).is_some()
-        && floe_access::local_calendar_connection_id(connector)
+    if floe_access::local_calendar_provider(connector).is_some()
+        && floe_access::local_calendar_connection_id_for_connector(connector)
             .is_none_or(|expected| connection.connection_id().as_str() == expected)
         || matches!(connector, "calendar.google" | "calendar.microsoft")
     {

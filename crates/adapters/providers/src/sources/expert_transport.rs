@@ -62,14 +62,16 @@ impl ExpertSourceAdapter {
         actor.validate()?;
         source.validate().map_err(|_| AgentFailure::InvalidInput)?;
         let provider = adapter_calendar_provider(source.connector_id().as_str())?;
-        let expected_owner = floe_access::native_calendar_execution_owner(
+        let expected_owner = floe_access::local_calendar_execution_owner(
             provider,
             &actor.device_id,
         )
         .ok_or(AgentFailure::CapabilityUnavailable)?;
         if source.person_id() != actor.person_id
             || source.execution_owner_id().as_str() != expected_owner
-            || floe_access::local_calendar_connection_id(source.connector_id().as_str())
+            || floe_access::local_calendar_connection_id_for_connector(
+                source.connector_id().as_str(),
+            )
                 .is_some_and(|expected| source.connection_id().as_str() != expected)
         {
             return Err(AgentFailure::PolicyDenied);
@@ -104,15 +106,26 @@ impl ExpertSourceAdapter {
     ) -> Result<CalendarAcquisitionResult, AgentFailure> {
         bounded(window, async {
             self.current_source(actor, source).await?;
-            let result = self
-                .broker
-                .submit(
-                    request.clone(),
-                    Utc::now().timestamp_millis(),
-                    window.cancellation.clone(),
-                )
-                .await?;
-            if self.broker.host_epoch(actor.person_id).as_deref() != Ok(request.host_epoch.as_str())
+            let result = if request.provider == CalendarProvider::Fixture {
+                #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                {
+                    super::fixture_calendar::respond(&request)?
+                }
+                #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
+                {
+                    return Err(AgentFailure::CapabilityUnavailable);
+                }
+            } else {
+                self.broker
+                    .submit(
+                        request.clone(),
+                        Utc::now().timestamp_millis(),
+                        window.cancellation.clone(),
+                    )
+                    .await?
+            };
+            if calendar_host_epoch(&self.broker, actor, request.provider)?.as_str()
+                != request.host_epoch
                 || result.request_id != request.request_id
                 || result.host_epoch != request.host_epoch
                 || result.person_id != request.person_id
@@ -131,7 +144,11 @@ impl ExpertSourceAdapter {
                 return Err(AgentFailure::StaleContext);
             }
             if !matches!(result.permission_class.as_str(), "full" | "authorized") {
-                return Err(AgentFailure::AccessReviewRequired);
+                return Err(if request.provider == CalendarProvider::Fixture {
+                    AgentFailure::CapabilityDenied
+                } else {
+                    AgentFailure::AccessReviewRequired
+                });
             }
             if request
                 .expected_native_subject_fingerprint
@@ -205,7 +222,7 @@ impl ExpertSourceAdapter {
             .ok_or(AgentFailure::InvalidInput)?;
         Ok(CalendarAcquisitionRequest {
             request_id: Uuid::new_v4(),
-            host_epoch: self.broker.host_epoch(actor.person_id)?,
+            host_epoch: calendar_host_epoch(&self.broker, actor, provider)?,
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),
             connection_id: source.connection_id().as_str().to_owned(),
@@ -567,10 +584,23 @@ fn native_stamp(result: &CalendarAcquisitionResult) -> CalendarReadAccessStamp {
 }
 
 fn adapter_calendar_provider(connector: &str) -> Result<CalendarProvider, AgentFailure> {
-    match connector {
-        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
+    match floe_access::local_calendar_provider(connector) {
+        Some(CalendarProvider::EventKit) => Ok(CalendarProvider::EventKit),
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-        "calendar.fixture" => Ok(CalendarProvider::Fixture),
+        Some(CalendarProvider::Fixture) => Ok(CalendarProvider::Fixture),
+        _ => Err(AgentFailure::CapabilityUnavailable),
+    }
+}
+
+fn calendar_host_epoch(
+    broker: &CalendarBroker,
+    actor: &OwnerActor,
+    provider: CalendarProvider,
+) -> Result<String, AgentFailure> {
+    match provider {
+        CalendarProvider::EventKit => broker.host_epoch(actor.person_id),
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        CalendarProvider::Fixture => Ok(super::fixture_calendar::host_epoch(&actor.device_id)),
         _ => Err(AgentFailure::CapabilityUnavailable),
     }
 }

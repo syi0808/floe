@@ -182,7 +182,7 @@ pub async fn authorize_native_calendar_dependency(
     if dependency.observed_at() > now || dependency.expires_at() <= now {
         return Err(AgentFailure::StaleContext);
     }
-    if floe_access::native_calendar_provider(dependency.source().connector().as_str()).is_none() {
+    if floe_access::local_calendar_provider(dependency.source().connector().as_str()).is_none() {
         return Err(AgentFailure::CapabilityDenied);
     }
     let (_, subject_fingerprint) = leases.observation(dependency)?;

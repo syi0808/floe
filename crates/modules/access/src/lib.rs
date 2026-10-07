@@ -26,10 +26,10 @@ pub use application::{
 };
 pub use application::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
-    admit_native_calendar_subject, is_native_calendar, local_calendar_execution_owner,
-    local_calendar_connection_id,
-    native_calendar_connection_unchanged, native_calendar_connector,
-    native_calendar_connection_id, native_calendar_execution_owner, native_calendar_provider,
+    admit_native_calendar_subject, is_local_calendar_provider, local_calendar_connection_id,
+    local_calendar_connection_id_for_connector, local_calendar_connector,
+    local_calendar_execution_owner, local_calendar_execution_owner_for_connector,
+    local_calendar_provider, native_calendar_connection_unchanged,
     native_calendar_source_current, reviewed_native_subject,
 };
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]

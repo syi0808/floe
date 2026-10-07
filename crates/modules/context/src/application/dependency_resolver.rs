@@ -73,8 +73,8 @@ impl DependencyResolver for ContextDependencyResolver {
                         .ok_or(AgentFailure::PolicyDenied)?;
                     floe_access::validate_grant_dependency(grant, dependency)?;
                     let connector = dependency.source().connector().as_str();
-                    if let Some(provider) = floe_access::native_calendar_provider(connector) {
-                        let execution_owner = floe_access::native_calendar_execution_owner(
+                    if let Some(provider) = floe_access::local_calendar_provider(connector) {
+                        let execution_owner = floe_access::local_calendar_execution_owner(
                             provider,
                             &self.actor.device_id,
                         )

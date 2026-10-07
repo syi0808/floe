@@ -102,7 +102,7 @@ impl CandidateCatalog for ContextCandidateCatalog {
                 && sources
                     .iter()
                     .any(|source| {
-                        floe_access::native_calendar_provider(source.connector_id().as_str())
+                        floe_access::local_calendar_provider(source.connector_id().as_str())
                             .is_none()
                     });
             let remote = if requires_remote {

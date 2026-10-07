@@ -772,9 +772,9 @@ impl LocalSources<'_> {
                 return Err(AgentFailure::StaleContext);
             }
             let outcome = if let Some(provider) =
-                floe_access::native_calendar_provider(connection.connector_id().as_str())
+                floe_access::local_calendar_provider(connection.connector_id().as_str())
             {
-                let expected_owner = floe_access::native_calendar_execution_owner(
+                let expected_owner = floe_access::local_calendar_execution_owner(
                     provider,
                     &actor.device_id,
                 )

@@ -43,10 +43,11 @@ impl CalendarProductAdapter {
         Self { broker, gateway }
     }
 
-    async fn observe_native(
+    async fn observe_local_calendar(
         &self,
         actor: &OwnerActor,
         source: &SourceConnection,
+        provider: CalendarProvider,
         scope: &ExecutionScope,
     ) -> Result<ProductSourceObservation, AgentFailure> {
         let source_binding = validate_source_for_actor(actor, source)?;
@@ -54,13 +55,13 @@ impl CalendarProductAdapter {
         let expected_subject = source
             .native_subject_fingerprint()
             .ok_or(AgentFailure::AccessReviewRequired)?;
-        let host_epoch = self.broker.host_epoch(actor.person_id)?;
+        let host_epoch = calendar_host_epoch(&self.broker, actor, provider)?;
         let read = NativeReadFence {
             actor,
             host_epoch: &host_epoch,
             connection_id: source.connection_id().as_str(),
             connection_revision: source.revision(),
-            provider: CalendarProvider::EventKit,
+            provider,
             calendar_ids: &calendar_ids,
             range_start_unix_ms: 0,
             range_end_unix_ms: 1,
@@ -87,7 +88,7 @@ impl CalendarProductAdapter {
                 subject_fingerprint: response.native_subject_fingerprint_after,
                 gateway: None,
             },
-            provider: CalendarProvider::EventKit,
+            provider,
             permission: ProductCalendarPermission::NativeRead,
             observed_at: Utc::now(),
         })
@@ -131,7 +132,7 @@ impl CalendarProductAdapter {
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        if observed.provider != CalendarProvider::EventKit
+        if !matches!(observed.provider, CalendarProvider::EventKit | CalendarProvider::Fixture)
             || source.gateway.is_some()
             || source.source != request.source
         {
@@ -139,7 +140,7 @@ impl CalendarProductAdapter {
         }
         let connection_id_value = request.source.connection_id();
         let connection_id = connection_id_value.as_str();
-        let host_epoch = self.broker.host_epoch(request.actor.person_id)?;
+        let host_epoch = calendar_host_epoch(&self.broker, &request.actor, observed.provider)?;
         let fence = NativeReadFence {
             actor: &request.actor,
             host_epoch: &host_epoch,
@@ -248,7 +249,10 @@ impl CalendarProductTransport for CalendarProductAdapter {
     ) -> BoxFuture<'a, Result<ProductSourceObservation, AgentFailure>> {
         Box::pin(async move {
             match provider_for(source)? {
-                CalendarProvider::EventKit => self.observe_native(actor, source, scope).await,
+                CalendarProvider::EventKit | CalendarProvider::Fixture => {
+                    self.observe_local_calendar(actor, source, provider_for(source)?, scope)
+                        .await
+                }
                 CalendarProvider::Google | CalendarProvider::Microsoft => {
                     self.observe_gateway(actor, source, scope).await
                 }
@@ -265,7 +269,9 @@ impl CalendarProductTransport for CalendarProductAdapter {
         Box::pin(async move {
             let permit = fence.permit();
             match permit.observation().provider {
-                CalendarProvider::EventKit => self.acquire_native(permit, scope).await,
+                CalendarProvider::EventKit | CalendarProvider::Fixture => {
+                    self.acquire_native(permit, scope).await
+                }
                 CalendarProvider::Google | CalendarProvider::Microsoft => {
                     let generation = permit
                         .gateway_runtime_generation()
@@ -316,9 +322,26 @@ fn validate_source_for_actor(
 
 fn provider_for(source: &SourceConnection) -> Result<CalendarProvider, AgentFailure> {
     match source.connector_id().as_str() {
-        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
         "calendar.google" => Ok(CalendarProvider::Google),
         "calendar.microsoft" => Ok(CalendarProvider::Microsoft),
+        connector => match floe_access::local_calendar_provider(connector) {
+            Some(CalendarProvider::EventKit) => Ok(CalendarProvider::EventKit),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            Some(CalendarProvider::Fixture) => Ok(CalendarProvider::Fixture),
+            _ => Err(AgentFailure::CapabilityUnavailable),
+        },
+    }
+}
+
+fn calendar_host_epoch(
+    broker: &CalendarBroker,
+    actor: &OwnerActor,
+    provider: CalendarProvider,
+) -> Result<String, AgentFailure> {
+    match provider {
+        CalendarProvider::EventKit => broker.host_epoch(actor.person_id),
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        CalendarProvider::Fixture => Ok(super::fixture_calendar::host_epoch(&actor.device_id)),
         _ => Err(AgentFailure::CapabilityUnavailable),
     }
 }
@@ -413,20 +436,31 @@ async fn native_call(
         expected_native_subject_fingerprint: (mode == CalendarAcquisitionMode::ReadEvents)
             .then(|| fence.expected_native_subject.to_owned()),
     };
-    let response = broker
-        .submit(
-            request,
-            Utc::now().timestamp_millis(),
-            scope.cancellation().clone(),
-        )
-        .await?;
+    let response = if fence.provider == CalendarProvider::Fixture {
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        {
+            super::fixture_calendar::respond(&request)?
+        }
+        #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
+        {
+            return Err(AgentFailure::CapabilityUnavailable);
+        }
+    } else {
+        broker
+            .submit(
+                request,
+                Utc::now().timestamp_millis(),
+                scope.cancellation().clone(),
+            )
+            .await?
+    };
     if scope.cancellation().is_cancelled() {
         return Err(AgentFailure::Cancelled);
     }
     if Instant::now() >= deadline {
         return Err(AgentFailure::DeadlineExceeded);
     }
-    if broker.host_epoch(fence.actor.person_id).as_deref() != Ok(fence.host_epoch) {
+    if calendar_host_epoch(broker, fence.actor, fence.provider)?.as_str() != fence.host_epoch {
         return Err(AgentFailure::StaleContext);
     }
     Ok(response)

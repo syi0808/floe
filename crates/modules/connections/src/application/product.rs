@@ -2247,11 +2247,7 @@ impl ConnectionsService {
             let connection =
                 floe_context_contract::ConnectionId::try_new(native_connection_id(connector)?)
                     .map_err(|_| AgentFailure::InvalidInput)?;
-            let expected_owner = floe_access::local_calendar_execution_owner(
-                connector,
-                &actor.device_id,
-            )
-            .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
+            let expected_owner = native_execution_owner(connector, &actor.device_id)?;
             let current = self
                 .sources
                 .load(actor.person_id, &connection)
@@ -2332,11 +2328,8 @@ impl ConnectionsService {
             .await
             .map_err(source_error)?
         {
-            let expected_owner = floe_access::local_calendar_execution_owner(
-                connector.as_str(),
-                &actor.device_id,
-            )
-            .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
+            let expected_owner =
+                native_execution_owner(connector.as_str(), &actor.device_id)?;
             if source.person_id() != actor.person_id
                 || source.connector_id() != &connector
                 || source.connection_id() != &connection
@@ -2361,11 +2354,7 @@ impl ConnectionsService {
         } else {
             ResourceMode::Selected
         };
-        let execution_owner = floe_access::local_calendar_execution_owner(
-            connector.as_str(),
-            &actor.device_id,
-        )
-        .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
+        let execution_owner = native_execution_owner(connector.as_str(), &actor.device_id)?;
         let owner = floe_context_contract::ExecutionOwnerId::try_new(execution_owner)
             .map_err(|_| AgentFailure::InvalidInput)?;
         let source = SourceConnection::establish(
@@ -2796,6 +2785,10 @@ impl ConnectionsService {
             (IntegrationBinding::Device { .. }, "calendar.event_kit") => {
                 IntegrationServiceKind::AppleCalendar
             }
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            (IntegrationBinding::Device { .. }, "calendar.fixture") => {
+                IntegrationServiceKind::SyntheticQaCalendar
+            }
             (IntegrationBinding::Device { .. }, "contacts.apple") => {
                 IntegrationServiceKind::AppleContacts
             }
@@ -2991,20 +2984,12 @@ fn opaque_ref(
     Ok(Uuid::from_bytes(id))
 }
 pub(super) fn native_source(source: &SourceConnection) -> bool {
-    matches!(
-        source.connector_id().as_str(),
-        "calendar.event_kit"
-            | "calendar.android"
-            | "contacts.apple"
-            | "contacts.android"
-            | "attention.macos"
-            | "health.apple"
-    ) || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
-        && source.connector_id().as_str() == "calendar.fixture")
+    floe_access::is_device_local_source(source.connector_id().as_str())
 }
 fn source_label(connector: &str) -> &str {
     match connector {
         "calendar.event_kit" => "Calendar",
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
         "calendar.fixture" => "Synthetic QA Calendar",
         "contacts.apple" => "Contacts",
         "attention.macos" => "Attention",
@@ -3090,7 +3075,7 @@ fn native_integration_ref(actor: &OwnerActor, connector: &str) -> Result<Uuid, A
     )
 }
 fn native_connection_id(connector: &str) -> Result<&'static str, AgentFailure> {
-    if let Some(connection_id) = floe_access::local_calendar_connection_id(connector) {
+    if let Some(connection_id) = floe_access::local_calendar_connection_id_for_connector(connector) {
         return Ok(connection_id);
     }
     match connector {
@@ -3099,6 +3084,15 @@ fn native_connection_id(connector: &str) -> Result<&'static str, AgentFailure> {
         "attention.macos" => Ok("attention.macos.local"),
         _ => Err(AgentFailure::InvalidInput),
     }
+}
+
+fn native_execution_owner(connector: &str, device_id: &str) -> Result<String, AgentFailure> {
+    if let Some(owner) =
+        floe_access::local_calendar_execution_owner_for_connector(connector, device_id)
+    {
+        return Ok(owner);
+    }
+    PersonalSourceSpec::for_connector(connector)?.execution_owner(device_id)
 }
 
 struct NativeDriveLease {
@@ -3202,9 +3196,11 @@ fn integration_source_matches(integration: &IntegrationRecord, source: &SourceCo
         return false;
     };
     let owner_matches = match &integration.target {
-        IntegrationBinding::Device { device_id } => {
-            identity.execution_owner_id.as_str() == floe_access::apple_execution_owner(device_id)
-        }
+        IntegrationBinding::Device { device_id } => native_execution_owner(
+            integration.descriptor.connector_id.as_str(),
+            device_id,
+        )
+        .is_ok_and(|expected| identity.execution_owner_id.as_str() == expected),
         IntegrationBinding::Gateway { .. } => !native_source(source),
     };
     owner_matches

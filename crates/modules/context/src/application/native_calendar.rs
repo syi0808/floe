@@ -10,7 +10,7 @@ use std::future::Future;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, ReadAuthorityEvidence,
-    ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read, is_native_calendar,
+    ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read,
     validate_read_authority,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
@@ -77,10 +77,10 @@ pub async fn admit_current_native_calendar_read(
         return Err(AgentFailure::PolicyDenied);
     }
     let provider = native_provider(&connection)?;
-    if !is_native_calendar(provider) {
+    if !floe_access::is_local_calendar_provider(provider) {
         return Err(AgentFailure::CapabilityUnavailable);
     }
-    let execution_owner = floe_access::native_calendar_execution_owner(provider, device_id)
+    let execution_owner = floe_access::local_calendar_execution_owner(provider, device_id)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
     if !connection.is_serving()
         || connection.person_id() != person_id
@@ -192,6 +192,6 @@ fn connection_calendar_ids(connection: &SourceConnection) -> Vec<String> {
 }
 
 fn native_provider(connection: &SourceConnection) -> Result<CalendarProvider, AgentFailure> {
-    floe_access::native_calendar_provider(connection.connector_id().as_str())
+    floe_access::local_calendar_provider(connection.connector_id().as_str())
         .ok_or(AgentFailure::CapabilityUnavailable)
 }

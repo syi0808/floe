@@ -50,11 +50,8 @@ pub fn native_calendar_source_current(
         .ok_or(AgentFailure::AccessReviewRequired)
 }
 
-/// Whether this provider is one whose subject the device answers for itself.
-///
-/// A native provider has no producer to sign for it, so the Person's own review
-/// of the device subject is the only thing standing behind the read.
-pub fn is_native_calendar(provider: CalendarProvider) -> bool {
+/// Whether this Calendar provider is served by this device.
+pub fn is_local_calendar_provider(provider: CalendarProvider) -> bool {
     match provider {
         CalendarProvider::EventKit | CalendarProvider::Android => true,
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
@@ -63,7 +60,7 @@ pub fn is_native_calendar(provider: CalendarProvider) -> bool {
     }
 }
 
-pub fn native_calendar_connector(provider: CalendarProvider) -> Option<&'static str> {
+pub fn local_calendar_connector(provider: CalendarProvider) -> Option<&'static str> {
     match provider {
         CalendarProvider::EventKit => Some("calendar.event_kit"),
         CalendarProvider::Android => Some("calendar.android"),
@@ -74,7 +71,7 @@ pub fn native_calendar_connector(provider: CalendarProvider) -> Option<&'static 
 }
 
 /// The native provider a connector identity grants bind, when it is native.
-pub fn native_calendar_provider(connector_id: &str) -> Option<CalendarProvider> {
+pub fn local_calendar_provider(connector_id: &str) -> Option<CalendarProvider> {
     match connector_id {
         "calendar.event_kit" => Some(CalendarProvider::EventKit),
         "calendar.android" => Some(CalendarProvider::Android),
@@ -88,8 +85,11 @@ pub fn native_calendar_provider(connector_id: &str) -> Option<CalendarProvider> 
 /// source identity contract shared by Connections, Access, Context and the
 /// native acquisition adapter; connector names are never inferred from an
 /// owner string or from the host platform.
-pub fn local_calendar_execution_owner(connector_id: &str, device_id: &str) -> Option<String> {
-    match native_calendar_provider(connector_id)? {
+pub fn local_calendar_execution_owner_for_connector(
+    connector_id: &str,
+    device_id: &str,
+) -> Option<String> {
+    match local_calendar_provider(connector_id)? {
         CalendarProvider::EventKit => Some(crate::apple_execution_owner(device_id)),
         CalendarProvider::Android => Some(device_id.to_owned()),
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
@@ -105,17 +105,17 @@ pub fn fixture_calendar_execution_owner(device_id: &str) -> String {
 }
 
 /// The execution owner corresponding to a local Calendar provider.
-pub fn native_calendar_execution_owner(
+pub fn local_calendar_execution_owner(
     provider: CalendarProvider,
     device_id: &str,
 ) -> Option<String> {
-    native_calendar_connector(provider)
-        .and_then(|connector| local_calendar_execution_owner(connector, device_id))
+    local_calendar_connector(provider)
+        .and_then(|connector| local_calendar_execution_owner_for_connector(connector, device_id))
 }
 
 /// Stable connection identifiers whose local providers are owned here.
 /// Android remains adapter-defined until its native setup contract is shipped.
-pub fn native_calendar_connection_id(provider: CalendarProvider) -> Option<&'static str> {
+pub fn local_calendar_connection_id(provider: CalendarProvider) -> Option<&'static str> {
     match provider {
         CalendarProvider::EventKit => Some("calendar.event_kit.local"),
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
@@ -124,13 +124,13 @@ pub fn native_calendar_connection_id(provider: CalendarProvider) -> Option<&'sta
     }
 }
 
-pub fn local_calendar_connection_id(connector_id: &str) -> Option<&'static str> {
-    native_calendar_provider(connector_id).and_then(native_calendar_connection_id)
+pub fn local_calendar_connection_id_for_connector(connector_id: &str) -> Option<&'static str> {
+    local_calendar_provider(connector_id).and_then(local_calendar_connection_id)
 }
 
 fn binds(connection: NativeCalendarConnection<'_>, review: NativeCalendarReview<'_>) -> bool {
     !connection.disconnected
-        && native_calendar_connection_id(connection.provider)
+        && local_calendar_connection_id(connection.provider)
             .is_none_or(|expected| connection.connection_id == expected)
         && connection.device_id == review.device_id
         && connection.provider == review.provider

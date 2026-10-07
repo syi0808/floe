@@ -239,3 +239,173 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
     assert_eq!(snapshot.generated.len(), 1);
     assert!(snapshot.generated[0].catalog.tools.is_empty());
 }
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evidence() {
+    const SCHEDULE_REQUEST: &str = "Review my calendar this week.";
+
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleExpertFlow,
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+
+    let source = support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    assert!(source.revision > 0);
+    assert_eq!(source.observe_state, floe_connections::ObserveState::Enabled);
+    assert_eq!(
+        source
+            .selected_resources
+            .iter()
+            .map(|resource| resource.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Synthetic team calendar"]
+    );
+    support::bind_schedule_expert(&host);
+
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.output.as_deref(), Some(REPLY));
+    assert_eq!(receipt.task_refs.len(), 1);
+
+    let transcript = read_session(&host, session_id);
+    assert!(transcript.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::User { text, .. } if text == SCHEDULE_REQUEST
+    )));
+    assert!(transcript.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::Assistant { text, .. } if text == REPLY
+    )));
+    let (task_id, execution_ref) = transcript
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            SessionMessage::Delegation { task, .. }
+                if task.agent_id == "floe.builtin.schedule"
+                    && task.state == floe_agent_contract::TaskState::Completed =>
+            {
+                Some((task.task_id, task.execution_receipt.clone()?))
+            }
+            _ => None,
+        })
+        .expect("persisted completed Schedule Expert delegation");
+    assert!(receipt.task_refs.contains(&task_id.as_uuid()));
+
+    let (person_id, device_id) = support::with_ready(&host, |_, caller, _| {
+        let actor = caller.owner_actor();
+        (actor.person_id, actor.device_id)
+    });
+    let task_receipt = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = floe_app::host_scope(
+            Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            Duration::from_secs(15),
+        );
+        services
+            .execute_owner(async move {
+                owners
+                    .experts
+                    .read_task_execution_receipt(&actor, &execution_ref, &scope)
+                    .await
+            })
+            .expect("read persisted Expert execution receipt")
+    });
+    assert_eq!(task_receipt.snapshot.task_id, task_id);
+    assert_eq!(task_receipt.snapshot.state, floe_agent_contract::TaskState::Completed);
+    assert!(!task_receipt.accounting.attempt_refs.is_empty());
+
+    let task_evidence = serde_json::to_string(&task_receipt.snapshot.artifacts)
+        .expect("serialize persisted Schedule Expert evidence");
+    assert!(task_evidence.contains("Synthetic planning event"));
+    assert!(!task_evidence.contains("Unselected calendar sentinel event"));
+    let floe_agent_contract::DependencyCoverage::Dependent { dependencies } =
+        &task_receipt.snapshot.coverage
+    else {
+        panic!("Schedule Expert result must retain source dependency evidence");
+    };
+    let fixture_dependency = dependencies
+        .iter()
+        .find(|dependency| dependency.source().connector().as_str() == "calendar.fixture")
+        .expect("fixture Calendar dependency in task evidence");
+    assert_eq!(fixture_dependency.person_id(), person_id);
+    assert_eq!(
+        fixture_dependency.source().connection_id().as_str(),
+        "calendar.fixture.local"
+    );
+    assert_eq!(
+        fixture_dependency.source().execution_owner().as_str(),
+        format!("fixture:{device_id}")
+    );
+    assert_eq!(fixture_dependency.operation(), floe_context_contract::GrantOperation::Read);
+    assert_eq!(fixture_dependency.purpose(), floe_context_contract::GrantPurpose::Assistant);
+    assert_eq!(
+        fixture_dependency.consumer().identifier(),
+        "floe.builtin.schedule"
+    );
+    assert_eq!(
+        fixture_dependency.processing(),
+        &floe_context_contract::ProcessingRestriction::DeviceOnly
+    );
+    assert_eq!(
+        fixture_dependency
+            .source_resources()
+            .iter()
+            .map(|resource| resource.as_str())
+            .collect::<Vec<_>>(),
+        vec!["fixture.calendar.team"]
+    );
+
+    let scripted = assert_script_clean(&recorder);
+    assert_eq!(scripted.plans.len(), 6);
+    assert_eq!(scripted.plan_bindings.len(), 6);
+    assert_eq!(scripted.generated.len(), 4);
+    assert_eq!(scripted.generated_bindings.len(), 4);
+    for binding in &scripted.generated_bindings {
+        assert_eq!(binding.run_id, Some(command.run_id.as_uuid()));
+        assert!(binding.attempt_id.is_some());
+    }
+    assert_eq!(
+        scripted.generated_bindings[0].consumer,
+        floe_conversation::CONVERSATION_CONSUMER
+    );
+    assert_eq!(
+        scripted.generated_bindings[1].consumer,
+        floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
+    );
+    assert_eq!(
+        scripted.generated_bindings[2].consumer,
+        floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
+    );
+    assert_eq!(
+        scripted.generated_bindings[3].consumer,
+        floe_conversation::CONVERSATION_CONSUMER
+    );
+    assert_eq!(scripted.generated_bindings[0].task_id, None);
+    assert_eq!(
+        scripted.generated_bindings[1].task_id,
+        Some(task_id.as_uuid())
+    );
+    assert_eq!(
+        scripted.generated_bindings[2].task_id,
+        Some(task_id.as_uuid())
+    );
+    assert_eq!(scripted.generated_bindings[3].task_id, None);
+    for binding in scripted.generated_bindings[..1]
+        .iter()
+        .chain(scripted.generated_bindings[3..].iter())
+    {
+        let attempt_id = binding.attempt_id.expect("attempt binding");
+        assert!(receipt.attempt_refs.contains(&attempt_id));
+    }
+    for binding in &scripted.generated_bindings[1..3] {
+        let attempt_id = binding.attempt_id.expect("attempt binding");
+        assert!(task_receipt.accounting.attempt_refs.contains(&attempt_id));
+    }
+}

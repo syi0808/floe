@@ -239,7 +239,7 @@ pub fn project_calendar_coverage(
                 floe_context_contract::CalendarProvider::EventKit => "Apple Calendar",
                 floe_context_contract::CalendarProvider::Google => "Google Calendar",
                 floe_context_contract::CalendarProvider::Microsoft => "Microsoft Calendar",
-                floe_context_contract::CalendarProvider::Fixture => "Example Calendar",
+                floe_context_contract::CalendarProvider::Fixture => "Synthetic QA Calendar",
                 floe_context_contract::CalendarProvider::Android => "Calendar",
             }
             .to_owned();

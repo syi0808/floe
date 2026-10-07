@@ -106,15 +106,15 @@ pub fn admits_native_calendar_read(
     source_authority: SourceAuthority,
     consumer: &GrantConsumer,
 ) -> Result<(), AgentFailure> {
-    let connector = super::native_calendar::native_calendar_connector(provider)
+    let connector = super::native_calendar::local_calendar_connector(provider)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
-    if super::native_calendar::native_calendar_connection_id(provider)
+    if super::native_calendar::local_calendar_connection_id(provider)
         .is_some_and(|expected| expected != connection_id)
     {
         return Err(AgentFailure::PolicyDenied);
     }
     let logical_resource = native_calendar_resource(connection_id)?;
-    let execution_owner = super::native_calendar::native_calendar_execution_owner(
+    let execution_owner = super::native_calendar::local_calendar_execution_owner(
         provider,
         device_id,
     )
@@ -191,7 +191,7 @@ pub async fn current_native_calendar_grant(
     execution_owner: &floe_context_contract::ExecutionOwnerId,
     consumer: &GrantConsumer,
 ) -> Result<crate::DataAccessGrant, AgentFailure> {
-    let connector = super::native_calendar::native_calendar_connector(provider)
+    let connector = super::native_calendar::local_calendar_connector(provider)
         .ok_or(AgentFailure::CapabilityUnavailable)?;
     let source = GrantSourceBinding::try_new(
         person_id,

@@ -63,10 +63,11 @@ impl ProductCalendarReadRequest {
             || self.source.person_id() != self.actor.person_id
             || self.range_start >= self.range_end
             || self.range_end.signed_duration_since(self.range_start) > chrono::Duration::hours(48)
-            || !matches!(
-                self.source.connector().as_str(),
-                "calendar.event_kit" | "calendar.google" | "calendar.microsoft"
-            )
+            || !(crate::local_calendar_provider(self.source.connector().as_str()).is_some()
+                || matches!(
+                    self.source.connector().as_str(),
+                    "calendar.google" | "calendar.microsoft"
+                ))
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -131,6 +132,13 @@ impl ProductSourceObservation {
             (
                 "calendar.event_kit",
                 CalendarProvider::EventKit,
+                ProductCalendarPermission::NativeRead,
+                false,
+            ) => Ok(()),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            (
+                "calendar.fixture",
+                CalendarProvider::Fixture,
                 ProductCalendarPermission::NativeRead,
                 false,
             ) => Ok(()),

@@ -567,16 +567,7 @@ impl SourceConnection {
     }
 
     fn requires_native_subject(&self) -> bool {
-        matches!(
-            self.connector_id.as_str(),
-            "calendar.event_kit"
-                | "calendar.android"
-                | "contacts.apple"
-                | "contacts.android"
-                | "attention.macos"
-                | "health.apple"
-        ) || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
-            && self.connector_id.as_str() == "calendar.fixture")
+        floe_access::is_device_local_source(self.connector_id.as_str())
     }
 }
 

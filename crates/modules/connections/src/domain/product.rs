@@ -59,6 +59,8 @@ pub enum IntegrationCapability {
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationServiceKind {
     AppleCalendar,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    SyntheticQaCalendar,
     AppleContacts,
     AppleHealth,
     AppleAttention,

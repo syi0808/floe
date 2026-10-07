@@ -42,8 +42,8 @@ impl ContextSourceReview {
         scope: &ExecutionScope,
     ) -> Result<String, AgentFailure> {
         let (before, after) =
-            if floe_access::native_calendar_provider(source.connector_id().as_str()).is_some() {
-                let execution_owner = floe_access::local_calendar_execution_owner(
+            if floe_access::local_calendar_provider(source.connector_id().as_str()).is_some() {
+                let execution_owner = floe_access::local_calendar_execution_owner_for_connector(
                     source.connector_id().as_str(),
                     &actor.device_id,
                 )
@@ -142,7 +142,7 @@ impl SourceReviewEvidence for ContextSourceReview {
                 .map(|resource| resource.handle().clone())
                 .collect::<Vec<_>>();
             let connector = source.connector_id().as_str();
-            if floe_access::native_calendar_provider(connector).is_some()
+            if floe_access::local_calendar_provider(connector).is_some()
                 || matches!(
                     connector,
                     "contacts.apple" | "contacts.android" | "attention.macos" | "health.apple"
@@ -151,7 +151,7 @@ impl SourceReviewEvidence for ContextSourceReview {
                 if !source.is_serving() {
                     return Err(AgentFailure::AccessReviewRequired);
                 }
-                if floe_access::native_calendar_provider(connector).is_none() {
+                if floe_access::local_calendar_provider(connector).is_none() {
                     PersonalSourceSpec::for_connector(connector)?
                         .validate_connection(source, &actor.device_id)?;
                 }

@@ -1,0 +1,287 @@
+//! Deterministic synthetic Calendar facts for explicit Linux QA builds.
+//!
+//! This module is the fixture's external boundary. It never reads a host
+//! calendar or mutates one; Connections, Access and Context still own source
+//! setup, selection, grants and read admission.
+
+use floe_context_contract::CalendarProvider;
+use floe_kernel::AgentFailure;
+use floe_native::{
+    CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult,
+    NativeCalendarBatch, NativeCalendarRecord, NativeEventSchedule, NativeResourceGroup,
+    NativeSourceResource,
+};
+use sha2::{Digest, Sha256};
+
+const CONNECTOR: &str = "calendar.fixture";
+const CONNECTION: &str = "calendar.fixture.local";
+const SUBJECT_DOMAIN: &[u8] = b"floe.qa.synthetic-calendar.subject.v1\0";
+const MAX_READ_RANGE_MS: i64 = 32 * 24 * 60 * 60 * 1000;
+
+const TEAM_CALENDAR: &str = "fixture.calendar.team";
+const PRIVATE_CALENDAR: &str = "fixture.calendar.private";
+const DENIED_CALENDAR: &str = "fixture.calendar.denied";
+
+#[derive(Clone, Copy)]
+struct FixtureCalendar {
+    handle: &'static str,
+    label: &'static str,
+}
+
+const CALENDARS: &[FixtureCalendar] = &[
+    FixtureCalendar {
+        handle: DENIED_CALENDAR,
+        label: "Synthetic permission-denied calendar",
+    },
+    FixtureCalendar {
+        handle: PRIVATE_CALENDAR,
+        label: "Synthetic unselected calendar",
+    },
+    FixtureCalendar {
+        handle: TEAM_CALENDAR,
+        label: "Synthetic team calendar",
+    },
+];
+
+/// Stable host-generation tag for this source adapter only. It is not an
+/// Apple/native host epoch and cannot be used to dispatch native requests.
+pub(super) fn host_epoch(device_id: &str) -> String {
+    format!("fixture-host:{device_id}")
+}
+
+pub(super) fn respond(
+    request: &CalendarAcquisitionRequest,
+) -> Result<CalendarAcquisitionResult, AgentFailure> {
+    validate_request(request)?;
+    let subject = subject_fingerprint(request);
+    let inventory = match request.mode {
+        CalendarAcquisitionMode::RequestPermission => Vec::new(),
+        _ => inventory(),
+    };
+    let ids = inventory
+        .iter()
+        .map(|resource| resource.handle.clone())
+        .collect::<Vec<_>>();
+
+    let permission_class = match request.mode {
+        CalendarAcquisitionMode::RequestPermission => "request_completed",
+        CalendarAcquisitionMode::ReadEvents
+            if request.calendar_ids.iter().any(|id| id == DENIED_CALENDAR) =>
+        {
+            "denied"
+        }
+        _ => "authorized",
+    };
+
+    let batches = if request.mode == CalendarAcquisitionMode::ReadEvents
+        && permission_class == "authorized"
+    {
+        request
+            .calendar_ids
+            .iter()
+            .map(|calendar_id| batch(calendar_id, request))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+
+    Ok(CalendarAcquisitionResult {
+        request_id: request.request_id,
+        host_epoch: request.host_epoch.clone(),
+        person_id: request.person_id,
+        device_id: request.device_id.clone(),
+        connection_id: request.connection_id.clone(),
+        connection_revision: request.connection_revision,
+        provider: request.provider,
+        mode: request.mode,
+        calendar_ids: request.calendar_ids.clone(),
+        range_start_unix_ms: request.range_start_unix_ms,
+        range_end_unix_ms: request.range_end_unix_ms,
+        native_subject_fingerprint_before: subject.clone(),
+        native_subject_fingerprint_after: subject,
+        available_calendar_ids: ids,
+        available_calendars: inventory,
+        permission_class: permission_class.to_owned(),
+        batches,
+    })
+}
+
+fn validate_request(request: &CalendarAcquisitionRequest) -> Result<(), AgentFailure> {
+    if request.request_id.is_nil()
+        || request.provider != CalendarProvider::Fixture
+        || request.connection_id != CONNECTION
+        || request.connection_revision == 0
+        || request.device_id.trim().is_empty()
+        || request.host_epoch != host_epoch(&request.device_id)
+        || request.range_start_unix_ms < 0
+        || request.range_end_unix_ms <= request.range_start_unix_ms
+        || request.deadline_unix_ms <= chrono::Utc::now().timestamp_millis()
+        || request.calendar_ids.len() > CALENDARS.len()
+        || request
+            .calendar_ids
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || request.calendar_ids.iter().any(|id| !known_calendar(id))
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+
+    match request.mode {
+        CalendarAcquisitionMode::RequestPermission
+            if !request.calendar_ids.is_empty()
+                || request.expected_native_subject_fingerprint.is_some() =>
+        {
+            Err(AgentFailure::InvalidInput)
+        }
+        CalendarAcquisitionMode::InspectCatalog
+            if !request.calendar_ids.is_empty()
+                || request.expected_native_subject_fingerprint.is_some() =>
+        {
+            Err(AgentFailure::InvalidInput)
+        }
+        CalendarAcquisitionMode::InspectSubject if request.calendar_ids.is_empty() => {
+            Err(AgentFailure::InvalidInput)
+        }
+        CalendarAcquisitionMode::ReadEvents
+            if request.calendar_ids.is_empty()
+                || request.expected_native_subject_fingerprint.as_deref()
+                    != Some(subject_fingerprint(request).as_str())
+                || request.range_end_unix_ms - request.range_start_unix_ms > MAX_READ_RANGE_MS =>
+        {
+            Err(AgentFailure::AccessReviewRequired)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn inventory() -> Vec<NativeSourceResource> {
+    let group = NativeResourceGroup {
+        handle: "fixture.qa".into(),
+        label: "Synthetic QA calendars".into(),
+    };
+    CALENDARS
+        .iter()
+        .map(|calendar| NativeSourceResource {
+            handle: calendar.handle.to_owned(),
+            label: calendar.label.to_owned(),
+            group: Some(group.clone()),
+        })
+        .collect()
+}
+
+fn known_calendar(handle: &str) -> bool {
+    CALENDARS.iter().any(|calendar| calendar.handle == handle)
+}
+
+fn subject_fingerprint(request: &CalendarAcquisitionRequest) -> String {
+    let mut hash = Sha256::new();
+    hash.update(SUBJECT_DOMAIN);
+    hash.update(request.person_id.to_string().as_bytes());
+    hash.update([0]);
+    hash.update(request.device_id.as_bytes());
+    hash.update([0]);
+    hash.update(request.connection_id.as_bytes());
+    hash.finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn batch(
+    calendar_id: &str,
+    request: &CalendarAcquisitionRequest,
+) -> Result<NativeCalendarBatch, AgentFailure> {
+    let title = match calendar_id {
+        TEAM_CALENDAR => "Synthetic planning event",
+        PRIVATE_CALENDAR => "Unselected calendar sentinel event",
+        DENIED_CALENDAR => return Err(AgentFailure::CapabilityDenied),
+        _ => return Err(AgentFailure::InvalidInput),
+    };
+    let span = request.range_end_unix_ms - request.range_start_unix_ms;
+    let event_duration = span.min(30 * 60 * 1000);
+    let start = request.range_start_unix_ms + (span - event_duration) / 2;
+    let end = start + event_duration;
+    let start = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(start)
+        .ok_or(AgentFailure::InvalidInput)?
+        .to_rfc3339();
+    let end = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(end)
+        .ok_or(AgentFailure::InvalidInput)?
+        .to_rfc3339();
+
+    Ok(NativeCalendarBatch {
+        calendar_id: calendar_id.to_owned(),
+        records: vec![NativeCalendarRecord {
+            can_modify: false,
+            calendar_id: calendar_id.to_owned(),
+            external_id: format!("synthetic-event-{calendar_id}"),
+            external_revision: format!("{:064x}", 1),
+            title: title.to_owned(),
+            schedule: NativeEventSchedule::Timed {
+                starts_at: start,
+                ends_at: end,
+                timezone: "UTC".into(),
+            },
+        }],
+        failure: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use floe_kernel::PersonId;
+    use uuid::Uuid;
+
+    fn request(mode: CalendarAcquisitionMode, calendar_ids: Vec<String>) -> CalendarAcquisitionRequest {
+        let mut request = CalendarAcquisitionRequest {
+            request_id: Uuid::new_v4(),
+            host_epoch: host_epoch("qa-device"),
+            person_id: PersonId(Uuid::new_v4()),
+            device_id: "qa-device".into(),
+            connection_id: CONNECTION.into(),
+            connection_revision: 1,
+            provider: CalendarProvider::Fixture,
+            mode,
+            calendar_ids,
+            range_start_unix_ms: 1_800_000_000_000,
+            range_end_unix_ms: 1_800_003_600_000,
+            deadline_unix_ms: chrono::Utc::now().timestamp_millis() + 30_000,
+            expected_native_subject_fingerprint: None,
+        };
+        if mode == CalendarAcquisitionMode::ReadEvents {
+            request.expected_native_subject_fingerprint = Some(subject_fingerprint(&request));
+        }
+        request
+    }
+
+    #[test]
+    fn selected_reads_exclude_unselected_calendar_content() {
+        let result = respond(&request(
+            CalendarAcquisitionMode::ReadEvents,
+            vec![TEAM_CALENDAR.into()],
+        ))
+        .unwrap();
+        assert_eq!(result.batches.len(), 1);
+        assert_eq!(result.batches[0].calendar_id, TEAM_CALENDAR);
+        assert_eq!(result.batches[0].records[0].title, "Synthetic planning event");
+        assert!(!result
+            .batches
+            .iter()
+            .any(|batch| batch.calendar_id == PRIVATE_CALENDAR));
+        assert!(result.batches.iter().flat_map(|batch| &batch.records).all(|record| {
+            !record.can_modify
+                && record.title != "Unselected calendar sentinel event"
+        }));
+    }
+
+    #[test]
+    fn denied_source_returns_no_calendar_payload() {
+        let result = respond(&request(
+            CalendarAcquisitionMode::ReadEvents,
+            vec![DENIED_CALENDAR.into()],
+        ))
+        .unwrap();
+        assert_eq!(result.permission_class, "denied");
+        assert!(result.batches.is_empty());
+    }
+}
