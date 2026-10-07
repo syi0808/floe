@@ -428,6 +428,7 @@ final class IntegrationSummary {
         'apple_contacts',
         'apple_health',
         'apple_attention',
+        'synthetic_qa_calendar',
         'hosted',
       }),
       integrationRef: IntegrationRef(_uuid(j['integration_ref'])),

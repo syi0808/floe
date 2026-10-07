@@ -32,6 +32,13 @@ final class ServicePresentation {
         LucideIcons.calendarDays,
       );
     }
+    if (integration.serviceKind == 'synthetic_qa_calendar') {
+      return ServicePresentation(
+        'Synthetic QA Calendar',
+        'Use deterministic synthetic Calendar data for Linux QA. No real calendar is accessed or changed.',
+        LucideIcons.calendarDays,
+      );
+    }
     return ServicePresentation(
       integration.displayName,
       switch (integration.serviceKind) {

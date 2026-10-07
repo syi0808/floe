@@ -619,6 +619,10 @@ fn integration(value: owner::IntegrationSummary) -> AppWireResult<dto::Integrati
             owner::IntegrationServiceKind::AppleCalendar => {
                 dto::IntegrationServiceKindDto::AppleCalendar
             }
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            owner::IntegrationServiceKind::SyntheticQaCalendar => {
+                dto::IntegrationServiceKindDto::SyntheticQaCalendar
+            }
             owner::IntegrationServiceKind::AppleContacts => {
                 dto::IntegrationServiceKindDto::AppleContacts
             }
@@ -666,6 +670,34 @@ fn integration(value: owner::IntegrationSummary) -> AppWireResult<dto::Integrati
             .collect(),
         source: value.source.map(source).transpose()?,
     })
+}
+
+#[cfg(all(test, feature = "qa-fixtures", target_os = "linux"))]
+mod tests {
+    use super::{dto, integration, owner};
+    use uuid::Uuid;
+
+    #[test]
+    fn synthetic_calendar_integration_maps_to_its_own_wire_kind() {
+        let value = owner::IntegrationSummary {
+            service_kind: owner::IntegrationServiceKind::SyntheticQaCalendar,
+            integration_ref: Uuid::new_v4(),
+            revision: 1,
+            display_name: "Synthetic QA Calendar".into(),
+            category: "calendar".into(),
+            state: owner::IntegrationState::Available,
+            capabilities: vec![],
+            source: None,
+        };
+
+        let wire = integration(value).expect("map synthetic integration");
+        assert_eq!(
+            wire.service_kind,
+            dto::IntegrationServiceKindDto::SyntheticQaCalendar
+        );
+        let json = serde_json::to_value(wire).expect("serialize synthetic integration");
+        assert_eq!(json["service_kind"], "synthetic_qa_calendar");
+    }
 }
 fn operation(
     value: owner::ConnectionOperationSnapshot,

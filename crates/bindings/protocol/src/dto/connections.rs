@@ -275,10 +275,28 @@ pub struct IntegrationSummaryDto {
 #[serde(rename_all = "snake_case")]
 pub enum IntegrationServiceKindDto {
     AppleCalendar,
+    SyntheticQaCalendar,
     AppleContacts,
     AppleHealth,
     AppleAttention,
     Hosted,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntegrationServiceKindDto;
+
+    #[test]
+    fn synthetic_qa_calendar_service_kind_has_a_distinct_wire_value() {
+        let encoded = serde_json::to_string(&IntegrationServiceKindDto::SyntheticQaCalendar)
+            .expect("serialize service kind");
+        assert_eq!(encoded, "\"synthetic_qa_calendar\"");
+        assert_eq!(
+            serde_json::from_str::<IntegrationServiceKindDto>(&encoded)
+                .expect("parse service kind"),
+            IntegrationServiceKindDto::SyntheticQaCalendar
+        );
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
