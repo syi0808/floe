@@ -161,6 +161,17 @@ final class NativeTransport implements AppWireTransport {
       final executableDirectory = File(Platform.resolvedExecutable).parent.path;
       return '$executableDirectory/../Frameworks/libfloe_ffi.dylib';
     }
+    if (Platform.isLinux) {
+      final executableDirectory = File(Platform.resolvedExecutable).parent.path;
+      final libraryPath = '$executableDirectory/lib/libfloe_ffi.so';
+      if (!File(libraryPath).existsSync()) {
+        throw FileSystemException(
+          'Bundled Floe core library is missing.',
+          libraryPath,
+        );
+      }
+      return libraryPath;
+    }
     throw UnsupportedError('The native Floe transport is unavailable.');
   }
 
