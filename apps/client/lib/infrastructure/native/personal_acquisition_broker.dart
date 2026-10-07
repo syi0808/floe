@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'package:floe_client/infrastructure/native/native_acquisition_service.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 typedef PersonalAcquisitionReader = Future<Map<String, dynamic>> Function(
@@ -268,7 +269,7 @@ final class PersonalAcquisitionBroker {
       !value.contains(RegExp(r'\s'));
 }
 
-final class PersonalAcquisitionService {
+final class PersonalAcquisitionService implements NativeAcquisitionService {
   PersonalAcquisitionService({
     required PersonalAcquisitionBroker broker,
     required PersonalAcquisitionReader reader,
@@ -284,6 +285,10 @@ final class PersonalAcquisitionService {
   bool _disposed = false;
   bool _polling = false;
 
+  @override
+  String get diagnosticOperation => 'personal_acquisition';
+
+  @override
   Future<void> start() async {
     if (_disposed) {
       throw StateError('Personal acquisition service is disposed.');
@@ -305,6 +310,7 @@ final class PersonalAcquisitionService {
     }
   }
 
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

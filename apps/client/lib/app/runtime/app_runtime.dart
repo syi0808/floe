@@ -162,11 +162,14 @@ final class AppRuntime {
 
   Future<void> startVault() => vaultController.open();
 
+  /// Closes local Vault-backed presentation admission before app retirement.
+  void closeAdmission() => vaultController.closeAdmission();
+
   Future<void>? _closing;
   Future<void> close() => _closing ??= _close();
 
   Future<void> _close() async {
-    vaultController.closeAdmission();
+    closeAdmission();
     try {
       await _transport.close();
     } finally {

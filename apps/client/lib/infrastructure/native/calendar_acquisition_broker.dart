@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'package:floe_client/infrastructure/native/native_acquisition_service.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 typedef CalendarAcquisitionReader = Future<Map<String, dynamic>> Function(
@@ -257,7 +258,7 @@ final class CalendarAcquisitionBroker {
   }
 }
 
-final class CalendarAcquisitionService {
+final class CalendarAcquisitionService implements NativeAcquisitionService {
   CalendarAcquisitionService({
     required CalendarAcquisitionBroker broker,
     required CalendarAcquisitionReader reader,
@@ -275,6 +276,10 @@ final class CalendarAcquisitionService {
   DateTime? _retryAt;
   Duration _backoff = const Duration(milliseconds: 100);
 
+  @override
+  String get diagnosticOperation => 'calendar_acquisition';
+
+  @override
   Future<void> start() async {
     if (_disposed) {
       throw StateError('Calendar acquisition service is disposed.');
@@ -305,6 +310,7 @@ final class CalendarAcquisitionService {
     }
   }
 
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

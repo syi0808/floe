@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'package:floe_client/infrastructure/native/native_acquisition_service.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 
 typedef AttentionAcquisitionReader = Future<Map<String, dynamic>> Function(
@@ -194,7 +195,7 @@ final class AttentionAcquisitionBroker {
       !value.contains(RegExp(r'\s'));
 }
 
-final class AttentionAcquisitionService {
+final class AttentionAcquisitionService implements NativeAcquisitionService {
   AttentionAcquisitionService({
     required AttentionAcquisitionBroker broker,
     required AttentionAcquisitionReader reader,
@@ -212,6 +213,10 @@ final class AttentionAcquisitionService {
   int _pollFailures = 0;
   DateTime _retryNotBefore = DateTime.fromMillisecondsSinceEpoch(0);
 
+  @override
+  String get diagnosticOperation => 'attention_acquisition';
+
+  @override
   Future<void> start() async {
     if (_disposed) {
       throw StateError('Attention acquisition service is disposed.');
@@ -242,6 +247,7 @@ final class AttentionAcquisitionService {
     }
   }
 
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

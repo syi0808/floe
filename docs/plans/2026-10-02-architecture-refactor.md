@@ -125,16 +125,22 @@ Vault 내부 lifecycle을 숨기고 transport 독립 제품 dispatch를 한 경�
 
 Prerequisite: P1.
 
-- **공유 client bootstrap:** main._start에서 support directory·library·OS reader 해석을 분리해 production/headless/desktop QA가 같은 openDefault·broker 등록·runtime 준비·close 경로를 사용하게 한다. Flutter 샘플은 실제 desktop에서 실행/버튼 조작까지 확인했다. Floe Linux runner는 제한된 QA host로 추가한다.
+- **공유 client bootstrap:** `main._start`는 `ClientAppBootstrap.openDefault`만 호출한다. 기존 `AppRuntime.openDefault`가 support directory·library resolution의 canonical path로 남고, OS reader construction은 platform acquisition adapter가 맡는다. Production/headless/desktop QA가 같은 registration·runtime preparation·close 경로를 사용한다. Floe Linux runner는 제한된 QA host로 유지한다.
 - **Rust 준비 수명:** VaultBridge/ReadyGeneration의 create/open/activate/retire/drain을 App runtime 내부로 둔다. callback host 준비 뒤 기동하며 준비 상태·실패·진단 ID·허용 복구 행동만 Flutter에 제공한다. 자동 reset은 없다.
 - **Typed Router:** crates/app/src/api.rs에 transport-neutral ProductCommand/Query/Outcome를 정리하고 새 router.rs가 host admission 뒤 owner API로 dispatch한다. FFI는 DTO 구조 검증·변환·메모리/ABI만 담당한다. App이 serde wire DTO나 FFI에 역의존하지 않는다.
 - **한 dispatch 경로:** Conversation/Connections의 FFI 직접 owner 호출과 나머지 App *_services forwarding을 차례로 동일 router로 이관한다. routing 검증 이후 기존 중복 enum/trait/scope 생성 경로를 제거한다. 새 forwarding facade를 겹치지 않는다.
 - **Flutter 분리:** VaultController/AgentVaultGateway 대신 RuntimeReadiness 관찰 모델로 교체한다. NativeCommandDisposition 의미는 product-level CommandOutcome로 이동해 feature가 NativeTransport 구현 타입을 import하지 않게 한다.
 - **Memory 제품화:** knowledge.memory.*를 memory.* 제품 의도로 교체하되 overview/review/decide 의미·불명 command identity를 보존한다. 기존 소비자를 함께 이관한다.
 
+**Bounded checkpoint 1 — shared Flutter bootstrap (2026-10-07):** the candidate adds `app/bootstrap.dart` as the owner of the real `AppRuntime`, Day gateway and startup-created native callback services. Production enters through `AppRuntime.openDefault`; `platform_acquisition_services.dart` keeps the existing OS reader evidence checks and platform selection at the native boundary. Applicable callback registrations run before the one Vault start. Optional registration failures are diagnosed and disposed independently. Shutdown closes local runtime admission, observes all native disposals concurrently for at most five seconds, then always awaits `AppRuntime.close`; an observation timeout is not evidence that native retirement drained. Focused native-lifetime tests cover ordering, optional failure cleanup, disposal attempts and repeated close. Root's same-snapshot desktop startup and retention qualification remains pending. This checkpoint does not complete P2.
+
+**Still pending in P2:** Rust Vault readiness lifecycle and its Flutter readiness projection, the typed App product router and its FFI/App caller cutover, transport-neutral command outcomes, and the `memory.*` product namespace migration. Those later cutovers retain the source anchors and deletion gates below.
+
 **Source anchors and disposition:**
 
-- `apps/client/lib/main.dart` — production과 QA가 공유할 bootstrap 추출
+- `apps/client/lib/app/bootstrap.dart` — production과 QA가 공유할 runtime/native-resource bootstrap
+- `apps/client/lib/infrastructure/native/platform_acquisition_services.dart` — 실제 OS reader 및 callback-service boundary
+- `apps/client/lib/main.dart` — bootstrap 호출 및 FloeApp 구성만 유지
 - `crates/app/src/api.rs` — 제품 intent/outcome canonical 계약
 - `crates/app/src/host.rs` — verified request admission 유지
 - `crates/app/src/owner_handles.rs` — scope/actor/generation 전달의 단일화
