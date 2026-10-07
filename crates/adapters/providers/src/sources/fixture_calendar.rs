@@ -13,7 +13,6 @@ use floe_native::{
 };
 use sha2::{Digest, Sha256};
 
-const CONNECTOR: &str = "calendar.fixture";
 const CONNECTION: &str = "calendar.fixture.local";
 const SUBJECT_DOMAIN: &[u8] = b"floe.qa.synthetic-calendar.subject.v1\0";
 const MAX_READ_RANGE_MS: i64 = 32 * 24 * 60 * 60 * 1000;
@@ -21,6 +20,14 @@ const MAX_READ_RANGE_MS: i64 = 32 * 24 * 60 * 60 * 1000;
 const TEAM_CALENDAR: &str = "fixture.calendar.team";
 const PRIVATE_CALENDAR: &str = "fixture.calendar.private";
 const DENIED_CALENDAR: &str = "fixture.calendar.denied";
+const TEAM_EVENT_ID: &str = "synthetic-event-team-1";
+const TEAM_EVENT_REVISION: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+const TEAM_EVENT_START: &str = "2026-10-08T10:00:00Z";
+const TEAM_EVENT_END: &str = "2026-10-08T10:30:00Z";
+const PRIVATE_EVENT_ID: &str = "synthetic-event-private-1";
+const PRIVATE_EVENT_REVISION: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+const PRIVATE_EVENT_START: &str = "2026-10-09T13:00:00Z";
+const PRIVATE_EVENT_END: &str = "2026-10-09T13:30:00Z";
 
 #[derive(Clone, Copy)]
 struct FixtureCalendar {
@@ -108,10 +115,14 @@ pub(super) fn respond(
 
 fn validate_request(request: &CalendarAcquisitionRequest) -> Result<(), AgentFailure> {
     if request.request_id.is_nil()
+        || request.person_id.0.is_nil()
         || request.provider != CalendarProvider::Fixture
         || request.connection_id != CONNECTION
         || request.connection_revision == 0
         || request.device_id.trim().is_empty()
+        || request.device_id.trim() != request.device_id
+        || request.device_id.len() > 128
+        || request.device_id.chars().any(char::is_control)
         || request.host_epoch != host_epoch(&request.device_id)
         || request.range_start_unix_ms < 0
         || request.range_end_unix_ms <= request.range_start_unix_ms
@@ -191,37 +202,51 @@ fn batch(
     calendar_id: &str,
     request: &CalendarAcquisitionRequest,
 ) -> Result<NativeCalendarBatch, AgentFailure> {
-    let title = match calendar_id {
-        TEAM_CALENDAR => "Synthetic planning event",
-        PRIVATE_CALENDAR => "Unselected calendar sentinel event",
+    let (event_id, event_revision, title, starts_at, ends_at) = match calendar_id {
+        TEAM_CALENDAR => (
+            TEAM_EVENT_ID,
+            TEAM_EVENT_REVISION,
+            "Synthetic planning event",
+            TEAM_EVENT_START,
+            TEAM_EVENT_END,
+        ),
+        PRIVATE_CALENDAR => (
+            PRIVATE_EVENT_ID,
+            PRIVATE_EVENT_REVISION,
+            "Unselected calendar sentinel event",
+            PRIVATE_EVENT_START,
+            PRIVATE_EVENT_END,
+        ),
         DENIED_CALENDAR => return Err(AgentFailure::CapabilityDenied),
         _ => return Err(AgentFailure::InvalidInput),
     };
-    let span = request.range_end_unix_ms - request.range_start_unix_ms;
-    let event_duration = span.min(30 * 60 * 1000);
-    let start = request.range_start_unix_ms + (span - event_duration) / 2;
-    let end = start + event_duration;
-    let start = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(start)
-        .ok_or(AgentFailure::InvalidInput)?
-        .to_rfc3339();
-    let end = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(end)
-        .ok_or(AgentFailure::InvalidInput)?
-        .to_rfc3339();
+    let event_start = chrono::DateTime::parse_from_rfc3339(starts_at)
+        .map_err(|_| AgentFailure::InvalidInput)?
+        .timestamp_millis();
+    let event_end = chrono::DateTime::parse_from_rfc3339(ends_at)
+        .map_err(|_| AgentFailure::InvalidInput)?
+        .timestamp_millis();
+    let overlaps = event_start < request.range_end_unix_ms
+        && event_end > request.range_start_unix_ms;
 
     Ok(NativeCalendarBatch {
         calendar_id: calendar_id.to_owned(),
-        records: vec![NativeCalendarRecord {
-            can_modify: false,
-            calendar_id: calendar_id.to_owned(),
-            external_id: format!("synthetic-event-{calendar_id}"),
-            external_revision: format!("{:064x}", 1),
-            title: title.to_owned(),
-            schedule: NativeEventSchedule::Timed {
-                starts_at: start,
-                ends_at: end,
-                timezone: "UTC".into(),
-            },
-        }],
+        records: if overlaps {
+            vec![NativeCalendarRecord {
+                can_modify: false,
+                calendar_id: calendar_id.to_owned(),
+                external_id: event_id.to_owned(),
+                external_revision: event_revision.to_owned(),
+                title: title.to_owned(),
+                schedule: NativeEventSchedule::Timed {
+                    starts_at: starts_at.to_owned(),
+                    ends_at: ends_at.to_owned(),
+                    timezone: "UTC".into(),
+                },
+            }]
+        } else {
+            Vec::new()
+        },
         failure: None,
     })
 }
@@ -233,6 +258,20 @@ mod tests {
     use uuid::Uuid;
 
     fn request(mode: CalendarAcquisitionMode, calendar_ids: Vec<String>) -> CalendarAcquisitionRequest {
+        request_in_range(
+            mode,
+            calendar_ids,
+            "2026-10-01T00:00:00Z",
+            "2026-11-01T00:00:00Z",
+        )
+    }
+
+    fn request_in_range(
+        mode: CalendarAcquisitionMode,
+        calendar_ids: Vec<String>,
+        start: &str,
+        end: &str,
+    ) -> CalendarAcquisitionRequest {
         let mut request = CalendarAcquisitionRequest {
             request_id: Uuid::new_v4(),
             host_epoch: host_epoch("qa-device"),
@@ -243,8 +282,12 @@ mod tests {
             provider: CalendarProvider::Fixture,
             mode,
             calendar_ids,
-            range_start_unix_ms: 1_800_000_000_000,
-            range_end_unix_ms: 1_800_003_600_000,
+            range_start_unix_ms: chrono::DateTime::parse_from_rfc3339(start)
+                .unwrap()
+                .timestamp_millis(),
+            range_end_unix_ms: chrono::DateTime::parse_from_rfc3339(end)
+                .unwrap()
+                .timestamp_millis(),
             deadline_unix_ms: chrono::Utc::now().timestamp_millis() + 30_000,
             expected_native_subject_fingerprint: None,
         };
@@ -272,6 +315,37 @@ mod tests {
             !record.can_modify
                 && record.title != "Unselected calendar sentinel event"
         }));
+    }
+
+    #[test]
+    fn overlapping_ranges_keep_a_stable_synthetic_event_identity_time_and_revision() {
+        let first = respond(&request(
+            CalendarAcquisitionMode::ReadEvents,
+            vec![TEAM_CALENDAR.into()],
+        ))
+        .unwrap();
+        let second = respond(&request_in_range(
+            CalendarAcquisitionMode::ReadEvents,
+            vec![TEAM_CALENDAR.into()],
+            "2026-10-07T00:00:00Z",
+            "2026-10-10T00:00:00Z",
+        ))
+        .unwrap();
+        assert_eq!(first.batches, second.batches);
+        assert_eq!(first.batches[0].records[0].external_id, TEAM_EVENT_ID);
+        assert_eq!(
+            first.batches[0].records[0].external_revision,
+            TEAM_EVENT_REVISION
+        );
+
+        let outside = respond(&request_in_range(
+            CalendarAcquisitionMode::ReadEvents,
+            vec![TEAM_CALENDAR.into()],
+            "2026-11-02T00:00:00Z",
+            "2026-11-03T00:00:00Z",
+        ))
+        .unwrap();
+        assert!(outside.batches[0].records.is_empty());
     }
 
     #[test]

@@ -383,7 +383,7 @@ impl ScriptedModel {
                 }]))
             }
             2 => Ok(response(vec![ModelStep::Answer {
-                text: "The selected synthetic calendar has one planning event this week.".into(),
+                text: "The selected synthetic calendar has one planning event in the requested range.".into(),
                 artifacts: vec![],
             }])),
             3 => Ok(response(vec![ModelStep::Answer {

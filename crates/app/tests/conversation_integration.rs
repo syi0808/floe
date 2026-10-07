@@ -243,7 +243,7 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 #[test]
 fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evidence() {
-    const SCHEDULE_REQUEST: &str = "Review my calendar this week.";
+    const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
 
     let model = ScriptedModel::new(
         PrimaryBehavior::NoGateway,
