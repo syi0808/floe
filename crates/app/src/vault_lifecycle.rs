@@ -4,16 +4,14 @@
 use crate::local_context::LocalContextHost;
 use crate::owner_handles::ReadyOwners;
 use crate::ready_generation::ReadyGeneration;
+use crate::runtime_control::{
+    RuntimeControl, RuntimeFailureProjection, RuntimePreparationCommandFailure,
+    RuntimePreparationResult, RuntimeReadiness, RuntimeReadinessState, validate_runtime_caller,
+};
 use crate::storage_profile::{ProfileVaultKeys as PlatformVaultKeys, vault_keys};
-use crate::{
-    CallerContext, FloeCore, ModelProviderFactory, VaultLifecycleCommandFailure,
-    VaultLifecycleFailureProjection, VaultLifecycleRecovery, VaultLifecycleResult, VaultState,
-};
+use crate::{CallerContext, FloeCore, ModelProviderFactory};
 use floe_execution::{CancelReason, Cancellation};
-use floe_kernel::{
-    AgentFailure, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
-    AgentRetryPolicy, PersonId,
-};
+use floe_kernel::{AgentFailure, PersonId};
 use floe_vault::EncryptedAgentVault;
 
 use std::{
@@ -37,17 +35,13 @@ const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(60);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum VaultLifecycleIntent {
-    Create,
-    Unlock,
-    Lock,
+enum PreparationIntent {
+    Prepare,
 }
-impl VaultLifecycleIntent {
+impl PreparationIntent {
     fn stage(self) -> &'static str {
         match self {
-            Self::Create => "create",
-            Self::Unlock => "unlock",
-            Self::Lock => "lock",
+            Self::Prepare => "prepare",
         }
     }
 }
@@ -64,62 +58,14 @@ fn requires_retirement(failure: AgentFailure) -> bool {
     )
 }
 
-pub(crate) fn project_failure(
-    failure: AgentFailure,
-    stage: &str,
-) -> VaultLifecycleFailureProjection {
-    // Lock closes admission before draining. Other failures seal the client only
-    // when the lifecycle has retired the generation; recovery never replays work.
-    let seal_session = stage == "lock"
-        || requires_retirement(failure)
-        || (stage == "unlock" && failure == AgentFailure::Conflict);
-    let category = match failure {
-        AgentFailure::VaultLocked | AgentFailure::NotFound | AgentFailure::ConsentRequired => {
-            AgentFailureCategory::UserConfiguration
-        }
-        AgentFailure::IncompleteCreation
-        | AgentFailure::Conflict
-        | AgentFailure::StaleContext
-        | AgentFailure::UnsupportedVersion => AgentFailureCategory::Integrity,
-        AgentFailure::PolicyDenied | AgentFailure::CapabilityDenied => {
-            AgentFailureCategory::Security
-        }
-        AgentFailure::VaultUnavailable
-        | AgentFailure::StorageUnavailable
-        | AgentFailure::StorageBusy
-        | AgentFailure::Interrupted
-        | AgentFailure::DeadlineExceeded
-        | AgentFailure::Cancelled
-        | AgentFailure::BudgetExceeded => AgentFailureCategory::Transient,
-        _ => AgentFailureCategory::Internal,
-    };
-    VaultLifecycleFailureProjection {
-        failure,
-        domain: AgentFailureDomain::Vault,
-        category,
-        safe_actions: if seal_session {
-            vec![AgentFailureSafeAction::ReopenVault]
-        } else {
-            vec![]
-        },
-        retry_policy: AgentRetryPolicy::Never,
-        retryable: false,
-        recovery: if seal_session {
-            VaultLifecycleRecovery::ReopenVault
-        } else {
-            VaultLifecycleRecovery::None
-        },
-        reload_required: seal_session,
-        seal_session,
-    }
-}
-
 type Generation = ReadyGeneration<PlatformVaultKeys>;
 type OpenGeneration = (CallerContext, Arc<Generation>);
 #[derive(Default)]
 struct Published {
     closing: bool,
-    failure: Option<AgentFailure>,
+    worker_failure: Option<AgentFailure>,
+    preparation_failure: Option<AgentFailure>,
+    failure_correlation: Option<Uuid>,
     current: Option<OpenGeneration>,
 }
 #[derive(Default)]
@@ -131,6 +77,8 @@ struct BridgeState {
 }
 pub(crate) struct VaultBridge {
     root: PathBuf,
+    expected: CallerContext,
+    runtime_handle: tokio::runtime::Handle,
     core: Arc<FloeCore>,
     local_context: Arc<LocalContextHost>,
     model_provider_factory: Arc<dyn ModelProviderFactory>,
@@ -141,12 +89,16 @@ pub(crate) struct VaultBridge {
 impl VaultBridge {
     pub(crate) fn new(
         database_path: &str,
+        expected: CallerContext,
+        runtime_handle: tokio::runtime::Handle,
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
         model_provider_factory: Arc<dyn ModelProviderFactory>,
     ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
+            expected,
+            runtime_handle,
             core,
             local_context,
             model_provider_factory,
@@ -157,7 +109,7 @@ impl VaultBridge {
     }
 
     pub(crate) fn ready(&self, caller: &CallerContext) -> Result<Arc<ReadyOwners>, AgentFailure> {
-        caller.owner_actor().validate()?;
+        validate_runtime_caller(&self.expected, caller)?;
         let slot = self
             .published
             .lock()
@@ -165,17 +117,13 @@ impl VaultBridge {
         if slot.closing {
             return Err(AgentFailure::Interrupted);
         }
-        if let Some(failure) = slot.failure {
-            return Err(failure);
+        if slot.worker_failure.is_some() {
+            // A terminal queue failure is reported by Runtime readiness. Feature
+            // calls fail closed without advertising another impossible prepare.
+            return Err(AgentFailure::Interrupted);
         }
         let Some((admitted, generation)) = slot.current.as_ref() else {
-            return Err(
-                match stored_vault_state(&self.root, PersonId(caller.person_id()))? {
-                    VaultState::Locked => AgentFailure::VaultLocked,
-                    VaultState::Missing => AgentFailure::NotFound,
-                    _ => AgentFailure::VaultUnavailable,
-                },
-            );
+            return Err(AgentFailure::VaultUnavailable);
         };
         if admitted != caller {
             return Err(AgentFailure::PolicyDenied);
@@ -191,75 +139,243 @@ impl VaultBridge {
         Ok(owners)
     }
 
-    pub(crate) fn status(&self, caller: &CallerContext) -> Result<VaultState, AgentFailure> {
-        caller.owner_actor().validate()?;
-        let slot = self
+    pub(crate) fn readiness(
+        &self,
+        caller: &CallerContext,
+        correlation_id: Uuid,
+    ) -> Result<RuntimeReadiness, AgentFailure> {
+        validate_runtime_caller(&self.expected, caller)?;
+        let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        let worker_failure = state
+            .worker
+            .as_ref()
+            .map(Worker::health_failure)
+            .transpose()?
+            .flatten();
+        drop(state);
+        if let Some(failure) = worker_failure {
+            set_worker_failure(&self.published, failure, correlation_id);
+        }
+        let mut slot = self
             .published
             .lock()
             .map_err(|_| AgentFailure::Interrupted)?;
         if slot.closing {
-            return Err(AgentFailure::Interrupted);
+            return Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::Unavailable,
+                failure: Some(RuntimeFailureProjection::project(
+                    AgentFailure::Interrupted,
+                    correlation_id,
+                    false,
+                )),
+            });
         }
-        if let Some(failure) = slot.failure {
-            return Err(failure);
+        if let Some(failure) = slot.worker_failure {
+            return Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::Unavailable,
+                failure: Some(RuntimeFailureProjection::project(
+                    failure,
+                    slot.failure_correlation.unwrap_or(correlation_id),
+                    false,
+                )),
+            });
         }
-        match slot.current.as_ref() {
-            Some((admitted, generation)) => {
-                if admitted != caller {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                let owners = generation.owners();
-                if owners.check(&caller.owner_actor()).is_err()
-                    || generation.check_access().is_err()
-                {
-                    let gateway = self.core.product_gateway.lock();
-                    let close = owners.close_admission();
-                    gateway.and(close)?;
-                    // No usable published generation remains. Unlock owns
-                    // retirement/drain on the lifecycle queue before reopening.
-                    return Ok(VaultState::Locked);
-                }
-                Ok(VaultState::Ready)
+        if let Some((admitted, generation)) = slot.current.as_ref() {
+            if admitted != caller {
+                return Err(AgentFailure::PolicyDenied);
             }
-            None => stored_vault_state(&self.root, PersonId(caller.person_id())),
+            let owners = generation.owners();
+            let observed_failure = match owners.check(&caller.owner_actor()) {
+                Ok(()) => generation.check_access().err(),
+                Err(failure) => Some(failure),
+            };
+            if observed_failure.is_none() {
+                return Ok(RuntimeReadiness {
+                    state: RuntimeReadinessState::Ready,
+                    failure: None,
+                });
+            }
+            let gateway = self.core.product_gateway.lock();
+            let close = owners.close_admission();
+            gateway.and(close)?;
+            let failure = observed_failure.unwrap_or(AgentFailure::VaultUnavailable);
+            slot.preparation_failure = Some(failure);
+            slot.failure_correlation = Some(correlation_id);
+            return Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::PreparationRequired,
+                failure: Some(RuntimeFailureProjection::project(
+                    failure,
+                    correlation_id,
+                    true,
+                )),
+            });
+        }
+        if let Some(failure) = slot.preparation_failure {
+            return Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::PreparationRequired,
+                failure: Some(RuntimeFailureProjection::project(
+                    failure,
+                    slot.failure_correlation.unwrap_or(correlation_id),
+                    true,
+                )),
+            });
+        }
+        match stored_vault_state(&self.root, PersonId(caller.person_id())) {
+            Ok(_) => Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::PreparationRequired,
+                failure: None,
+            }),
+            Err(failure) => Ok(RuntimeReadiness {
+                state: RuntimeReadinessState::Unavailable,
+                failure: Some(RuntimeFailureProjection::project(
+                    failure,
+                    correlation_id,
+                    false,
+                )),
+            }),
         }
     }
 
-    pub(crate) fn request(
+    pub(crate) fn prepare(
         &self,
         caller: &CallerContext,
         id: Uuid,
-        intent: Option<VaultLifecycleIntent>,
-        release: bool,
-    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure> {
-        let state = (|| -> Result<_, AgentFailure> {
-            caller.owner_actor().validate()?;
-            if id.is_nil() {
-                return Err(AgentFailure::InvalidInput);
+    ) -> Result<RuntimePreparationResult, RuntimePreparationCommandFailure> {
+        validate_runtime_caller(&self.expected, caller)
+            .map_err(RuntimePreparationCommandFailure::NotAdmitted)?;
+        if id.is_nil() {
+            return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted))?;
+        if state.closing {
+            return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                AgentFailure::Interrupted,
+            ));
+        }
+        if let Some(worker) = state.worker.as_ref() {
+            if worker.health_failure().map_err(|_| {
+                RuntimePreparationCommandFailure::NotAdmitted(AgentFailure::Interrupted)
+            })?.is_some() {
+                return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                    AgentFailure::Interrupted,
+                ));
             }
-            let mut state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
-            if state.closing {
-                return Err(AgentFailure::Interrupted);
+            if let Some(result) = worker
+                .cached_result(caller, id)
+                .map_err(RuntimePreparationCommandFailure::NotAdmitted)?
+            {
+                return Ok(result);
             }
-            if state.worker.is_none() {
-                state.worker = Some(Worker::new(
+        }
+        let archived = self
+            .load_archived_receipt(id)
+            .map_err(RuntimePreparationCommandFailure::Indeterminate)?;
+        if let Some(receipt) = archived {
+            if receipt.intent != PreparationIntent::Prepare.stage() {
+                return Err(RuntimePreparationCommandFailure::NotAdmitted(
+                    AgentFailure::Conflict,
+                ));
+            }
+            return preparation_receipt_result(caller, id, receipt)
+                .map_err(RuntimePreparationCommandFailure::NotAdmitted);
+        }
+        if state.worker.is_none() {
+            state.worker = Some(
+                Worker::new(
                     self.root.clone(),
                     self.core.clone(),
                     self.local_context.clone(),
                     self.published.clone(),
                     self.model_provider_factory.clone(),
-                )?);
-            }
-            Ok(state)
-        })()
-        .map_err(VaultLifecycleCommandFailure::NotAdmitted)?;
+                )
+                .map_err(RuntimePreparationCommandFailure::NotAdmitted)?,
+            );
+        }
         state
             .worker
             .as_ref()
-            .ok_or(VaultLifecycleCommandFailure::NotAdmitted(
+            .ok_or(RuntimePreparationCommandFailure::NotAdmitted(
                 AgentFailure::Interrupted,
             ))?
-            .request(caller, id, intent, release)
+            .prepare(caller, id)
+    }
+
+    pub(crate) fn get_preparation(
+        &self,
+        caller: &CallerContext,
+        id: Uuid,
+    ) -> Result<RuntimePreparationResult, AgentFailure> {
+        validate_runtime_caller(&self.expected, caller)?;
+        if id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if state.closing {
+            return Err(AgentFailure::Interrupted);
+        }
+        if let Some(worker) = state.worker.as_ref() {
+            if let Some(result) = worker.cached_result(caller, id)? {
+                return Ok(result);
+            }
+        }
+        drop(state);
+        self.load_archived_preparation(caller, id)
+    }
+
+    pub(crate) fn acknowledge(
+        &self,
+        caller: &CallerContext,
+        id: Uuid,
+    ) -> Result<RuntimePreparationResult, AgentFailure> {
+        validate_runtime_caller(&self.expected, caller)?;
+        if id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let state = self.state.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if state.closing {
+            return Err(AgentFailure::Interrupted);
+        }
+        if let Some(worker) = state.worker.as_ref() {
+            if let Some(result) = worker.acknowledge_cached(caller, id)? {
+                return Ok(result);
+            }
+        }
+        drop(state);
+        self.load_archived_preparation(caller, id)
+    }
+
+    fn load_archived_preparation(
+        &self,
+        caller: &CallerContext,
+        id: Uuid,
+    ) -> Result<RuntimePreparationResult, AgentFailure> {
+        let archive = self
+            .load_archived_receipt(id)?
+            .ok_or(AgentFailure::NotFound)?;
+        preparation_receipt_result(caller, id, archive)
+    }
+
+    fn load_archived_receipt(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<floe_vault::StoredVaultLifecycleReceipt>, AgentFailure> {
+        let result = self
+            .runtime_handle
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    self.core.store.load_vault_lifecycle_receipt(id),
+                )
+                .await
+            })
+            .map_err(|_| AgentFailure::StorageUnavailable)?
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        Ok(result)
     }
 
     pub(crate) fn shutdown(&self) -> Result<(), AgentFailure> {
@@ -316,15 +432,17 @@ impl Drop for VaultBridge {
 struct Job {
     caller: CallerContext,
     id: Uuid,
-    intent: VaultLifecycleIntent,
+    intent: PreparationIntent,
     cancellation: Cancellation,
-    result: Mutex<Option<Result<VaultState, AgentFailure>>>,
+    result: Mutex<Option<Result<(), AgentFailure>>>,
     archived: AtomicBool,
+    preparation_receipt: AtomicBool,
 }
 struct Worker {
     sender: Option<mpsc::SyncSender<Arc<Job>>>,
     jobs: Arc<Mutex<HashMap<Uuid, Arc<Job>>>>,
     closing: Arc<AtomicBool>,
+    health: Arc<Mutex<Option<AgentFailure>>>,
     thread: Option<std::thread::JoinHandle<Result<(), AgentFailure>>>,
     failure: Option<AgentFailure>,
 }
@@ -345,6 +463,8 @@ impl Worker {
         let (sender, receiver) = mpsc::sync_channel::<Arc<Job>>(MAX_PENDING);
         let closing = Arc::new(AtomicBool::new(false));
         let worker_closing = closing.clone();
+        let health = Arc::new(Mutex::new(None));
+        let worker_health = health.clone();
         let jobs = Arc::new(Mutex::new(HashMap::<Uuid, Arc<Job>>::new()));
         let thread = std::thread::Builder::new()
             .name("floe-vault-lifecycle".into())
@@ -374,6 +494,8 @@ impl Worker {
                             _ => std::thread::sleep(Duration::from_millis(200)),
                         }
                     };
+                    let from_archive = saved.is_some();
+                    let failed_before = fatal.is_some();
                     let outcome = if worker_closing.load(Ordering::Acquire) {
                         Err(AgentFailure::Interrupted)
                     } else if let Some(failure) = fatal {
@@ -383,6 +505,8 @@ impl Worker {
                             runtime.block_on(async {
                                 if let Some(receipt) = saved {
                                     job.archived.store(true, Ordering::Release);
+                                    let valid = receipt_is_preparation(&job, &receipt);
+                                    job.preparation_receipt.store(valid, Ordering::Release);
                                     return receipt_outcome(&job, receipt);
                                 }
                                 tokio::time::timeout(
@@ -404,17 +528,37 @@ impl Worker {
                             Ok(result) => result,
                             Err(_) => {
                                 fatal = Some(AgentFailure::Interrupted);
+                                set_worker_failure(
+                                    &worker_health,
+                                    &published,
+                                    AgentFailure::Interrupted,
+                                    job.id,
+                                );
                                 Err(AgentFailure::Interrupted)
                             }
                         }
                     };
-                    if let Some(failure) = fatal {
-                        let mut slot = published
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        slot.failure = Some(failure);
+                    if !from_archive && !failed_before && let Some(failure) = fatal {
+                        let cleanup = retire(
+                            &runtime,
+                            &core,
+                            &published,
+                            &mut current,
+                            job.id,
+                        );
+                        if let Err(cleanup_failure) = cleanup {
+                            fatal = Some(cleanup_failure);
+                        }
+                        set_worker_failure(
+                            &worker_health,
+                            &published,
+                            fatal.unwrap_or(failure),
+                            job.id,
+                        );
                     }
-                    if !job.archived.load(Ordering::Acquire)
+                    if !from_archive
+                        && !failed_before
+                        && fatal.is_none()
                         && outcome
                             .as_ref()
                             .err()
@@ -424,6 +568,23 @@ impl Worker {
                             retire(&runtime, &core, &published, &mut current, job.id)
                         {
                             shutdown_failure.get_or_insert(failure);
+                            fatal = Some(failure);
+                            set_worker_failure(&worker_health, &published, failure, job.id);
+                        }
+                    }
+                    if !from_archive && !failed_before {
+                        let mut slot = published
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        match &outcome {
+                            Ok(()) => {
+                                slot.preparation_failure = None;
+                                slot.failure_correlation = None;
+                            }
+                            Err(failure) => {
+                                slot.preparation_failure = Some(*failure);
+                                slot.failure_correlation = Some(job.id);
+                            }
                         }
                     }
                     // Completion/release cannot be acknowledged before the
@@ -442,9 +603,10 @@ impl Worker {
                                 )
                                 .await
                             })
-                            .is_ok_and(|value| value.is_ok())
+                        .is_ok_and(|value| value.is_ok())
                         {
                             job.archived.store(true, Ordering::Release);
+                            job.preparation_receipt.store(true, Ordering::Release);
                         } else {
                             std::thread::sleep(Duration::from_millis(200));
                         }
@@ -454,14 +616,18 @@ impl Worker {
                         Err(poisoned) => {
                             *poisoned.into_inner() = Some(Err(AgentFailure::Interrupted));
                             fatal = Some(AgentFailure::Interrupted);
-                            published
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .failure = fatal;
+                            set_worker_failure(
+                                &worker_health,
+                                &published,
+                                AgentFailure::Interrupted,
+                                job.id,
+                            );
                             if let Err(failure) =
                                 retire(&runtime, &core, &published, &mut current, job.id)
                             {
                                 shutdown_failure.get_or_insert(failure);
+                                fatal = Some(failure);
+                                set_worker_failure(&worker_health, &published, failure, job.id);
                             }
                         }
                     }
@@ -479,109 +645,139 @@ impl Worker {
             sender: Some(sender),
             jobs,
             closing,
+            health,
             thread: Some(thread),
             failure: None,
         })
     }
 
-    fn request(
+    fn prepare(
         &self,
         caller: &CallerContext,
         id: Uuid,
-        intent: Option<VaultLifecycleIntent>,
-        release: bool,
-    ) -> Result<VaultLifecycleResult, VaultLifecycleCommandFailure> {
+    ) -> Result<RuntimePreparationResult, RuntimePreparationCommandFailure> {
         let mut admitted = false;
-        let result = (|| -> Result<VaultLifecycleResult, AgentFailure> {
+        let result = (|| -> Result<RuntimePreparationResult, AgentFailure> {
             if self.closing.load(Ordering::Acquire) {
                 return Err(AgentFailure::Interrupted);
             }
+            if self.health_failure()?.is_some() {
+                // Runtime readiness carries the terminal cause without offering
+                // another prepare on this failed queue.
+                return Err(AgentFailure::Interrupted);
+            }
             let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
-            if let Some(intent) = intent {
-                if let Some(prior) = jobs.get(&id) {
-                    if prior.caller != *caller || prior.intent != intent {
-                        return Err(AgentFailure::Conflict);
-                    }
-                } else {
-                    if jobs.len() >= MAX_RECEIPTS {
-                        return Err(AgentFailure::BudgetExceeded);
-                    }
-                    let pending = jobs.values().try_fold(0usize, |count, job| {
-                        let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
-                        Ok::<_, AgentFailure>(count + usize::from(result.is_none()))
-                    })?;
-                    if pending >= MAX_PENDING {
-                        return Err(AgentFailure::BudgetExceeded);
-                    }
-                    let job = Arc::new(Job {
-                        caller: caller.clone(),
-                        id,
-                        intent,
-                        cancellation: Cancellation::new(),
-                        result: Mutex::new(None),
-                        archived: AtomicBool::new(false),
-                    });
-                    self.sender
-                        .as_ref()
-                        .ok_or(AgentFailure::Interrupted)?
-                        .try_send(job.clone())
-                        .map_err(|error| match error {
-                            mpsc::TrySendError::Full(_) => AgentFailure::BudgetExceeded,
-                            mpsc::TrySendError::Disconnected(_) => AgentFailure::Interrupted,
-                        })?;
-                    jobs.insert(id, job);
-                }
-            }
-            admitted = intent.is_some();
-            let job = jobs.get(&id).ok_or(AgentFailure::NotFound)?;
-            if job.caller != *caller {
-                return Err(AgentFailure::NotFound);
-            }
-            let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
-            if release && result.is_none() {
-                return Err(AgentFailure::Conflict);
-            }
-            // All completed results are already durably archived. A replay
-            // receipt (including a changed-intent Conflict) never replaces it.
-            if release {
-                if !job.archived.load(Ordering::Acquire) {
+            if let Some(prior) = jobs.get(&id) {
+                if prior.caller != *caller || prior.intent != PreparationIntent::Prepare {
                     return Err(AgentFailure::Conflict);
                 }
-                let id = job.id;
-                // Clone below avoids retaining a reference into the map while evicting.
-                let completed = *result;
-                let stage = job.intent.stage().to_string();
-                drop(result);
-                jobs.remove(&id);
-                return Ok(VaultLifecycleResult {
-                    operation_id: id,
-                    stage,
-                    done: true,
-                    state: completed.and_then(Result::ok),
-                    failure: completed.and_then(Result::err),
+            } else {
+                if jobs.len() >= MAX_RECEIPTS {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let pending = jobs.values().try_fold(0usize, |count, job| {
+                    let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+                    Ok::<_, AgentFailure>(count + usize::from(result.is_none()))
+                })?;
+                if pending >= MAX_PENDING {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let job = Arc::new(Job {
+                    caller: caller.clone(),
+                    id,
+                    intent: PreparationIntent::Prepare,
+                    cancellation: Cancellation::new(),
+                    result: Mutex::new(None),
+                    archived: AtomicBool::new(false),
+                    preparation_receipt: AtomicBool::new(false),
                 });
+                self.sender
+                    .as_ref()
+                    .ok_or(AgentFailure::Interrupted)?
+                    .try_send(job.clone())
+                    .map_err(|error| match error {
+                        mpsc::TrySendError::Full(_) => AgentFailure::BudgetExceeded,
+                        mpsc::TrySendError::Disconnected(_) => AgentFailure::Interrupted,
+                    })?;
+                jobs.insert(id, job);
             }
-            Ok(VaultLifecycleResult {
+            admitted = true;
+            let job = jobs.get(&id).ok_or(AgentFailure::NotFound)?;
+            if job.caller != *caller {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+            Ok(RuntimePreparationResult {
                 operation_id: id,
-                stage: job.intent.stage().into(),
                 done: result.is_some(),
-                state: result
-                    .as_ref()
-                    .and_then(|value| value.as_ref().ok())
-                    .copied(),
-                failure: result
-                    .as_ref()
-                    .and_then(|value| value.as_ref().err())
-                    .copied(),
+                failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
             })
         })();
         result.map_err(|failure| {
-            if intent.is_some() && !admitted {
-                VaultLifecycleCommandFailure::NotAdmitted(failure)
+            if !admitted {
+                RuntimePreparationCommandFailure::NotAdmitted(failure)
             } else {
-                VaultLifecycleCommandFailure::Indeterminate(failure)
+                RuntimePreparationCommandFailure::Indeterminate(failure)
             }
         })
+    }
+
+    fn cached_result(
+        &self,
+        caller: &CallerContext,
+        id: Uuid,
+    ) -> Result<Option<RuntimePreparationResult>, AgentFailure> {
+        let jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
+        let Some(job) = jobs.get(&id) else {
+            return Ok(None);
+        };
+        if job.caller != *caller {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+        Ok(Some(RuntimePreparationResult {
+            operation_id: id,
+            done: result.is_some(),
+            failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
+        }))
+    }
+
+    fn acknowledge_cached(
+        &self,
+        caller: &CallerContext,
+        id: Uuid,
+    ) -> Result<Option<RuntimePreparationResult>, AgentFailure> {
+        let mut jobs = self.jobs.lock().map_err(|_| AgentFailure::Interrupted)?;
+        let Some(job) = jobs.get(&id) else {
+            return Ok(None);
+        };
+        if job.caller != *caller {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let result = job.result.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if result.is_none()
+            || !job.archived.load(Ordering::Acquire)
+            || !job.preparation_receipt.load(Ordering::Acquire)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let completed = RuntimePreparationResult {
+            operation_id: id,
+            done: true,
+            failure: result.as_ref().and_then(|value| value.as_ref().err()).copied(),
+        };
+        drop(result);
+        jobs.remove(&id);
+        Ok(Some(completed))
+    }
+
+    fn health_failure(&self) -> Result<Option<AgentFailure>, AgentFailure> {
+        let finished = self.thread.as_ref().is_some_and(|thread| thread.is_finished());
+        let mut health = self.health.lock().map_err(|_| AgentFailure::Interrupted)?;
+        if finished && health.is_none() {
+            *health = Some(AgentFailure::Interrupted);
+        }
+        Ok(*health)
     }
 
     fn shutdown(&mut self) -> Result<(), AgentFailure> {
@@ -627,7 +823,7 @@ async fn execute(
     model_provider_factory: &Arc<dyn ModelProviderFactory>,
     current: &mut Option<OpenGeneration>,
     job: &Job,
-) -> Result<VaultState, AgentFailure> {
+) -> Result<(), AgentFailure> {
     if job.cancellation.is_cancelled() {
         return Err(AgentFailure::Interrupted);
     }
@@ -638,15 +834,12 @@ async fn execute(
         return Err(AgentFailure::PolicyDenied);
     }
     match job.intent {
-        VaultLifecycleIntent::Create | VaultLifecycleIntent::Unlock => {
+        PreparationIntent::Prepare => {
             if let Some((_, generation)) = current.as_ref() {
-                if job.intent == VaultLifecycleIntent::Create {
-                    return Err(AgentFailure::Conflict);
-                }
                 if generation.owners().check(&job.caller.owner_actor()).is_ok()
                     && generation.check_access().is_ok()
                 {
-                    return Ok(VaultState::Ready);
+                    return Ok(());
                 }
                 let fence = close_published(published, core, false);
                 let (_, generation) = current.take().ok_or(AgentFailure::Conflict)?;
@@ -657,15 +850,19 @@ async fn execute(
                 drop(generation);
             }
             let person = PersonId(job.caller.person_id());
-            let vault = if job.intent == VaultLifecycleIntent::Create {
-                match fs::DirBuilder::new().mode(0o700).create(root) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(_) => return Err(AgentFailure::VaultUnavailable),
+            let presence = floe_vault::inspect_vault_presence(root, person)?;
+            let vault = match presence {
+                floe_vault::VaultPresence::Missing => {
+                    match fs::DirBuilder::new().mode(0o700).create(root) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                        Err(_) => return Err(AgentFailure::VaultUnavailable),
+                    }
+                    EncryptedAgentVault::create(root, person, vault_keys(root)?).await?
                 }
-                EncryptedAgentVault::create(root, person, vault_keys(root)?).await?
-            } else {
-                EncryptedAgentVault::open(root, person, vault_keys(root)?).await?
+                floe_vault::VaultPresence::Existing => {
+                    EncryptedAgentVault::open(root, person, vault_keys(root)?).await?
+                }
             };
             let generation = Arc::new(
                 ReadyGeneration::activate(
@@ -686,18 +883,7 @@ async fn execute(
                 return Err(AgentFailure::Interrupted);
             }
             slot.current = current.clone();
-            Ok(VaultState::Ready)
-        }
-        VaultLifecycleIntent::Lock => {
-            let fence = close_published(published, core, false);
-            let drain = match current.take() {
-                Some((_, open)) => tokio::time::timeout(DRAIN_TIMEOUT, open.shutdown(job.id))
-                    .await
-                    .map_err(|_| AgentFailure::DeadlineExceeded)?,
-                None => Ok(()),
-            };
-            fence.and(drain)?;
-            stored_vault_state(root, PersonId(job.caller.person_id()))
+            Ok(())
         }
     }
 }
@@ -754,16 +940,13 @@ fn retire(
     fence.and(drain)
 }
 
-fn stored_vault_state(root: &Path, person: PersonId) -> Result<VaultState, AgentFailure> {
-    match floe_vault::inspect_vault_presence(root, person)? {
-        floe_vault::VaultPresence::Missing => Ok(VaultState::Missing),
-        floe_vault::VaultPresence::Existing => Ok(VaultState::Locked),
-    }
+fn stored_vault_state(root: &Path, person: PersonId) -> Result<(), AgentFailure> {
+    floe_vault::inspect_vault_presence(root, person).map(|_| ())
 }
 
 fn stored_receipt(
     job: &Job,
-    outcome: Result<VaultState, AgentFailure>,
+    outcome: Result<(), AgentFailure>,
 ) -> floe_vault::StoredVaultLifecycleReceipt {
     floe_vault::StoredVaultLifecycleReceipt {
         operation_id: job.id,
@@ -771,38 +954,89 @@ fn stored_receipt(
         device_id: job.caller.device_id().into(),
         runtime_epoch: job.caller.runtime_epoch(),
         intent: job.intent.stage().into(),
-        state: outcome.ok().map(|state| {
-            match state {
-                VaultState::Missing => "missing",
-                VaultState::Locked => "locked",
-                VaultState::Ready => "ready",
-                VaultState::Unavailable => "unavailable",
-            }
-            .into()
-        }),
+        state: outcome.is_ok().then(|| "completed".into()),
         failure: outcome.err(),
     }
 }
 fn receipt_outcome(
     job: &Job,
     receipt: floe_vault::StoredVaultLifecycleReceipt,
-) -> Result<VaultState, AgentFailure> {
-    if receipt.operation_id != job.id
-        || receipt.person_id.0 != job.caller.person_id()
-        || receipt.device_id != job.caller.device_id()
-        || receipt.runtime_epoch != job.caller.runtime_epoch()
-        || receipt.intent != job.intent.stage()
-    {
+) -> Result<(), AgentFailure> {
+    if !receipt_is_preparation(job, &receipt) {
+        if receipt.intent == job.intent.stage()
+            && (receipt.person_id.0 != job.caller.person_id()
+                || receipt.device_id != job.caller.device_id()
+                || receipt.runtime_epoch != job.caller.runtime_epoch())
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
         return Err(AgentFailure::Conflict);
     }
     if let Some(failure) = receipt.failure {
         return Err(failure);
     }
     match receipt.state.as_deref() {
-        Some("missing") => Ok(VaultState::Missing),
-        Some("locked") => Ok(VaultState::Locked),
-        Some("ready") => Ok(VaultState::Ready),
-        Some("unavailable") => Ok(VaultState::Unavailable),
+        Some("completed") => Ok(()),
         _ => Err(AgentFailure::StorageUnavailable),
+    }
+}
+
+fn receipt_is_preparation(
+    job: &Job,
+    receipt: &floe_vault::StoredVaultLifecycleReceipt,
+) -> bool {
+    receipt.operation_id == job.id
+        && receipt.person_id.0 == job.caller.person_id()
+        && receipt.device_id == job.caller.device_id()
+        && receipt.runtime_epoch == job.caller.runtime_epoch()
+        && receipt.intent == job.intent.stage()
+}
+
+fn preparation_receipt_result(
+    caller: &CallerContext,
+    id: Uuid,
+    receipt: floe_vault::StoredVaultLifecycleReceipt,
+) -> Result<RuntimePreparationResult, AgentFailure> {
+    if receipt.operation_id != id {
+        return Err(AgentFailure::Conflict);
+    }
+    if receipt.person_id.0 != caller.person_id()
+        || receipt.device_id != caller.device_id()
+        || receipt.runtime_epoch != caller.runtime_epoch()
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if receipt.intent != PreparationIntent::Prepare.stage() {
+        return Err(AgentFailure::NotFound);
+    }
+    let failure = receipt.failure;
+    if failure.is_none() && receipt.state.as_deref() != Some("completed") {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(RuntimePreparationResult {
+        operation_id: id,
+        done: true,
+        failure,
+    })
+}
+
+fn set_worker_failure(
+    health: &Mutex<Option<AgentFailure>>,
+    published: &Mutex<Published>,
+    failure: AgentFailure,
+    correlation_id: Uuid,
+) {
+    let mut health = health
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if health.is_none() {
+        *health = Some(failure);
+        let mut slot = published
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.worker_failure.is_none() {
+            slot.worker_failure = Some(failure);
+            slot.failure_correlation = Some(correlation_id);
+        }
     }
 }
