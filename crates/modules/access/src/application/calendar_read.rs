@@ -95,6 +95,18 @@ impl CalendarReadAccessAdmission {
     pub fn scope(&self) -> &GrantScope {
         &self.scope
     }
+
+    pub fn operation(&self) -> GrantOperation {
+        self.operation
+    }
+
+    pub fn purpose(&self) -> GrantPurpose {
+        self.purpose
+    }
+
+    pub fn consumer(&self) -> &GrantConsumer {
+        &self.consumer
+    }
 }
 
 pub fn admits_native_calendar_read(
