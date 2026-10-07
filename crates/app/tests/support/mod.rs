@@ -255,12 +255,28 @@ impl ScriptRecorder {
                     floe_agent_contract::ModelConversationEntry::DelegationExchange {
                         request,
                         receipt,
-                    } => Some(format!(
-                        "task={:?} state={:?} issue={:?}",
-                        request.task_id,
-                        receipt.snapshot.state,
-                        receipt.snapshot.issue.as_ref()
-                    )),
+                    } => {
+                        let accounting = match &receipt.execution {
+                            floe_agent_contract::TaskExecutionEvidence::Admitted(execution) => {
+                                format!(
+                                    "attempts={} tokens={} cost_micros={} unresolved={}",
+                                    execution.accounting.attempt_refs.len(),
+                                    execution.accounting.usage.tokens,
+                                    execution.accounting.usage.cost_micros,
+                                    execution.accounting.unresolved_attempts.len()
+                                )
+                            }
+                            floe_agent_contract::TaskExecutionEvidence::Unadmitted => {
+                                "unadmitted".into()
+                            }
+                        };
+                        Some(format!(
+                            "task={:?} state={:?} issue={:?} accounting={accounting}",
+                            request.task_id,
+                            receipt.snapshot.state,
+                            receipt.snapshot.issue.as_ref()
+                        ))
+                    }
                     _ => None,
                 });
             state.transport_boundaries.push(format!(
