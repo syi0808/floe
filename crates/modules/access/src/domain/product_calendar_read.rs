@@ -63,11 +63,8 @@ impl ProductCalendarReadRequest {
             || self.source.person_id() != self.actor.person_id
             || self.range_start >= self.range_end
             || self.range_end.signed_duration_since(self.range_start) > chrono::Duration::hours(48)
-            || !(crate::local_calendar_provider(self.source.connector().as_str()).is_some()
-                || matches!(
-                    self.source.connector().as_str(),
-                    "calendar.google" | "calendar.microsoft"
-                ))
+            || crate::supported_product_calendar_binding(self.source.connector().as_str())
+                .is_none()
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -113,8 +110,11 @@ impl ProductSourceObservation {
         source.validate().map_err(|_| AgentFailure::InvalidInput)?;
         self.expectation.validate()?;
         self.expectation.validate_device(&actor.device_id)?;
+        let binding = crate::supported_product_calendar_binding(source.connector().as_str())
+            .ok_or(AgentFailure::PolicyDenied)?;
         if source.person_id() != actor.person_id
             || self.expectation.source != *source
+            || binding.provider != expected_provider
             || self.provider != expected_provider
             || self.expectation.revision.is_none()
             || self.observed_at > now
@@ -124,42 +124,27 @@ impl ProductSourceObservation {
             return Err(AgentFailure::StaleContext);
         }
         match (
-            source.connector().as_str(),
             self.provider,
             self.permission,
             self.expectation.gateway.is_some(),
         ) {
             (
-                "calendar.event_kit",
-                CalendarProvider::EventKit,
-                ProductCalendarPermission::NativeRead,
-                false,
-            ) => Ok(()),
-            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-            (
-                "calendar.fixture",
-                CalendarProvider::Fixture,
+                CalendarProvider::EventKit | CalendarProvider::Fixture,
                 ProductCalendarPermission::NativeRead,
                 false,
             ) => Ok(()),
             (
-                "calendar.google",
-                CalendarProvider::Google,
+                CalendarProvider::Google | CalendarProvider::Microsoft,
                 ProductCalendarPermission::ProviderRead {
                     identity_generation,
                     gateway_runtime_generation,
                 },
                 true,
             )
-            | (
-                "calendar.microsoft",
-                CalendarProvider::Microsoft,
-                ProductCalendarPermission::ProviderRead {
-                    identity_generation,
-                    gateway_runtime_generation,
-                },
-                true,
-            ) if identity_generation > 0 && gateway_runtime_generation > 0 => Ok(()),
+                if identity_generation > 0 && gateway_runtime_generation > 0 =>
+            {
+                Ok(())
+            }
             _ => Err(AgentFailure::PolicyDenied),
         }
     }

@@ -5,7 +5,7 @@ use floe_access::{
     ProductSourceAuthority, ProductSourceObservation,
 };
 use floe_connections::{ConnectionsRepository, SourceConnection, SourceState};
-use floe_context_contract::{CalendarProvider, ConnectorId, GrantSourceBinding};
+use floe_context_contract::{ConnectorId, GrantSourceBinding};
 use floe_day::{
     CalendarAcquisition, CalendarAcquisitionPort, CalendarFailure, CalendarRefreshError,
     CalendarRefreshRequest, CalendarResourceOutcome, CalendarSelection, CalendarSourceOutcome,
@@ -57,15 +57,8 @@ impl ContextCore {
             .map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
         check(scope)?;
         let mut sources = Vec::new();
-        let mut calendar_connectors = vec![
-            "calendar.event_kit",
-            "calendar.google",
-            "calendar.microsoft",
-        ];
-        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-        calendar_connectors.push("calendar.fixture");
-        for connector in calendar_connectors {
-            let connector = ConnectorId::try_new(connector)
+        for binding in floe_access::supported_product_calendar_bindings() {
+            let connector = ConnectorId::try_new(binding.connector_id)
                 .map_err(|_| DayRefreshFailure::InvalidAcquisition)?;
             let current = self
                 .sources
@@ -503,14 +496,11 @@ fn source_binding(source: &SourceConnection) -> Result<GrantSourceBinding, Agent
 fn calendar_source_version(
     source: &SourceConnection,
 ) -> Result<CalendarSourceVersion, DayRefreshFailure> {
-    let provider = match source.connector_id().as_str() {
-        "calendar.event_kit" => CalendarProvider::EventKit,
-        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-        "calendar.fixture" => CalendarProvider::Fixture,
-        "calendar.google" => CalendarProvider::Google,
-        "calendar.microsoft" => CalendarProvider::Microsoft,
-        _ => return Err(DayRefreshFailure::InvalidAcquisition),
-    };
+    let provider = floe_access::supported_product_calendar_binding(
+        source.connector_id().as_str(),
+    )
+    .map(|binding| binding.provider)
+    .ok_or(DayRefreshFailure::InvalidAcquisition)?;
     let mut calendars = source
         .resources()
         .iter()

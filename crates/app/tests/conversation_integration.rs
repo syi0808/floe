@@ -242,6 +242,184 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
 
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 #[test]
+fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
+    use floe_app::{DayCommands as _, DayQueries as _};
+    use floe_day::{DayCoverageState, DayRefreshState, DayTimelineItem};
+
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+
+    let source = support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    assert_eq!(
+        source
+            .selected_resources
+            .iter()
+            .map(|resource| resource.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Synthetic team calendar"]
+    );
+
+    let query = floe_app::DayQuery {
+        date: chrono::NaiveDate::from_ymd_opt(2026, 10, 8).expect("valid fixed fixture date"),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+        now: chrono::DateTime::parse_from_rfc3339("2026-10-07T00:00:00Z")
+            .expect("valid fixed fixture instant")
+            .with_timezone(&chrono::Utc),
+    };
+    let (refresh, day) = support::with_ready(&host, |services, caller, _owners| {
+        let admitted = services
+            .refresh_day(caller, Uuid::new_v4(), query.clone())
+            .unwrap_or_else(|failure| panic!("phase=day_refresh_admission failure={failure:?}"));
+        let deadline = Instant::now() + WAIT_TIMEOUT;
+        let refresh = loop {
+            let current = services
+                .get_day_refresh(caller, admitted.operation_ref)
+                .unwrap_or_else(|failure| panic!("phase=day_refresh_poll failure={failure:?}"));
+            if current.state.terminal() {
+                break current;
+            }
+            let last_phase = match &current.state {
+                DayRefreshState::Pending => "pending".to_owned(),
+                DayRefreshState::Running => "running".to_owned(),
+                DayRefreshState::Completed { .. } => "completed".to_owned(),
+                DayRefreshState::Failed { failure } => format!("failed:{failure:?}"),
+                DayRefreshState::Interrupted { failure } => format!("interrupted:{failure:?}"),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "phase=day_refresh_wait timed out; last_state={last_phase}"
+            );
+            std::thread::yield_now();
+        };
+        let day = services
+            .read_day(caller, query.clone())
+            .unwrap_or_else(|failure| panic!("phase=day_read failure={failure:?}"));
+        (refresh, day)
+    });
+
+    let refresh_phase = match &refresh.state {
+        DayRefreshState::Pending => "pending".to_owned(),
+        DayRefreshState::Running => "running".to_owned(),
+        DayRefreshState::Completed { .. } => "completed".to_owned(),
+        DayRefreshState::Failed { failure } => format!("failed:{failure:?}"),
+        DayRefreshState::Interrupted { failure } => format!("interrupted:{failure:?}"),
+    };
+    let coverage_summary = day
+        .calendar
+        .as_ref()
+        .map(|coverage| {
+            coverage
+                .sources
+                .iter()
+                .take(4)
+                .map(|source| {
+                    let resources = source
+                        .resources
+                        .iter()
+                        .take(4)
+                        .map(|resource| {
+                            format!(
+                                "{}:{:?}:{:?}",
+                                resource.label, resource.state, resource.failure
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    format!(
+                        "{}:{:?}:{:?}:{resources:?}",
+                        source.label, source.state, source.failure
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let observed_titles = day
+        .items
+        .iter()
+        .take(8)
+        .map(|item| match item {
+            DayTimelineItem::Event(event) => event.title.as_str(),
+            DayTimelineItem::Task(task) => task.title.as_str(),
+            DayTimelineItem::Note(note) => note.content.as_str(),
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(&refresh.state, DayRefreshState::Completed { .. }),
+        "phase=day_refresh terminal_state={refresh_phase}; coverage={coverage_summary:?}; items={observed_titles:?}"
+    );
+
+    let events = day
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            DayTimelineItem::Event(event) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events.len(),
+        1,
+        "phase=day_read expected one event; coverage={coverage_summary:?}; items={observed_titles:?}"
+    );
+    assert_eq!(
+        events[0].title,
+        "Synthetic planning event",
+        "phase=day_event source={:?}",
+        &events[0].source
+    );
+    assert!(
+        matches!(
+            &events[0].source,
+        floe_day::DayItemSource::Calendar { calendar_label, .. }
+                if calendar_label.as_str() == "Synthetic team calendar"
+        ),
+        "phase=day_event source={:?}",
+        &events[0].source
+    );
+    assert!(
+        !observed_titles.contains(&"Unselected calendar sentinel event"),
+        "phase=day_read unselected private sentinel appeared; items={observed_titles:?}"
+    );
+
+    let coverage = day
+        .calendar
+        .as_ref()
+        .unwrap_or_else(|| panic!("phase=day_coverage missing; summary={coverage_summary:?}"));
+    assert_eq!(
+        coverage.sources.len(),
+        1,
+        "phase=day_coverage expected only selected source; summary={coverage_summary:?}"
+    );
+    let source_coverage = &coverage.sources[0];
+    assert_eq!(
+        source_coverage.state,
+        DayCoverageState::Current,
+        "phase=day_coverage source={:?}",
+        source_coverage
+    );
+    assert_eq!(
+        source_coverage.resources.len(),
+        1,
+        "phase=day_coverage selected source={source_coverage:?}"
+    );
+    let resource = &source_coverage.resources[0];
+    assert_eq!(resource.label, "Synthetic team calendar");
+    assert_eq!(
+        resource.state,
+        DayCoverageState::Current,
+        "phase=day_coverage resource={resource:?}"
+    );
+    assert_eq!(
+        resource.last_range.as_ref(),
+        Some(&query.range().expect("valid fixed-day calendar range")),
+        "phase=day_coverage range={resource:?}"
+    );
+    assert_eq!(assert_script_clean(&recorder).generated.len(), 0);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
 fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evidence() {
     const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
 

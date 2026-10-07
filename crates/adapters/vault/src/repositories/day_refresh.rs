@@ -2,7 +2,7 @@
 
 use crate::TursoStore;
 use floe_connections::{SourceConnection, SourceState};
-use floe_context_contract::{CalendarProvider, GrantSourceBinding};
+use floe_context_contract::GrantSourceBinding;
 use floe_day::{
     CalendarAcquisition, CalendarMirror, CalendarSelection, CalendarSourceOutcome,
     CalendarSourceVersion, DayError, DayRefreshFailure, DayRefreshState, MAX_REFRESH_SOURCES,
@@ -17,7 +17,22 @@ use turso::{Connection, Row};
 const MAX_SOURCE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
 const REFRESH_COLUMNS: &str =
     "operation_id, person_id, device_id, command_id, executor_generation, revision, payload";
-const CALENDAR_SOURCE_QUERY: &str = "SELECT connection_id, person_id, connector_id, revision, payload FROM source_connections WHERE person_id = ? AND connector_id IN ('calendar.event_kit', 'calendar.google', 'calendar.microsoft') ORDER BY connection_id";
+
+fn calendar_source_query(person_id: PersonId) -> (String, Vec<turso::Value>) {
+    let bindings = floe_access::supported_product_calendar_bindings();
+    let placeholders = vec!["?"; bindings.len()].join(", ");
+    let query = format!(
+        "SELECT connection_id, person_id, connector_id, revision, payload FROM source_connections WHERE person_id = ? AND connector_id IN ({placeholders}) ORDER BY connection_id"
+    );
+    let mut parameters: Vec<turso::Value> = Vec::with_capacity(bindings.len() + 1);
+    parameters.push(person_id.to_string().into());
+    parameters.extend(
+        bindings
+            .iter()
+            .map(|binding| binding.connector_id.to_owned().into()),
+    );
+    (query, parameters)
+}
 
 pub(super) struct CurrentCalendarSource {
     pub(super) source: SourceConnection,
@@ -191,12 +206,11 @@ pub(super) async fn persist_mirror_on(
 
 fn calendar_source_version(source: &SourceConnection) -> Result<CalendarSourceVersion, DayError> {
     source.validate().map_err(storage_error)?;
-    let provider = match source.connector_id().as_str() {
-        "calendar.event_kit" => CalendarProvider::EventKit,
-        "calendar.google" => CalendarProvider::Google,
-        "calendar.microsoft" => CalendarProvider::Microsoft,
-        _ => return Err(storage_error("unexpected connector in Calendar inventory")),
-    };
+    let provider = floe_access::supported_product_calendar_binding(
+        source.connector_id().as_str(),
+    )
+    .map(|binding| binding.provider)
+    .ok_or_else(|| storage_error("unexpected connector in Calendar inventory"))?;
     let binding = GrantSourceBinding::try_new(
         source.person_id(),
         source.connection_id().clone(),
@@ -254,8 +268,9 @@ pub(super) async fn current_calendar_sources_on(
     connection: &Connection,
     person_id: PersonId,
 ) -> Result<Vec<CurrentCalendarSource>, DayError> {
+    let (query, parameters) = calendar_source_query(person_id);
     let mut rows = connection
-        .query(CALENDAR_SOURCE_QUERY, (person_id.to_string(),))
+        .query(&query, parameters)
         .await
         .map_err(storage_error)?;
     let mut current = Vec::new();

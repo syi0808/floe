@@ -8,6 +8,92 @@
 use floe_context_contract::{CalendarProvider, CalendarScope, SourceAuthority};
 use floe_kernel::AgentFailure;
 
+/// A Calendar source identity that the product Day surface can refresh.
+/// This is deliberately narrower than the set of locally owned calendars:
+/// Android support is not part of the product Calendar read contract.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductCalendarBinding {
+    pub connector_id: &'static str,
+    pub provider: CalendarProvider,
+}
+
+/// The complete connector/provider map accepted by product Calendar reads.
+/// The synthetic source is present only in Linux QA fixture builds.
+pub fn supported_product_calendar_bindings() -> &'static [ProductCalendarBinding] {
+    const BINDINGS: &[ProductCalendarBinding] = &[
+        ProductCalendarBinding {
+            connector_id: "calendar.event_kit",
+            provider: CalendarProvider::EventKit,
+        },
+        ProductCalendarBinding {
+            connector_id: "calendar.google",
+            provider: CalendarProvider::Google,
+        },
+        ProductCalendarBinding {
+            connector_id: "calendar.microsoft",
+            provider: CalendarProvider::Microsoft,
+        },
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        ProductCalendarBinding {
+            connector_id: "calendar.fixture",
+            provider: CalendarProvider::Fixture,
+        },
+    ];
+    BINDINGS
+}
+
+pub fn supported_product_calendar_binding(
+    connector_id: &str,
+) -> Option<ProductCalendarBinding> {
+    supported_product_calendar_bindings()
+        .iter()
+        .copied()
+        .find(|binding| binding.connector_id == connector_id)
+}
+
+#[cfg(test)]
+mod product_calendar_tests {
+    use super::*;
+
+    #[test]
+    fn product_calendar_mapping_is_complete_and_excludes_unshipped_android() {
+        let mut expected_connectors = vec![
+            "calendar.event_kit",
+            "calendar.google",
+            "calendar.microsoft",
+        ];
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        expected_connectors.push("calendar.fixture");
+        assert_eq!(
+            supported_product_calendar_bindings()
+                .iter()
+                .map(|binding| binding.connector_id)
+                .collect::<Vec<_>>(),
+            expected_connectors
+        );
+
+        for (connector, provider) in [
+            ("calendar.event_kit", CalendarProvider::EventKit),
+            ("calendar.google", CalendarProvider::Google),
+            ("calendar.microsoft", CalendarProvider::Microsoft),
+        ] {
+            assert_eq!(
+                supported_product_calendar_binding(connector).map(|binding| binding.provider),
+                Some(provider)
+            );
+        }
+        assert_eq!(supported_product_calendar_binding("calendar.android"), None);
+
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        assert_eq!(
+            supported_product_calendar_binding("calendar.fixture").map(|binding| binding.provider),
+            Some(CalendarProvider::Fixture)
+        );
+        #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
+        assert_eq!(supported_product_calendar_binding("calendar.fixture"), None);
+    }
+}
+
 /// The calendar connection this Person currently records for their device.
 #[derive(Clone, Copy)]
 pub struct NativeCalendarConnection<'a> {
