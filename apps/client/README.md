@@ -180,9 +180,24 @@ OS-keyring backend is available. It never falls back to development custody.
 Use the same source snapshot for the client and Gateway. Their development
 endpoint defaults to `127.0.0.1:18431`; production defaults to port `8431`.
 
-The build-only selector `FLOE_LINUX_QA_FEATURE=qa-fixtures` is reserved for the
-explicit fixture feature. It fails if the FFI manifest does not yet declare that
-feature; an ordinary Debug build does not silently enable synthetic sources.
+The build-only selector `FLOE_LINUX_QA_FEATURE=qa-fixtures` enables the explicit
+Linux synthetic Calendar adapter; an ordinary Debug build does not enable it:
+
+```sh
+# From apps/client:
+FLOE_LINUX_QA_FEATURE=qa-fixtures flutter build linux --debug
+```
+
+In Connections, open **Synthetic QA Calendar**, connect, and select **Synthetic
+team calendar**. Review **Use with Floe** separately if reasoning should consume
+this source. The immutable team event is on October 8, 2026, 10:00–10:30 UTC;
+the unselected/private sentinel is on October 9, 13:00–13:30 UTC. Query windows
+filter these fixed facts rather than moving events. A separate permission-denied
+resource supports negative tests. No real calendar is read or written.
+
+The provider retains the real Connections, Access, Context and Expert execution
+paths, with `calendar.fixture` / `fixture:<device-id>` provenance. It does not
+prove Apple permission, native-host continuity, external writes or real LLM behavior.
 The [active plan](../../docs/plans/2026-10-02-architecture-refactor.md) records
 fixture implementation and behavioral qualification separately from runner support.
 Do not override HOME/XDG or copy authentication files just to run this host;

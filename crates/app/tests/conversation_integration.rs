@@ -363,8 +363,7 @@ fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
         "phase=day_read expected one event; coverage={coverage_summary:?}; items={observed_titles:?}"
     );
     assert_eq!(
-        events[0].title,
-        "Synthetic planning event",
+        events[0].title, "Synthetic planning event",
         "phase=day_event source={:?}",
         &events[0].source
     );
@@ -372,7 +371,7 @@ fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
         matches!(
             &events[0].source,
         floe_day::DayItemSource::Calendar { calendar_label, .. }
-                if calendar_label.as_str() == "Synthetic team calendar"
+                if calendar_label.as_str() == "Synthetic QA calendars · Synthetic team calendar"
         ),
         "phase=day_event source={:?}",
         &events[0].source
@@ -404,7 +403,10 @@ fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
         "phase=day_coverage selected source={source_coverage:?}"
     );
     let resource = &source_coverage.resources[0];
-    assert_eq!(resource.label, "Synthetic team calendar");
+    assert_eq!(
+        resource.label,
+        "Synthetic QA calendars · Synthetic team calendar"
+    );
     assert_eq!(
         resource.state,
         DayCoverageState::Current,
@@ -433,7 +435,10 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
 
     let source = support::configure_fixture_calendar(&host, "Synthetic team calendar");
     assert!(source.revision > 0);
-    assert_eq!(source.observe_state, floe_connections::ObserveState::Enabled);
+    assert_eq!(
+        source.observe_state,
+        floe_connections::ObserveState::Enabled
+    );
     assert_eq!(
         source
             .selected_resources
@@ -505,7 +510,10 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
             .expect("read persisted Expert execution receipt")
     });
     assert_eq!(task_receipt.snapshot.task_id, task_id);
-    assert_eq!(task_receipt.snapshot.state, floe_agent_contract::TaskState::Completed);
+    assert_eq!(
+        task_receipt.snapshot.state,
+        floe_agent_contract::TaskState::Completed
+    );
     assert!(!task_receipt.accounting.attempt_refs.is_empty());
 
     let task_evidence = serde_json::to_string(&task_receipt.snapshot.artifacts)
@@ -530,8 +538,14 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
         fixture_dependency.source().execution_owner().as_str(),
         format!("fixture:{device_id}")
     );
-    assert_eq!(fixture_dependency.operation(), floe_context_contract::GrantOperation::Read);
-    assert_eq!(fixture_dependency.purpose(), floe_context_contract::GrantPurpose::Assistant);
+    assert_eq!(
+        fixture_dependency.operation(),
+        floe_context_contract::GrantOperation::Read
+    );
+    assert_eq!(
+        fixture_dependency.purpose(),
+        floe_context_contract::GrantPurpose::Assistant
+    );
     assert_eq!(
         fixture_dependency.consumer().identifier(),
         "floe.builtin.schedule"

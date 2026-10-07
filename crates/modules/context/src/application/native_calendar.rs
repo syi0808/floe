@@ -10,8 +10,7 @@ use std::future::Future;
 
 use floe_access::{
     CalendarReadAccessAdmission, CalendarReadAccessRequest, ReadAuthorityEvidence,
-    ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read,
-    validate_read_authority,
+    ReadAuthorityIdentity, RemoteCallWindow, admits_native_calendar_read, validate_read_authority,
 };
 use floe_agent_contract::{AgentFailure, PersonId};
 use floe_connections::SourceConnection;

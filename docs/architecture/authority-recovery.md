@@ -116,6 +116,21 @@ state. Detached query completions cannot publish stale client state.
 
 ## Provenance and coverage travel with evidence
 
+A Calendar grant may authorize several consumers. Each observation dependency
+records the exact admitted consumer, operation and purpose for that read, while
+retaining the original grant identity, authority, resources, categories and
+processing restriction. Context validates membership in the full grant scope;
+it must not infer the caller by requiring a singleton scope or selecting its
+first consumer. Live Access reauthorization still checks the exact dependency.
+
+Each new model intent carries a conservative ceiling bounded by the remaining
+root ledger, budget partition and ancestor lease quotas, including settled and
+pending charges. This ceiling snapshot is not a live reservation. The owner
+journal still rejects oversubscribed intents, and dispatch atomically reserves
+within both the persisted ceiling and the then-current allowance. Unresolved
+attempts remain conservatively charged. A configured per-attempt cap is not the
+remaining budget and must not be reused after earlier positive-cost attempts.
+
 Source-backed model/tool inputs retain enough identity to determine:
 
 - Person and source/producer;

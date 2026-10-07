@@ -2,13 +2,13 @@
 
 pub mod calendar_product;
 pub mod expert_transport;
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+mod fixture_calendar;
 pub mod native_acquisition;
 pub mod native_calendar;
 pub mod personal_native;
 pub mod server;
 pub mod source_metadata;
-#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-mod fixture_calendar;
 
 pub use calendar_product::CalendarProductAdapter;
 pub use expert_transport::ExpertSourceAdapter;

@@ -168,11 +168,11 @@ pub fn discover_source_candidates(
                     request.device_id,
                 )
                 .or_else(|| request.remote_execution_owner.map(str::to_owned));
-                let supported_connector =
-                    floe_access::local_calendar_provider(connector).is_some()
-                        || matches!(connector, "calendar.google" | "calendar.microsoft");
-                let connection_identity_matches = floe_access::local_calendar_connection_id_for_connector(connector)
-                .is_none_or(|expected| connection.connection_id().as_str() == expected);
+                let supported_connector = floe_access::local_calendar_provider(connector).is_some()
+                    || matches!(connector, "calendar.google" | "calendar.microsoft");
+                let connection_identity_matches =
+                    floe_access::local_calendar_connection_id_for_connector(connector)
+                        .is_none_or(|expected| connection.connection_id().as_str() == expected);
                 if connection.is_serving()
                     && connection.person_id() == request.person_id
                     && expected_owner.as_deref() == Some(connection.execution_owner_id().as_str())

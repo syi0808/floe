@@ -63,8 +63,7 @@ impl ProductCalendarReadRequest {
             || self.source.person_id() != self.actor.person_id
             || self.range_start >= self.range_end
             || self.range_end.signed_duration_since(self.range_start) > chrono::Duration::hours(48)
-            || crate::supported_product_calendar_binding(self.source.connector().as_str())
-                .is_none()
+            || crate::supported_product_calendar_binding(self.source.connector().as_str()).is_none()
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -140,11 +139,7 @@ impl ProductSourceObservation {
                     gateway_runtime_generation,
                 },
                 true,
-            )
-                if identity_generation > 0 && gateway_runtime_generation > 0 =>
-            {
-                Ok(())
-            }
+            ) if identity_generation > 0 && gateway_runtime_generation > 0 => Ok(()),
             _ => Err(AgentFailure::PolicyDenied),
         }
     }

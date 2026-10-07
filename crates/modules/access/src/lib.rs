@@ -5,6 +5,8 @@ mod data_access_grant;
 mod ports;
 
 pub use application::attention_consumer;
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub use application::fixture_calendar_execution_owner;
 pub use application::model_dispatch::{
     ModelDispatchFence, ModelDispatchPermit, admit_model_dispatch, consume_model_dispatch,
     revalidate_model_dispatch,
@@ -30,12 +32,9 @@ pub use application::{
     local_calendar_connection_id, local_calendar_connection_id_for_connector,
     local_calendar_connector, local_calendar_execution_owner,
     local_calendar_execution_owner_for_connector, local_calendar_provider,
-    native_calendar_connection_unchanged, native_calendar_source_current,
-    reviewed_native_subject, supported_product_calendar_binding,
-    supported_product_calendar_bindings,
+    native_calendar_connection_unchanged, native_calendar_source_current, reviewed_native_subject,
+    supported_product_calendar_binding, supported_product_calendar_bindings,
 };
-#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-pub use application::fixture_calendar_execution_owner;
 pub use application::{admit_device_pairing, admit_enrollment_pairing};
 pub use data_access_grant::{DataAccessGrant, GrantState, GrantTransitionError};
 pub use floe_context_contract::{

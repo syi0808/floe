@@ -774,11 +774,9 @@ impl LocalSources<'_> {
             let outcome = if let Some(provider) =
                 floe_access::local_calendar_provider(connection.connector_id().as_str())
             {
-                let expected_owner = floe_access::local_calendar_execution_owner(
-                    provider,
-                    &actor.device_id,
-                )
-                .ok_or(AgentFailure::CapabilityUnavailable)?;
+                let expected_owner =
+                    floe_access::local_calendar_execution_owner(provider, &actor.device_id)
+                        .ok_or(AgentFailure::CapabilityUnavailable)?;
                 if connection.execution_owner_id().as_str() != expected_owner {
                     return Err(AgentFailure::PolicyDenied);
                 }

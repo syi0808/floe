@@ -42,9 +42,7 @@ pub fn supported_product_calendar_bindings() -> &'static [ProductCalendarBinding
     BINDINGS
 }
 
-pub fn supported_product_calendar_binding(
-    connector_id: &str,
-) -> Option<ProductCalendarBinding> {
+pub fn supported_product_calendar_binding(connector_id: &str) -> Option<ProductCalendarBinding> {
     supported_product_calendar_bindings()
         .iter()
         .copied()

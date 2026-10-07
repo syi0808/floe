@@ -126,11 +126,9 @@ pub fn admits_native_calendar_read(
         return Err(AgentFailure::PolicyDenied);
     }
     let logical_resource = native_calendar_resource(connection_id)?;
-    let execution_owner = super::native_calendar::local_calendar_execution_owner(
-        provider,
-        device_id,
-    )
-    .ok_or(AgentFailure::CapabilityUnavailable)?;
+    let execution_owner =
+        super::native_calendar::local_calendar_execution_owner(provider, device_id)
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
     if admission.person_id != person_id
         || admission.source.person_id() != person_id
         || admission.source.connection_id().as_str() != connection_id

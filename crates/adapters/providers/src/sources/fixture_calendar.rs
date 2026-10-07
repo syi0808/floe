@@ -21,11 +21,13 @@ const TEAM_CALENDAR: &str = "fixture.calendar.team";
 const PRIVATE_CALENDAR: &str = "fixture.calendar.private";
 const DENIED_CALENDAR: &str = "fixture.calendar.denied";
 const TEAM_EVENT_ID: &str = "synthetic-event-team-1";
-const TEAM_EVENT_REVISION: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+const TEAM_EVENT_REVISION: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
 const TEAM_EVENT_START: &str = "2026-10-08T10:00:00Z";
 const TEAM_EVENT_END: &str = "2026-10-08T10:30:00Z";
 const PRIVATE_EVENT_ID: &str = "synthetic-event-private-1";
-const PRIVATE_EVENT_REVISION: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+const PRIVATE_EVENT_REVISION: &str =
+    "0000000000000000000000000000000000000000000000000000000000000001";
 const PRIVATE_EVENT_START: &str = "2026-10-09T13:00:00Z";
 const PRIVATE_EVENT_END: &str = "2026-10-09T13:30:00Z";
 
@@ -226,8 +228,8 @@ fn batch(
     let event_end = chrono::DateTime::parse_from_rfc3339(ends_at)
         .map_err(|_| AgentFailure::InvalidInput)?
         .timestamp_millis();
-    let overlaps = event_start < request.range_end_unix_ms
-        && event_end > request.range_start_unix_ms;
+    let overlaps =
+        event_start < request.range_end_unix_ms && event_end > request.range_start_unix_ms;
 
     Ok(NativeCalendarBatch {
         calendar_id: calendar_id.to_owned(),
@@ -257,7 +259,10 @@ mod tests {
     use floe_kernel::PersonId;
     use uuid::Uuid;
 
-    fn request(mode: CalendarAcquisitionMode, calendar_ids: Vec<String>) -> CalendarAcquisitionRequest {
+    fn request(
+        mode: CalendarAcquisitionMode,
+        calendar_ids: Vec<String>,
+    ) -> CalendarAcquisitionRequest {
         request_in_range(
             mode,
             calendar_ids,
@@ -306,15 +311,25 @@ mod tests {
         .unwrap();
         assert_eq!(result.batches.len(), 1);
         assert_eq!(result.batches[0].calendar_id, TEAM_CALENDAR);
-        assert_eq!(result.batches[0].records[0].title, "Synthetic planning event");
-        assert!(!result
-            .batches
-            .iter()
-            .any(|batch| batch.calendar_id == PRIVATE_CALENDAR));
-        assert!(result.batches.iter().flat_map(|batch| &batch.records).all(|record| {
-            !record.can_modify
-                && record.title != "Unselected calendar sentinel event"
-        }));
+        assert_eq!(
+            result.batches[0].records[0].title,
+            "Synthetic planning event"
+        );
+        assert!(
+            !result
+                .batches
+                .iter()
+                .any(|batch| batch.calendar_id == PRIVATE_CALENDAR)
+        );
+        assert!(
+            result
+                .batches
+                .iter()
+                .flat_map(|batch| &batch.records)
+                .all(|record| {
+                    !record.can_modify && record.title != "Unselected calendar sentinel event"
+                })
+        );
     }
 
     #[test]

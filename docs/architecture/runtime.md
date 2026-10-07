@@ -40,6 +40,27 @@ physical custody mechanics do not merge the two stores' lifecycle or semantic ow
 Gateway private-file permissions are still not a blanket encryption guarantee;
 Gateway payload encryption remains an open gate in the active plan.
 
+## Explicit Linux Calendar fixture boundary
+
+Linux QA builds may opt into `qa-fixtures`, which selects development storage and
+exposes `calendar.fixture` with the distinct `fixture:<device-id>` execution owner.
+The provider adapter supplies only immutable synthetic Calendar facts, filtered by
+the requested range and selected resources. It does not emulate Apple permission
+or mutation behavior. Connections still owns setup/resource selection, Access owns
+source grants and processing restrictions, Context owns observation/dependency
+reauthorization, and the real Expert/Conversation owners drive tool execution.
+Platform availability is an observation supplied by `NativeSourceSetupPort`, not
+an OS branch in Connections. Ordinary builds do not provision this fixture.
+Access's supported product Calendar connector/provider set is also shared by
+Context's acquisition inventory and Vault's parameterized commit-time inventory
+query. The storage transaction compares the complete same-scope inventory and
+source versions; it does not maintain a separate list that can omit a source.
+
+Stable fixture event IDs, timestamps and revisions are independent of the query
+window. Synthetic host tags identify the fixture adapter, not an Apple OS host
+generation. These tests therefore cannot qualify native permission, host restart,
+external write or crash recovery behavior.
+
 ## General Conversation
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.

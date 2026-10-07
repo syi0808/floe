@@ -62,17 +62,15 @@ impl ExpertSourceAdapter {
         actor.validate()?;
         source.validate().map_err(|_| AgentFailure::InvalidInput)?;
         let provider = adapter_calendar_provider(source.connector_id().as_str())?;
-        let expected_owner = floe_access::local_calendar_execution_owner(
-            provider,
-            &actor.device_id,
-        )
-        .ok_or(AgentFailure::CapabilityUnavailable)?;
+        let expected_owner =
+            floe_access::local_calendar_execution_owner(provider, &actor.device_id)
+                .ok_or(AgentFailure::CapabilityUnavailable)?;
         if source.person_id() != actor.person_id
             || source.execution_owner_id().as_str() != expected_owner
             || floe_access::local_calendar_connection_id_for_connector(
                 source.connector_id().as_str(),
             )
-                .is_some_and(|expected| source.connection_id().as_str() != expected)
+            .is_some_and(|expected| source.connection_id().as_str() != expected)
         {
             return Err(AgentFailure::PolicyDenied);
         }

@@ -99,12 +99,9 @@ impl CandidateCatalog for ContextCandidateCatalog {
                 requirement.capability.as_str(),
                 "mail.communication" | "work.context" | "life.logistics"
             ) || requirement.capability == "calendar.timeline"
-                && sources
-                    .iter()
-                    .any(|source| {
-                        floe_access::local_calendar_provider(source.connector_id().as_str())
-                            .is_none()
-                    });
+                && sources.iter().any(|source| {
+                    floe_access::local_calendar_provider(source.connector_id().as_str()).is_none()
+                });
             let remote = if requires_remote {
                 scope
                     .run(dependencies.transport.remote(&query.actor, scope))

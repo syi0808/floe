@@ -2328,8 +2328,7 @@ impl ConnectionsService {
             .await
             .map_err(source_error)?
         {
-            let expected_owner =
-                native_execution_owner(connector.as_str(), &actor.device_id)?;
+            let expected_owner = native_execution_owner(connector.as_str(), &actor.device_id)?;
             if source.person_id() != actor.person_id
                 || source.connector_id() != &connector
                 || source.connection_id() != &connection
@@ -3075,7 +3074,8 @@ fn native_integration_ref(actor: &OwnerActor, connector: &str) -> Result<Uuid, A
     )
 }
 fn native_connection_id(connector: &str) -> Result<&'static str, AgentFailure> {
-    if let Some(connection_id) = floe_access::local_calendar_connection_id_for_connector(connector) {
+    if let Some(connection_id) = floe_access::local_calendar_connection_id_for_connector(connector)
+    {
         return Ok(connection_id);
     }
     match connector {
@@ -3196,11 +3196,10 @@ fn integration_source_matches(integration: &IntegrationRecord, source: &SourceCo
         return false;
     };
     let owner_matches = match &integration.target {
-        IntegrationBinding::Device { device_id } => native_execution_owner(
-            integration.descriptor.connector_id.as_str(),
-            device_id,
-        )
-        .is_ok_and(|expected| identity.execution_owner_id.as_str() == expected),
+        IntegrationBinding::Device { device_id } => {
+            native_execution_owner(integration.descriptor.connector_id.as_str(), device_id)
+                .is_ok_and(|expected| identity.execution_owner_id.as_str() == expected)
+        }
         IntegrationBinding::Gateway { .. } => !native_source(source),
     };
     owner_matches

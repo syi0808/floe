@@ -326,8 +326,7 @@ impl ScriptedModel {
         )?;
         let schedule_flow = matches!(&self.output, ModelOutput::ScheduleExpertFlow);
         let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
-        let consumer_is_expert =
-            plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
+        let consumer_is_expert = plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
         let valid_catalog = if !schedule_flow || consumer_is_conversation {
             request.catalog.tools.is_empty()
         } else if consumer_is_expert {
@@ -442,12 +441,13 @@ impl ScriptedModel {
                 Ok(response(vec![ModelStep::CallTool {
                     tool_id: calendar.id.clone(),
                     definition_revision: calendar.definition_revision,
-                    input: serde_json::to_string(&input)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    input: serde_json::to_string(&input).map_err(|_| AgentFailure::InvalidInput)?,
                 }]))
             }
             2 => Ok(response(vec![ModelStep::Answer {
-                text: "The selected synthetic calendar has one planning event in the requested range.".into(),
+                text:
+                    "The selected synthetic calendar has one planning event in the requested range."
+                        .into(),
                 artifacts: vec![],
             }])),
             3 => Ok(response(vec![ModelStep::Answer {
@@ -535,14 +535,12 @@ impl ModelProvider for ScriptedModelProvider {
             if scope.cancellation().is_cancelled() {
                 return Err(ModelObservationError::Cancelled);
             }
-            model
-                .recorder
-                .record_plan(
-                    PlanStage::LocalFallback,
-                    request,
-                    scope.root_run_id().map(RunId::as_uuid),
-                    scope.task_id().map(|task_id| task_id.as_uuid()),
-                )?;
+            model.recorder.record_plan(
+                PlanStage::LocalFallback,
+                request,
+                scope.root_run_id().map(RunId::as_uuid),
+                scope.task_id().map(|task_id| task_id.as_uuid()),
+            )?;
             let binding_digest = device_binding(request)?;
             let purpose = ModelPurpose::new(request.purpose.clone())
                 .ok_or(ModelObservationError::InvalidIdentity)?;
@@ -788,15 +786,9 @@ pub fn configure_fixture_calendar(
         let actor = caller.owner_actor();
         services
             .execute_owner(async move {
-                let overview_scope = host_scope(
-                    Uuid::new_v4(),
-                    Cancellation::new(),
-                    Duration::from_secs(30),
-                );
-                let overview = owners
-                    .connections
-                    .overview(&actor, &overview_scope)
-                    .await?;
+                let overview_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let overview = owners.connections.overview(&actor, &overview_scope).await?;
                 let integration = overview
                     .integrations
                     .iter()
@@ -813,11 +805,7 @@ pub fn configure_fixture_calendar(
                         Uuid::new_v4(),
                         integration.integration_ref,
                         integration.revision,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())?;
@@ -829,11 +817,7 @@ pub fn configure_fixture_calendar(
                         integration.integration_ref,
                         integration_review.review_ref,
                         integration.revision,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())?;
@@ -875,11 +859,7 @@ pub fn configure_fixture_calendar(
                         Uuid::new_v4(),
                         source.source_ref,
                         source.revision,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())?;
@@ -897,17 +877,15 @@ pub fn configure_fixture_calendar(
                         source_review.review_ref,
                         vec![resource.resource_ref],
                         source.revision,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())?;
                 let configured = match configured {
                     floe_connections::SourceConfigurationResult::Configured { source } => source,
-                    floe_connections::SourceConfigurationResult::NotSavedReviewRequired { .. } => {
+                    floe_connections::SourceConfigurationResult::NotSavedReviewRequired {
+                        ..
+                    } => {
                         return Err(AgentFailure::AccessReviewRequired);
                     }
                 };
@@ -919,11 +897,7 @@ pub fn configure_fixture_calendar(
                         configured.source_ref,
                         configured.revision,
                         floe_connections::ProcessingChoice::DeviceOnly,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())?;
@@ -936,11 +910,7 @@ pub fn configure_fixture_calendar(
                         configured.revision,
                         observe_review.review_ref,
                         floe_connections::ObserveDecision::Allow,
-                        &host_scope(
-                            Uuid::new_v4(),
-                            Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
                     )
                     .await
                     .map_err(|failure| failure.into_failure())
@@ -955,13 +925,8 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
         let actor = caller.owner_actor();
         services
             .execute_owner(async move {
-                let scope = || {
-                    host_scope(
-                        Uuid::new_v4(),
-                        Cancellation::new(),
-                        Duration::from_secs(30),
-                    )
-                };
+                let scope =
+                    || host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
                 let directory = owners.experts.directory(&actor, &scope()).await?;
                 let assignment = directory
                     .assignments

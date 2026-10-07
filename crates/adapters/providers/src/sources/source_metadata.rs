@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use floe_connections::{
-    ConnectionResource, ConnectionResourceGroup, NativeSetupObservation, NativeSetupRequest,
-    NativeAvailabilityObservation, NativeSetupState, NativeSourceSetupPort,
+    ConnectionResource, ConnectionResourceGroup, NativeAvailabilityObservation,
+    NativeSetupObservation, NativeSetupRequest, NativeSetupState, NativeSourceSetupPort,
     PersonalSourceSpec, SourceCatalogObservation, SourceCatalogPort, SourceConnection,
 };
 use floe_context::{NativeSubjectObservation, SourceMetadataTransport};
@@ -49,10 +49,9 @@ impl NativeSourceMetadataAdapter {
         validate_source(actor, source)?;
         let provider = adapter_calendar_provider(source.connector_id().as_str())?;
         if !matches!(
-                mode,
-                CalendarAcquisitionMode::InspectSubject | CalendarAcquisitionMode::InspectCatalog
-            )
-            || (mode == CalendarAcquisitionMode::InspectCatalog) != calendar_ids.is_empty()
+            mode,
+            CalendarAcquisitionMode::InspectSubject | CalendarAcquisitionMode::InspectCatalog
+        ) || (mode == CalendarAcquisitionMode::InspectCatalog) != calendar_ids.is_empty()
             || calendar_ids.len() > 256
             || calendar_ids.windows(2).any(|pair| pair[0] >= pair[1])
             || calendar_ids
@@ -154,9 +153,7 @@ impl NativeSourceMetadataAdapter {
         match provider {
             CalendarProvider::EventKit => self.calendar.host_epoch(actor.person_id),
             #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-            CalendarProvider::Fixture => {
-                Ok(super::fixture_calendar::host_epoch(&actor.device_id))
-            }
+            CalendarProvider::Fixture => Ok(super::fixture_calendar::host_epoch(&actor.device_id)),
             _ => Err(AgentFailure::CapabilityUnavailable),
         }
     }

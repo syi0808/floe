@@ -206,11 +206,9 @@ pub(super) async fn persist_mirror_on(
 
 fn calendar_source_version(source: &SourceConnection) -> Result<CalendarSourceVersion, DayError> {
     source.validate().map_err(storage_error)?;
-    let provider = floe_access::supported_product_calendar_binding(
-        source.connector_id().as_str(),
-    )
-    .map(|binding| binding.provider)
-    .ok_or_else(|| storage_error("unexpected connector in Calendar inventory"))?;
+    let provider = floe_access::supported_product_calendar_binding(source.connector_id().as_str())
+        .map(|binding| binding.provider)
+        .ok_or_else(|| storage_error("unexpected connector in Calendar inventory"))?;
     let binding = GrantSourceBinding::try_new(
         source.person_id(),
         source.connection_id().clone(),

@@ -616,8 +616,9 @@ impl BudgetLease {
             BudgetPartition::Work => &state.work,
             BudgetPartition::Finalization => &state.finalization,
         };
-        let partition_available_tokens =
-            partition.max_tokens.saturating_sub(partition.outstanding_tokens());
+        let partition_available_tokens = partition
+            .max_tokens
+            .saturating_sub(partition.outstanding_tokens());
         let partition_available_cost = partition
             .max_cost_micros
             .saturating_sub(partition.outstanding_cost());
@@ -1133,8 +1134,7 @@ mod tests {
             }
         );
 
-        let attempt_ledger =
-            BudgetLedger::new(BudgetConfig::new(1, 0), ModelUsage::default());
+        let attempt_ledger = BudgetLedger::new(BudgetConfig::new(1, 0), ModelUsage::default());
         let attempt_scope = attempt_ledger.work_lease();
         for _ in 0..MAX_MODEL_ATTEMPTS_PER_SCOPE {
             let mut tokens = 1;

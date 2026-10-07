@@ -496,11 +496,9 @@ fn source_binding(source: &SourceConnection) -> Result<GrantSourceBinding, Agent
 fn calendar_source_version(
     source: &SourceConnection,
 ) -> Result<CalendarSourceVersion, DayRefreshFailure> {
-    let provider = floe_access::supported_product_calendar_binding(
-        source.connector_id().as_str(),
-    )
-    .map(|binding| binding.provider)
-    .ok_or(DayRefreshFailure::InvalidAcquisition)?;
+    let provider = floe_access::supported_product_calendar_binding(source.connector_id().as_str())
+        .map(|binding| binding.provider)
+        .ok_or(DayRefreshFailure::InvalidAcquisition)?;
     let mut calendars = source
         .resources()
         .iter()

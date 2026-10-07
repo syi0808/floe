@@ -132,8 +132,10 @@ impl CalendarProductAdapter {
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        if !matches!(observed.provider, CalendarProvider::EventKit | CalendarProvider::Fixture)
-            || source.gateway.is_some()
+        if !matches!(
+            observed.provider,
+            CalendarProvider::EventKit | CalendarProvider::Fixture
+        ) || source.gateway.is_some()
             || source.source != request.source
         {
             return Err(AgentFailure::PolicyDenied);
