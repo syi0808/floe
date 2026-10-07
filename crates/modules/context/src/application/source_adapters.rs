@@ -94,11 +94,13 @@ impl NativeCalendarGrantReader for NativeGrants<'_> {
     ) -> Result<floe_access::CalendarReadAccessAdmission, AgentFailure> {
         let consumer =
             GrantConsumer::builtin(consumer).map_err(|_| AgentFailure::CapabilityDenied)?;
+        let provider = floe_access::native_calendar_provider(connection.connector_id().as_str())
+            .ok_or(AgentFailure::CapabilityUnavailable)?;
         let grant = floe_access::current_native_calendar_grant(
             self.0,
             person,
             connection.connection_id().as_str(),
-            floe_context_contract::CalendarProvider::EventKit,
+            provider,
             connection.execution_owner_id(),
             &consumer,
         )

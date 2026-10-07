@@ -26,10 +26,14 @@ pub use application::{
 };
 pub use application::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
-    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
-    native_calendar_connector, native_calendar_provider, native_calendar_source_current,
-    reviewed_native_subject,
+    admit_native_calendar_subject, is_native_calendar, local_calendar_execution_owner,
+    local_calendar_connection_id,
+    native_calendar_connection_unchanged, native_calendar_connector,
+    native_calendar_connection_id, native_calendar_execution_owner, native_calendar_provider,
+    native_calendar_source_current, reviewed_native_subject,
 };
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub use application::fixture_calendar_execution_owner;
 pub use application::{admit_device_pairing, admit_enrollment_pairing};
 pub use data_access_grant::{DataAccessGrant, GrantState, GrantTransitionError};
 pub use floe_context_contract::{

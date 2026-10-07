@@ -575,7 +575,8 @@ impl SourceConnection {
                 | "contacts.android"
                 | "attention.macos"
                 | "health.apple"
-        )
+        ) || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
+            && self.connector_id.as_str() == "calendar.fixture")
     }
 }
 

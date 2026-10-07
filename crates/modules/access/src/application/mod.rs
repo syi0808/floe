@@ -21,10 +21,14 @@ pub use grants::{
 };
 pub use native_calendar::{
     NativeCalendarConnection, NativeCalendarReview, admit_native_calendar_setup,
-    admit_native_calendar_subject, is_native_calendar, native_calendar_connection_unchanged,
-    native_calendar_connector, native_calendar_provider, native_calendar_source_current,
-    reviewed_native_subject,
+    admit_native_calendar_subject, is_native_calendar, local_calendar_execution_owner,
+    local_calendar_connection_id,
+    native_calendar_connection_unchanged, native_calendar_connector,
+    native_calendar_connection_id, native_calendar_execution_owner, native_calendar_provider,
+    native_calendar_source_current, reviewed_native_subject,
 };
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub use native_calendar::fixture_calendar_execution_owner;
 pub use personal_read::{
     PersonalReadRequirement, active_read_grant, attention_consumer, grant_unchanged,
     subject_unchanged, valid_subject_fingerprint,

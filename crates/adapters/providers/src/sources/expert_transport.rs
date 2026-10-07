@@ -61,10 +61,16 @@ impl ExpertSourceAdapter {
     ) -> Result<(), AgentFailure> {
         actor.validate()?;
         source.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        let provider = adapter_calendar_provider(source.connector_id().as_str())?;
+        let expected_owner = floe_access::native_calendar_execution_owner(
+            provider,
+            &actor.device_id,
+        )
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
         if source.person_id() != actor.person_id
-            || source.execution_owner_id().as_str()
-                != floe_access::apple_execution_owner(&actor.device_id)
-            || source.connector_id().as_str() != "calendar.event_kit"
+            || source.execution_owner_id().as_str() != expected_owner
+            || floe_access::local_calendar_connection_id(source.connector_id().as_str())
+                .is_some_and(|expected| source.connection_id().as_str() != expected)
         {
             return Err(AgentFailure::PolicyDenied);
         }
@@ -158,9 +164,10 @@ impl ExpertSourceAdapter {
         range_end_unix_ms: i64,
     ) -> Result<CalendarAcquisitionRequest, AgentFailure> {
         actor.validate()?;
+        let provider = adapter_calendar_provider(source.connector_id().as_str())?;
         if read.person_id != actor.person_id
             || read.device_id != actor.device_id
-            || read.provider != CalendarProvider::EventKit
+            || read.provider != provider
             || range_start_unix_ms < 0
             || range_end_unix_ms <= range_start_unix_ms
         {
@@ -203,7 +210,7 @@ impl ExpertSourceAdapter {
             device_id: actor.device_id.clone(),
             connection_id: source.connection_id().as_str().to_owned(),
             connection_revision: source.revision(),
-            provider: CalendarProvider::EventKit,
+            provider,
             mode,
             calendar_ids: read.calendar_ids.clone(),
             range_start_unix_ms,
@@ -556,6 +563,15 @@ fn native_stamp(result: &CalendarAcquisitionResult) -> CalendarReadAccessStamp {
         calendar_ids: result.calendar_ids.clone(),
         native_subject_fingerprint: result.native_subject_fingerprint_after.clone(),
         generation: result.host_epoch.clone(),
+    }
+}
+
+fn adapter_calendar_provider(connector: &str) -> Result<CalendarProvider, AgentFailure> {
+    match connector {
+        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        "calendar.fixture" => Ok(CalendarProvider::Fixture),
+        _ => Err(AgentFailure::CapabilityUnavailable),
     }
 }
 

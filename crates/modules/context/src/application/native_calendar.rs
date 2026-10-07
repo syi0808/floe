@@ -80,11 +80,8 @@ pub async fn admit_current_native_calendar_read(
     if !is_native_calendar(provider) {
         return Err(AgentFailure::CapabilityUnavailable);
     }
-    let execution_owner = if provider == CalendarProvider::EventKit {
-        floe_access::apple_execution_owner(device_id)
-    } else {
-        device_id.to_owned()
-    };
+    let execution_owner = floe_access::native_calendar_execution_owner(provider, device_id)
+        .ok_or(AgentFailure::CapabilityUnavailable)?;
     if !connection.is_serving()
         || connection.person_id() != person_id
         || connection.execution_owner_id().as_str() != execution_owner
@@ -195,9 +192,6 @@ fn connection_calendar_ids(connection: &SourceConnection) -> Vec<String> {
 }
 
 fn native_provider(connection: &SourceConnection) -> Result<CalendarProvider, AgentFailure> {
-    match connection.connector_id().as_str() {
-        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
-        "calendar.android" => Ok(CalendarProvider::Android),
-        _ => Err(AgentFailure::CapabilityUnavailable),
-    }
+    floe_access::native_calendar_provider(connection.connector_id().as_str())
+        .ok_or(AgentFailure::CapabilityUnavailable)
 }

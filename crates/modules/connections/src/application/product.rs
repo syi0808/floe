@@ -253,14 +253,17 @@ impl ConnectionsService {
                 _ => {}
             }
         }
-        for connector in [
+        let mut native_connectors = vec![
             "calendar.event_kit",
             "contacts.apple",
             "attention.macos",
             "health.apple",
-        ] {
+        ];
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        native_connectors.push("calendar.fixture");
+        for connector in native_connectors {
             let id = native_integration_ref(actor, connector)?;
-            if let Some(integration) = self.native_integration(actor, id).await? {
+            if let Some(integration) = self.native_integration(actor, id, scope).await? {
                 integrations.push(self.integration_summary(actor, &integration, scope).await?)
             }
         }
@@ -434,7 +437,7 @@ impl ConnectionsService {
                     integration
                 }
                 None => self
-                    .native_integration(actor, integration_ref)
+                    .native_integration(actor, integration_ref, scope)
                     .await?
                     .ok_or(AgentFailure::NotFound)?,
             };
@@ -2225,34 +2228,50 @@ impl ConnectionsService {
         &self,
         actor: &OwnerActor,
         id: Uuid,
+        scope: &ExecutionScope,
     ) -> Result<Option<IntegrationRecord>, AgentFailure> {
-        for connector in [
+        let mut native_connectors = vec![
             "calendar.event_kit",
             "contacts.apple",
             "attention.macos",
             "health.apple",
-        ] {
+        ];
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        native_connectors.push("calendar.fixture");
+        for connector in native_connectors {
             if native_integration_ref(actor, connector)? != id {
                 continue;
             }
+            let connector_id = floe_context_contract::ConnectorId::try_new(connector)
+                .map_err(|_| AgentFailure::InvalidInput)?;
             let connection =
                 floe_context_contract::ConnectionId::try_new(native_connection_id(connector)?)
                     .map_err(|_| AgentFailure::InvalidInput)?;
+            let expected_owner = floe_access::local_calendar_execution_owner(
+                connector,
+                &actor.device_id,
+            )
+            .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
             let current = self
                 .sources
                 .load(actor.person_id, &connection)
                 .await
                 .map_err(source_error)?
                 .filter(|source| {
-                    source.execution_owner_id().as_str()
-                        == floe_access::apple_execution_owner(&actor.device_id)
+                    source.person_id() == actor.person_id
+                        && source.connector_id() == &connector_id
+                        && source.connection_id() == &connection
+                        && source.execution_owner_id().as_str() == expected_owner
                 });
             let revision = current.as_ref().map_or(1, SourceConnection::revision);
-            let available = match connector {
-                "health.apple" => cfg!(target_os = "ios"),
-                "attention.macos" => false,
-                _ => cfg!(any(target_os = "macos", target_os = "ios")),
-            };
+            let availability = self
+                .native_setup
+                .availability(actor, &connector_id, scope)
+                .await?;
+            if availability.connector_id != connector_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let available = availability.available;
             return Ok(Some(IntegrationRecord {
                 integration_ref: id,
                 target: IntegrationBinding::Device {
@@ -2260,11 +2279,10 @@ impl ConnectionsService {
                 },
                 revision,
                 descriptor: IntegrationDescriptor {
-                    connector_id: floe_context_contract::ConnectorId::try_new(connector)
-                        .map_err(|_| AgentFailure::InvalidInput)?,
+                    connector_id,
                     display_name: source_label(connector).into(),
                     category: match connector {
-                        "calendar.event_kit" => "calendar",
+                        "calendar.event_kit" | "calendar.fixture" => "calendar",
                         "contacts.apple" => "contacts",
                         "health.apple" => "health",
                         _ => "attention",
@@ -2314,6 +2332,18 @@ impl ConnectionsService {
             .await
             .map_err(source_error)?
         {
+            let expected_owner = floe_access::local_calendar_execution_owner(
+                connector.as_str(),
+                &actor.device_id,
+            )
+            .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
+            if source.person_id() != actor.person_id
+                || source.connector_id() != &connector
+                || source.connection_id() != &connection
+                || source.execution_owner_id().as_str() != expected_owner
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
             if source.state() == SourceState::Pending {
                 return Ok(source);
             }
@@ -2331,10 +2361,13 @@ impl ConnectionsService {
         } else {
             ResourceMode::Selected
         };
-        let owner = floe_context_contract::ExecutionOwnerId::try_new(
-            floe_access::apple_execution_owner(&actor.device_id),
+        let execution_owner = floe_access::local_calendar_execution_owner(
+            connector.as_str(),
+            &actor.device_id,
         )
-        .map_err(|_| AgentFailure::InvalidInput)?;
+        .unwrap_or_else(|| floe_access::apple_execution_owner(&actor.device_id));
+        let owner = floe_context_contract::ExecutionOwnerId::try_new(execution_owner)
+            .map_err(|_| AgentFailure::InvalidInput)?;
         let source = SourceConnection::establish(
             actor.person_id,
             connector,
@@ -2572,7 +2605,7 @@ impl ConnectionsService {
         if let IntegrationBinding::Device { device_id } = &integration.target {
             if device_id != &actor.device_id
                 || self
-                    .native_integration(actor, integration.integration_ref)
+                    .native_integration(actor, integration.integration_ref, scope)
                     .await?
                     .as_ref()
                     != Some(integration)
@@ -2966,11 +2999,13 @@ pub(super) fn native_source(source: &SourceConnection) -> bool {
             | "contacts.android"
             | "attention.macos"
             | "health.apple"
-    )
+    ) || (cfg!(all(feature = "qa-fixtures", target_os = "linux"))
+        && source.connector_id().as_str() == "calendar.fixture")
 }
 fn source_label(connector: &str) -> &str {
     match connector {
         "calendar.event_kit" => "Calendar",
+        "calendar.fixture" => "Synthetic QA Calendar",
         "contacts.apple" => "Contacts",
         "attention.macos" => "Attention",
         "health.apple" => "Health",
@@ -3055,8 +3090,10 @@ fn native_integration_ref(actor: &OwnerActor, connector: &str) -> Result<Uuid, A
     )
 }
 fn native_connection_id(connector: &str) -> Result<&'static str, AgentFailure> {
+    if let Some(connection_id) = floe_access::local_calendar_connection_id(connector) {
+        return Ok(connection_id);
+    }
     match connector {
-        "calendar.event_kit" => Ok("calendar.event_kit.local"),
         "contacts.apple" => Ok("contacts.apple.local"),
         "health.apple" => Ok("health.apple.local"),
         "attention.macos" => Ok("attention.macos.local"),

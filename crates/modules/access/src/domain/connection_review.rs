@@ -312,8 +312,11 @@ fn validate_source_device(
     {
         return Err(AgentFailure::InvalidInput);
     }
-    if source.connector().as_str() == "calendar.event_kit" {
-        if source.execution_owner().as_str() != crate::apple_execution_owner(device_id) {
+    if let Some(expected) = crate::local_calendar_execution_owner(
+        source.connector().as_str(),
+        device_id,
+    ) {
+        if source.execution_owner().as_str() != expected {
             return Err(AgentFailure::PolicyDenied);
         }
     } else if crate::is_device_local_source(source.connector().as_str())

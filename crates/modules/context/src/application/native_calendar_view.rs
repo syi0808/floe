@@ -182,10 +182,7 @@ pub async fn authorize_native_calendar_dependency(
     if dependency.observed_at() > now || dependency.expires_at() <= now {
         return Err(AgentFailure::StaleContext);
     }
-    if !matches!(
-        dependency.source().connector().as_str(),
-        "calendar.event_kit" | "calendar.android"
-    ) {
+    if floe_access::native_calendar_provider(dependency.source().connector().as_str()).is_none() {
         return Err(AgentFailure::CapabilityDenied);
     }
     let (_, subject_fingerprint) = leases.observation(dependency)?;

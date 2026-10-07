@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["os-keyring"]
 os-keyring = ["floe-app/os-keyring"]
 development-storage = ["floe-app/development-storage"]
+qa-fixtures = ["development-storage", "floe-app/qa-fixtures"]
 
 [dependencies]
 chrono.workspace = true

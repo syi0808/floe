@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use floe_connections::{
     ConnectionResource, ConnectionResourceGroup, NativeSetupObservation, NativeSetupRequest,
-    NativeSetupState, NativeSourceSetupPort, SourceCatalogObservation, SourceCatalogPort,
-    SourceConnection,
+    NativeAvailabilityObservation, NativeSetupState, NativeSourceSetupPort,
+    SourceCatalogObservation, SourceCatalogPort, SourceConnection,
 };
 use floe_context::{NativeSubjectObservation, SourceMetadataTransport};
 use floe_context_contract::{CalendarProvider, ResourceHandle};
@@ -47,8 +47,8 @@ impl NativeSourceMetadataAdapter {
         scope: &ExecutionScope,
     ) -> Result<CalendarAcquisitionResult, AgentFailure> {
         validate_source(actor, source)?;
-        if source.connector_id().as_str() != "calendar.event_kit"
-            || !matches!(
+        let provider = adapter_calendar_provider(source.connector_id().as_str())?;
+        if !matches!(
                 mode,
                 CalendarAcquisitionMode::InspectSubject | CalendarAcquisitionMode::InspectCatalog
             )
@@ -69,7 +69,7 @@ impl NativeSourceMetadataAdapter {
             device_id: actor.device_id.clone(),
             connection_id: source.connection_id().as_str().to_owned(),
             connection_revision: source.revision(),
-            provider: CalendarProvider::EventKit,
+            provider,
             mode,
             calendar_ids,
             range_start_unix_ms: now,
@@ -316,6 +316,19 @@ impl SourceCatalogPort for NativeSourceMetadataAdapter {
                         .await?;
                     (validate_resources(response.available_calendars)?, true)
                 }
+                #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                "calendar.fixture" => {
+                    let response = self
+                        .calendar_metadata(
+                            actor,
+                            source,
+                            CalendarAcquisitionMode::InspectCatalog,
+                            Vec::new(),
+                            scope,
+                        )
+                        .await?;
+                    (validate_resources(response.available_calendars)?, true)
+                }
                 "contacts.apple" => {
                     self.personal_catalog(actor, PersonalDomain::People, scope)
                         .await?
@@ -339,6 +352,33 @@ impl SourceCatalogPort for NativeSourceMetadataAdapter {
 }
 
 impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
+    fn availability<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        connector_id: &'a floe_context_contract::ConnectorId,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<NativeAvailabilityObservation, AgentFailure>> {
+        Box::pin(async move {
+            actor.validate()?;
+            deadline(scope)?;
+            let connector = connector_id.as_str();
+            let available = match connector {
+                "calendar.event_kit" | "contacts.apple" => {
+                    cfg!(any(target_os = "macos", target_os = "ios"))
+                }
+                "health.apple" => cfg!(target_os = "ios"),
+                "attention.macos" => false,
+                #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                "calendar.fixture" => true,
+                _ => false,
+            };
+            Ok(NativeAvailabilityObservation {
+                connector_id: connector_id.clone(),
+                available,
+            })
+        })
+    }
+
     fn request_permission<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -352,7 +392,8 @@ impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
             }
             let (now, deadline) = deadline(scope)?;
             let permission = match request.connector_id.as_str() {
-                "calendar.event_kit" => {
+                "calendar.event_kit" | "calendar.fixture" => {
+                    let provider = adapter_calendar_provider(request.connector_id.as_str())?;
                     let response = self
                         .submit_calendar(
                             CalendarAcquisitionRequest {
@@ -362,7 +403,7 @@ impl NativeSourceSetupPort for NativeSourceMetadataAdapter {
                                 device_id: actor.device_id.clone(),
                                 connection_id: request.connection_id.as_str().to_owned(),
                                 connection_revision: request.source_revision,
-                                provider: CalendarProvider::EventKit,
+                                provider,
                                 mode: CalendarAcquisitionMode::RequestPermission,
                                 calendar_ids: Vec::new(),
                                 range_start_unix_ms: now,
@@ -433,17 +474,38 @@ fn validate_source(actor: &OwnerActor, source: &SourceConnection) -> Result<(), 
     actor.validate()?;
     source.validate().map_err(|_| AgentFailure::InvalidInput)?;
     let expected_owner = match source.connector_id().as_str() {
-        "calendar.event_kit" => floe_access::apple_execution_owner(&actor.device_id),
+        "calendar.event_kit" => floe_access::local_calendar_execution_owner(
+            source.connector_id().as_str(),
+            &actor.device_id,
+        )
+        .ok_or(AgentFailure::CapabilityUnavailable)?,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        "calendar.fixture" => floe_access::local_calendar_execution_owner(
+            source.connector_id().as_str(),
+            &actor.device_id,
+        )
+        .ok_or(AgentFailure::CapabilityUnavailable)?,
         "contacts.apple" | "health.apple" => format!("apple:{}", actor.device_id),
         "attention.macos" => format!("macos:{}", actor.device_id),
         _ => return Err(AgentFailure::CapabilityUnavailable),
     };
     if source.person_id() != actor.person_id
         || source.execution_owner_id().as_str() != expected_owner
+        || floe_access::local_calendar_connection_id(source.connector_id().as_str())
+            .is_some_and(|expected| source.connection_id().as_str() != expected)
     {
         return Err(AgentFailure::PolicyDenied);
     }
     Ok(())
+}
+
+fn adapter_calendar_provider(connector: &str) -> Result<CalendarProvider, AgentFailure> {
+    match connector {
+        "calendar.event_kit" => Ok(CalendarProvider::EventKit),
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        "calendar.fixture" => Ok(CalendarProvider::Fixture),
+        _ => Err(AgentFailure::CapabilityUnavailable),
+    }
 }
 
 fn deadline(scope: &ExecutionScope) -> Result<(i64, i64), AgentFailure> {

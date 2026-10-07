@@ -16,10 +16,15 @@ pub struct CalendarReviewClassification {
 }
 
 pub fn current_calendar_connector(connection: &floe_connections::SourceConnection) -> Option<&str> {
-    match connection.connector_id().as_str() {
-        "calendar.fixture" | "calendar.event_kit" | "calendar.google" | "calendar.microsoft"
-        | "calendar.android" => Some(connection.connector_id().as_str()),
-        _ => None,
+    let connector = connection.connector_id().as_str();
+    if floe_access::native_calendar_provider(connector).is_some()
+        && floe_access::local_calendar_connection_id(connector)
+            .is_none_or(|expected| connection.connection_id().as_str() == expected)
+        || matches!(connector, "calendar.google" | "calendar.microsoft")
+    {
+        Some(connector)
+    } else {
+        None
     }
 }
 
