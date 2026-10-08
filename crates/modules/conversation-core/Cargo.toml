@@ -1,0 +1,16 @@
+[package]
+name = "floe-conversation-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+floe-conversation-contract = { path = "../../contracts/conversation" }
+floe-execution = { path = "../../runtime/execution" }
+floe-kernel = { path = "../../contracts/kernel" }
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true

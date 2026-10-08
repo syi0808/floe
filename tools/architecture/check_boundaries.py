@@ -136,6 +136,7 @@ def _forbidden_edges(policy: dict) -> list[tuple[str, str]]:
         if entry["group"] == "modules"
         for dependency in ("floe-vault", "floe-provider-adapters", "floe-ffi", "floe-app")
     ]
+    forbidden += [tuple(path) for path in policy.get("forbidden_paths", [])]
     return forbidden
 
 

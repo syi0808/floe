@@ -618,6 +618,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
+name = "floe-a2a"
+version = "0.1.0"
+dependencies = [
+ "floe-agent-contract",
+ "floe-conversation-contract",
+ "floe-execution",
+ "floe-kernel",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "floe-access"
 version = "0.1.0"
 dependencies = [
@@ -794,6 +806,29 @@ dependencies = [
  "sha2",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "floe-conversation-contract"
+version = "0.1.0"
+dependencies = [
+ "floe-kernel",
+ "serde",
+ "serde_json",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
+name = "floe-conversation-core"
+version = "0.1.0"
+dependencies = [
+ "floe-conversation-contract",
+ "floe-execution",
+ "floe-kernel",
+ "serde_json",
+ "sha2",
  "uuid",
 ]
 

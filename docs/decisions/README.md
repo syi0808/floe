@@ -44,6 +44,7 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0030 — Conversation-owned durable interactions and origin-linked resume](0030-durable-interaction-and-linked-resume.md) — Observe reviewed-target semantics amended by ADR 0031; model-review retirement and durable automatic resume amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0033 — Run-scoped Agent environment and grounded Manager](0033-run-scoped-agent-environment-and-grounded-manager.md) — amends 0017/0018 for root Agent readiness, Run-pinned Expert configuration, attempt Context and Manager grounding; live processing authority and Primary/Fallback evaluation order amended by [0034](0034-gateway-reasoning-and-source-processing-authority.md).
 - [0034 — Gateway reasoning and source-owned processing authority](0034-gateway-reasoning-and-source-processing-authority.md) — accepted product trust boundary, shared Gateway-primary/local-fallback reasoning, Health-only mandatory local privacy transformation and source-review auto-resume; acceptance does not claim runtime implementation.
+- [0035 — Role-neutral Conversation Core and separate A2A boundary](0035-conversation-core-and-a2a-boundaries.md) — value/state contracts and host/peer ownership; the R1 contract slice does not claim production persistence or Expert resume integration.
 
 ### Device context, connections and authority
 

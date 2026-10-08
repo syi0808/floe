@@ -54,6 +54,16 @@
       ]
     },
     {
+      "id": "conversation_contract",
+      "package": "floe-conversation-contract",
+      "path": "crates/contracts/conversation",
+      "responsibility": "Role-neutral Agent/Conversation identity, transcript, admission and checkpoint values",
+      "group": "contracts",
+      "allowed_internal_dependencies": [
+        "kernel"
+      ]
+    },
+    {
       "id": "diagnostics",
       "package": "floe-diagnostics",
       "path": "crates/platform/diagnostics",
@@ -73,6 +83,31 @@
         "agent_contract",
         "execution",
         "diagnostics"
+      ]
+    },
+    {
+      "id": "conversation_core",
+      "package": "floe-conversation-core",
+      "path": "crates/modules/conversation-core",
+      "responsibility": "Pure role-neutral conversation admission, sequencing, replay and checkpoint transitions",
+      "group": "modules",
+      "allowed_internal_dependencies": [
+        "conversation_contract",
+        "execution",
+        "kernel"
+      ]
+    },
+    {
+      "id": "a2a",
+      "package": "floe-a2a",
+      "path": "crates/modules/a2a",
+      "responsibility": "Transport-neutral A2A exchange validation, peer identity mapping and host/peer ports",
+      "group": "modules",
+      "allowed_internal_dependencies": [
+        "agent_contract",
+        "conversation_contract",
+        "execution",
+        "kernel"
       ]
     },
     {
@@ -184,7 +219,9 @@
         "context_contract",
         "execution",
         "agent_runtime",
-        "kernel"
+        "kernel",
+        "conversation_contract",
+        "conversation_core"
       ]
     },
     {
@@ -205,7 +242,9 @@
         "actions",
         "access",
         "connections",
-        "context_contract"
+        "context_contract",
+        "conversation_contract",
+        "conversation_core"
       ]
     },
     {
@@ -350,6 +389,30 @@
     "Inference and Connections have no dependency path to each other; both may use Access public API.",
     "Public cross-module APIs only; no mutable state or private repository sharing.",
     "Composition root may construct concrete services but must not select an Expert from request meaning.",
-    "Shared physical storage does not grant cross-module table ownership."
+    "Shared physical storage does not grant cross-module table ownership.",
+    "Conversation Core is role-neutral and has no dependency on A2A, Experts or Manager Conversation.",
+    "A2A exchange DTOs are not Conversation transcript or Vault storage schemas; host Task state remains Task-owner state."
+  ],
+  "forbidden_paths": [
+    [
+      "floe-conversation-core",
+      "floe-a2a"
+    ],
+    [
+      "floe-conversation-core",
+      "floe-experts"
+    ],
+    [
+      "floe-conversation-core",
+      "floe-conversation"
+    ],
+    [
+      "floe-a2a",
+      "floe-conversation"
+    ],
+    [
+      "floe-a2a",
+      "floe-experts"
+    ]
   ]
 }

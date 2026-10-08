@@ -65,6 +65,30 @@ external write or crash recovery behavior.
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.
 
+### R1 admission contracts (not connected to production)
+
+`floe-conversation-contract` defines role-neutral Person/agent-assignment,
+Conversation/branch, Message, transcript, Run/Task-link and checkpoint values.
+`floe-conversation-core` supplies deterministic New/Continue, replay/conflict,
+FIFO inbox, single-writer and prefix-bound checkpoint transitions behind a
+Core-owned store port. Its fixtures exercise Manager and Expert identities
+through the same transitions while keeping provenance and conversation IDs
+isolated. A changed pinned agent definition selects a new Conversation.
+
+This is contract-only: the current Conversation/Expert execution path, Run
+journal, V1 Task receipts and stored sessions are unchanged. No production
+caller, durable store, migration or Expert resume behavior is connected by this
+slice. `MessageOrigin` is supplied only by a host-verified boundary; a model
+role or an agent identity is not authentication or an authority grant.
+
+`floe-a2a` is a separate transport-neutral module over the Agent and Conversation
+contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
+and ports to the host Task owner and peer binding. Remote Task observations and
+artifacts remain external exchange data until the host Task owner accepts them.
+The module does not depend on Conversation Core or duplicate host Task state;
+HTTP transport and standard conformance are future binding work. An in-process
+binding will call the same operation directly rather than loop through HTTP.
+
 ### Model path
 
 Canonical ownership:

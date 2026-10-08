@@ -1,0 +1,39 @@
+[
+  {
+    "name": "conversation-core-cannot-import-a2a",
+    "graph": {
+      "floe-conversation-core": ["floe-a2a"],
+      "floe-a2a": []
+    }
+  },
+  {
+    "name": "conversation-core-cannot-reach-experts-transitively",
+    "graph": {
+      "floe-conversation-core": ["floe-agent-contract"],
+      "floe-agent-contract": ["floe-experts"],
+      "floe-experts": []
+    }
+  },
+  {
+    "name": "a2a-cannot-import-manager-conversation",
+    "graph": {
+      "floe-a2a": ["floe-conversation"],
+      "floe-conversation": []
+    }
+  },
+  {
+    "name": "a2a-cannot-reach-expert-domain-through-context",
+    "graph": {
+      "floe-a2a": ["floe-context"],
+      "floe-context": ["floe-experts"],
+      "floe-experts": []
+    }
+  },
+  {
+    "name": "a2a-cannot-import-vault-storage",
+    "graph": {
+      "floe-a2a": ["floe-vault"],
+      "floe-vault": []
+    }
+  }
+]

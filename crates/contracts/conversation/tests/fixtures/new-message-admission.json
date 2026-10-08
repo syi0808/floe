@@ -1,0 +1,24 @@
+{
+  "target": {
+    "kind": "new",
+    "conversation_id": "00000000-0000-4000-8000-000000000101",
+    "branch_id": "00000000-0000-4000-8000-000000000102",
+    "identity": {
+      "person_id": "00000000-0000-4000-8000-000000000103",
+      "agent_instance_id": "00000000-0000-4000-8000-000000000104",
+      "assignment_id": "00000000-0000-4000-8000-000000000105",
+      "definition_id": "expert.schedule",
+      "definition_revision": 3
+    }
+  },
+  "message": {
+    "message_id": "00000000-0000-4000-8000-000000000106",
+    "command_id": "00000000-0000-4000-8000-000000000107",
+    "origin": {
+      "kind": "person",
+      "person_id": "00000000-0000-4000-8000-000000000103"
+    },
+    "text": "Review my next appointment.",
+    "task_id": null
+  }
+}
