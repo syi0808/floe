@@ -29,6 +29,9 @@ impl SourceServices {
         core: Arc<crate::FloeCore>,
         local_context: Arc<crate::LocalContextHost>,
         actor: floe_kernel::OwnerActor,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
+            Arc<dyn floe_context::ExpertSourceTransport>,
+        >,
     ) -> Result<Self, AgentFailure> {
         actor.validate()?;
         if vault.person_id() != actor.person_id {
@@ -76,6 +79,15 @@ impl SourceServices {
             personal: local_context.personal_handle(),
             observations: local_context.observations_handle(),
         });
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        let transport = expert_source_transport.unwrap_or_else(|| {
+            Arc::new(floe_provider_adapters::sources::ExpertSourceAdapter::new(
+                local_context.calendar_handle(),
+                core.store.clone(),
+                core.product_gateway.clone(),
+            ))
+        });
+        #[cfg(not(all(feature = "qa-fixtures", target_os = "linux")))]
         let transport: Arc<dyn floe_context::ExpertSourceTransport> =
             Arc::new(floe_provider_adapters::sources::ExpertSourceAdapter::new(
                 local_context.calendar_handle(),

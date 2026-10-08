@@ -120,6 +120,8 @@ pub(crate) struct RuntimePreparationHost {
     core: Arc<FloeCore>,
     local_context: Arc<LocalContextHost>,
     model_provider_factory: Arc<dyn ModelProviderFactory>,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    expert_source_transport: Option<Arc<dyn floe_context::ExpertSourceTransport>>,
     state: Mutex<BridgeState>,
     drained: Condvar,
     published: Arc<Mutex<Published>>,
@@ -132,6 +134,9 @@ impl RuntimePreparationHost {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
         model_provider_factory: Arc<dyn ModelProviderFactory>,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
+            Arc<dyn floe_context::ExpertSourceTransport>,
+        >,
     ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
@@ -140,6 +145,8 @@ impl RuntimePreparationHost {
             core,
             local_context,
             model_provider_factory,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            expert_source_transport,
             state: Mutex::new(BridgeState::default()),
             drained: Condvar::new(),
             published: Arc::new(Mutex::new(Published::default())),
@@ -191,6 +198,39 @@ impl RuntimePreparationHost {
             return Err(failure);
         }
         Ok(owners)
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub(crate) fn qa_conversation_journal(
+        &self,
+        caller: &CallerContext,
+        run_id: floe_kernel::RunId,
+    ) -> Result<Vec<floe_vault::VaultConversationJournalEntry>, AgentFailure> {
+        let generation = self.qa_generation(caller)?;
+        crate::owner_handles::execute_on_handle(&self.runtime_handle, async move {
+            generation.qa_conversation_journal(run_id).await
+        })
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    fn qa_generation(&self, caller: &CallerContext) -> Result<Arc<Generation>, AgentFailure> {
+        validate_runtime_caller(&self.expected, caller)?;
+        let slot = self
+            .published
+            .lock()
+            .map_err(|_| AgentFailure::Interrupted)?;
+        if slot.closing {
+            return Err(AgentFailure::Interrupted);
+        }
+        let Some((admitted, generation)) = slot.current.as_ref() else {
+            return Err(AgentFailure::VaultUnavailable);
+        };
+        if admitted != caller {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        generation.owners().check(&caller.owner_actor())?;
+        generation.check_access()?;
+        Ok(generation.clone())
     }
 
     pub(crate) fn readiness(
@@ -377,6 +417,8 @@ impl RuntimePreparationHost {
                     self.local_context.clone(),
                     self.published.clone(),
                     self.model_provider_factory.clone(),
+                    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                    self.expert_source_transport.clone(),
                 )
                 .map_err(RuntimePreparationCommandFailure::NotAdmitted)?,
             );
@@ -550,6 +592,9 @@ impl Worker {
         local_context: Arc<LocalContextHost>,
         published: Arc<Mutex<Published>>,
         model_provider_factory: Arc<dyn ModelProviderFactory>,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
+            Arc<dyn floe_context::ExpertSourceTransport>,
+        >,
     ) -> Result<Self, AgentFailure> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -616,6 +661,8 @@ impl Worker {
                                         &local_context,
                                         &published,
                                         &model_provider_factory,
+                                        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                                        &expert_source_transport,
                                         &mut current,
                                         &job,
                                     ),
@@ -938,6 +985,9 @@ async fn execute(
     local_context: &Arc<LocalContextHost>,
     published: &Mutex<Published>,
     model_provider_factory: &Arc<dyn ModelProviderFactory>,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: &Option<
+        Arc<dyn floe_context::ExpertSourceTransport>,
+    >,
     current: &mut Option<OpenGeneration>,
     job: &Job,
 ) -> Result<(), AgentFailure> {
@@ -997,6 +1047,8 @@ async fn execute(
                     core.clone(),
                     local_context.clone(),
                     model_provider_factory.clone(),
+                    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                    expert_source_transport.clone(),
                     job.caller.owner_actor(),
                     job.id,
                     job.cancellation.clone(),

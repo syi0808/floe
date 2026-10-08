@@ -54,6 +54,9 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         core: Arc<FloeCore>,
         local_context: Arc<LocalContextHost>,
         model_provider_factory: Arc<dyn ModelProviderFactory>,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
+            Arc<dyn floe_context::ExpertSourceTransport>,
+        >,
         actor: OwnerActor,
         operation_id: Uuid,
         cancellation: Cancellation,
@@ -89,6 +92,8 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             core.clone(),
             local_context,
             actor.clone(),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            expert_source_transport,
         )?;
         core.product_gateway.publish(
             activation.executor_generation,
@@ -233,6 +238,14 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
     }
     pub(crate) fn owners(&self) -> Arc<ReadyOwners> {
         self.owners.clone()
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub(crate) async fn qa_conversation_journal(
+        &self,
+        run_id: floe_kernel::RunId,
+    ) -> Result<Vec<floe_vault::VaultConversationJournalEntry>, AgentFailure> {
+        self.vault.conversation_journal(run_id).await
     }
     pub(crate) fn check_access(&self) -> Result<(), AgentFailure> {
         if self.retired.load(Ordering::Acquire) {

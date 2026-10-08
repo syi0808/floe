@@ -28,6 +28,15 @@ use floe_provider_adapters::gateway::GatewayCredentialStore;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_connections::SourceConnection;
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_context::{
+    CalendarObservation, CalendarObserveRequest, ExpertRemoteSource, ExpertSourceTransport,
+};
+
 const OWNER_TIMEOUT: Duration = Duration::from_secs(15);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(55);
 const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -45,6 +54,7 @@ pub enum ModelOutput {
     UnsupportedManagerToolCall,
     WaitForCancellation(Arc<GenerateBarrier>),
     ScheduleExpertFlow,
+    ScheduleFinalizationFlow,
 }
 
 #[derive(Clone, Debug)]
@@ -98,8 +108,7 @@ struct RecorderState {
     violations: Vec<String>,
     identity: Option<(String, String)>,
     catalogs: std::collections::BTreeMap<String, AllowedCatalog>,
-    schedule_flow: bool,
-    expected_model_calls: usize,
+    expected_consumers: Vec<String>,
     model_selections: Vec<ScriptModelSelection>,
 }
 
@@ -107,10 +116,9 @@ struct RecorderState {
 pub struct ScriptRecorder(Arc<Mutex<RecorderState>>);
 
 impl ScriptRecorder {
-    fn new(schedule_flow: bool, expected_model_calls: usize) -> Self {
+    fn new(expected_consumers: Vec<String>) -> Self {
         Self(Arc::new(Mutex::new(RecorderState {
-            schedule_flow,
-            expected_model_calls,
+            expected_consumers,
             ..RecorderState::default()
         })))
     }
@@ -132,20 +140,7 @@ impl ScriptRecorder {
         } else {
             PlanStage::LocalFallback
         };
-        let consumer = if state.schedule_flow {
-            [
-                CONVERSATION_CONSUMER,
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                CONVERSATION_CONSUMER,
-            ]
-            .get(call_index)
-            .copied()
-        } else if call_index < state.expected_model_calls {
-            Some(CONVERSATION_CONSUMER)
-        } else {
-            None
-        };
+        let consumer = state.expected_consumers.get(call_index).map(String::as_str);
         let expected = consumer.map(|consumer| (expected_stage, consumer));
         let Some((expected_stage, expected_consumer)) = expected else {
             state
@@ -229,20 +224,10 @@ impl ScriptRecorder {
         task_id: Option<Uuid>,
     ) -> Result<usize, AgentFailure> {
         let mut state = self.0.lock().map_err(|_| AgentFailure::Interrupted)?;
-        let expected = if state.schedule_flow {
-            [
-                CONVERSATION_CONSUMER,
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                CONVERSATION_CONSUMER,
-            ]
+        let expected = state
+            .expected_consumers
             .get(state.generated.len())
-            .copied()
-        } else if state.generated.len() < state.expected_model_calls {
-            Some(CONVERSATION_CONSUMER)
-        } else {
-            None
-        };
+            .map(String::as_str);
         let Some(expected_consumer) = expected else {
             state
                 .violations
@@ -319,13 +304,27 @@ impl ScriptedModel {
         expected_input: impl Into<String>,
         output: ModelOutput,
     ) -> Self {
-        let schedule_flow = matches!(&output, ModelOutput::ScheduleExpertFlow);
-        let expected_model_calls = if schedule_flow { 4 } else { 1 };
+        let expected_consumers = match &output {
+            ModelOutput::ScheduleExpertFlow => vec![
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+            ],
+            ModelOutput::ScheduleFinalizationFlow => vec![
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+            ],
+            _ => vec![CONVERSATION_CONSUMER.into()],
+        };
         Self {
             primary,
             expected_input: expected_input.into(),
             output,
-            recorder: ScriptRecorder::new(schedule_flow, expected_model_calls),
+            recorder: ScriptRecorder::new(expected_consumers),
         }
     }
 
@@ -337,6 +336,15 @@ impl ScriptedModel {
         AppOpenOptions::default().with_model_provider_factory(ScriptedModelProviderFactory {
             model: self.clone(),
         })
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub fn app_options_with_qa_source_transport(
+        &self,
+        transport: impl ExpertSourceTransport + 'static,
+    ) -> AppOpenOptions {
+        self.app_options()
+            .with_qa_expert_source_transport(transport)
     }
 
     fn validate_canonical(
@@ -358,7 +366,10 @@ impl ScriptedModel {
             &request.envelope.run_instructions.output_format,
             &request.catalog,
         )?;
-        let schedule_flow = matches!(&self.output, ModelOutput::ScheduleExpertFlow);
+        let schedule_flow = matches!(
+            &self.output,
+            ModelOutput::ScheduleExpertFlow | ModelOutput::ScheduleFinalizationFlow
+        );
         let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
         let consumer_is_expert = plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
         let valid_catalog = if !schedule_flow || consumer_is_conversation {
@@ -388,7 +399,14 @@ impl ScriptedModel {
             .0
             .lock()
             .map_err(|_| AgentFailure::Interrupted)?;
-        if let Some(expected_catalog) = state.catalogs.get(&plan.consumer) {
+        let catalog_key = if request.envelope.run_instructions.response_contract
+            == floe_conversation::FINALIZATION_OUTPUT_CONTRACT
+        {
+            format!("{}:finalization", plan.consumer)
+        } else {
+            plan.consumer.clone()
+        };
+        if let Some(expected_catalog) = state.catalogs.get(&catalog_key) {
             if expected_catalog != &request.catalog {
                 state
                     .violations
@@ -396,9 +414,7 @@ impl ScriptedModel {
                 return Err(AgentFailure::InvalidInput);
             }
         } else {
-            state
-                .catalogs
-                .insert(plan.consumer.clone(), request.catalog.clone());
+            state.catalogs.insert(catalog_key, request.catalog.clone());
         }
         Ok(())
     }
@@ -484,16 +500,41 @@ impl ScriptedModel {
                         .into(),
                 artifacts: vec![],
             }])),
-            3 => Ok(response(vec![ModelStep::Answer {
-                text: SCRIPTED_REPLY.into(),
-                artifacts: vec![],
-            }])),
+            3 => match &self.output {
+                ModelOutput::ScheduleExpertFlow => Ok(response(vec![ModelStep::Answer {
+                    text: SCRIPTED_REPLY.into(),
+                    artifacts: vec![],
+                }])),
+                ModelOutput::ScheduleFinalizationFlow => Err(AgentFailure::BudgetExceeded),
+                _ => Err(AgentFailure::InvalidInput),
+            },
+            4 if matches!(&self.output, ModelOutput::ScheduleFinalizationFlow) => {
+                self.finalization_answer(request)
+            }
             _ => {
                 self.recorder
                     .record_violation("unexpected scripted schedule flow generation index");
                 Err(AgentFailure::InvalidInput)
             }
         }
+    }
+
+    fn finalization_answer(
+        &self,
+        request: &InferenceRequest,
+    ) -> Result<CanonicalModelResponse, AgentFailure> {
+        if request.envelope.run_instructions.response_contract
+            != floe_conversation::FINALIZATION_OUTPUT_CONTRACT
+        {
+            self.recorder.record_violation(
+                "finalizer request did not carry the finalization response contract",
+            );
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(response(vec![ModelStep::Answer {
+            text: SCRIPTED_REPLY.into(),
+            artifacts: vec![],
+        }]))
     }
 }
 
@@ -576,6 +617,10 @@ impl ModelProvider for ScriptedModelProvider {
                 scope.task_id().map(|task_id| task_id.as_uuid()),
             )?;
             let selection = model.recorder.model_selection(plan_index / 2)?;
+            let capabilities = ModelCapabilities(vec![
+                floe_agent_contract::ModelCapability::Chat,
+                floe_agent_contract::ModelCapability::ToolProposals,
+            ]);
             let binding_digest = selection.binding_digest;
             let purpose = ModelPurpose::new(request.purpose.clone())
                 .ok_or(ModelObservationError::InvalidIdentity)?;
@@ -587,14 +632,14 @@ impl ModelProvider for ScriptedModelProvider {
                 run_id: scope.root_run_id().map(RunId::as_uuid),
                 task_id: scope.task_id().map(|task_id| task_id.as_uuid()),
                 binding_digest,
-                capabilities: request.required_capabilities.clone(),
+                capabilities: capabilities.clone(),
             };
             let transport: Box<dyn PreparedModelTransport> = Box::new(transport);
             Ok(LocalObservation::Available(PreparedModelProfile {
                 capability: ObservedModelCapability {
                     purpose,
                     consumer,
-                    capabilities: request.required_capabilities.clone(),
+                    capabilities,
                     boundary: selection.boundary,
                     binding_digest,
                     selection_commitment: selection.commitment,
@@ -632,11 +677,10 @@ impl PreparedModelTransport for ScriptedTransport {
         Box::pin(async move {
             self.validate_request(&request)?;
             if !target.matches(&self.binding_digest, ProcessingBoundary::Device)
-                || self.capabilities
-                    != ModelCapabilities::for_request(
-                        &request.envelope.run_instructions.output_format,
-                        &request.catalog,
-                    )?
+                || !self.capabilities.includes(&ModelCapabilities::for_request(
+                    &request.envelope.run_instructions.output_format,
+                    &request.catalog,
+                )?)
             {
                 self.model.recorder.record_violation(
                     "model dispatch target or capabilities did not match the admitted Device plan",
@@ -669,6 +713,9 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::ScheduleExpertFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
+                }
+                ModelOutput::ScheduleFinalizationFlow => {
                     self.model.schedule_flow_response(call_index, &request)
                 }
             }
@@ -745,6 +792,52 @@ impl IsolatedProfile {
         let path = self.root.path().to_str().expect("temporary path is UTF-8");
         floe_app::open_default_with_options(path, model.app_options())
             .unwrap_or_else(|error| panic!("open isolated App profile: {error:?}"))
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub fn open_with_qa_source_transport(
+        &self,
+        model: &ScriptedModel,
+        transport: impl ExpertSourceTransport + 'static,
+    ) -> AppHost<AppComposition> {
+        let path = self.root.path().to_str().expect("temporary path is UTF-8");
+        floe_app::open_default_with_options(
+            path,
+            model.app_options_with_qa_source_transport(transport),
+        )
+        .unwrap_or_else(|error| panic!("open isolated App profile: {error:?}"))
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub struct UnavailableCalendarTransport;
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl ExpertSourceTransport for UnavailableCalendarTransport {
+    fn remote<'a>(
+        &'a self,
+        _: &'a floe_kernel::OwnerActor,
+        _: &'a ExecutionScope,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<ExpertRemoteSource>, AgentFailure>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn check_calendar<'a>(
+        &'a self,
+        _: &'a floe_kernel::OwnerActor,
+        _: &'a SourceConnection,
+        _: CalendarReadAccessRequest,
+    ) -> floe_execution::BoxFuture<'a, Result<CalendarReadAccessStamp, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+
+    fn observe_calendar<'a>(
+        &'a self,
+        _: &'a floe_kernel::OwnerActor,
+        _: &'a SourceConnection,
+        _: CalendarObserveRequest,
+    ) -> floe_execution::BoxFuture<'a, Result<CalendarObservation, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
     }
 }
 
@@ -1143,6 +1236,18 @@ pub fn read_events(host: &AppHost<AppComposition>) -> EventRead {
                     .await
             })
             .expect("read Conversation owner events")
+    })
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub fn read_vault_conversation_journal(
+    host: &AppHost<AppComposition>,
+    run_id: RunId,
+) -> Vec<floe_vault::VaultConversationJournalEntry> {
+    with_ready(host, |services, caller, _| {
+        services
+            .qa_conversation_journal(caller, run_id)
+            .expect("read encrypted Conversation journal through App QA")
     })
 }
 

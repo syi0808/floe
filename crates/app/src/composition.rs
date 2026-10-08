@@ -33,11 +33,23 @@ impl ModelProviderFactory for CompositeModelProviderFactory {
 #[derive(Clone)]
 pub struct AppOpenOptions {
     model_provider_factory: Arc<dyn ModelProviderFactory>,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    expert_source_transport: Option<Arc<dyn floe_context::ExpertSourceTransport>>,
 }
 
 impl AppOpenOptions {
     pub fn with_model_provider_factory(mut self, factory: impl ModelProviderFactory) -> Self {
         self.model_provider_factory = Arc::new(factory);
+        self
+    }
+
+    /// Replace only external Expert source I/O in Linux App QA.
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub fn with_qa_expert_source_transport(
+        mut self,
+        transport: impl floe_context::ExpertSourceTransport + 'static,
+    ) -> Self {
+        self.expert_source_transport = Some(Arc::new(transport));
         self
     }
 }
@@ -46,6 +58,8 @@ impl Default for AppOpenOptions {
     fn default() -> Self {
         Self {
             model_provider_factory: Arc::new(CompositeModelProviderFactory),
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            expert_source_transport: None,
         }
     }
 }
@@ -56,6 +70,20 @@ pub struct AppComposition {
     pub(crate) local_context: Arc<local_context::LocalContextHost>,
     #[cfg(unix)]
     pub(crate) runtime_preparation: runtime_preparation::RuntimePreparationHost,
+}
+
+impl AppComposition {
+    /// Read encrypted Conversation journal evidence in Linux App QA.
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    #[doc(hidden)]
+    pub fn qa_conversation_journal(
+        &self,
+        caller: &crate::CallerContext,
+        run_id: floe_kernel::RunId,
+    ) -> Result<Vec<floe_vault::VaultConversationJournalEntry>, floe_kernel::AgentFailure> {
+        self.runtime_preparation
+            .qa_conversation_journal(caller, run_id)
+    }
 }
 
 impl HostServices for AppComposition {
@@ -261,6 +289,8 @@ fn compose(
             core,
             local_context,
             options.model_provider_factory,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            options.expert_source_transport,
         ),
     };
     AppHost::with_caller(services, caller).map_err(AppOpenError::Host)

@@ -27,11 +27,110 @@ const USER_TEXT: &str = "Summarize my current priorities.";
 const REPLY: &str = "A deterministic scripted reply.";
 const WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
+
 fn create_ready_app(model: &ScriptedModel) -> (IsolatedProfile, AppHost<AppComposition>) {
     let profile = IsolatedProfile::new();
     let host = profile.open(model);
     assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
     (profile, host)
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn finalization_flow_model(finalizer_selection: Option<ScriptModelSelection>) -> ScriptedModel {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleFinalizationFlow,
+    );
+    let mut selections = vec![
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(1),
+    ];
+    if let Some(selection) = finalizer_selection {
+        selections[4] = selection;
+    }
+    model.recorder().set_model_selection_sequence(selections);
+    model
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn start_exhausted_schedule_run(
+    model: &ScriptedModel,
+) -> (
+    IsolatedProfile,
+    AppHost<AppComposition>,
+    floe_conversation::CommandReceipt,
+    floe_conversation::RunReceipt,
+) {
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_source_transport(model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    support::bind_schedule_expert(&host);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    (profile, host, command, receipt)
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn journal_events(
+    host: &AppHost<AppComposition>,
+    run_id: floe_kernel::RunId,
+) -> Vec<floe_agent_contract::JournalEvent> {
+    support::read_vault_conversation_journal(host, run_id)
+        .iter()
+        .map(|entry| serde_json::from_str(&entry.payload).expect("decode encrypted journal event"))
+        .collect()
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn assert_finalizer_drift_rejected(selection: ScriptModelSelection) {
+    let model = finalization_flow_model(Some(selection));
+    let recorder = model.recorder();
+    let (_profile, host, command, receipt) = start_exhausted_schedule_run(&model);
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::PolicyDenied));
+    assert_eq!(receipt.output, None);
+    let script = assert_script_clean(&recorder);
+    assert_eq!(script.generated.len(), 4);
+    assert_eq!(
+        script.plans.len(),
+        10,
+        "the changed finalizer plan was observed"
+    );
+    assert_eq!(
+        script.plan_bindings[8].consumer,
+        floe_conversation::CONVERSATION_CONSUMER
+    );
+
+    let events = journal_events(&host, command.run_id);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::FinalizationStarted {
+            prior_exhaustion: AgentFailure::BudgetExceeded,
+            ..
+        }
+    )));
+    let manager_intents = events
+        .iter()
+        .filter(|event| {
+            matches!(event,
+                floe_agent_contract::JournalEvent::ModelIntent { plan, .. }
+                    if plan.consumer == floe_conversation::CONVERSATION_CONSUMER
+            )
+        })
+        .count();
+    assert_eq!(
+        manager_intents, 2,
+        "the changed finalizer selection was rejected before a finalization ModelIntent"
+    );
 }
 
 fn wait_terminal_event(
@@ -1291,4 +1390,213 @@ fn manager_rejects_same_budget_model_change_before_second_dispatch() {
         3,
         "the changed selection was rejected before the fourth provider handoff"
     );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn exhausted_manager_dispatch_is_settled_before_stable_finalization_reply() {
+    let model = finalization_flow_model(None);
+    let recorder = model.recorder();
+    let (_profile, host, command, receipt) = start_exhausted_schedule_run(&model);
+    let script_snapshot = recorder.snapshot();
+    let event_snapshot = journal_events(&host, command.run_id);
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(
+        receipt.issue,
+        Some(AgentFailure::BudgetExceeded),
+        "generated={:?}; violations={:?}; events={:?}",
+        script_snapshot.generated_bindings,
+        script_snapshot.violations,
+        event_snapshot
+    );
+    assert_eq!(receipt.output.as_deref(), Some(REPLY));
+    assert_eq!(receipt.task_refs.len(), 1);
+
+    let script = assert_script_clean(&recorder);
+    assert_eq!(script.generated.len(), 5);
+    assert_eq!(
+        script.generated_bindings[3].consumer,
+        floe_conversation::CONVERSATION_CONSUMER,
+        "the fourth provider call is the exhausted Manager dispatch"
+    );
+    assert_eq!(
+        script.generated_bindings[4].consumer,
+        floe_conversation::CONVERSATION_CONSUMER,
+        "the fifth provider call is finalization"
+    );
+    assert_eq!(
+        script.generated[4]
+            .envelope
+            .run_instructions
+            .response_contract,
+        floe_conversation::FINALIZATION_OUTPUT_CONTRACT
+    );
+
+    let events = journal_events(&host, command.run_id);
+    let finalization_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                floe_agent_contract::JournalEvent::FinalizationStarted {
+                    prior_exhaustion: AgentFailure::BudgetExceeded,
+                    ..
+                }
+            )
+        })
+        .expect("real Conversation finalizer started after exhaustion");
+    let exhausted_attempt = script.generated_bindings[3]
+        .attempt_id
+        .expect("exhausted provider attempt is bound to its durable intent");
+    let exhausted_intent_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
+                    if *attempt_id == exhausted_attempt
+            )
+        })
+        .expect("exhausted Manager attempt has a durable intent");
+    let exhausted_result_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
+                    if *attempt_id == exhausted_attempt
+            )
+        })
+        .expect("BudgetExceeded provider attempt has a settled result");
+    assert!(exhausted_intent_index < exhausted_result_index);
+    assert!(exhausted_result_index < finalization_index);
+    assert!(receipt.attempt_refs.contains(&exhausted_attempt));
+
+    let model_intents = events
+        .iter()
+        .filter_map(|event| match event {
+            floe_agent_contract::JournalEvent::ModelIntent {
+                attempt_id, plan, ..
+            } => Some((*attempt_id, plan)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let model_results = events
+        .iter()
+        .filter_map(|event| match event {
+            floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. } => Some(*attempt_id),
+            _ => None,
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        model_intents.len(),
+        3,
+        "Manager calls are in the run journal"
+    );
+    assert_eq!(model_results.len(), 3);
+    assert!(
+        model_intents
+            .iter()
+            .all(|(attempt_id, _)| model_results.contains(attempt_id)),
+        "every durable model intent has one settled result"
+    );
+    let manager_plans = model_intents
+        .iter()
+        .filter_map(|(_, plan)| {
+            (plan.consumer == floe_conversation::CONVERSATION_CONSUMER).then_some(*plan)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(manager_plans.len(), 3);
+    assert_eq!(
+        manager_plans[0].selection_commitment, manager_plans[2].selection_commitment,
+        "finalization inherits the active Manager selection"
+    );
+    assert_eq!(
+        manager_plans[0].budget_profile, manager_plans[2].budget_profile,
+        "finalization inherits the active Manager budget profile"
+    );
+    let schedule_receipt = events
+        .iter()
+        .find_map(|event| match event {
+            floe_agent_contract::JournalEvent::DelegationResult { receipt }
+                if receipt.snapshot.agent_id == "floe.builtin.schedule" =>
+            {
+                Some(receipt)
+            }
+            _ => None,
+        })
+        .expect("completed Schedule delegation persisted in the real run journal");
+    assert_eq!(schedule_receipt.snapshot.issue, None);
+    assert_eq!(
+        schedule_receipt.snapshot.coverage,
+        floe_agent_contract::DependencyCoverage::Independent
+    );
+    let floe_agent_contract::TaskExecutionEvidence::Admitted(task_receipt) =
+        &schedule_receipt.execution
+    else {
+        panic!("completed Schedule delegation has admitted execution evidence");
+    };
+    assert_eq!(task_receipt.accounting.attempt_refs.len(), 2);
+    assert!(task_receipt.accounting.unresolved_attempts.is_empty());
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn finalization_rejects_changed_model_target_before_provider_dispatch() {
+    let mut changed_target = ScriptModelSelection::device(2);
+    changed_target.binding_digest = floe_agent_contract::ModelBindingDigest([8; 32]);
+    assert_finalizer_drift_rejected(changed_target);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn finalization_rejects_changed_budget_profile_before_provider_dispatch() {
+    let mut changed_profile = ScriptModelSelection::device(1);
+    changed_profile.budget_profile.sources.catalog.status =
+        floe_agent_contract::CatalogMetadataStatus::ModelNotListed;
+    changed_profile.budget_profile.sources.catalog.revision = Some(1);
+    changed_profile
+        .budget_profile
+        .validate()
+        .expect("changed budget profile is structurally valid");
+    assert_finalizer_drift_rejected(changed_profile);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn finalization_rejects_changed_effective_context_output_budget_before_provider_dispatch() {
+    let mut changed_budget = ScriptModelSelection::device(1);
+    changed_budget.budget_profile.context_window = floe_agent_contract::ModelTokenLimit {
+        status: floe_agent_contract::TokenLimitStatus::Known,
+        tokens: Some(32_000),
+        source: floe_agent_contract::TokenLimitSource::OperatorConfiguration,
+    };
+    changed_budget.budget_profile.max_output = floe_agent_contract::ModelTokenLimit {
+        status: floe_agent_contract::TokenLimitStatus::Known,
+        tokens: Some(4_096),
+        source: floe_agent_contract::TokenLimitSource::OperatorConfiguration,
+    };
+    changed_budget.budget_profile.selected_output_reservation =
+        floe_agent_contract::ModelTokenLimit {
+            status: floe_agent_contract::TokenLimitStatus::Known,
+            tokens: Some(2_048),
+            source: floe_agent_contract::TokenLimitSource::OperatorConfiguration,
+        };
+    changed_budget
+        .budget_profile
+        .estimator
+        .provider_overhead_tokens = Some(128);
+    changed_budget.budget_profile.estimator.safety_margin_tokens = Some(256);
+    changed_budget.budget_profile.sources.operator_configuration =
+        floe_agent_contract::OperatorConfigurationStatus::Configured;
+    changed_budget
+        .budget_profile
+        .sources
+        .operator_configuration_version = Some(1);
+    changed_budget
+        .budget_profile
+        .validate()
+        .expect("changed effective budget profile is structurally valid");
+    assert_finalizer_drift_rejected(changed_budget);
 }
