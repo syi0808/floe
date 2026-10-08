@@ -9,19 +9,86 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use floe_conversation_contract::{
-    AdmissionDisposition, AdmissionReceipt, AdmissionResult, AdmissionTarget,
-    ConversationCheckpoint, ConversationFailure, ConversationId, ConversationMessage,
-    ConversationReference, MessageAdmissionRequest, MessageId, RunTaskLink, TranscriptReference,
+    AdmissionResult, AdmissionTarget, ConversationCheckpoint, ConversationFailure, ConversationId,
+    ConversationMessage, ConversationReference, MessageAdmissionRequest, MessageId, RunTaskLink,
+    TranscriptReference,
 };
 use floe_execution::BoxFuture;
 use floe_kernel::{CommandId, RunId};
-use sha2::{Digest, Sha256};
+
+mod transitions;
+pub use transitions::{
+    AdmissionFacts, AdmissionTransition, CheckpointFacts, ClaimFacts, ClaimTransition,
+    CompletionFacts, ConversationHead, EMPTY_PREFIX_DIGEST, PendingMessage, StoredAdmission,
+    StoredCommand, TranscriptEntry, WriterClaim, admit as admit_transition, advance_prefix_digest,
+    apply_checkpoint as apply_checkpoint_transition, claim_writer as claim_writer_transition,
+    complete_writer as complete_writer_transition, validate_target as validate_reference_target,
+};
+use transitions::{
+    admit as transition_admit, apply_checkpoint as transition_checkpoint, checkpoint_from_prefix,
+    claim_writer as transition_claim_writer, complete_writer as transition_complete_writer,
+};
+
+/// Storage failures preserve the distinction between a confirmed rollback and
+/// a commit whose acknowledgement or settlement is unknown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConversationStoreFailure {
+    Transition(ConversationFailure),
+    Busy,
+    Unavailable,
+    NotCommitted,
+    OutcomeUnknown,
+    PageItemExceedsBudget,
+}
+
+impl From<ConversationFailure> for ConversationStoreFailure {
+    fn from(value: ConversationFailure) -> Self {
+        Self::Transition(value)
+    }
+}
+
+pub const MAX_TRANSCRIPT_PAGE_ENTRIES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WriterClaim {
-    pub link: RunTaskLink,
-    pub message: TranscriptReference,
-    pub writer_epoch: u64,
+pub struct TranscriptPageBudget {
+    pub max_entries: usize,
+    /// Sum of serialized UTF-8 `ConversationMessage` payload bytes.
+    pub max_bytes: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptPage {
+    pub entries: Vec<TranscriptEntry>,
+    /// Cursor for the last returned entry. Reuse it as `after` on the next page.
+    pub next_cursor: Option<TranscriptReference>,
+    pub has_more: bool,
+    pub encoded_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriterRecoveryState {
+    /// No exact Run receipt exists in the requested conversation branch.
+    Absent,
+    /// The exact claim is still active and fenced by the current owner
+    /// executor generation. This observation does not authorize dispatch.
+    ActiveCurrentGeneration,
+    /// The exact claim remains stored as active, but its executor generation
+    /// is stale. It must not be released or re-executed by this API.
+    Interrupted,
+    /// The exact writer receipt is durably completed.
+    Completed,
+}
+
+/// Bounded readback for one exact Run receipt. `active_writer` describes the
+/// conversation head now; `writer` describes the requested Run receipt. A
+/// missing observation is a successful read only when state is `Absent`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WriterRecoveryObservation {
+    pub state: WriterRecoveryState,
+    pub head: ConversationHead,
+    pub writer: Option<WriterClaim>,
+    pub active_writer: Option<WriterClaim>,
+    pub current_executor_generation: u64,
 }
 
 /// Core-owned persistence port. Implementations must commit an admission's
@@ -33,7 +100,16 @@ pub trait ConversationStorePort: Send + Sync {
     fn admit<'a>(
         &'a self,
         request: MessageAdmissionRequest,
-    ) -> BoxFuture<'a, Result<AdmissionResult, ConversationFailure>>;
+    ) -> BoxFuture<'a, Result<AdmissionResult, ConversationStoreFailure>>;
+
+    /// Read a stable sequence page under independent item and serialized-byte
+    /// budgets. The requested page is never materialized as a full history.
+    fn read_transcript_page<'a>(
+        &'a self,
+        target: ConversationReference,
+        after: Option<TranscriptReference>,
+        budget: TranscriptPageBudget,
+    ) -> BoxFuture<'a, Result<TranscriptPage, ConversationStoreFailure>>;
 
     /// Atomically claim the next queued message for one Run writer. A second
     /// writer must fail while the current claim remains active.
@@ -41,34 +117,33 @@ pub trait ConversationStorePort: Send + Sync {
         &'a self,
         target: ConversationReference,
         link: RunTaskLink,
-    ) -> BoxFuture<'a, Result<WriterClaim, ConversationFailure>>;
+        executor_generation: u64,
+    ) -> BoxFuture<'a, Result<WriterClaim, ConversationStoreFailure>>;
 
-    /// Release only the matching active Run claim after its owner has settled.
+    /// Release only the matching active Run/Task/transcript/writer/executor
+    /// fence after its owner has settled.
     fn complete_writer<'a>(
         &'a self,
-        conversation_id: ConversationId,
+        claim: WriterClaim,
+    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>>;
+
+    /// Read the exact stored receipt for one Run together with the current
+    /// head and active claim. This is observability only: it does not grant
+    /// dispatch authority, release an interrupted claim, or resume its Run.
+    fn observe_writer<'a>(
+        &'a self,
+        target: ConversationReference,
         run_id: RunId,
-    ) -> BoxFuture<'a, Result<(), ConversationFailure>>;
+    ) -> BoxFuture<'a, Result<WriterRecoveryObservation, ConversationStoreFailure>>;
 
     /// Apply a checkpoint only to an exact completed prefix. Active and queued
     /// input stays protected; later appended messages may remain outside the
     /// prefix. Implementations reject stale scope or checkpoint regression.
     fn apply_checkpoint<'a>(
         &'a self,
+        target: ConversationReference,
         checkpoint: ConversationCheckpoint,
-    ) -> BoxFuture<'a, Result<(), ConversationFailure>>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct TranscriptEntry {
-    reference: TranscriptReference,
-    message: ConversationMessage,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct StoredAdmission {
-    message: ConversationMessage,
-    receipt: AdmissionReceipt,
+    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>>;
 }
 
 /// One in-memory transition model, suitable for deterministic contract tests.
@@ -84,7 +159,7 @@ pub struct ConversationCore {
     transcript: Vec<TranscriptEntry>,
     pending: VecDeque<TranscriptReference>,
     messages: HashMap<MessageId, StoredAdmission>,
-    commands: HashMap<CommandId, MessageId>,
+    commands: HashMap<CommandId, StoredCommand>,
     active_writer: Option<WriterClaim>,
     used_runs: HashSet<RunId>,
     completed_runs: Vec<RunTaskLink>,
@@ -98,12 +173,12 @@ impl ConversationCore {
         request: MessageAdmissionRequest,
     ) -> Result<(Self, AdmissionResult), ConversationFailure> {
         request.validate()?;
-        let (identity, conversation_id, branch_id) = match request.target {
+        let (identity, conversation_id, branch_id) = match &request.target {
             AdmissionTarget::New {
                 identity,
                 conversation_id,
                 branch_id,
-            } => (identity, conversation_id, branch_id),
+            } => (identity.clone(), *conversation_id, *branch_id),
             AdmissionTarget::Continue { .. } => {
                 return Err(ConversationFailure::ConversationMismatch);
             }
@@ -124,7 +199,18 @@ impl ConversationCore {
             completed_runs: Vec::new(),
             checkpoint: None,
         };
-        let result = conversation.append(request.message)?;
+        let transition = transition_admit(
+            AdmissionFacts {
+                head: None,
+                active_writer: None,
+                message: None,
+                command: None,
+                previous_prefix_digest: EMPTY_PREFIX_DIGEST,
+            },
+            request.clone(),
+        )?;
+        let result = transition.result.clone();
+        conversation.apply_admission_transition(transition, request.message);
         Ok((conversation, result))
     }
 
@@ -134,90 +220,68 @@ impl ConversationCore {
         &mut self,
         request: MessageAdmissionRequest,
     ) -> Result<AdmissionResult, ConversationFailure> {
-        request.validate()?;
-        let reference = match request.target {
-            AdmissionTarget::Continue { reference } => reference,
-            AdmissionTarget::New { .. } => return Err(ConversationFailure::ConversationMismatch),
-        };
-        self.check_target(&reference)?;
-
-        if let Some(result) = self.replay(&request.message)? {
-            return Ok(result);
-        }
-        if reference.head_revision != self.head_revision {
-            return Err(ConversationFailure::RevisionConflict);
-        }
-        self.append(request.message)
+        let facts = self.admission_facts(&request);
+        let transition = transition_admit(facts, request.clone())?;
+        let result = transition.result.clone();
+        self.apply_admission_transition(transition, request.message);
+        Ok(result)
     }
 
     /// Reserve the next FIFO inbox message for one execution writer.
     pub fn claim_next_writer(
         &mut self,
         link: RunTaskLink,
+        executor_generation: u64,
     ) -> Result<WriterClaim, ConversationFailure> {
-        link.validate()?;
-        if self.active_writer.is_some() {
-            return Err(ConversationFailure::WriterAlreadyActive);
-        }
-        if self.used_runs.contains(&link.run_id) {
-            return Err(ConversationFailure::RunAlreadyUsed);
-        }
-        let message = self
-            .pending
-            .front()
-            .copied()
-            .ok_or(ConversationFailure::NoPendingMessage)?;
-        let message_index = usize::try_from(message.sequence)
-            .ok()
-            .and_then(|sequence| sequence.checked_sub(1))
-            .ok_or(ConversationFailure::ConversationMismatch)?;
-        let entry = self
-            .transcript
-            .get(message_index)
-            .filter(|entry| entry.reference == message)
-            .ok_or(ConversationFailure::ConversationMismatch)?;
-        if entry.message.task_id != link.task_id {
-            return Err(ConversationFailure::TaskMismatch);
-        }
-        let writer_epoch = self
-            .state_revision
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
+        let earliest_pending = self.pending.front().and_then(|reference| {
+            usize::try_from(reference.sequence)
+                .ok()
+                .and_then(|sequence| sequence.checked_sub(1))
+                .and_then(|index| self.transcript.get(index))
+                .filter(|entry| entry.reference == *reference)
+                .cloned()
+                .map(|entry| PendingMessage { entry })
+        });
+        let transition = transition_claim_writer(
+            &self.reference(),
+            link,
+            ClaimFacts {
+                head: self.head(),
+                active_writer: self.active_writer.clone(),
+                earliest_pending,
+                run_already_used: self.used_runs.contains(&link.run_id),
+                requested_executor_generation: executor_generation,
+                executor_generation,
+            },
+        )?;
         self.pending.pop_front();
         self.used_runs.insert(link.run_id);
-        let claim = WriterClaim {
-            link,
-            message,
-            writer_epoch,
-        };
-        self.active_writer = Some(claim);
-        self.state_revision = writer_epoch;
-        Ok(claim)
+        self.active_writer = Some(transition.claim.clone());
+        self.state_revision = transition.head.state_revision;
+        Ok(transition.claim)
     }
 
     /// Release exactly the matching writer. A later Run may retain the same
     /// host Task ID without changing any Task state or legacy receipt.
-    pub fn complete_writer(&mut self, run_id: RunId) -> Result<RunTaskLink, ConversationFailure> {
-        let active = self.active_writer.ok_or(ConversationFailure::WrongWriter)?;
-        if active.link.run_id != run_id {
-            return Err(ConversationFailure::WrongWriter);
-        }
-        let expected_sequence = self
-            .completed_prefix
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
-        if active.message.sequence != expected_sequence {
-            return Err(ConversationFailure::ConversationMismatch);
-        }
-        let next_state_revision = self
-            .state_revision
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
+    pub fn complete_writer(
+        &mut self,
+        claim: WriterClaim,
+        executor_generation: u64,
+    ) -> Result<RunTaskLink, ConversationFailure> {
+        let link = claim.link;
+        let head = transition_complete_writer(
+            claim.clone(),
+            CompletionFacts {
+                head: self.head(),
+                active_writer: self.active_writer.clone(),
+                executor_generation,
+            },
+        )?;
         self.active_writer = None;
-        self.completed_prefix = active.message.sequence;
-        self.completed_runs.push(active.link);
-        self.state_revision = next_state_revision;
-        Ok(active.link)
+        self.completed_prefix = head.completed_prefix;
+        self.completed_runs.push(link);
+        self.state_revision = head.state_revision;
+        Ok(link)
     }
 
     /// Apply a checkpoint only when it names this conversation's exact prefix.
@@ -225,33 +289,19 @@ impl ConversationCore {
         &mut self,
         checkpoint: ConversationCheckpoint,
     ) -> Result<(), ConversationFailure> {
-        checkpoint.validate()?;
-        if checkpoint.through.conversation_id != self.conversation_id
-            || checkpoint.through.branch_id != self.branch_id
-        {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        let index = self.checkpoint_prefix_index(checkpoint.through)?;
-        if self
-            .checkpoint
-            .as_ref()
-            .is_some_and(|current| checkpoint.through.sequence < current.through.sequence)
-        {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        let entry = self
-            .transcript
-            .get(index)
-            .ok_or(ConversationFailure::CheckpointMismatch)?;
-        if entry.reference != checkpoint.through
-            || self.prefix_digest(checkpoint.through.sequence)? != checkpoint.prefix_digest
-        {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        self.state_revision = self
-            .state_revision
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
+        let stored_prefix_digest = self
+            .entry(checkpoint.through)
+            .map(|entry| entry.prefix_digest);
+        let head = transition_checkpoint(
+            &self.reference(),
+            &checkpoint,
+            CheckpointFacts {
+                head: self.head(),
+                current_checkpoint_sequence: self.checkpoint.as_ref().map(|v| v.through.sequence),
+                stored_prefix_digest,
+            },
+        )?;
+        self.state_revision = head.state_revision;
         self.checkpoint = Some(checkpoint);
         Ok(())
     }
@@ -266,21 +316,13 @@ impl ConversationCore {
         if through.conversation_id != self.conversation_id || through.branch_id != self.branch_id {
             return Err(ConversationFailure::CheckpointMismatch);
         }
-        let index = self.checkpoint_prefix_index(through)?;
-        if self
-            .transcript
-            .get(index)
-            .is_none_or(|entry| entry.reference != through)
-        {
+        if through.sequence > self.completed_prefix {
             return Err(ConversationFailure::CheckpointMismatch);
         }
-        let checkpoint = ConversationCheckpoint {
-            through,
-            prefix_digest: self.prefix_digest(through.sequence)?,
-            summary: summary.into(),
-        };
-        checkpoint.validate()?;
-        Ok(checkpoint)
+        let entry = self
+            .entry(through)
+            .ok_or(ConversationFailure::CheckpointMismatch)?;
+        checkpoint_from_prefix(through, entry.prefix_digest, summary)
     }
 
     pub fn reference(&self) -> ConversationReference {
@@ -301,7 +343,7 @@ impl ConversationCore {
     }
 
     pub fn active_writer(&self) -> Option<WriterClaim> {
-        self.active_writer
+        self.active_writer.clone()
     }
 
     pub fn pending_messages(&self) -> impl Iterator<Item = TranscriptReference> + '_ {
@@ -322,161 +364,71 @@ impl ConversationCore {
         self.checkpoint.as_ref()
     }
 
-    fn check_target(&self, reference: &ConversationReference) -> Result<(), ConversationFailure> {
-        reference.validate()?;
-        if reference.conversation_id != self.conversation_id
-            || reference.branch_id != self.branch_id
-        {
-            return Err(ConversationFailure::ConversationMismatch);
-        }
-        if reference.identity != self.identity {
-            return Err(ConversationFailure::AgentMismatch);
-        }
-        Ok(())
-    }
-
-    fn checkpoint_prefix_index(
-        &self,
-        through: TranscriptReference,
-    ) -> Result<usize, ConversationFailure> {
-        through.validate()?;
-        if through.sequence > self.completed_prefix {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        let index = usize::try_from(through.sequence)
-            .ok()
-            .and_then(|sequence| sequence.checked_sub(1))
-            .ok_or(ConversationFailure::CheckpointMismatch)?;
-        if self
-            .transcript
-            .get(index)
-            .is_none_or(|entry| entry.reference != through)
-        {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        Ok(index)
-    }
-
-    fn replay(
-        &mut self,
-        message: &ConversationMessage,
-    ) -> Result<Option<AdmissionResult>, ConversationFailure> {
-        if let Some(stored) = self.messages.get(&message.message_id) {
-            if !stored.message.same_delivery(message) {
-                return Err(ConversationFailure::MessageIdConflict);
-            }
-            if self
-                .commands
-                .get(&message.command_id)
-                .is_some_and(|message_id| *message_id != message.message_id)
-            {
-                return Err(ConversationFailure::CommandIdConflict);
-            }
-            let receipt = stored.receipt.clone();
-            if !self.commands.contains_key(&message.command_id) {
-                let next_revision = self
-                    .state_revision
-                    .checked_add(1)
-                    .ok_or(ConversationFailure::InvalidInput)?;
-                self.commands.insert(message.command_id, message.message_id);
-                self.state_revision = next_revision;
-            }
-            return Ok(Some(AdmissionResult {
-                disposition: AdmissionDisposition::Replayed,
-                receipt,
-            }));
-        }
-        if self.commands.contains_key(&message.command_id) {
-            return Err(ConversationFailure::CommandIdConflict);
-        }
-        Ok(None)
-    }
-
-    fn append(
-        &mut self,
-        message: ConversationMessage,
-    ) -> Result<AdmissionResult, ConversationFailure> {
-        message.validate()?;
-        if let Some(origin_person) = match &message.origin {
-            floe_conversation_contract::MessageOrigin::Person { person_id } => Some(*person_id),
-            _ => None,
-        } {
-            if origin_person != self.identity.person_id {
-                return Err(ConversationFailure::AgentMismatch);
-            }
-        }
-        if self.messages.contains_key(&message.message_id) {
-            return Err(ConversationFailure::MessageIdConflict);
-        }
-        if self.commands.contains_key(&message.command_id) {
-            return Err(ConversationFailure::CommandIdConflict);
-        }
-        let sequence = self
-            .head_revision
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
-        let reference = TranscriptReference {
+    fn head(&self) -> ConversationHead {
+        ConversationHead {
+            identity: self.identity.clone(),
             conversation_id: self.conversation_id,
             branch_id: self.branch_id,
-            message_id: message.message_id,
-            sequence,
-        };
-        let receipt = AdmissionReceipt {
-            transcript: reference,
-            head_revision: sequence,
-            task_id: message.task_id,
-        };
-        let disposition = if self.active_writer.is_some() {
-            AdmissionDisposition::Queued
-        } else {
-            AdmissionDisposition::Appended
-        };
-        let next_state_revision = self
-            .state_revision
-            .checked_add(1)
-            .ok_or(ConversationFailure::InvalidInput)?;
-        self.transcript.push(TranscriptEntry {
-            reference,
-            message: message.clone(),
-        });
-        self.pending.push_back(reference);
-        self.messages.insert(
-            message.message_id,
-            StoredAdmission {
-                message: message.clone(),
-                receipt: receipt.clone(),
-            },
-        );
-        self.commands.insert(message.command_id, message.message_id);
-        self.head_revision = sequence;
-        self.state_revision = next_state_revision;
-        Ok(AdmissionResult {
-            disposition,
-            receipt,
-        })
+            head_revision: self.head_revision,
+            completed_prefix: self.completed_prefix,
+            state_revision: self.state_revision,
+        }
     }
 
-    fn prefix_digest(&self, through_sequence: u64) -> Result<[u8; 32], ConversationFailure> {
-        let count =
-            usize::try_from(through_sequence).map_err(|_| ConversationFailure::InvalidInput)?;
-        if count == 0 || count > self.transcript.len() {
-            return Err(ConversationFailure::CheckpointMismatch);
+    fn entry(&self, reference: TranscriptReference) -> Option<&TranscriptEntry> {
+        let index = usize::try_from(reference.sequence).ok()?.checked_sub(1)?;
+        self.transcript
+            .get(index)
+            .filter(|entry| entry.reference == reference)
+    }
+
+    fn admission_facts(&self, request: &MessageAdmissionRequest) -> AdmissionFacts {
+        AdmissionFacts {
+            head: Some(self.head()),
+            active_writer: self.active_writer.clone(),
+            message: self.messages.get(&request.message.message_id).cloned(),
+            command: self.commands.get(&request.message.command_id).cloned(),
+            previous_prefix_digest: self
+                .transcript
+                .last()
+                .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest),
         }
-        let mut digest = Sha256::new();
-        for entry in self.transcript.iter().take(count) {
-            digest.update(entry.reference.message_id.as_uuid().as_bytes());
-            digest.update(entry.message.body_digest());
-            let origin = serde_json::to_vec(&entry.message.origin)
-                .map_err(|_| ConversationFailure::InvalidInput)?;
-            digest.update((origin.len() as u64).to_be_bytes());
-            digest.update(origin);
-            if let Some(task_id) = entry.message.task_id {
-                digest.update([1]);
-                digest.update(task_id.as_uuid().as_bytes());
-            } else {
-                digest.update([0]);
-            }
+    }
+
+    fn apply_admission_transition(
+        &mut self,
+        transition: AdmissionTransition,
+        message: ConversationMessage,
+    ) {
+        if let Some(entry) = transition.appended {
+            self.pending.push_back(entry.reference);
+            self.transcript.push(entry);
+            self.messages.insert(
+                message.message_id,
+                StoredAdmission {
+                    message: message.clone(),
+                    receipt: transition.result.receipt.clone(),
+                },
+            );
         }
-        Ok(digest.finalize().into())
+        if transition.command_receipt.is_some() {
+            let admission = self
+                .messages
+                .get(&message.message_id)
+                .cloned()
+                .expect("command receipts refer to an admitted message");
+            self.commands.insert(
+                message.command_id,
+                StoredCommand {
+                    identity: self.identity.clone(),
+                    conversation_id: self.conversation_id,
+                    branch_id: self.branch_id,
+                    admission,
+                },
+            );
+        }
+        self.head_revision = transition.head.head_revision;
+        self.completed_prefix = transition.head.completed_prefix;
+        self.state_revision = transition.head.state_revision;
     }
 }

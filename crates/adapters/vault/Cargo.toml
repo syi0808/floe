@@ -20,6 +20,8 @@ floe-context = { path = "../../modules/context" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-connections = { path = "../../modules/connections" }
 floe-conversation = { path = "../../modules/conversation" }
+floe-conversation-contract = { path = "../../contracts/conversation" }
+floe-conversation-core = { path = "../../modules/conversation-core" }
 floe-day = { path = "../../modules/day" }
 floe-execution = { path = "../../runtime/execution" }
 floe-experts = { path = "../../modules/experts" }

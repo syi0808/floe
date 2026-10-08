@@ -258,6 +258,53 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
 ];
 
+/// Role-neutral Conversation Core custody is versioned independently from the
+/// existing Session/Run journal family. The rows are append-oriented and never
+/// encode a whole conversation as one growing payload.
+pub(super) const CONVERSATION_CORE: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_conversation_core_schema",
+        2,
+        "CREATE TABLE agent_conversation_core_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_heads",
+        "CREATE TABLE agent_conversation_core_heads (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, identity_json TEXT NOT NULL CHECK (length(CAST(identity_json AS BLOB)) BETWEEN 1 AND 1024), head_revision INTEGER NOT NULL CHECK (head_revision > 0), state_revision INTEGER NOT NULL CHECK (state_revision > 0), completed_prefix INTEGER NOT NULL CHECK (completed_prefix >= 0 AND completed_prefix <= head_revision), PRIMARY KEY (person_id, conversation_id, branch_id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_entries",
+        "CREATE TABLE agent_conversation_core_entries (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, message_json TEXT NOT NULL CHECK (length(CAST(message_json AS BLOB)) BETWEEN 1 AND 132096), message_bytes INTEGER NOT NULL CHECK (message_bytes = length(CAST(message_json AS BLOB))), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id) REFERENCES agent_conversation_core_heads(person_id, conversation_id, branch_id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_message_receipts",
+        "CREATE TABLE agent_conversation_core_message_receipts (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 1024), PRIMARY KEY (person_id, conversation_id, branch_id, message_id), UNIQUE (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_command_receipts",
+        "CREATE TABLE agent_conversation_core_command_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (person_id, command_id), FOREIGN KEY (person_id, conversation_id, branch_id, message_id) REFERENCES agent_conversation_core_message_receipts(person_id, conversation_id, branch_id, message_id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_core_command_scope",
+        "CREATE INDEX agent_conversation_core_command_scope ON agent_conversation_core_command_receipts (person_id, conversation_id, branch_id, command_id, message_id)",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_pending_inputs",
+        "CREATE TABLE agent_conversation_core_pending_inputs (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, PRIMARY KEY (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_active_writers",
+        "CREATE TABLE agent_conversation_core_active_writers (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT, message_sequence INTEGER NOT NULL CHECK (message_sequence > 0), writer_epoch INTEGER NOT NULL CHECK (writer_epoch > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), PRIMARY KEY (person_id, conversation_id, branch_id), UNIQUE (person_id, conversation_id, branch_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, message_sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_writer_receipts",
+        "CREATE TABLE agent_conversation_core_writer_receipts (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT, message_sequence INTEGER NOT NULL CHECK (message_sequence > 0), writer_epoch INTEGER NOT NULL CHECK (writer_epoch > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), state TEXT NOT NULL CHECK (state IN ('active', 'completed')), PRIMARY KEY (person_id, conversation_id, branch_id, run_id), UNIQUE (person_id, conversation_id, branch_id, message_sequence), FOREIGN KEY (person_id, conversation_id, branch_id, message_sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_checkpoints",
+        "CREATE TABLE agent_conversation_core_checkpoints (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 65536), PRIMARY KEY (person_id, conversation_id, branch_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+];
+
 pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_interaction_schema",

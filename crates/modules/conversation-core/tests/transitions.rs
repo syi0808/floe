@@ -61,10 +61,13 @@ fn exercise_role_fixture(
     let first_run = RunId::from_uuid(uuid(run_base)).expect("first Run");
     let next_run = RunId::from_uuid(uuid(run_base + 1)).expect("next Run");
     let first_claim = conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: first_run,
-            task_id,
-        })
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: first_run,
+                task_id,
+            },
+            1,
+        )
         .expect("one active writer");
     assert_eq!(first_claim.message, first_admission.receipt.transcript);
 
@@ -80,25 +83,31 @@ fn exercise_role_fixture(
         .expect("new Message ID queues as a distinct admission");
     assert_eq!(queued.disposition, AdmissionDisposition::Queued);
     assert_eq!(
-        conversation.claim_next_writer(RunTaskLink {
-            run_id: next_run,
-            task_id,
-        }),
+        conversation.claim_next_writer(
+            RunTaskLink {
+                run_id: next_run,
+                task_id,
+            },
+            1
+        ),
         Err(floe_conversation_contract::ConversationFailure::WriterAlreadyActive)
     );
 
     conversation
-        .complete_writer(first_run)
+        .complete_writer(first_claim, 1)
         .expect("first Run settled");
     let next_claim = conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: next_run,
-            task_id,
-        })
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: next_run,
+                task_id,
+            },
+            1,
+        )
         .expect("next queued message is claimed in order");
     assert_eq!(next_claim.message, queued.receipt.transcript);
     conversation
-        .complete_writer(next_run)
+        .complete_writer(next_claim, 1)
         .expect("next Run settled");
     conversation
 }
@@ -130,10 +139,13 @@ fn agent_conversation_run_and_task_have_distinct_identity_and_lifetimes() {
     .expect("open a new conversation");
     let run_id = RunId::from_uuid(uuid(41)).expect("Run ID");
     let claim = conversation
-        .claim_next_writer(RunTaskLink {
-            run_id,
-            task_id: Some(task_id),
-        })
+        .claim_next_writer(
+            RunTaskLink {
+                run_id,
+                task_id: Some(task_id),
+            },
+            1,
+        )
         .expect("claim first execution segment");
 
     assert_eq!(claim.link.run_id, run_id);
@@ -154,7 +166,7 @@ fn agent_conversation_run_and_task_have_distinct_identity_and_lifetimes() {
     );
 
     let completed = conversation
-        .complete_writer(run_id)
+        .complete_writer(claim, 1)
         .expect("settle the Run segment");
     assert_eq!(completed.task_id, Some(task_id));
     assert_eq!(conversation.completed_runs(), &[completed]);
@@ -382,22 +394,33 @@ fn active_writer_queues_follow_up_and_next_run_keeps_the_same_task_link() {
     let run_two = RunId::from_uuid(uuid(42)).expect("second Run ID");
     let state_before_claim = conversation.state_revision();
     assert_eq!(
-        conversation.claim_next_writer(RunTaskLink {
-            run_id: run_one,
-            task_id: Some(TaskId::from_uuid(uuid(99)).expect("wrong Task ID")),
-        }),
+        conversation.claim_next_writer(
+            RunTaskLink {
+                run_id: run_one,
+                task_id: Some(TaskId::from_uuid(uuid(99)).expect("wrong Task ID")),
+            },
+            1
+        ),
         Err(floe_conversation_contract::ConversationFailure::TaskMismatch)
     );
     assert_eq!(conversation.state_revision(), state_before_claim);
     assert_eq!(conversation.pending_messages().count(), 1);
 
     let first_claim = conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: run_one,
-            task_id: Some(task_id),
-        })
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: run_one,
+                task_id: Some(task_id),
+            },
+            1,
+        )
         .expect("claim the first message");
     assert_eq!(first_claim.message, first.receipt.transcript);
+
+    assert_eq!(
+        conversation.complete_writer(first_claim.clone(), 2),
+        Err(floe_conversation_contract::ConversationFailure::WrongWriter)
+    );
 
     let queued = conversation
         .continue_with(MessageAdmissionRequest {
@@ -409,21 +432,27 @@ fn active_writer_queues_follow_up_and_next_run_keeps_the_same_task_link() {
         .expect("durably queue the new message without mutating current input");
     assert_eq!(queued.disposition, AdmissionDisposition::Queued);
     assert_eq!(
-        conversation.claim_next_writer(RunTaskLink {
-            run_id: run_two,
-            task_id: Some(task_id),
-        }),
+        conversation.claim_next_writer(
+            RunTaskLink {
+                run_id: run_two,
+                task_id: Some(task_id),
+            },
+            1
+        ),
         Err(floe_conversation_contract::ConversationFailure::WriterAlreadyActive)
     );
 
     conversation
-        .complete_writer(run_one)
+        .complete_writer(first_claim.clone(), 1)
         .expect("settle the active writer");
     let second_claim = conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: run_two,
-            task_id: Some(task_id),
-        })
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: run_two,
+                task_id: Some(task_id),
+            },
+            1,
+        )
         .expect("claim the next message in FIFO order");
     assert_eq!(second_claim.message, queued.receipt.transcript);
     assert_eq!(second_claim.link.task_id, Some(task_id));
@@ -453,11 +482,14 @@ fn checkpoint_protects_active_and_pending_work_and_advances_monotonically() {
     );
 
     let first_run = RunId::from_uuid(uuid(41)).expect("first Run");
-    conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: first_run,
-            task_id: None,
-        })
+    let first_claim = conversation
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: first_run,
+                task_id: None,
+            },
+            1,
+        )
         .expect("claim current input");
     assert_eq!(
         conversation.checkpoint_for(first.receipt.transcript, "still active"),
@@ -474,7 +506,7 @@ fn checkpoint_protects_active_and_pending_work_and_advances_monotonically() {
         .expect("append a new input while current Run is active");
     assert_eq!(queued.disposition, AdmissionDisposition::Queued);
     conversation
-        .complete_writer(first_run)
+        .complete_writer(first_claim, 1)
         .expect("complete the protected current input");
 
     let checkpoint = conversation
@@ -500,14 +532,17 @@ fn checkpoint_protects_active_and_pending_work_and_advances_monotonically() {
     assert_eq!(conversation.checkpoint(), Some(&checkpoint));
 
     let second_run = RunId::from_uuid(uuid(42)).expect("second Run");
-    conversation
-        .claim_next_writer(RunTaskLink {
-            run_id: second_run,
-            task_id: None,
-        })
+    let second_claim = conversation
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: second_run,
+                task_id: None,
+            },
+            1,
+        )
         .expect("claim queued tail");
     conversation
-        .complete_writer(second_run)
+        .complete_writer(second_claim, 1)
         .expect("complete queued tail");
     let newer = conversation
         .checkpoint_for(queued.receipt.transcript, "newer completed prefix")
@@ -530,14 +565,17 @@ fn checkpoint_cannot_cross_conversation_or_incompatible_branch() {
     ))
     .expect("open conversation");
     let run_id = RunId::from_uuid(uuid(41)).expect("Run");
-    conversation
-        .claim_next_writer(RunTaskLink {
-            run_id,
-            task_id: None,
-        })
+    let claim = conversation
+        .claim_next_writer(
+            RunTaskLink {
+                run_id,
+                task_id: None,
+            },
+            1,
+        )
         .expect("claim first message");
     conversation
-        .complete_writer(run_id)
+        .complete_writer(claim, 1)
         .expect("complete first message");
     let checkpoint = conversation
         .checkpoint_for(first.receipt.transcript, "completed prefix")
@@ -550,14 +588,17 @@ fn checkpoint_cannot_cross_conversation_or_incompatible_branch() {
     ))
     .expect("separate conversation");
     let other_run = RunId::from_uuid(uuid(92)).expect("other Run");
-    other
-        .claim_next_writer(RunTaskLink {
-            run_id: other_run,
-            task_id: None,
-        })
+    let other_claim = other
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: other_run,
+                task_id: None,
+            },
+            1,
+        )
         .expect("claim other message");
     other
-        .complete_writer(other_run)
+        .complete_writer(other_claim, 1)
         .expect("complete other message");
     assert_eq!(
         other.apply_checkpoint(checkpoint),

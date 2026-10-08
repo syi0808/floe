@@ -158,6 +158,6 @@ fn identical_mapped_evidence_replays_and_changed_artifact_conflicts() {
         .expect("map changed evidence with the same peer Message ID and text");
     assert_eq!(
         core.continue_with(changed.message),
-        Err(ConversationFailure::MessageIdConflict)
+        Err(ConversationFailure::CommandIdConflict)
     );
 }

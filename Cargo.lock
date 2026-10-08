@@ -1047,6 +1047,8 @@ dependencies = [
  "floe-context",
  "floe-context-contract",
  "floe-conversation",
+ "floe-conversation-contract",
+ "floe-conversation-core",
  "floe-day",
  "floe-execution",
  "floe-experts",

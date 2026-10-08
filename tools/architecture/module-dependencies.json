@@ -89,7 +89,7 @@
       "id": "conversation_core",
       "package": "floe-conversation-core",
       "path": "crates/modules/conversation-core",
-      "responsibility": "Pure role-neutral conversation admission, sequencing, replay and checkpoint transitions",
+      "responsibility": "Role-neutral conversation admission, sequencing, replay and checkpoint transitions plus the storage port",
       "group": "modules",
       "allowed_internal_dependencies": [
         "conversation_contract",
@@ -309,6 +309,8 @@
         "kernel",
         "agent_contract",
         "context_contract",
+        "conversation_contract",
+        "conversation_core",
         "execution",
         "native",
         "conversation",

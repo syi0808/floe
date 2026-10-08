@@ -27,6 +27,7 @@ mod context_cleanup;
 mod context_dependencies;
 mod creation;
 pub use creation::{VaultPresence, inspect_vault_presence};
+mod conversation_core;
 mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;
@@ -95,6 +96,10 @@ pub struct EncryptedAgentVault<Keys> {
     journal_writes: tokio::sync::Mutex<()>,
     conversation_executor_generation: AtomicU64,
     task_executor_generation: AtomicU64,
+    #[cfg(test)]
+    conversation_core_ack_loss: AtomicBool,
+    #[cfg(test)]
+    conversation_core_failure_before_pending: AtomicBool,
     _host_lock: File,
 }
 
@@ -210,6 +215,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             journal_writes: tokio::sync::Mutex::new(()),
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
+            #[cfg(test)]
+            conversation_core_ack_loss: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_failure_before_pending: AtomicBool::new(false),
             _host_lock: host_lock,
         };
         vault.create_schema().await?;
@@ -265,6 +274,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             journal_writes: tokio::sync::Mutex::new(()),
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
+            #[cfg(test)]
+            conversation_core_ack_loss: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_failure_before_pending: AtomicBool::new(false),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;
@@ -307,6 +320,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.validate_expert_binding_reviews().await?;
         self.validate_context_dependencies().await?;
         let connection = self.connection()?;
+        if crate::schema::conversation_core_family_present(&connection)
+            .await
+            .map_err(crate::schema::SchemaFailure::into_agent)?
+        {
+            self.validate_conversation_core_store().await?;
+        }
         conversations::validate_schema(&connection).await?;
         tasks::validate_schema(&connection).await?;
         self.validate_context_cleanup().await?;

@@ -60,6 +60,7 @@ pub(crate) enum Family {
     Bindings,
     Context,
     Conversation,
+    ConversationCore,
     Interactions,
     Tasks,
     Cleanup,
@@ -79,6 +80,7 @@ impl Family {
             Self::Bindings => encrypted::BINDINGS,
             Self::Context => encrypted::CONTEXT,
             Self::Conversation => encrypted::CONVERSATION,
+            Self::ConversationCore => encrypted::CONVERSATION_CORE,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::Cleanup => encrypted::CLEANUP,
@@ -210,21 +212,32 @@ async fn inventory(
 fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
     let mut names = BTreeSet::new();
     for family in layout.families() {
-        for object in family.objects() {
-            if !names.insert(object.name)
-                || !schema_sql::declares_object(object.ddl, object.kind, object.name)
-            {
-                return Err(SchemaFailure::InvalidDefinition);
-            }
+        validate_family_declarations(*family, &mut names)?;
+    }
+    if matches!(layout, Layout::Encrypted) {
+        validate_family_declarations(Family::ConversationCore, &mut names)?;
+    }
+    Ok(())
+}
+
+fn validate_family_declarations(
+    family: Family,
+    names: &mut BTreeSet<&'static str>,
+) -> Result<(), SchemaFailure> {
+    for object in family.objects() {
+        if !names.insert(object.name)
+            || !schema_sql::declares_object(object.ddl, object.kind, object.name)
+        {
+            return Err(SchemaFailure::InvalidDefinition);
         }
-        for (table, _) in family.markers() {
-            if !family
-                .objects()
-                .iter()
-                .any(|object| object.name == table && object.kind == "table")
-            {
-                return Err(SchemaFailure::InvalidDefinition);
-            }
+    }
+    for (table, _) in family.markers() {
+        if !family
+            .objects()
+            .iter()
+            .any(|object| object.name == table && object.kind == "table")
+        {
+            return Err(SchemaFailure::InvalidDefinition);
         }
     }
     Ok(())
@@ -237,23 +250,34 @@ pub(crate) async fn create(connection: &Connection, layout: Layout) -> Result<()
         return Err(unsupported("catalog", "not_empty"));
     }
     for family in layout.families() {
-        for object in family.objects() {
+        create_family(connection, *family).await?;
+    }
+    if matches!(layout, Layout::Encrypted) {
+        // This additive family is created in new Vaults. Older encrypted
+        // layouts remain openable; the family is initialized on first explicit
+        // use of the Conversation Core storage port.
+        create_family(connection, Family::ConversationCore).await?;
+    }
+    Ok(())
+}
+
+async fn create_family(connection: &Connection, family: Family) -> Result<(), SchemaFailure> {
+    for object in family.objects() {
+        connection
+            .execute(object.ddl, ())
+            .await
+            .map_err(SchemaFailure::from_database)?;
+    }
+    // Core identity includes Person/Vault columns and is seeded by the fresh owner.
+    if !matches!(family, Family::Core) {
+        for (table, version) in family.markers() {
             connection
-                .execute(object.ddl, ())
+                .execute(
+                    &format!("INSERT INTO {table}(id,version) VALUES(1,?)"),
+                    (version,),
+                )
                 .await
                 .map_err(SchemaFailure::from_database)?;
-        }
-        // Core identity includes Person/Vault columns and is seeded by the fresh owner.
-        if !matches!(family, Family::Core) {
-            for (table, version) in family.markers() {
-                connection
-                    .execute(
-                        &format!("INSERT INTO {table}(id,version) VALUES(1,?)"),
-                        (version,),
-                    )
-                    .await
-                    .map_err(SchemaFailure::from_database)?;
-            }
         }
     }
     Ok(())
@@ -268,13 +292,80 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
         .flat_map(|family| family.objects().iter())
         .map(|object| object.name)
         .collect::<BTreeSet<_>>();
+    let mut expected = expected;
+    if matches!(layout, Layout::Encrypted) {
+        expected.extend(
+            Family::ConversationCore
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
+        validate_optional_family_presence(&stored, Family::ConversationCore)?;
+    }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
         return Err(unsupported("catalog", "unexpected_object"));
     }
     for family in layout.families() {
         inspect_declared(connection, *family, &stored).await?;
     }
+    if matches!(layout, Layout::Encrypted) && family_present(&stored, Family::ConversationCore) {
+        inspect_declared(connection, Family::ConversationCore, &stored).await?;
+    }
     Ok(())
+}
+
+fn family_present(stored: &BTreeMap<String, StoredObject>, family: Family) -> bool {
+    family
+        .objects()
+        .iter()
+        .any(|object| stored.contains_key(object.name))
+}
+
+fn validate_optional_family_presence(
+    stored: &BTreeMap<String, StoredObject>,
+    family: Family,
+) -> Result<(), SchemaFailure> {
+    let present = family
+        .objects()
+        .iter()
+        .filter(|object| stored.contains_key(object.name))
+        .count();
+    if present != 0 && present != family.objects().len() {
+        return Err(unsupported(
+            "agent_conversation_core_schema",
+            "partial_family",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the additive family if present without requiring it in an older
+/// encrypted Vault. New storage methods call `ensure_conversation_core_family`
+/// inside their own immediate transaction before using its tables.
+pub(crate) async fn conversation_core_family_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    let stored = inventory(connection).await?;
+    validate_optional_family_presence(&stored, Family::ConversationCore)?;
+    if family_present(&stored, Family::ConversationCore) {
+        inspect_declared(connection, Family::ConversationCore, &stored).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Initialize only the new family in the caller's immediate transaction.
+/// Existing Session, journal and receipt rows are never read or rewritten.
+pub(crate) async fn ensure_conversation_core_family(
+    connection: &Connection,
+) -> Result<(), SchemaFailure> {
+    if conversation_core_family_present(connection).await? {
+        return Ok(());
+    }
+    create_family(connection, Family::ConversationCore).await?;
+    let stored = inventory(connection).await?;
+    inspect_declared(connection, Family::ConversationCore, &stored).await
 }
 pub(crate) async fn inspect_family(
     connection: &Connection,
@@ -292,6 +383,15 @@ pub(crate) async fn inspect_family(
         .flat_map(|family| family.objects().iter())
         .map(|object| object.name)
         .collect::<BTreeSet<_>>();
+    let mut expected = expected;
+    if matches!(layout, Layout::Encrypted) {
+        expected.extend(
+            Family::ConversationCore
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
+    }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
         return Err(unsupported("catalog", "unexpected_object"));
     }
