@@ -15,6 +15,7 @@ import (
 	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 	"floe/server/internal/inference/providers"
+	"floe/server/internal/modelcatalog"
 	"floe/server/internal/pairing"
 	"floe/server/internal/storage"
 	"floe/server/internal/trust"
@@ -117,6 +118,10 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 		t.Fatalf("open inference configuration owner: %v", err)
 	}
 	pairingOperations := pairing.NewOperations(trustService, credentialsStore, nil)
+	catalog, err := modelcatalog.Open("")
+	if err != nil {
+		t.Fatalf("open embedded model catalog: %v", err)
+	}
 	return &consoleFixture{
 		address:    dashboardTestAddress,
 		adminToken: string(adminToken),
@@ -126,6 +131,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 			Trust:         trustService,
 			Pairing:       pairingOperations,
 			Configuration: configuration,
+			ModelCatalog:  catalog,
 			Inference:     &InferenceHandler{Service: inferenceService, Trust: trustService, Address: dashboardTestAddress},
 		},
 	}
@@ -178,13 +184,35 @@ func (fixture *consoleFixture) login(t *testing.T) (*http.Cookie, string) {
 }
 
 type consoleState struct {
-	CSRF    string `json:"csrf"`
-	Pairing *struct {
+	CSRF         string                  `json:"csrf"`
+	ModelCatalog modelcatalog.Projection `json:"model_catalog"`
+	Pairing      *struct {
 		ID                string   `json:"id"`
 		Phase             string   `json:"phase"`
 		AllowedActions    []string `json:"allowed_actions"`
 		IssuerFingerprint string   `json:"issuer_fingerprint"`
 	} `json:"pairing"`
+}
+
+func TestConsoleProjectsReadOnlyModelCatalogOnlyToOperatorSession(t *testing.T) {
+	fixture := newConsoleFixture(t)
+	unauthenticated := fixture.request(http.MethodGet, "/manage/api/state", nil, nil, "", "", "")
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated dashboard state returned %d", unauthenticated.Code)
+	}
+	cookie, _ := fixture.login(t)
+	state := fixture.getState(t, cookie)
+	if state.ModelCatalog.Catalog.Revision != 1 || state.ModelCatalog.Status.Source != "bootstrap" {
+		t.Fatalf("operator state omitted catalog projection: %#v", state.ModelCatalog)
+	}
+	if len(state.ModelCatalog.Catalog.Providers) != 1 || state.ModelCatalog.Catalog.Providers[0].ProviderID != "codex_oauth" {
+		t.Fatalf("unexpected catalog provider projection: %#v", state.ModelCatalog.Catalog.Providers)
+	}
+	for _, model := range state.ModelCatalog.Catalog.Providers[0].Models {
+		if model.Metadata != nil || model.Source != "migrated_repository_suggestions" {
+			t.Fatalf("unverified metadata leaked into operator catalog: %#v", model)
+		}
+	}
 }
 
 func (fixture *consoleFixture) getState(t *testing.T, cookie *http.Cookie) consoleState {

@@ -10,7 +10,7 @@ let loginPending = false;
 let polling = false;
 let codexPending = false;
 let editing = false;
-let state = {providers: {}, clients: []};
+let state = {providers: {}, clients: [], model_catalog: null};
 let selectedProvider = 'openai_compatible';
 
 function notice(message) { element('notice').textContent = message; }
@@ -54,6 +54,47 @@ function button(label, operation) {
   node.addEventListener('click', () => action(node, operation)); return node;
 }
 
+function renderModelCatalogSuggestions() {
+  const list = element('model-suggestions');
+  const projection = state.model_catalog;
+  const providers = projection?.catalog?.providers;
+  const provider = Array.isArray(providers) ? providers.find((candidate) => candidate.provider_id === selectedProvider) : null;
+  const models = Array.isArray(provider?.models) ? provider.models : [];
+  const suggestions = models.filter((model) => typeof model?.model_id === 'string' && model.model_id && model.deprecated !== true);
+  list.replaceChildren();
+  for (const model of suggestions) {
+    const option = document.createElement('option');
+    option.value = model.model_id;
+    if (typeof model.display_name === 'string' && model.display_name) option.label = model.display_name;
+    list.append(option);
+  }
+  for (const purpose of purposes) {
+    const input = document.querySelector(`[name="${purpose}_model"]`);
+    if (suggestions.length) input.setAttribute('list', 'model-suggestions');
+    else input.removeAttribute('list');
+  }
+
+  const status = projection?.status;
+  const statusNode = element('model-catalog-status');
+  if (!status) {
+    statusNode.textContent = 'Model suggestions are unavailable. You can enter any model ID.';
+    return;
+  }
+  const source = ({
+    file: 'Local catalog', previous: 'Last known good catalog', bootstrap: 'Built-in suggestions',
+  })[status.source] || 'Catalog';
+  const errors = ({
+    missing: 'The local catalog file is missing.',
+    invalid_catalog: 'The local catalog file failed validation.',
+    stale_revision: 'The local catalog revision is stale.',
+    read_failed: 'The local catalog could not be read.',
+    writer_lock_unavailable: 'The catalog writer lock is unavailable.',
+    rollback_recovery_failed: 'A prior catalog rollback needs recovery.',
+  })[status.last_error];
+  const version = typeof status.version === 'string' ? ` ${status.version}` : '';
+  statusNode.textContent = `${source}${version}. ${errors || 'Enter any model ID, including one not listed here.'}`;
+}
+
 function renderProvider() {
   const isClaude = selectedProvider === 'claude_oauth';
   const isCodex = selectedProvider === 'codex_oauth';
@@ -80,7 +121,6 @@ function renderProvider() {
     const configured = profile.purposes?.[purpose] || {};
     const model = form.elements[`${purpose}_model`];
     model.value = configured.model || '';
-    if (isCodex) model.setAttribute('list', 'codex-models'); else model.removeAttribute('list');
     form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
     const capabilities = configured.capabilities || ['chat'];
     form.elements[`${purpose}_structured_output`].checked = capabilities.includes('structured_output');
@@ -89,6 +129,7 @@ function renderProvider() {
     row.classList.toggle('active-route', configured.active === true);
     row.querySelector('.test-class').disabled = !configured.model || configured.available === false;
   }
+  renderModelCatalogSuggestions();
   element('remove-provider').disabled = !state.providers?.[selectedProvider];
 }
 
