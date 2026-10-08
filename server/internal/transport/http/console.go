@@ -22,12 +22,13 @@ type RouteRequest struct {
 	ReasoningEffort string `json:"reasoning_effort"`
 }
 type TargetRequest struct {
-	ID           string   `json:"id"`
-	Provider     string   `json:"provider"`
-	BaseURL      string   `json:"base_url"`
-	Model        string   `json:"model"`
-	APIKey       string   `json:"api_key"`
-	Capabilities []string `json:"capabilities"`
+	ID             string                         `json:"id"`
+	Provider       string                         `json:"provider"`
+	BaseURL        string                         `json:"base_url"`
+	Model          string                         `json:"model"`
+	APIKey         string                         `json:"api_key"`
+	Capabilities   []string                       `json:"capabilities"`
+	BudgetOverride *inference.ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 type ProviderRequest struct {
 	Provider string                            `json:"provider"`
@@ -93,10 +94,13 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.serveHostedSetup(writer, request)
 		return
 	}
-	if request.Method == http.MethodGet && (request.URL.Path == "/" || request.URL.Path == "/manage" || request.URL.Path == "/manage/" || request.URL.Path == "/manage/app.js" || request.URL.Path == "/manage/style.css") {
+	if request.Method == http.MethodGet && (request.URL.Path == "/" || request.URL.Path == "/manage" || request.URL.Path == "/manage/" || request.URL.Path == "/manage/app.js" || request.URL.Path == "/manage/budget-override.mjs" || request.URL.Path == "/manage/style.css") {
 		name, contentType := "index.html", "text/html; charset=utf-8"
 		if strings.HasSuffix(request.URL.Path, "app.js") {
 			name, contentType = "app.js", "text/javascript; charset=utf-8"
+		}
+		if strings.HasSuffix(request.URL.Path, "budget-override.mjs") {
+			name, contentType = "budget-override.mjs", "text/javascript; charset=utf-8"
 		}
 		if strings.HasSuffix(request.URL.Path, "style.css") {
 			name, contentType = "style.css", "text/css; charset=utf-8"
@@ -221,7 +225,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		})
 	case "/manage/api/target":
 		dispatch(writer, request, func(in TargetRequest) operation.Result {
-			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities})
+			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities, BudgetOverride: in.BudgetOverride})
 		})
 	case "/manage/api/provider":
 		dispatch(writer, request, func(in ProviderRequest) operation.Result {

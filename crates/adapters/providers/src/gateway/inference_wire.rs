@@ -1,5 +1,6 @@
-//! Strict paired Gateway schema 2. Provider/account routing never crosses this wire.
+//! Strict paired Gateway schema 3. Provider/account routing never crosses this wire.
 use floe_agent_contract::AgentFailure;
+use floe_agent_contract::ModelBudgetProfile;
 use floe_inference::ModelObservationError;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -27,13 +28,14 @@ pub(crate) enum PurposeCapability {
     Available {
         capability_revision: String,
         capabilities: Vec<String>,
+        budget_profile: ModelBudgetProfile,
     },
     NotConfigured,
     Disabled,
 }
 impl Inventory {
     pub fn selected(self, purpose: &str) -> Result<PurposeCapability, ModelObservationError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(ModelObservationError::InvalidInventory);
         }
         for capability in [
@@ -41,15 +43,20 @@ impl Inventory {
             &self.purposes.everyday_assistance,
             &self.purposes.deep_work,
         ] {
-            if let PurposeCapability::Available {
-                capability_revision,
-                capabilities,
-            } = capability
-            {
-                if !valid_hex(capability_revision, 64) || model_capabilities(capabilities).is_err()
-                {
-                    return Err(ModelObservationError::InvalidInventory);
+            match capability {
+                PurposeCapability::Available {
+                    capability_revision,
+                    capabilities,
+                    budget_profile,
+                } => {
+                    if !valid_hex(capability_revision, 64)
+                        || model_capabilities(capabilities).is_err()
+                        || budget_profile.validate().is_err()
+                    {
+                        return Err(ModelObservationError::InvalidInventory);
+                    }
                 }
+                PurposeCapability::NotConfigured | PurposeCapability::Disabled => {}
             }
         }
         match purpose {
@@ -110,13 +117,40 @@ pub(crate) fn valid_hex(value: &str, length: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
+
+pub(crate) fn selection_commitment(
+    revision: &str,
+) -> Result<floe_agent_contract::ModelSelectionCommitment, ModelObservationError> {
+    if !valid_hex(revision, 64) {
+        return Err(ModelObservationError::InvalidInventory);
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in revision.as_bytes().chunks_exact(2).enumerate() {
+        let high = hex_nibble(pair[0]).ok_or(ModelObservationError::InvalidInventory)?;
+        let low = hex_nibble(pair[1]).ok_or(ModelObservationError::InvalidInventory)?;
+        bytes[index] = (high << 4) | low;
+    }
+    let commitment = floe_agent_contract::ModelSelectionCommitment(bytes);
+    commitment
+        .validate()
+        .map_err(|_| ModelObservationError::InvalidInventory)?;
+    Ok(commitment)
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
 pub(crate) fn failure(
     status: u16,
     bytes: &[u8],
 ) -> Result<(ModelObservationError, AgentFailure), AgentFailure> {
     use AgentFailure as F;
     let body: InferenceErrorBody = decode(bytes)?;
-    if body.schema_version != 2
+    if body.schema_version != 3
         || body.trace_id.is_some()
         || body.attempt_id.is_some()
         || body.purpose.is_some()
@@ -203,7 +237,7 @@ pub(crate) fn inference_failure(
     revision: &str,
 ) -> Result<floe_inference::CanonicalModelResponse, AgentFailure> {
     let body: InferenceErrorBody = decode(bytes)?;
-    if body.schema_version != 2
+    if body.schema_version != 3
         || body
             .trace_id
             .as_ref()
@@ -238,4 +272,98 @@ pub(crate) fn inference_failure(
             cost_micros: body.usage.cost_micros,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentFailure, Inventory, PurposeCapability};
+
+    fn fixture(name: &str) -> &'static str {
+        match name {
+            "unknown" => {
+                include_str!("../../../../../testdata/inference-budget-schema3-unknown.json")
+            }
+            "unavailable" => {
+                include_str!("../../../../../testdata/inference-budget-schema3-unavailable.json")
+            }
+            "configured" => {
+                include_str!("../../../../../testdata/inference-budget-schema3-configured.json")
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn shared_schema3_budget_fixtures_preserve_unknown_and_descriptive_sources() {
+        for name in ["unknown", "unavailable", "configured"] {
+            let inventory: Inventory =
+                serde_json::from_str(fixture(name)).expect("valid shared inventory fixture");
+            let selected = inventory
+                .selected("quick_response")
+                .expect("valid selected capability");
+            let PurposeCapability::Available {
+                capabilities,
+                budget_profile,
+                ..
+            } = selected
+            else {
+                panic!("shared fixture must have an available purpose");
+            };
+            assert_eq!(capabilities, vec!["chat".to_owned()]);
+            budget_profile.validate().expect("valid v1 profile");
+            if name == "configured" {
+                assert_eq!(budget_profile.context_window.tokens, Some(10_000));
+                assert_eq!(
+                    budget_profile.sources.catalog.context_window_tokens,
+                    Some(8_192)
+                );
+                assert_eq!(budget_profile.framing.max_input_json_bytes, 16_000);
+            } else {
+                assert_eq!(budget_profile.context_window.tokens, None);
+                assert_eq!(budget_profile.max_output.tokens, None);
+            }
+        }
+    }
+
+    #[test]
+    fn schema3_capability_drift_and_oversize_errors_keep_typed_rust_outcomes() {
+        let response = |code: &str| {
+            serde_json::json!({
+                "schema_version": 3,
+                "error": {"code": code},
+                "trace_id": null,
+                "attempt_id": null,
+                "purpose": null,
+                "capability_revision": null,
+                "usage": {"tokens": null, "cost_micros": null}
+            })
+            .to_string()
+        };
+        let drift = response("capability_changed");
+        let (observation, failure) =
+            super::failure(409, drift.as_bytes()).expect("typed drift response");
+        assert_eq!(
+            observation,
+            floe_inference::ModelObservationError::InvalidInventory
+        );
+        assert_eq!(failure, AgentFailure::PolicyDenied);
+
+        let oversize = response("body_too_large");
+        let (observation, failure) =
+            super::failure(413, oversize.as_bytes()).expect("typed capacity response");
+        assert_eq!(
+            observation,
+            floe_inference::ModelObservationError::InvalidInventory
+        );
+        assert_eq!(failure, AgentFailure::ModelInputCapacityExceeded);
+    }
+
+    #[test]
+    fn go_compatible_model_estimate_counts_korean_and_escaped_html_bytes() {
+        let encoded = serde_json::to_vec(&serde_json::json!({"input": "서울 <>&\u{2028}"}))
+            .expect("UTF-8 JSON");
+        let estimate = crate::gateway::inference::go_compatible_json_len(&encoded);
+        assert_eq!(estimate, encoded.len() + 5 * 3 + 3);
+        assert!(encoded.iter().any(|byte| *byte >= 0x80));
+    }
 }

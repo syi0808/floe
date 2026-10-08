@@ -199,6 +199,10 @@ impl DeviceModelProvider {
                     capabilities,
                     boundary: floe_agent_contract::ProcessingBoundary::Device,
                     binding_digest,
+                    selection_commitment: floe_agent_contract::ModelSelectionCommitment(
+                        binding_digest.0,
+                    ),
+                    budget_profile: floe_agent_contract::ModelBudgetProfile::unknown(),
                 },
                 transport: PreparedDeviceTransport {
                     protection: self.protection,

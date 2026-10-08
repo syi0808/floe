@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use floe_agent_contract::{
     AllowedCatalog, DependencyCoverage, EngineRequest, EngineStep, ModelConversation,
-    ModelConversationEntry, RoleSpec,
+    ModelConversationEntry, ModelSelectionState, RoleSpec,
 };
 use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::ExecutionScope;
@@ -52,6 +52,13 @@ pub(super) async fn finalize_exhausted_run<
         Err(AgentFailure::Interrupted) => return Ok(FinalizationOutcome::NotAttempted(issue)),
         Err(failure) => return Err(failure),
     };
+    let model_selection = reconcile_finalization_selection(
+        &work_request.model_selection,
+        &projected.model_selection,
+    )?;
+    if model_selection == ModelSelectionState::Unproven {
+        return Ok(FinalizationOutcome::NotAttempted(issue));
+    }
     let Some(user_message) = work_request
         .conversation
         .current_turn
@@ -146,6 +153,7 @@ pub(super) async fn finalize_exhausted_run<
         max_output_bytes: work_request.max_output_bytes,
         replay,
         resume: None,
+        model_selection,
         // Finalization never delegates: its catalog carries no cards, so no
         // execution context is required.
         delegation_context: None,
@@ -212,6 +220,78 @@ pub(super) async fn finalize_exhausted_run<
                 interactions: vec![],
             }))
         }
+    }
+}
+
+fn reconcile_finalization_selection(
+    inherited: &ModelSelectionState,
+    local: &ModelSelectionState,
+) -> Result<ModelSelectionState, AgentFailure> {
+    use ModelSelectionState::{Fresh, Pinned, Unproven};
+    match (inherited, local) {
+        (Unproven, _) | (_, Unproven) => Ok(Unproven),
+        (Pinned(parent), Fresh) => Ok(Pinned(parent.clone())),
+        (Pinned(parent), Pinned(current)) if parent == current => Ok(Pinned(parent.clone())),
+        (Pinned(_), Pinned(_)) => Err(AgentFailure::StorageUnavailable),
+        (Fresh, state) => Ok(state.clone()),
+    }
+}
+
+#[cfg(test)]
+mod model_selection_tests {
+    use super::*;
+    use floe_agent_contract::{
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelExecutionSelection,
+        ModelSelectionCommitment, ProcessingBoundary,
+    };
+
+    fn selection(commitment: u8) -> ModelExecutionSelection {
+        ModelExecutionSelection {
+            commitment: ModelSelectionCommitment([commitment; 32]),
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: crate::CONVERSATION_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
+        }
+    }
+
+    #[test]
+    fn finalization_inherits_pending_continue_pin_when_child_has_no_local_intent() {
+        let inherited = ModelSelectionState::Pinned(selection(1));
+        assert_eq!(
+            reconcile_finalization_selection(&inherited, &ModelSelectionState::Fresh),
+            Ok(inherited),
+            "a replayed pending batch can exhaust before the child writes a ModelIntent"
+        );
+    }
+
+    #[test]
+    fn finalization_rejects_a_conflicting_or_unproven_selection() {
+        assert_eq!(
+            reconcile_finalization_selection(
+                &ModelSelectionState::Pinned(selection(1)),
+                &ModelSelectionState::Pinned(selection(2)),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        );
+        assert_eq!(
+            reconcile_finalization_selection(
+                &ModelSelectionState::Pinned(selection(1)),
+                &ModelSelectionState::Unproven,
+            ),
+            Ok(ModelSelectionState::Unproven)
+        );
+        assert_eq!(
+            reconcile_finalization_selection(
+                &ModelSelectionState::Unproven,
+                &ModelSelectionState::Fresh,
+            ),
+            Ok(ModelSelectionState::Unproven)
+        );
     }
 }
 

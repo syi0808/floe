@@ -2,7 +2,7 @@
 
 use floe_agent_contract::{
     AgentFailure, AllowedCatalog, BoxFuture, ContextEnvelope, ModelBindingDigest,
-    ModelCapabilities, ModelPlanRequest, ModelStep, ProcessingBoundary,
+    ModelBudgetProfile, ModelCapabilities, ModelPlanRequest, ModelStep, ProcessingBoundary,
 };
 use floe_context_contract::DataClass;
 use floe_execution::{Cancellation, ExecutionScope};
@@ -54,6 +54,7 @@ pub struct CanonicalModelRequest {
     pub attempt_id: Uuid,
     pub envelope: ContextEnvelope,
     pub catalog: AllowedCatalog,
+    pub budget_profile: ModelBudgetProfile,
     pub input_data_classes: Vec<DataClass>,
     pub remaining_tokens: u64,
     pub remaining_cost_micros: u64,
@@ -79,6 +80,7 @@ impl CanonicalModelRequest {
             return Err(AgentFailure::InvalidInput);
         }
         self.envelope.validate()?;
+        self.budget_profile.validate()?;
         ModelCapabilities::for_request(
             &self.envelope.run_instructions.output_format,
             &self.catalog,
@@ -151,6 +153,8 @@ pub struct ObservedModelCapability {
     pub capabilities: ModelCapabilities,
     pub boundary: ProcessingBoundary,
     pub binding_digest: ModelBindingDigest,
+    pub selection_commitment: floe_agent_contract::ModelSelectionCommitment,
+    pub budget_profile: ModelBudgetProfile,
 }
 
 pub enum PrimaryObservation<P> {

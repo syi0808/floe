@@ -65,7 +65,7 @@ pub struct ModelProjectionRequest {
 
 impl ModelProjectionRequest {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        self.plan.validate()?;
+        self.plan.validate_for_dispatch()?;
         if self.projection_operation_id.is_nil()
             || self.principal != self.plan.principal
             || self.principal.trim().is_empty()

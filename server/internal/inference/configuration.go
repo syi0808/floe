@@ -10,11 +10,12 @@ import (
 )
 
 type ProviderTarget struct {
-	Provider     string   `json:"provider"`
-	BaseURL      string   `json:"base_url"`
-	Model        string   `json:"model"`
-	APIKeyEnv    string   `json:"api_key_env,omitempty"`
-	Capabilities []string `json:"capabilities"`
+	Provider       string               `json:"provider"`
+	BaseURL        string               `json:"base_url"`
+	Model          string               `json:"model"`
+	APIKeyEnv      string               `json:"api_key_env,omitempty"`
+	Capabilities   []string             `json:"capabilities"`
+	BudgetOverride *ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 
 // ProviderFactory opens local provider accounts and supplies the executor used by
@@ -113,7 +114,7 @@ func profileTargetID(provider, purpose string) string {
 
 func profileTarget(provider, purpose string, profile providerProfile) ProviderTarget {
 	configured := profile.Purposes[purpose]
-	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, Capabilities: append([]string(nil), configured.Capabilities...)}
+	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, Capabilities: append([]string(nil), configured.Capabilities...), BudgetOverride: cloneModelBudgetOverride(configured.BudgetOverride)}
 }
 
 func (c *Configuration) RequiredError() error {

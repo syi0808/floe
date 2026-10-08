@@ -44,7 +44,11 @@ pub use interactions::{
 };
 pub use model_projection::ConversationModelProjection;
 pub use query::{get_command, get_run};
-pub use recovery::{project_continuation, validate_run_journal};
+pub use recovery::{
+    JournalLineage, MAX_CONTINUATION_JOURNAL_ENTRIES, ModelSelectionJournalProjection,
+    ResumeLineageFold, fold_resume_lineage, project_continuation, project_model_selection_journal,
+    reconcile_resume_lineage, reconcile_resume_selection, validate_run_journal,
+};
 pub use resume::{ResumeSuppression, build_resume_required, resume_gate};
 pub use session::{
     admit_unscoped_session, admitted_session, get_session, resume_session, start_session,

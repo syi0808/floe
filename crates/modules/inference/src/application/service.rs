@@ -5,9 +5,9 @@ use floe_access::{
     admit_model_dispatch, consume_model_dispatch, revalidate_model_dispatch,
 };
 use floe_agent_contract::{
-    AgentFailure, AllowedCatalog, BoxFuture, ModelCapabilities, ModelPlanRequest, ModelPort,
-    ModelRequest, ModelResponse, ModelStep, ModelUsage, PreparedModelCall, PreparedModelPlan,
-    ProcessingBoundary,
+    AgentFailure, AllowedCatalog, BoxFuture, ModelBudgetProfile, ModelCapabilities,
+    ModelPlanRequest, ModelPort, ModelRequest, ModelResponse, ModelStep, ModelUsage,
+    PreparedModelCall, PreparedModelPlan, ProcessingBoundary,
 };
 use floe_execution::ExecutionScope;
 use uuid::Uuid;
@@ -25,6 +25,7 @@ const MAX_ATTEMPT_COST_MICROS: u64 = 1_000_000;
 pub struct InferenceAvailability {
     pub boundary: ProcessingBoundary,
     pub capabilities: ModelCapabilities,
+    pub budget_profile: ModelBudgetProfile,
 }
 
 impl InferenceAvailability {
@@ -37,6 +38,11 @@ impl InferenceAvailability {
         Ok(Self {
             boundary: prepared.plan().boundary,
             capabilities: prepared.plan().capabilities.clone(),
+            budget_profile: prepared
+                .plan()
+                .budget_profile
+                .clone()
+                .ok_or(AgentFailure::PolicyDenied)?,
         })
     }
 }
@@ -120,6 +126,8 @@ where
                         capabilities: capability.capabilities,
                         boundary: capability.boundary,
                         binding_digest: capability.binding_digest,
+                        selection_commitment: Some(capability.selection_commitment),
+                        budget_profile: Some(capability.budget_profile.clone()),
                     };
                     let prepared: Box<dyn PreparedModelCall> = Box::new(PreparedInferenceCall {
                         plan,
@@ -250,6 +258,11 @@ where
             attempt_id: request.attempt_id,
             envelope: request.projection.envelope.clone(),
             catalog: request.catalog.clone(),
+            budget_profile: self
+                .plan
+                .budget_profile
+                .clone()
+                .ok_or(AgentFailure::PolicyDenied)?,
             input_data_classes: request.projection.input_data_classes.clone(),
             remaining_tokens: tokens,
             remaining_cost_micros: cost,

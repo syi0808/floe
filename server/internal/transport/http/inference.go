@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"floe/server/internal/inference"
+	"floe/server/internal/modelcatalog"
 	"floe/server/internal/operation"
 	"floe/server/internal/trust"
 	"io"
@@ -13,9 +14,10 @@ import (
 )
 
 type InferenceHandler struct {
-	Service *inference.Service
-	Trust   *trust.Service
-	Address string
+	Service      *inference.Service
+	Trust        *trust.Service
+	ModelCatalog *modelcatalog.Store
+	Address      string
 }
 
 func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +79,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeInferenceError(w, err)
 			return
 		}
-		writeInferenceJSON(w, inventoryDTO(inventory))
+		writeInferenceJSON(w, inventoryDTO(inventory, h.ModelCatalog))
 	case "/v1/agent":
 		if r.Method != http.MethodPost {
 			writeInferenceError(w, inference.Failure{Code: inference.MethodNotAllowed})
@@ -98,7 +100,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeInferenceError(w, err)
 			return
 		}
-		writeInferenceJSON(w, AgentResponseDTO{2, out.Purpose, out.CapabilityRevision, out.AttemptID, out.TraceID, out.Output, out.CallIDs, out.Usage})
+		writeInferenceJSON(w, AgentResponseDTO{3, out.Purpose, out.CapabilityRevision, out.AttemptID, out.TraceID, out.Output, out.CallIDs, out.Usage})
 	case "/v1/generate":
 		if r.Method != http.MethodPost {
 			writeInferenceError(w, inference.Failure{Code: inference.MethodNotAllowed})
@@ -119,7 +121,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeInferenceError(w, err)
 			return
 		}
-		writeInferenceJSON(w, StructuredResponseDTO{2, out.Purpose, out.CapabilityRevision, out.AttemptID, out.TraceID, out.Output, out.Usage})
+		writeInferenceJSON(w, StructuredResponseDTO{3, out.Purpose, out.CapabilityRevision, out.AttemptID, out.TraceID, out.Output, out.Usage})
 	case "/v1/traces":
 		if r.Method != http.MethodGet {
 			writeInferenceError(w, inference.Failure{Code: inference.MethodNotAllowed})
@@ -130,7 +132,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeInferenceError(w, inferenceTrustFailure(err))
 			return
 		}
-		writeInferenceJSON(w, map[string]any{"schema_version": 2, "traces": out})
+		writeInferenceJSON(w, map[string]any{"schema_version": 3, "traces": out})
 	default:
 		if strings.HasPrefix(r.URL.Path, "/v1/traces/") {
 			if r.Method != http.MethodGet {
@@ -142,7 +144,7 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeInferenceError(w, err)
 				return
 			}
-			writeInferenceJSON(w, map[string]any{"schema_version": 2, "trace": out})
+			writeInferenceJSON(w, map[string]any{"schema_version": 3, "trace": out})
 			return
 		}
 		writeInferenceError(w, inference.Failure{Code: inference.NotFound})
@@ -177,7 +179,7 @@ func writeInferenceError(w http.ResponseWriter, err error) {
 		f = inference.Failure{Code: inference.ModelUnavailable}
 	}
 	status := inferenceStatus(f.Code)
-	out := InferenceErrorDTO{SchemaVersion: 2}
+	out := InferenceErrorDTO{SchemaVersion: 3}
 	out.Error.Code = f.Code
 	// Only the execution service may attach the admitted correlation. Request
 	// decoding and other pre-admission failures expose no caller-supplied echo.

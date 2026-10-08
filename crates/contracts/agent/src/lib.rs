@@ -14,6 +14,7 @@ mod history;
 mod interaction;
 mod message;
 mod model;
+mod model_budget;
 mod model_conversation;
 mod model_plan;
 mod ports;
@@ -71,6 +72,15 @@ pub use model::{
     ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall, ToolDescriptor,
     ValidatedFinalPayload, validate_tool_input,
 };
+pub use model_budget::{
+    AGENT_CONVERSATION_BYTES, BudgetProvenance, CatalogBudgetFacts, CatalogMetadataStatus,
+    GATEWAY_INSTRUCTION_BYTES, GATEWAY_MESSAGE_COUNT, GATEWAY_OUTPUT_BYTES, GATEWAY_REQUEST_BYTES,
+    GATEWAY_TOOL_COUNT, LEGACY_AGENT_INPUT_BYTES, MAX_KNOWN_MODEL_TOKENS,
+    MODEL_BUDGET_PROFILE_VERSION, MODEL_INPUT_ESTIMATE_METHOD, MODEL_INPUT_ESTIMATE_UNCERTAINTY,
+    ModelBudgetProfile, ModelBudgetSources, ModelFramingGuards, ModelTokenEstimatePolicy,
+    ModelTokenLimit, OperatorConfigurationStatus, ProviderConfirmedStatus, TokenLimitSource,
+    TokenLimitStatus,
+};
 pub use model_conversation::{
     MAX_CONTEXT_REFS, MAX_MODEL_CONVERSATION_BYTES, ModelConversation, ModelConversationEntry,
 };
@@ -104,8 +114,9 @@ pub const MAX_AGENT_MESSAGES: usize = 128;
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub use model_plan::{
-    ModelBindingDigest, ModelCapabilities, ModelCapability, ModelPlanRequest, PreparedModelPlan,
-    ProcessingBoundary,
+    ModelBindingDigest, ModelCapabilities, ModelCapability, ModelExecutionSelection,
+    ModelPlanRequest, ModelSelectionCommitment, ModelSelectionState, PreparedModelPlan,
+    ProcessingBoundary, validate_model_intent_selection,
 };
 
 pub use floe_model_contract::{ModelOutputFormat, ModelSchema, strict_json as strict_model_json};

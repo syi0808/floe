@@ -34,6 +34,7 @@ func newProvider(ctx context.Context, target inference.ProviderTarget, lookup fu
 		return nil, errors.New("invalid model capabilities")
 	}
 	target.Capabilities = append([]string(nil), target.Capabilities...)
+	target.BudgetOverride = inference.CloneModelBudgetOverride(target.BudgetOverride)
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
 		return nil, errors.New("invalid model")
 	}
@@ -146,8 +147,11 @@ func (p *provider) checkLocal(ctx context.Context) error {
 	}
 	return nil
 }
-func (p *provider) structured(ctx context.Context, in inference.StructuredInvocation, effort string) (out inference.StructuredResult, err error) {
+func (p *provider) structured(ctx context.Context, in inference.StructuredInvocation, effort string, outputTokenLimit *uint32) (out inference.StructuredResult, err error) {
 	if p.target.Provider == "codex_oauth" {
+		if outputTokenLimit != nil {
+			return out, inference.Failure{Code: inference.Validation}
+		}
 		identity := p.codex.ReplayIdentity()
 		if identity == "" {
 			return out, inference.Failure{Code: inference.ProviderCredentialsUnavailable}
@@ -173,7 +177,11 @@ func (p *provider) structured(ctx context.Context, in inference.StructuredInvoca
 				Prompt *uint64 `json:"prompt_eval_count"`
 				Output *uint64 `json:"eval_count"`
 			}
-			err = p.post(ctx, "/api/chat", map[string]any{"model": p.target.Model, "messages": messages, "stream": false, "format": in.OutputSchema}, &response)
+			payload := map[string]any{"model": p.target.Model, "messages": messages, "stream": false, "format": in.OutputSchema}
+			if outputTokenLimit != nil {
+				payload["options"] = map[string]any{"num_predict": *outputTokenLimit}
+			}
+			err = p.post(ctx, "/api/chat", payload, &response)
 			out.Usage.Tokens = sumUsage(response.Prompt, response.Output)
 			if err != nil {
 				return out, err
@@ -198,6 +206,9 @@ func (p *provider) structured(ctx context.Context, in inference.StructuredInvoca
 				} `json:"usage"`
 			}
 			payload := map[string]any{"model": p.target.Model, "messages": messages, "stream": false, "response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{"name": "floe_result", "strict": true, "schema": in.OutputSchema}}}
+			if outputTokenLimit != nil {
+				payload["max_completion_tokens"] = *outputTokenLimit
+			}
 			if effort != "" {
 				payload["reasoning_effort"] = effort
 			}

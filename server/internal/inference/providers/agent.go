@@ -9,9 +9,12 @@ import (
 	"strings"
 )
 
-func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effort string) (out inference.AgentResult, err error) {
+func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effort string, outputTokenLimit *uint32) (out inference.AgentResult, err error) {
 	if !inference.SupportsAgent(p.target.Capabilities, in) {
 		return out, inference.Failure{Code: inference.RequestRejected}
+	}
+	if p.target.Provider == "codex_oauth" && outputTokenLimit != nil {
+		return out, inference.Failure{Code: inference.Validation}
 	}
 	input, err := json.Marshal(in.Input)
 	if err != nil {
@@ -48,6 +51,13 @@ func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effo
 		}
 		messages := append([]map[string]any{{"role": "system", "content": in.Instructions}}, plain.Messages...)
 		payload := map[string]any{"model": p.target.Model, "messages": messages, "tools": plain.Tools, "stream": false}
+		if outputTokenLimit != nil {
+			if p.target.Provider == "ollama" {
+				payload["options"] = map[string]any{"num_predict": *outputTokenLimit}
+			} else {
+				payload["max_completion_tokens"] = *outputTokenLimit
+			}
+		}
 		if p.target.Provider == "ollama" {
 			if in.OutputFormat.Kind == "json" {
 				payload["format"] = in.OutputFormat.Schema

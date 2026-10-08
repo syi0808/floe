@@ -4,14 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"floe/server/internal/inference"
+	"floe/server/internal/modelcatalog"
 	"floe/server/internal/trust"
 	"io"
 )
 
 type PurposeCapabilityDTO struct {
-	Status             string   `json:"status"`
-	CapabilityRevision string   `json:"capability_revision,omitempty"`
-	Capabilities       []string `json:"capabilities,omitempty"`
+	Status             string                        `json:"status"`
+	CapabilityRevision string                        `json:"capability_revision,omitempty"`
+	Capabilities       []string                      `json:"capabilities,omitempty"`
+	BudgetProfile      *inference.ModelBudgetProfile `json:"budget_profile,omitempty"`
 }
 type InventoryResponseDTO struct {
 	SchemaVersion int `json:"schema_version"`
@@ -114,12 +116,12 @@ func decodeAgentRequest(data []byte) (inference.AgentInvocation, error) {
 	if !decodeDTO(data, &dto) {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
 	}
-	if dto.SchemaVersion != 2 {
+	if dto.SchemaVersion != 3 {
 		return inference.AgentInvocation{}, inference.Failure{Code: inference.UnsupportedSchema}
 	}
-	input, ok := decodeAgentInput(dto.Input)
-	if !ok {
-		return inference.AgentInvocation{}, inference.Failure{Code: inference.Validation}
+	input, err := decodeAgentInput(dto.Input)
+	if err != nil {
+		return inference.AgentInvocation{}, err
 	}
 	format, err := inference.DecodeOutputFormat(dto.OutputFormat)
 	if err != nil {
@@ -142,7 +144,7 @@ func decodeStructuredRequest(data []byte) (inference.StructuredInvocation, error
 	if !decodeDTO(data, &dto) {
 		return inference.StructuredInvocation{}, inference.Failure{Code: inference.Validation}
 	}
-	if dto.SchemaVersion != 2 {
+	if dto.SchemaVersion != 3 {
 		return inference.StructuredInvocation{}, inference.Failure{Code: inference.UnsupportedSchema}
 	}
 	out := inference.StructuredInvocation{Purpose: dto.Purpose, CapabilityRevision: dto.CapabilityRevision, AttemptID: dto.AttemptID, DataClasses: dto.DataClasses, Instructions: dto.Instructions, Input: dto.Input, OutputSchema: dto.OutputSchema, MaxOutputBytes: dto.MaxOutputBytes}
@@ -151,15 +153,18 @@ func decodeStructuredRequest(data []byte) (inference.StructuredInvocation, error
 	}
 	return out, nil
 }
-func decodeAgentInput(data []byte) (inference.AgentInput, bool) {
+func decodeAgentInput(data []byte) (inference.AgentInput, error) {
 	var out inference.AgentInput
+	if len(data) > 32768 {
+		return out, inference.Failure{Code: inference.BodyTooLarge}
+	}
 	fields, ok := exactObject(bytes.TrimSpace(data), []string{"messages", "tools"})
-	if !ok || len(data) > 32768 {
-		return out, false
+	if !ok {
+		return out, inference.Failure{Code: inference.Validation}
 	}
 	var messages, tools []json.RawMessage
 	if json.Unmarshal(fields["messages"], &messages) != nil || json.Unmarshal(fields["tools"], &tools) != nil || messages == nil || tools == nil {
-		return out, false
+		return out, inference.Failure{Code: inference.Validation}
 	}
 	out.Messages = []inference.Message{}
 	out.Tools = []inference.Tool{}
@@ -168,7 +173,7 @@ func decodeAgentInput(data []byte) (inference.AgentInput, bool) {
 			Role string `json:"role"`
 		}
 		if json.Unmarshal(raw, &role) != nil {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		var fields map[string]json.RawMessage
 		switch role.Role {
@@ -185,57 +190,113 @@ func decodeAgentInput(data []byte) (inference.AgentInput, bool) {
 				fields, ok = exactObject(raw, []string{"role", "content"})
 			}
 		default:
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		if !ok {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		if callsRaw, exists := fields["tool_calls"]; exists {
 			var calls []json.RawMessage
 			if json.Unmarshal(callsRaw, &calls) != nil || len(calls) == 0 {
-				return out, false
+				return out, inference.Failure{Code: inference.Validation}
 			}
 			for _, call := range calls {
 				c, ok := exactObject(call, []string{"id", "type", "function"})
 				if !ok {
-					return out, false
+					return out, inference.Failure{Code: inference.Validation}
 				}
 				if _, ok = exactObject(c["function"], []string{"name", "arguments"}); !ok {
-					return out, false
+					return out, inference.Failure{Code: inference.Validation}
 				}
 			}
 		}
 		var message inference.Message
 		if !decodeDTO(raw, &message) {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		out.Messages = append(out.Messages, message)
 	}
 	for _, raw := range tools {
 		fields, ok := exactObject(raw, []string{"type", "function"})
 		if !ok {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		f, ok := exactObject(fields["function"], []string{"name", "description", "parameters", "strict"})
 		if !ok || string(bytes.TrimSpace(f["strict"])) != "false" {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		var t inference.Tool
 		if !decodeDTO(raw, &t) {
-			return out, false
+			return out, inference.Failure{Code: inference.Validation}
 		}
 		out.Tools = append(out.Tools, t)
 	}
-	return out, true
+	return out, nil
 }
-func inventoryDTO(i inference.PurposeInventory) InventoryResponseDTO {
+func inventoryDTO(i inference.PurposeInventory, catalog *modelcatalog.Store) InventoryResponseDTO {
 	capability := func(c inference.PurposeCapability) PurposeCapabilityDTO {
-		return PurposeCapabilityDTO{string(c.Status), c.CapabilityRevision, append([]string(nil), c.Capabilities...)}
+		out := PurposeCapabilityDTO{Status: string(c.Status)}
+		if c.Status != inference.Available {
+			return out
+		}
+		profile := c.BudgetProfile
+		profile.Sources.Catalog = catalogBudgetFacts(catalog, c.ModelIdentity)
+		out.CapabilityRevision = c.CapabilityRevision
+		out.Capabilities = append([]string(nil), c.Capabilities...)
+		out.BudgetProfile = &profile
+		return out
 	}
 	var out InventoryResponseDTO
-	out.SchemaVersion = 2
+	out.SchemaVersion = 3
 	out.Purposes.QuickResponse = capability(i.QuickResponse)
 	out.Purposes.EverydayAssistance = capability(i.EverydayAssistance)
 	out.Purposes.DeepWork = capability(i.DeepWork)
 	return out
+}
+
+func catalogBudgetFacts(store *modelcatalog.Store, identity inference.ModelIdentity) inference.CatalogBudgetFacts {
+	out := inference.CatalogBudgetFacts{Status: inference.CatalogUnavailable}
+	if store == nil {
+		return out
+	}
+	catalog := store.Snapshot()
+	revision := catalog.Revision
+	out.Revision = &revision
+	for _, provider := range catalog.Providers {
+		if provider.ProviderID != identity.ProviderID {
+			continue
+		}
+		for _, model := range provider.Models {
+			if model.ModelID != identity.ModelID {
+				continue
+			}
+			if model.Metadata == nil {
+				out.Status = inference.CatalogMetadataUnknown
+				return out
+			}
+			out.ContextWindowTokens = cloneCatalogTokenValue(model.Metadata.ContextWindow)
+			out.MaxOutputTokens = cloneCatalogTokenValue(model.Metadata.MaxOutputTokens)
+			if model.Metadata.Provenance != nil {
+				out.Provenance = &inference.BudgetProvenance{
+					Source: model.Metadata.Provenance.Source, VerifiedAt: model.Metadata.Provenance.VerifiedAt,
+				}
+			}
+			if out.ContextWindowTokens == nil && out.MaxOutputTokens == nil {
+				out.Status = inference.CatalogMetadataUnknown
+			} else {
+				out.Status = inference.CatalogMetadataPresent
+			}
+			return out
+		}
+	}
+	out.Status = inference.CatalogModelNotListed
+	return out
+}
+
+func cloneCatalogTokenValue(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }

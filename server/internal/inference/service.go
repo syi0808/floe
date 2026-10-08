@@ -93,13 +93,22 @@ func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, 
 	if !ValidCapabilities(capabilities) {
 		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
 	}
-	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...)}
+	modelIdentity := account.ModelIdentity()
+	if !validModelIdentity(modelIdentity) {
+		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+	}
+	budgetProfile := ResolveModelBudgetProfile(account.BudgetOverride())
+	if budgetProfile.Validate() != nil {
+		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+	}
+	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...), modelIdentity: modelIdentity, budgetProfile: budgetProfile}
 	material, _ := json.Marshal(struct {
 		Purpose                    Purpose
 		TargetID, Effort, Identity string
 		Generation                 uint64
 		Capabilities               []string
-	}{p, r.TargetID, r.ReasoningEffort, identity, generation, capabilities})
+		BudgetProfile              any
+	}{p, r.TargetID, r.ReasoningEffort, identity, generation, capabilities, budgetProfile.effectiveRevisionMaterial()})
 	mac := hmac.New(sha256.New, s.secret[:])
 	mac.Write(material)
 	revision := hex.EncodeToString(mac.Sum(nil))
@@ -129,7 +138,10 @@ func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 			}
 			return PurposeInventory{}, err
 		}
-		out.set(p, PurposeCapability{Available, revision, append([]string(nil), target.capabilities...)})
+		out.set(p, PurposeCapability{
+			Status: Available, CapabilityRevision: revision, Capabilities: append([]string(nil), target.capabilities...),
+			BudgetProfile: target.budgetProfile, ModelIdentity: target.modelIdentity,
+		})
 	}
 	return out, nil
 }
@@ -159,6 +171,9 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 	}
 	if revision != in.CapabilityRevision {
 		return out, Failure{Code: CapabilityChanged}
+	}
+	if err = ValidateModelBudgetInput(target.budgetProfile, in); err != nil {
+		return out, err
 	}
 	if !SupportsAgent(target.capabilities, in) {
 		return out, Failure{Code: RequestRejected}
@@ -234,6 +249,9 @@ func (s *Service) InvokeStructured(ctx context.Context, p trust.OperatorPrincipa
 	}
 	if revision != in.CapabilityRevision {
 		return out, Failure{Code: CapabilityChanged}
+	}
+	if err = ValidateStructuredModelBudgetInput(target.budgetProfile, in); err != nil {
+		return out, err
 	}
 	select {
 	case s.active <- struct{}{}:

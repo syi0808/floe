@@ -29,8 +29,11 @@ func NewFactory(lookup func(context.Context, string) (string, error), codex Code
 type registry struct{ targets map[string]*provider }
 
 func (f *Factory) ValidateTarget(target inference.ProviderTarget) error {
-	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || !inference.ValidCapabilities(target.Capabilities) {
+	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || !inference.ValidCapabilities(target.Capabilities) || target.BudgetOverride != nil && target.BudgetOverride.Validate() != nil {
 		return errors.New("invalid model")
+	}
+	if target.Provider == "codex_oauth" && target.BudgetOverride != nil && target.BudgetOverride.SelectedOutputReservationTokens != nil {
+		return errors.New("Codex provider cannot enforce the selected output token reservation")
 	}
 	_, err := newProvider(context.Background(), target, func(context.Context, string) (string, error) { return "validation-placeholder", nil }, nil)
 	if target.Provider == "codex_oauth" && target.BaseURL == "https://chatgpt.com/backend-api/codex" && target.APIKeyEnv == "" {
@@ -113,12 +116,24 @@ func (p *provider) Capabilities() []string {
 	return append([]string(nil), p.target.Capabilities...)
 }
 
+func (p *provider) ModelIdentity() inference.ModelIdentity {
+	return inference.ModelIdentity{ProviderID: p.target.Provider, ModelID: p.target.Model}
+}
+
+func (p *provider) BudgetOverride() *inference.ModelBudgetOverride {
+	return inference.CloneModelBudgetOverride(p.target.BudgetOverride)
+}
+
 func (r *registry) InvokeAgent(ctx context.Context, target inference.ResolvedModelTarget, in inference.AgentInvocation) (inference.AgentResult, error) {
 	p := r.targets[target.TargetID()]
 	if p == nil || p.ReplayIdentity() != target.AccountIdentity() {
 		return inference.AgentResult{}, inference.Failure{Code: inference.CapabilityChanged}
 	}
-	return p.agent(ctx, in, target.ReasoningEffort())
+	var outputTokenLimit *uint32
+	if tokens, ok := target.SelectedOutputReservationTokens(); ok {
+		outputTokenLimit = &tokens
+	}
+	return p.agent(ctx, in, target.ReasoningEffort(), outputTokenLimit)
 }
 
 func (r *registry) InvokeStructured(ctx context.Context, target inference.ResolvedModelTarget, in inference.StructuredInvocation) (inference.StructuredResult, error) {
@@ -126,5 +141,9 @@ func (r *registry) InvokeStructured(ctx context.Context, target inference.Resolv
 	if p == nil || p.ReplayIdentity() != target.AccountIdentity() {
 		return inference.StructuredResult{}, inference.Failure{Code: inference.CapabilityChanged}
 	}
-	return p.structured(ctx, in, target.ReasoningEffort())
+	var outputTokenLimit *uint32
+	if tokens, ok := target.SelectedOutputReservationTokens(); ok {
+		outputTokenLimit = &tokens
+	}
+	return p.structured(ctx, in, target.ReasoningEffort(), outputTokenLimit)
 }

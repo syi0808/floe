@@ -4,8 +4,8 @@ use std::{
 };
 
 use floe_agent_contract::{
-    AgentFailure, AllowedCatalog, BoxFuture, ModelCapabilities, ModelPlanRequest, ModelStep,
-    ProcessingBoundary,
+    AgentFailure, AllowedCatalog, BoxFuture, ModelBindingDigest, ModelBudgetProfile,
+    ModelCapabilities, ModelPlanRequest, ModelSelectionCommitment, ModelStep, ProcessingBoundary,
 };
 use floe_app::{
     AppComposition, AppHost, AppOpenOptions, CallerContext, ModelProviderFactory, ReadyOwners,
@@ -47,6 +47,25 @@ pub enum ModelOutput {
     ScheduleExpertFlow,
 }
 
+#[derive(Clone, Debug)]
+pub struct ScriptModelSelection {
+    pub commitment: ModelSelectionCommitment,
+    pub boundary: ProcessingBoundary,
+    pub binding_digest: ModelBindingDigest,
+    pub budget_profile: ModelBudgetProfile,
+}
+
+impl ScriptModelSelection {
+    pub fn device(commitment_byte: u8) -> Self {
+        Self {
+            commitment: ModelSelectionCommitment([commitment_byte; 32]),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([9; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlanStage {
     Primary,
@@ -80,68 +99,61 @@ struct RecorderState {
     identity: Option<(String, String)>,
     catalogs: std::collections::BTreeMap<String, AllowedCatalog>,
     schedule_flow: bool,
+    expected_model_calls: usize,
+    model_selections: Vec<ScriptModelSelection>,
 }
 
 #[derive(Clone)]
 pub struct ScriptRecorder(Arc<Mutex<RecorderState>>);
 
 impl ScriptRecorder {
-    fn new(schedule_flow: bool) -> Self {
+    fn new(schedule_flow: bool, expected_model_calls: usize) -> Self {
         Self(Arc::new(Mutex::new(RecorderState {
             schedule_flow,
+            expected_model_calls,
             ..RecorderState::default()
         })))
     }
 
     fn record_plan(
         &self,
-        stage: PlanStage,
+        observed_stage: PlanStage,
         request: &ModelPlanRequest,
         run_id: Option<Uuid>,
         task_id: Option<Uuid>,
-    ) -> Result<(), ModelObservationError> {
+    ) -> Result<usize, ModelObservationError> {
         let mut state = self
             .0
             .lock()
             .map_err(|_| ModelObservationError::StorageUnavailable)?;
-        let expected = if state.schedule_flow {
-            match state.plans.len() {
-                0 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
-                1 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
-                2 => Some((
-                    PlanStage::Primary,
-                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                )),
-                3 => Some((
-                    PlanStage::LocalFallback,
-                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                )),
-                4 => Some((
-                    PlanStage::Primary,
-                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                )),
-                5 => Some((
-                    PlanStage::LocalFallback,
-                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
-                )),
-                6 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
-                7 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
-                _ => None,
-            }
+        let call_index = state.plans.len() / 2;
+        let expected_stage = if state.plans.len() % 2 == 0 {
+            PlanStage::Primary
         } else {
-            match state.plans.len() {
-                0 => Some((PlanStage::Primary, CONVERSATION_CONSUMER)),
-                1 => Some((PlanStage::LocalFallback, CONVERSATION_CONSUMER)),
-                _ => None,
-            }
+            PlanStage::LocalFallback
         };
+        let consumer = if state.schedule_flow {
+            [
+                CONVERSATION_CONSUMER,
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER,
+                CONVERSATION_CONSUMER,
+            ]
+            .get(call_index)
+            .copied()
+        } else if call_index < state.expected_model_calls {
+            Some(CONVERSATION_CONSUMER)
+        } else {
+            None
+        };
+        let expected = consumer.map(|consumer| (expected_stage, consumer));
         let Some((expected_stage, expected_consumer)) = expected else {
             state
                 .violations
                 .push("unexpected additional model plan observation".into());
             return Err(ModelObservationError::InvalidIdentity);
         };
-        if stage != expected_stage
+        if observed_stage != expected_stage
             || request.consumer != expected_consumer
             || request.purpose != CONVERSATION_PURPOSE
             || request.required_capabilities.validate().is_err()
@@ -150,9 +162,9 @@ impl ScriptRecorder {
             || (request.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
                 && task_id.is_none())
         {
-            state
-                .violations
-                .push(format!("unexpected {stage:?} plan request: {request:?}"));
+            state.violations.push(format!(
+                "unexpected {observed_stage:?} plan request: {request:?}"
+            ));
             return Err(ModelObservationError::InvalidIdentity);
         }
         match &state.identity {
@@ -169,14 +181,38 @@ impl ScriptRecorder {
             }
             _ => {}
         }
-        state.plans.push((stage, request.clone()));
+        let plan_index = state.plans.len();
+        state.plans.push((observed_stage, request.clone()));
         state.plan_bindings.push(ScriptCallBinding {
             consumer: request.consumer.clone(),
             run_id,
             task_id,
             attempt_id: None,
         });
-        Ok(())
+        Ok(plan_index)
+    }
+
+    pub fn set_model_selection_sequence(&self, selections: Vec<ScriptModelSelection>) {
+        self.0
+            .lock()
+            .expect("script recorder mutex poisoned")
+            .model_selections = selections;
+    }
+
+    fn model_selection(
+        &self,
+        call_index: usize,
+    ) -> Result<ScriptModelSelection, ModelObservationError> {
+        let state = self
+            .0
+            .lock()
+            .map_err(|_| ModelObservationError::StorageUnavailable)?;
+        Ok(state
+            .model_selections
+            .get(call_index)
+            .or_else(|| state.model_selections.last())
+            .cloned()
+            .unwrap_or_else(|| ScriptModelSelection::device(1)))
     }
 
     fn record_violation(&self, message: impl Into<String>) {
@@ -202,7 +238,7 @@ impl ScriptRecorder {
             ]
             .get(state.generated.len())
             .copied()
-        } else if state.generated.is_empty() {
+        } else if state.generated.len() < state.expected_model_calls {
             Some(CONVERSATION_CONSUMER)
         } else {
             None
@@ -225,11 +261,7 @@ impl ScriptRecorder {
             ));
             return Err(AgentFailure::InvalidInput);
         }
-        let expected_plan_index = if state.schedule_flow {
-            state.generated.len() * 2 + 1
-        } else {
-            1
-        };
+        let expected_plan_index = state.generated.len() * 2 + 1;
         let Some(((stage, observed_plan), binding)) = state
             .plans
             .get(expected_plan_index)
@@ -288,11 +320,12 @@ impl ScriptedModel {
         output: ModelOutput,
     ) -> Self {
         let schedule_flow = matches!(&output, ModelOutput::ScheduleExpertFlow);
+        let expected_model_calls = if schedule_flow { 4 } else { 1 };
         Self {
             primary,
             expected_input: expected_input.into(),
             output,
-            recorder: ScriptRecorder::new(schedule_flow),
+            recorder: ScriptRecorder::new(schedule_flow, expected_model_calls),
         }
     }
 
@@ -502,7 +535,7 @@ impl ModelProvider for ScriptedModelProvider {
     > {
         let model = self.model.clone();
         Box::pin(async move {
-            model.recorder.record_plan(
+            let _ = model.recorder.record_plan(
                 PlanStage::Primary,
                 request,
                 scope.root_run_id().map(RunId::as_uuid),
@@ -536,13 +569,14 @@ impl ModelProvider for ScriptedModelProvider {
             if scope.cancellation().is_cancelled() {
                 return Err(ModelObservationError::Cancelled);
             }
-            model.recorder.record_plan(
+            let plan_index = model.recorder.record_plan(
                 PlanStage::LocalFallback,
                 request,
                 scope.root_run_id().map(RunId::as_uuid),
                 scope.task_id().map(|task_id| task_id.as_uuid()),
             )?;
-            let binding_digest = device_binding(request)?;
+            let selection = model.recorder.model_selection(plan_index / 2)?;
+            let binding_digest = selection.binding_digest;
             let purpose = ModelPurpose::new(request.purpose.clone())
                 .ok_or(ModelObservationError::InvalidIdentity)?;
             let consumer = floe_inference::ModelConsumer::new(request.consumer.clone())
@@ -561,30 +595,15 @@ impl ModelProvider for ScriptedModelProvider {
                     purpose,
                     consumer,
                     capabilities: request.required_capabilities.clone(),
-                    boundary: ProcessingBoundary::Device,
+                    boundary: selection.boundary,
                     binding_digest,
+                    selection_commitment: selection.commitment,
+                    budget_profile: selection.budget_profile,
                 },
                 transport,
             }))
         })
     }
-}
-
-fn device_binding(
-    request: &ModelPlanRequest,
-) -> Result<floe_agent_contract::ModelBindingDigest, ModelObservationError> {
-    use sha2::Digest;
-    let mut input = Vec::from(b"floe.p1a.scripted-device-model\0".as_slice());
-    input.extend_from_slice(request.principal.as_bytes());
-    input.push(0);
-    input.extend_from_slice(request.device_id.as_bytes());
-    input.push(0);
-    input.extend_from_slice(request.purpose.as_bytes());
-    input.push(0);
-    input.extend_from_slice(request.consumer.as_bytes());
-    Ok(floe_agent_contract::ModelBindingDigest(
-        sha2::Sha256::digest(input).into(),
-    ))
 }
 
 struct ScriptedTransport {

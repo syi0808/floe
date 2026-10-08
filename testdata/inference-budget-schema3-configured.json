@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "purposes": {
+    "quick_response": {
+      "status": "available",
+      "capability_revision": "2222222222222222222222222222222222222222222222222222222222222222",
+      "capabilities": ["chat"],
+      "budget_profile": {
+        "schema_version": 1,
+        "context_window": {"status": "known", "tokens": 10000, "source": "operator_configuration"},
+        "max_output": {"status": "known", "tokens": 2000, "source": "operator_configuration"},
+        "selected_output_reservation": {"status": "known", "tokens": 1024, "source": "operator_configuration"},
+        "estimator": {
+          "version": 1,
+          "method": "utf8_model_input_bytes_upper_estimate_v1",
+          "uncertainty": "exact_tokenizer_unavailable",
+          "provider_overhead_tokens": 64,
+          "safety_margin_tokens": 128
+        },
+        "framing": {
+          "configured_input_json_bytes": 16000,
+          "max_input_json_bytes": 16000,
+          "max_instruction_bytes": 9216,
+          "max_messages": 256,
+          "max_tools": 64,
+          "max_conversation_bytes": 131072,
+          "max_request_bytes": 98304,
+          "max_output_bytes": 16384
+        },
+        "sources": {
+          "catalog": {
+            "status": "available",
+            "revision": 11,
+            "context_window_tokens": 8192,
+            "max_output_tokens": 1024,
+            "provenance": {"source": "verified_catalog_fixture", "verified_at": "2026-10-08T00:00:00Z"}
+          },
+          "operator_configuration": "configured",
+          "provider_confirmed": "unknown",
+          "operator_configuration_version": 1
+        }
+      }
+    },
+    "everyday_assistance": {"status": "not_configured"},
+    "deep_work": {"status": "disabled"}
+  }
+}

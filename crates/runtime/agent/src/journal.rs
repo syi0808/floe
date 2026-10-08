@@ -1,9 +1,9 @@
 //! One role-neutral parser for canonical execution journals.
 use floe_agent_contract::{
     AgentFailure, Artifact, BatchCursor, DependencyCoverage, JournalEntry, JournalEvent,
-    ModelConversation, ModelConversationEntry, ModelStep, ProjectionRef, ReplayReceipt, RunId,
-    TaskExecutionEvidence, TaskExecutionReceipt, TaskId, TaskModelAccounting, TaskReceipt,
-    TaskState, UnresolvedModelAttempt, ValidatedModelBatch, input_digest,
+    ModelConversation, ModelConversationEntry, ModelSelectionState, ModelStep, ProjectionRef,
+    ReplayReceipt, RunId, TaskExecutionEvidence, TaskExecutionReceipt, TaskId, TaskModelAccounting,
+    TaskReceipt, TaskState, UnresolvedModelAttempt, ValidatedModelBatch, input_digest,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -54,6 +54,7 @@ pub enum JournalBlockage {
 #[derive(Clone, Debug)]
 pub struct JournalProjection {
     pub execution_id: Option<Uuid>,
+    pub model_selection: ModelSelectionState,
     pub model_conversation: ModelConversation,
     pub replay: Vec<ReplayReceipt>,
     pub pending_batch: Option<ValidatedModelBatch>,
@@ -152,6 +153,7 @@ pub fn project_execution_journal(
     let mut seen_batches = HashSet::new();
     let mut batches_seen: u32 = 0;
     let mut execution_id: Option<Uuid> = None;
+    let mut model_selection = ModelSelectionState::Fresh;
     let mut pending: Option<PendingBatch> = None;
     let mut uncheckpointed_completion = false;
     let mut completed_iterations: u32 = 0;
@@ -224,6 +226,7 @@ pub fn project_execution_journal(
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
+                record_model_selection(&mut model_selection, plan)?;
                 attempts.insert(
                     *attempt_id,
                     AttemptState {
@@ -817,6 +820,7 @@ pub fn project_execution_journal(
         delegated_receipts,
         task_refs,
         execution_id,
+        model_selection,
         model_conversation: ModelConversation {
             history: Vec::new(),
             current_turn: exchanges,
@@ -828,6 +832,29 @@ pub fn project_execution_journal(
         usage: total.usage,
         lineage,
     })
+}
+
+fn record_model_selection(
+    state: &mut ModelSelectionState,
+    plan: &floe_agent_contract::PreparedModelPlan,
+) -> Result<(), AgentFailure> {
+    match plan.model_execution_selection()? {
+        Some(selection) => match state {
+            ModelSelectionState::Fresh => {
+                *state = ModelSelectionState::Pinned(selection);
+            }
+            ModelSelectionState::Pinned(pinned) if *pinned == selection => {}
+            ModelSelectionState::Pinned(_) => return Err(AgentFailure::StorageUnavailable),
+            ModelSelectionState::Unproven => {}
+        },
+        None => match state {
+            ModelSelectionState::Fresh | ModelSelectionState::Pinned(_) => {
+                *state = ModelSelectionState::Unproven;
+            }
+            ModelSelectionState::Unproven => {}
+        },
+    }
+    Ok(())
 }
 
 pub fn journal_digest(entries: &[JournalEntry]) -> Result<[u8; 32], AgentFailure> {
@@ -871,6 +898,59 @@ pub fn validate_journal_capacity(entries: &[JournalEntry]) -> Result<(), AgentFa
         return Err(AgentFailure::BudgetExceeded);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod model_selection_tests {
+    use super::*;
+    use floe_agent_contract::{
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+        PreparedModelPlan, ProcessingBoundary,
+    };
+
+    fn plan(commitment: u8) -> PreparedModelPlan {
+        PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: "floe.conversation.manager".into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        }
+    }
+
+    #[test]
+    fn durable_model_intent_selection_is_pinned_and_conflicting_selection_is_rejected() {
+        let first = plan(1);
+        let mut selection = ModelSelectionState::Fresh;
+        record_model_selection(&mut selection, &first).expect("pin first selection");
+        assert_eq!(
+            selection,
+            ModelSelectionState::Pinned(first.model_execution_selection().unwrap().unwrap())
+        );
+        record_model_selection(&mut selection, &first).expect("same selection is stable");
+        assert_eq!(
+            record_model_selection(&mut selection, &plan(3)),
+            Err(AgentFailure::StorageUnavailable),
+            "a later ModelIntent cannot silently replace the durable pin"
+        );
+    }
+
+    #[test]
+    fn legacy_model_intent_without_selection_evidence_remains_unproven() {
+        let mut legacy = plan(1);
+        legacy.selection_commitment = None;
+        legacy.budget_profile = None;
+        let mut selection = ModelSelectionState::Fresh;
+        record_model_selection(&mut selection, &legacy).expect("read legacy evidence");
+        assert_eq!(selection, ModelSelectionState::Unproven);
+        record_model_selection(&mut selection, &plan(2)).expect("retain conservative state");
+        assert_eq!(selection, ModelSelectionState::Unproven);
+    }
 }
 
 fn checked_add(value: &mut u64, amount: u64) -> Result<(), AgentFailure> {

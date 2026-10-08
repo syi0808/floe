@@ -17,9 +17,10 @@ use floe_kernel::AgentFailure;
 use uuid::Uuid;
 
 use support::{
-    GenerateBarrier, IsolatedProfile, ModelOutput, PlanStage, PrimaryBehavior, ScriptedModel,
-    assert_script_clean, cancel_run, prepare_runtime, read_events, read_run, read_session,
-    start_session, start_turn, terminal_run_event, wait_terminal_run,
+    GenerateBarrier, IsolatedProfile, ModelOutput, PlanStage, PrimaryBehavior,
+    ScriptModelSelection, ScriptedModel, assert_script_clean, cancel_run, prepare_runtime,
+    read_events, read_run, read_session, start_session, start_turn, terminal_run_event,
+    wait_terminal_run,
 };
 
 const USER_TEXT: &str = "Summarize my current priorities.";
@@ -1072,6 +1073,12 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
         ModelOutput::ScheduleExpertFlow,
     );
     let recorder = model.recorder();
+    recorder.set_model_selection_sequence(vec![
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(1),
+    ]);
     let (_profile, host) = create_ready_app(&model);
 
     let source = support::configure_fixture_calendar(&host, "Synthetic team calendar");
@@ -1247,4 +1254,41 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
             assert!(receipt.attempt_refs.contains(&attempt_id));
         }
     }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn manager_rejects_same_budget_model_change_before_second_dispatch() {
+    const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
+
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleExpertFlow,
+    );
+    let recorder = model.recorder();
+    recorder.set_model_selection_sequence(vec![
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(2),
+        // Same profile and binding, different opaque model/revision commitment.
+        ScriptModelSelection::device(3),
+    ]);
+    let (_profile, host) = create_ready_app(&model);
+
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    support::bind_schedule_expert(&host);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let receipt = wait_terminal_run(&host, command.run_id);
+
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(receipt.issue, Some(AgentFailure::PolicyDenied));
+    let script = assert_script_clean(&recorder);
+    assert_eq!(script.plans.len(), 8, "the changed selection was observed");
+    assert_eq!(
+        script.generated.len(),
+        3,
+        "the changed selection was rejected before the fourth provider handoff"
+    );
 }

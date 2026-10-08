@@ -28,6 +28,8 @@ type PurposeCapability struct {
 	Status             PurposeStatus
 	CapabilityRevision string
 	Capabilities       []string
+	BudgetProfile      ModelBudgetProfile
+	ModelIdentity      ModelIdentity
 }
 type PurposeInventory struct{ QuickResponse, EverydayAssistance, DeepWork PurposeCapability }
 

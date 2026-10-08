@@ -237,6 +237,7 @@ struct Drive<'a> {
 
 impl Drive<'_> {
     async fn run(self) -> Result<EngineOutcome, AgentFailure> {
+        let model_selection = self.request.model_selection.clone();
         let mut drive = ActiveDrive {
             config: self.config,
             execution_id: self.request.execution_id,
@@ -254,6 +255,7 @@ impl Drive<'_> {
             delegations: 0,
             unavailable: HashMap::new(),
             seen_invocations: HashSet::new(),
+            model_selection,
         };
         drive.conversation = drive.request.conversation.clone();
         drive.model_replay.clone_from(&drive.request.replay);
@@ -365,6 +367,7 @@ struct ActiveDrive<'a> {
     delegations: u32,
     unavailable: HashMap<String, u8>,
     seen_invocations: HashSet<InvocationKey>,
+    model_selection: floe_agent_contract::ModelSelectionState,
 }
 
 impl ActiveDrive<'_> {
@@ -438,6 +441,9 @@ impl ActiveDrive<'_> {
     /// Select once, then project and dispatch against that immutable object.
     /// A correction has fresh attempt/projection identities and source fences.
     async fn validated_batch(&mut self) -> Result<BatchOutcome, AgentFailure> {
+        if self.model_selection == floe_agent_contract::ModelSelectionState::Unproven {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let plan_request = ModelPlanRequest {
             principal: self.request.principal.clone(),
             device_id: self.request.device_id.clone(),
@@ -459,7 +465,7 @@ impl ActiveDrive<'_> {
             )
             .await?;
         let plan = prepared.plan().clone();
-        plan.validate()?;
+        plan.validate_for_dispatch()?;
         if plan.principal != plan_request.principal
             || plan.device_id != plan_request.device_id
             || plan.purpose != plan_request.purpose
@@ -470,6 +476,8 @@ impl ActiveDrive<'_> {
         {
             return Err(AgentFailure::PolicyDenied);
         }
+        let selection =
+            floe_agent_contract::validate_model_intent_selection(&self.model_selection, &plan)?;
         let mut correction: Option<ModelCorrection> = None;
         loop {
             let projection_operation_id = Uuid::new_v4();
@@ -563,6 +571,10 @@ impl ActiveDrive<'_> {
                 } else {
                     AgentFailure::Conflict
                 });
+            }
+            if self.model_selection == floe_agent_contract::ModelSelectionState::Fresh {
+                self.model_selection =
+                    floe_agent_contract::ModelSelectionState::Pinned(selection.clone());
             }
             let response = model_scope
                 .run(prepared.generate(model_request, &model_scope))
@@ -1617,4 +1629,362 @@ fn validate_model_steps(
         }
     }
     Ok(corrections)
+}
+
+#[cfg(test)]
+mod model_selection_tests {
+    use super::*;
+    use floe_agent_contract::{
+        InvocationKey, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelConversation, ModelConversationEntry, ModelSelectionCommitment, ModelSelectionState,
+        PreparedModelPlan, ProcessingBoundary, RoleSpec, TraceContext,
+    };
+    use floe_execution::{
+        Cancellation, ExecutionScope,
+        budget::{BudgetConfig, BudgetLedger, ModelUsage},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::Duration;
+
+    struct NeverCalledPorts;
+
+    impl ModelProjectionPort for NeverCalledPorts {
+        fn project<'a>(
+            &'a self,
+            _request: ModelProjectionRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelProjectionOutcome, AgentFailure>>
+        {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    impl ToolPort for NeverCalledPorts {
+        fn invoke<'a>(
+            &'a self,
+            _call: ToolCall,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ToolInvocationOutcome, AgentFailure>>
+        {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    impl DelegationPort for NeverCalledPorts {
+        fn delegate<'a>(
+            &'a self,
+            _request: DelegationRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<TaskReceipt, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    impl ExecutionJournal for NeverCalledPorts {
+        fn record_intent<'a>(
+            &'a self,
+            _event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+
+        fn record_result<'a>(
+            &'a self,
+            _event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+
+        fn record_output<'a>(
+            &'a self,
+            _event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+
+        fn checkpoint<'a>(
+            &'a self,
+            _event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    struct CountingModel(AtomicUsize);
+
+    impl ModelPort for CountingModel {
+        fn prepare<'a>(
+            &'a self,
+            _request: ModelPlanRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<Box<dyn floe_agent_contract::PreparedModelCall>, AgentFailure>,
+        > {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_unproven_selection_is_rejected_before_model_preparation() {
+        let execution_id = Uuid::new_v4();
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default());
+        let request = EngineRequest {
+            execution_id,
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            role_spec: RoleSpec {
+                role_id: "manager".into(),
+                instructions: "Help the person.".into(),
+                output_contract: "Return a concise answer.".into(),
+                output_format: floe_agent_contract::ModelOutputFormat::Text,
+            },
+            scope: ExecutionScope::root(
+                Cancellation::new(),
+                tokio::time::Instant::now() + Duration::from_secs(30),
+                ledger.work_lease(),
+                TraceContext::new(execution_id),
+            ),
+            conversation: ModelConversation {
+                history: Vec::new(),
+                current_turn: vec![ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "hello".into(),
+                }],
+            },
+            allowed_catalog: AllowedCatalog::default(),
+            purpose: "everyday_assistance".into(),
+            consumer: "floe.conversation.manager".into(),
+            max_iterations: 1,
+            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+            replay: Vec::new(),
+            resume: None,
+            model_selection: ModelSelectionState::Unproven,
+            delegation_context: None,
+        };
+        let never = NeverCalledPorts;
+        let model = CountingModel(AtomicUsize::new(0));
+        let ports = EnginePorts {
+            projection: &never,
+            model: &model,
+            tools: &never,
+            delegation: &never,
+            journal: &never,
+            validator: &ContractValidator,
+        };
+
+        assert!(matches!(
+            Engine::default().drive(request, ports).await,
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(
+            model.0.load(Ordering::SeqCst),
+            0,
+            "legacy evidence without a complete selection cannot prepare a new provider call"
+        );
+    }
+
+    struct CountingPreparedModel {
+        plan: PreparedModelPlan,
+        generates: Arc<AtomicUsize>,
+    }
+
+    impl floe_agent_contract::PreparedModelCall for CountingPreparedModel {
+        fn plan(&self) -> &PreparedModelPlan {
+            &self.plan
+        }
+
+        fn generate<'a>(
+            &'a self,
+            _request: ModelRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ModelResponse, AgentFailure>> {
+            self.generates.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    struct CountingPlanModel {
+        plan: PreparedModelPlan,
+        prepares: Arc<AtomicUsize>,
+        generates: Arc<AtomicUsize>,
+    }
+
+    impl ModelPort for CountingPlanModel {
+        fn prepare<'a>(
+            &'a self,
+            _request: ModelPlanRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<
+            'a,
+            Result<Box<dyn floe_agent_contract::PreparedModelCall>, AgentFailure>,
+        > {
+            self.prepares.fetch_add(1, Ordering::SeqCst);
+            let prepared = CountingPreparedModel {
+                plan: self.plan.clone(),
+                generates: self.generates.clone(),
+            };
+            let prepared: Box<dyn floe_agent_contract::PreparedModelCall> = Box::new(prepared);
+            Box::pin(async move { Ok(prepared) })
+        }
+    }
+
+    fn finalization_request(model_selection: ModelSelectionState) -> EngineRequest {
+        use floe_agent_contract::{DependencyCoverage, ToolCall, ToolResult};
+
+        let execution_id = Uuid::new_v4();
+        let ledger = BudgetLedger::new(
+            BudgetConfig::new(100, 100).with_finalization_reserve(100, 100),
+            ModelUsage::default(),
+        );
+        let root_scope = ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            ledger.work_lease(),
+            TraceContext::new(execution_id),
+        );
+        let scope = root_scope
+            .finalization_scope(Duration::from_secs(10))
+            .expect("reserve a finalization scope");
+        let call_id = Uuid::new_v4();
+        let call = ToolCall {
+            call_id,
+            invocation_key: InvocationKey::new(),
+            tool_id: "floe.source.calendar".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        };
+        let result = ToolResult {
+            call_id,
+            text: "Persisted calendar observation.".into(),
+            artifacts: vec![],
+            coverage: DependencyCoverage::Independent,
+            issue: None,
+        };
+        EngineRequest {
+            execution_id,
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            role_spec: RoleSpec {
+                role_id: "manager.finalization".into(),
+                instructions: "Use only settled observations.".into(),
+                output_contract: "Return one concise answer.".into(),
+                output_format: floe_agent_contract::ModelOutputFormat::Text,
+            },
+            scope,
+            conversation: ModelConversation {
+                history: vec![],
+                current_turn: vec![
+                    ModelConversationEntry::User {
+                        message_id: Uuid::new_v4(),
+                        text: "Summarize my calendar.".into(),
+                    },
+                    ModelConversationEntry::ToolExchange { call, result },
+                ],
+            },
+            allowed_catalog: AllowedCatalog::default(),
+            purpose: "everyday_assistance".into(),
+            consumer: "floe.conversation.manager".into(),
+            max_iterations: 1,
+            max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+            replay: vec![],
+            resume: None,
+            model_selection,
+            delegation_context: None,
+        }
+    }
+
+    fn prepared_plan(commitment: u8) -> PreparedModelPlan {
+        PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: "floe.conversation.manager".into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        }
+    }
+
+    #[tokio::test]
+    async fn finalization_replay_keeps_settled_observation_but_denies_changed_model_before_handoff()
+    {
+        let selection = floe_agent_contract::ModelExecutionSelection {
+            commitment: ModelSelectionCommitment([1; 32]),
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: "floe.conversation.manager".into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
+        };
+        let request = finalization_request(ModelSelectionState::Pinned(selection));
+        assert!(matches!(
+            request.conversation.current_turn.as_slice(),
+            [
+                ModelConversationEntry::User { .. },
+                ModelConversationEntry::ToolExchange { result, .. }
+            ] if result.text == "Persisted calendar observation."
+        ));
+        let never = NeverCalledPorts;
+        let model = CountingPlanModel {
+            plan: prepared_plan(2),
+            prepares: Arc::new(AtomicUsize::new(0)),
+            generates: Arc::new(AtomicUsize::new(0)),
+        };
+        let ports = EnginePorts {
+            projection: &never,
+            model: &model,
+            tools: &never,
+            delegation: &never,
+            journal: &never,
+            validator: &ContractValidator,
+        };
+
+        assert!(matches!(
+            Engine::default().drive(request, ports).await,
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(model.prepares.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            model.generates.load(Ordering::SeqCst),
+            0,
+            "a replayed observation is retained, but finalization cannot hand off to a changed model"
+        );
+    }
+
+    #[tokio::test]
+    async fn finalization_replay_with_unproven_selection_stops_before_model_preparation() {
+        let request = finalization_request(ModelSelectionState::Unproven);
+        let never = NeverCalledPorts;
+        let model = CountingPlanModel {
+            plan: prepared_plan(1),
+            prepares: Arc::new(AtomicUsize::new(0)),
+            generates: Arc::new(AtomicUsize::new(0)),
+        };
+        let ports = EnginePorts {
+            projection: &never,
+            model: &model,
+            tools: &never,
+            delegation: &never,
+            journal: &never,
+            validator: &ContractValidator,
+        };
+
+        assert!(matches!(
+            Engine::default().drive(request, ports).await,
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert_eq!(model.prepares.load(Ordering::SeqCst), 0);
+        assert_eq!(model.generates.load(Ordering::SeqCst), 0);
+    }
 }

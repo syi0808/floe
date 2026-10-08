@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use floe_agent_contract::{
-    AgentMessage, BatchCursor, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep,
-    MessageRole, ModelConversation, ModelConversationEntry, ValidatedModelBatch,
+    AgentMessage, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep, MessageRole,
+    ModelConversation, ModelConversationEntry, ModelSelectionState,
 };
 use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
@@ -16,7 +16,10 @@ use crate::{
 };
 
 use super::finalization::{FinalizationOutcome, finalize_exhausted_run};
-use super::recovery::{JournalLineage, project_transcript_history};
+use super::recovery::{
+    MAX_CONTINUATION_JOURNAL_ENTRIES, ResumeLineageFold, fold_resume_lineage,
+    project_transcript_history, reconcile_resume_lineage,
+};
 
 pub(super) enum RunAdmission {
     Existing(RunReceipt),
@@ -399,10 +402,16 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             message_id: original.message_id,
             text: original.text.clone(),
         };
-        let (model_conversation, resume, mut continuation_replay) = match continuation {
+        let (model_conversation, resume, mut continuation_replay, model_selection) =
+            match continuation {
             // Continuation and resume both derive from the validated request
             // mode, so the marker arm below only runs for a linked resume.
             Some(snapshot) => {
+                let model_selection = if snapshot.pending_batch.is_some() {
+                    snapshot.model_selection.clone()
+                } else {
+                    ModelSelectionState::Fresh
+                };
                 // The new user message leads; the settled exchanges of the
                 // continued execution follow as context for it.
                 let mut current_turn =
@@ -423,6 +432,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     },
                     resume,
                     snapshot.replay,
+                    model_selection,
                 )
             }
             None => match resume_context {
@@ -448,6 +458,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     },
                     None,
                     Vec::new(),
+                    ModelSelectionState::Fresh,
                 ),
                 None => {
                     let history = project_transcript_history(&admitted.transcript)?
@@ -467,6 +478,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                         },
                         None,
                         Vec::new(),
+                        ModelSelectionState::Fresh,
                     )
                 }
             },
@@ -490,6 +502,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             max_output_bytes: self.config.max_output_bytes,
             replay: continuation_replay,
             resume,
+            model_selection,
             delegation_context: request.delegation_context,
         };
         let pending_coverage = engine_request
@@ -754,7 +767,7 @@ pub async fn continuation<Repository: ConversationRepository>(
     let mut completed_iterations = 0_u32;
     let mut own_accounting = Vec::new();
     let mut delegated_accounting = Vec::new();
-    let mut carried: Option<(ValidatedModelBatch, BatchCursor)> = None;
+    let mut lineage_fold = ResumeLineageFold::default();
     let mut total_entries = 0_usize;
     let mut seen_exchanges = std::collections::HashSet::new();
     let mut replay_invocations = std::collections::HashSet::new();
@@ -813,7 +826,7 @@ pub async fn continuation<Repository: ConversationRepository>(
         total_entries = total_entries
             .checked_add(entries.len())
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if total_entries > 512 {
+        if total_entries > MAX_CONTINUATION_JOURNAL_ENTRIES {
             return Err(AgentFailure::BudgetExceeded);
         }
         let projected = floe_agent_runtime::project_execution_journal(
@@ -821,6 +834,7 @@ pub async fn continuation<Repository: ConversationRepository>(
             &entries,
             floe_agent_runtime::JournalProjectionMode::ContinueSettledDelegation,
         )?;
+        let projected_selection = projected.model_selection.clone();
         // A resumed run re-journals the steps it replays, so the same logical
         // exchange can appear in several runs: keep the first, skip repeats.
         // Duplicates inside one journal are still rejected by projection.
@@ -851,7 +865,12 @@ pub async fn continuation<Repository: ConversationRepository>(
             .pending_batch
             .clone()
             .zip(projected.cursor.clone());
-        carried = reconcile_resume_lineage(carried, &projected.lineage, live)?;
+        lineage_fold = fold_resume_lineage(
+            &lineage_fold,
+            &projected.lineage,
+            live,
+            &projected_selection,
+        )?;
     }
     let usage =
         floe_agent_runtime::aggregate_model_accounting(&own_accounting, &delegated_accounting)?
@@ -863,8 +882,15 @@ pub async fn continuation<Repository: ConversationRepository>(
     if model_conversation.len() > floe_agent_contract::MAX_AGENT_MESSAGES || replay.len() > 128 {
         return Err(AgentFailure::BudgetExceeded);
     }
-    let (pending_batch, batch_cursor) =
-        carried.map_or((None, None), |(batch, cursor)| (Some(batch), Some(cursor)));
+    let (pending_batch, batch_cursor) = lineage_fold
+        .pending
+        .clone()
+        .map_or((None, None), |(batch, cursor)| (Some(batch), Some(cursor)));
+    let model_selection = if pending_batch.is_some() {
+        lineage_fold.carried_selection
+    } else {
+        ModelSelectionState::Fresh
+    };
     Ok(ContinuationSnapshot {
         expert_environment: current.expert_environment,
         reference: current.continuation().ok_or(AgentFailure::Conflict)?,
@@ -875,49 +901,10 @@ pub async fn continuation<Repository: ConversationRepository>(
         replay,
         pending_batch,
         batch_cursor,
+        model_selection,
         completed_iterations,
         usage,
     })
-}
-
-/// Oldest → newest resume-lineage reconciliation. `carried` is the inherited
-/// parent pending batch/cursor, `lineage` describes how the child journal
-/// began, and `live` is the child's projected pending batch/cursor.
-fn reconcile_resume_lineage(
-    carried: Option<(ValidatedModelBatch, BatchCursor)>,
-    lineage: &JournalLineage,
-    live: Option<(ValidatedModelBatch, BatchCursor)>,
-) -> Result<Option<(ValidatedModelBatch, BatchCursor)>, AgentFailure> {
-    match (carried, lineage) {
-        // No inherited pending work: only a journal that never claimed a
-        // resume may carry live state forward.
-        (None, JournalLineage::Empty | JournalLineage::Fresh) => Ok(live),
-        (None, JournalLineage::ResumeBatchOnly { .. } | JournalLineage::ResumeClaimed { .. }) => {
-            Err(AgentFailure::StorageUnavailable)
-        }
-        // The child has not taken over yet; the parent stays authoritative.
-        (Some(parent), JournalLineage::Empty) => Ok(Some(parent)),
-        // Batch-only re-records never started: an exact batch keeps the
-        // parent authoritative, anything else is corruption.
-        (Some((parent_batch, parent_cursor)), JournalLineage::ResumeBatchOnly { batch }) => {
-            if *batch == parent_batch {
-                Ok(Some((parent_batch, parent_cursor)))
-            } else {
-                Err(AgentFailure::StorageUnavailable)
-            }
-        }
-        // Exact batch/cursor takeover confirmed: the child's live state
-        // becomes authoritative from this point on.
-        (Some((parent_batch, parent_cursor)), JournalLineage::ResumeClaimed { batch, cursor }) => {
-            if *batch == parent_batch && *cursor == parent_cursor {
-                Ok(live)
-            } else {
-                Err(AgentFailure::StorageUnavailable)
-            }
-        }
-        // A fresh model plan cannot skip parent pending work.
-        (Some(_), JournalLineage::Fresh) => Err(AgentFailure::StorageUnavailable),
-    }
 }
 
 fn exchange_identity(entry: &ModelConversationEntry) -> Option<uuid::Uuid> {
@@ -1147,4 +1134,268 @@ pub fn validate_task_delegation_lineage(
         return Err(AgentFailure::Conflict);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod model_selection_tests {
+    use super::*;
+    use crate::JournalLineage;
+    use crate::application::recovery::reconcile_resume_selection;
+    use floe_agent_contract::{
+        BatchCursor, BudgetProvenance, CatalogMetadataStatus, ModelBindingDigest,
+        ModelBudgetProfile, ModelCapabilities, ModelExecutionSelection, ModelSelectionCommitment,
+        ModelTokenLimit, OperatorConfigurationStatus, ProcessingBoundary, TokenLimitSource,
+        TokenLimitStatus, ValidatedModelBatch,
+    };
+
+    fn selection() -> ModelExecutionSelection {
+        ModelExecutionSelection {
+            commitment: ModelSelectionCommitment([1; 32]),
+            principal: "00000000-0000-4000-8000-000000000001".into(),
+            device_id: "device-1".into(),
+            purpose: "everyday_assistance".into(),
+            consumer: CONVERSATION_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
+        }
+    }
+
+    fn configured_profile() -> ModelBudgetProfile {
+        let mut profile = ModelBudgetProfile::unknown();
+        profile.context_window = ModelTokenLimit {
+            status: TokenLimitStatus::Known,
+            tokens: Some(32_000),
+            source: TokenLimitSource::OperatorConfiguration,
+        };
+        profile.max_output = ModelTokenLimit {
+            status: TokenLimitStatus::Known,
+            tokens: Some(4_096),
+            source: TokenLimitSource::OperatorConfiguration,
+        };
+        profile.selected_output_reservation = ModelTokenLimit {
+            status: TokenLimitStatus::Known,
+            tokens: Some(2_048),
+            source: TokenLimitSource::OperatorConfiguration,
+        };
+        profile.estimator.provider_overhead_tokens = Some(128);
+        profile.estimator.safety_margin_tokens = Some(256);
+        profile.sources.operator_configuration = OperatorConfigurationStatus::Configured;
+        profile.sources.operator_configuration_version = Some(1);
+        profile.sources.catalog.status = CatalogMetadataStatus::Available;
+        profile.sources.catalog.revision = Some(1);
+        profile.sources.catalog.context_window_tokens = Some(32_000);
+        profile.sources.catalog.max_output_tokens = Some(4_096);
+        profile.sources.catalog.provenance = Some(BudgetProvenance {
+            source: "test fixture".into(),
+            verified_at: "2026-10-08".into(),
+        });
+        profile.validate().expect("valid known budget profile");
+        profile
+    }
+
+    #[test]
+    fn resumed_selection_preserves_pin_and_fails_closed_on_every_selection_dimension() {
+        let pinned = selection();
+        assert_eq!(
+            reconcile_resume_selection(
+                &ModelSelectionState::Pinned(pinned.clone()),
+                &ModelSelectionState::Pinned(pinned.clone()),
+            ),
+            Ok(ModelSelectionState::Pinned(pinned.clone()))
+        );
+        assert_eq!(
+            reconcile_resume_selection(
+                &ModelSelectionState::Pinned(pinned.clone()),
+                &ModelSelectionState::Fresh
+            ),
+            Ok(ModelSelectionState::Pinned(pinned.clone())),
+            "a pending batch child with no local ModelIntent inherits its parent's pin"
+        );
+
+        let mut changed = pinned.clone();
+        changed.commitment = ModelSelectionCommitment([3; 32]);
+        let mut variants = vec![changed];
+        let mut changed = pinned.clone();
+        changed.boundary = ProcessingBoundary::Gateway;
+        variants.push(changed);
+        let mut changed = pinned.clone();
+        changed.binding_digest = ModelBindingDigest([4; 32]);
+        variants.push(changed);
+        let mut changed = pinned.clone();
+        changed.budget_profile = configured_profile();
+        variants.push(changed);
+        for changed in variants {
+            assert_eq!(
+                reconcile_resume_selection(
+                    &ModelSelectionState::Pinned(pinned.clone()),
+                    &ModelSelectionState::Pinned(changed),
+                ),
+                Err(AgentFailure::StorageUnavailable)
+            );
+        }
+    }
+
+    #[test]
+    fn unproven_historical_selection_never_becomes_a_dispatch_pin() {
+        assert_eq!(
+            reconcile_resume_selection(&ModelSelectionState::Unproven, &ModelSelectionState::Fresh,),
+            Ok(ModelSelectionState::Unproven)
+        );
+        assert_eq!(
+            reconcile_resume_selection(
+                &ModelSelectionState::Unproven,
+                &ModelSelectionState::Pinned(selection()),
+            ),
+            Err(AgentFailure::StorageUnavailable)
+        );
+    }
+
+    #[test]
+    fn pending_batch_takeover_restores_the_parent_selection() {
+        let execution_id = uuid::Uuid::new_v4();
+        let batch_id = uuid::Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id: uuid::Uuid::new_v4(),
+            projection_ref: floe_agent_contract::ProjectionRef::new(),
+            batch_id,
+            steps: vec![floe_agent_contract::ModelStep::Answer {
+                text: "persisted answer".into(),
+                artifacts: vec![],
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
+        };
+        let cursor = BatchCursor {
+            batch_id,
+            next_step_index: 0,
+        };
+        let parent_state = Some((batch.clone(), cursor.clone()));
+        let child_batch_only = JournalLineage::ResumeBatchOnly {
+            batch: batch.clone(),
+        };
+        assert_eq!(
+            reconcile_resume_lineage(parent_state.clone(), &child_batch_only, None),
+            Ok(parent_state.clone()),
+            "the parent remains authoritative until the child acknowledges its cursor"
+        );
+        let child_claimed = JournalLineage::ResumeClaimed {
+            batch: batch.clone(),
+            cursor: cursor.clone(),
+        };
+        assert_eq!(
+            reconcile_resume_lineage(
+                parent_state.clone(),
+                &child_claimed,
+                Some((batch.clone(), cursor.clone())),
+            ),
+            Ok(parent_state)
+        );
+        let pinned = selection();
+        assert_eq!(
+            reconcile_resume_selection(
+                &ModelSelectionState::Pinned(pinned.clone()),
+                &ModelSelectionState::Fresh
+            ),
+            Ok(ModelSelectionState::Pinned(pinned)),
+            "the child has no local ModelIntent, so it inherits the pending execution pin"
+        );
+    }
+
+    #[test]
+    fn shared_lineage_fold_carries_pin_across_unclaimed_runs_and_resets_after_claim() {
+        let pinned = selection();
+        let execution_id = uuid::Uuid::new_v4();
+        let batch = ValidatedModelBatch {
+            execution_id,
+            attempt_id: uuid::Uuid::new_v4(),
+            projection_ref: floe_agent_contract::ProjectionRef::new(),
+            batch_id: uuid::Uuid::new_v4(),
+            steps: vec![floe_agent_contract::ModelStep::Answer {
+                text: "persisted answer".into(),
+                artifacts: vec![],
+            }],
+            catalog_revision: 1,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
+        };
+        let cursor = BatchCursor {
+            batch_id: batch.batch_id,
+            next_step_index: 0,
+        };
+        let ancestor = fold_resume_lineage(
+            &ResumeLineageFold::default(),
+            &JournalLineage::Fresh,
+            Some((batch.clone(), cursor.clone())),
+            &ModelSelectionState::Pinned(pinned.clone()),
+        )
+        .expect("fold pinned ancestor with pending batch");
+        assert_eq!(
+            ancestor.carried_selection,
+            ModelSelectionState::Pinned(pinned.clone())
+        );
+
+        for middle_lineage in [
+            JournalLineage::Empty,
+            JournalLineage::ResumeBatchOnly {
+                batch: batch.clone(),
+            },
+        ] {
+            let middle = fold_resume_lineage(
+                &ancestor,
+                &middle_lineage,
+                None,
+                &ModelSelectionState::Fresh,
+            )
+            .expect("unclaimed intermediate preserves parent carry");
+            assert_eq!(middle.pending, Some((batch.clone(), cursor.clone())));
+            assert_eq!(
+                middle.carried_selection,
+                ModelSelectionState::Pinned(pinned.clone())
+            );
+
+            let claimed = JournalLineage::ResumeClaimed {
+                batch: batch.clone(),
+                cursor: cursor.clone(),
+            };
+            let current = fold_resume_lineage(&middle, &claimed, None, &ModelSelectionState::Fresh)
+                .expect("claimed batch finishes while current execution keeps its pin");
+            assert_eq!(current.pending, None);
+            assert_eq!(
+                current.execution_selection,
+                ModelSelectionState::Pinned(pinned.clone())
+            );
+            assert_eq!(current.carried_selection, ModelSelectionState::Fresh);
+
+            let next = fold_resume_lineage(
+                &current,
+                &JournalLineage::Empty,
+                None,
+                &ModelSelectionState::Fresh,
+            )
+            .expect("later Run starts fresh after carry is consumed");
+            assert_eq!(next.execution_selection, ModelSelectionState::Fresh);
+            assert_eq!(next.carried_selection, ModelSelectionState::Fresh);
+
+            let mut changed = pinned.clone();
+            changed.commitment = ModelSelectionCommitment([9; 32]);
+            assert_eq!(
+                fold_resume_lineage(
+                    &middle,
+                    &claimed,
+                    None,
+                    &ModelSelectionState::Pinned(changed),
+                ),
+                Err(AgentFailure::StorageUnavailable),
+                "a claimed child cannot switch selection before finishing the batch"
+            );
+        }
+    }
 }

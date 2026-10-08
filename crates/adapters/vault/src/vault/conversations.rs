@@ -18,6 +18,11 @@ const MAX_RUN_ROWS: i64 = 4_096;
 const MAX_COMMAND_ROWS: i64 = 4_096;
 pub(super) const MAX_JOURNAL_ENTRIES: u64 = 512;
 
+#[cfg(test)]
+static MODEL_SELECTION_ACK_LOSS_VAULTS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<uuid::Uuid>>,
+> = std::sync::OnceLock::new();
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultConversationAdmission {
     Created {
@@ -603,6 +608,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let event: JournalEvent = serde_json::from_str(payload).map_err(|_| AgentFailure::InvalidInput)?;
             if kind != journal_kind(&event) || payload.len() > journal_event_byte_limit(&event) { return Err(AgentFailure::InvalidInput); }
             let mut entries = self.conversation_journal_on(&transaction, &record).await?;
+            if let JournalEvent::ModelIntent { plan, .. } = &event {
+                let prior = self
+                    .model_selection_for_append_on(&transaction, &record, &entries)
+                    .await?;
+                floe_agent_contract::validate_model_intent_selection(&prior, plan)?;
+            }
             entries.push(JournalEntry { revision: record.journal_revision + 1, event });
             validate_journal(&record, &entries)?;
             let previous = record.journal_revision;
@@ -638,8 +649,100 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(record.journal_revision)
         }
         .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
+        let revision = self
+            .finish_registry_transaction_checked(transaction, result)
+            .await?;
+        #[cfg(test)]
+        if MODEL_SELECTION_ACK_LOSS_VAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .map_err(|_| AgentFailure::Interrupted)?
+            .remove(&self.vault_id)
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(revision)
+    }
+
+    async fn model_selection_for_append_on(
+        &self,
+        transaction: &Transaction<'_>,
+        record: &RunRecord,
+        entries: &[JournalEntry],
+    ) -> Result<floe_agent_contract::ModelSelectionState, AgentFailure> {
+        let mut chain = vec![(record.clone(), entries.to_vec())];
+        let mut seen = std::collections::HashSet::from([record.run_id]);
+        let mut child = record.clone();
+        let mut total_entries = entries.len();
+        let mut continuation_depth = 0_usize;
+
+        while let Some(parent_id) = child.continuation_of {
+            if continuation_depth >= usize::from(MAX_RESUME_LINEAGE) || !seen.insert(parent_id) {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let parent = self
+                .conversation_run_on(transaction, parent_id)
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let child_receipt = floe_conversation::project_run_receipt(child.clone())?;
+            let parent_receipt = floe_conversation::project_run_receipt(parent.clone())?;
+            let reference = parent_receipt
+                .continuation()
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if child.person_id != parent.person_id
+                || child_receipt.principal != parent_receipt.principal
+                || child.session_id != parent.session_id
+                || child.device_id != parent.device_id
+                || child.continuation_of != Some(parent_id)
+                || reference.run_id != parent_id
+                || child.continuation_executor_generation != Some(parent.executor_generation)
+                || child.continuation_level != reference.level
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+
+            let parent_entries = self.conversation_journal_on(transaction, &parent).await?;
+            total_entries = total_entries
+                .checked_add(parent_entries.len())
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if total_entries > floe_conversation::MAX_CONTINUATION_JOURNAL_ENTRIES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            chain.push((parent.clone(), parent_entries));
+            child = parent;
+            continuation_depth += 1;
+        }
+
+        chain.reverse();
+        let mut fold = floe_conversation::ResumeLineageFold::default();
+        let chain_len = chain.len();
+        for (index, (ancestor, ancestor_entries)) in chain.into_iter().enumerate() {
+            let receipt = floe_conversation::project_run_receipt(ancestor)?;
+            let projection =
+                floe_conversation::project_model_selection_journal(&receipt, &ancestor_entries)?;
+            if index + 1 == chain_len
+                && matches!(
+                    &projection.lineage,
+                    floe_conversation::JournalLineage::ResumeBatchOnly { .. }
+                )
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let live = projection
+                .pending_batch
+                .clone()
+                .zip(projection.cursor.clone());
+            fold = floe_conversation::fold_resume_lineage(
+                &fold,
+                &projection.lineage,
+                live,
+                &projection.selection,
+            )?;
+        }
+        if fold.pending.is_some() {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(fold.execution_selection)
     }
 
     pub async fn finish_conversation_run(
@@ -1877,5 +1980,767 @@ fn journal_event_byte_limit(event: &JournalEvent) -> usize {
     match event {
         JournalEvent::DelegationResult { .. } => MAX_JOURNAL_ENTRY_BYTES,
         _ => 128 * 1024,
+    }
+}
+
+#[cfg(test)]
+mod model_selection_owner_tests {
+    use std::{
+        collections::HashMap,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
+
+    use super::*;
+    use crate::{RootKey, VaultKeyProvider};
+    use floe_agent_contract::{
+        BatchCursor, InvocationKey, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelSelectionState, ModelStep, PreparedModelPlan,
+        ProcessingBoundary, ProjectionRef, ValidatedModelBatch,
+    };
+    use floe_conversation::{CanonicalTurnIntent, StartSessionRequest};
+    use floe_kernel::PersonId;
+
+    #[derive(Clone, Default)]
+    struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
+
+    impl VaultKeyProvider for TestKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(RootKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &RootKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    struct TestRoot(PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("floe-model-selection-{}", Uuid::new_v4()));
+            std::fs::create_dir(&path).expect("create isolated Vault test root");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .expect("restrict isolated Vault test root");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct StartedRun {
+        root: TestRoot,
+        keys: TestKeys,
+        person_id: PersonId,
+        vault: EncryptedAgentVault<TestKeys>,
+        record: RunRecord,
+    }
+
+    async fn start_run() -> StartedRun {
+        let root = TestRoot::new();
+        let person_id = PersonId::new();
+        let keys = TestKeys::default();
+        let vault = EncryptedAgentVault::create(&root.0, person_id, keys.clone())
+            .await
+            .expect("create isolated encrypted Vault");
+        let session = match vault
+            .start_conversation_session(StartSessionRequest {
+                principal: person_id.to_string(),
+                command_id: CommandId::new(),
+            })
+            .await
+            .expect("start persisted Conversation session")
+        {
+            floe_conversation::SessionStartAdmission::Started(receipt) => receipt,
+            other => panic!("unexpected initial session admission: {other:?}"),
+        };
+        vault
+            .activate_conversation_executor()
+            .await
+            .expect("activate fenced Conversation executor");
+
+        let run_id = RunId::new();
+        let command_id = CommandId::new();
+        let principal = person_id.to_string();
+        let text = "Pin this model execution.".to_owned();
+        let intent = CanonicalTurnIntent {
+            session_id: session.session_id,
+            expected_revision: session.session_revision,
+            text: text.clone(),
+            mode: TurnMode::New,
+            retry_of: None,
+        };
+        let request = TurnAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
+            run_id,
+            command_id,
+            session_id: session.session_id,
+            expected_session_revision: session.session_revision,
+            principal: principal.clone(),
+            device_id: "device-model-selection".into(),
+            request_digest: intent.digest(&principal).expect("canonical turn digest"),
+            mode: TurnMode::New,
+            retry_of: None,
+            input: TurnInput::NewMessage(floe_agent_contract::AgentMessage {
+                message_id: command_id.as_uuid(),
+                role: floe_agent_contract::MessageRole::User,
+                text,
+                call_id: None,
+                coverage: DependencyCoverage::Independent,
+            }),
+        };
+        let admission = vault
+            .admit_conversation_turn(request)
+            .await
+            .expect("admit owner Run");
+        let VaultConversationAdmission::Created { record, .. } = admission else {
+            panic!("initial Run was not newly admitted: {admission:?}");
+        };
+        StartedRun {
+            root,
+            keys,
+            person_id,
+            vault,
+            record,
+        }
+    }
+
+    fn plan(record: &RunRecord, commitment: u8) -> PreparedModelPlan {
+        PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: record.person_id.to_string(),
+            device_id: record.device_id.clone(),
+            purpose: "everyday_assistance".into(),
+            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: floe_agent_contract::ModelBindingDigest([2; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        }
+    }
+
+    fn model_intent(
+        attempt_id: Uuid,
+        projection_ref: ProjectionRef,
+        plan: PreparedModelPlan,
+    ) -> JournalEvent {
+        JournalEvent::ModelIntent {
+            attempt_id,
+            parent_task_id: None,
+            reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                tokens: 10,
+                cost_micros: 10,
+            },
+            projection_ref,
+            plan,
+        }
+    }
+
+    async fn append_event(
+        vault: &EncryptedAgentVault<TestKeys>,
+        run_id: RunId,
+        event: JournalEvent,
+    ) -> Result<u64, AgentFailure> {
+        let kind = journal_kind(&event);
+        let payload = serde_json::to_string(&event).expect("serialize journal event");
+        vault
+            .append_conversation_journal(run_id, kind, &payload)
+            .await
+    }
+
+    fn batch(
+        record: &RunRecord,
+        attempt_id: Uuid,
+        projection_ref: ProjectionRef,
+    ) -> ValidatedModelBatch {
+        ValidatedModelBatch {
+            execution_id: record.run_id.as_uuid(),
+            attempt_id,
+            projection_ref,
+            batch_id: Uuid::new_v4(),
+            steps: vec![
+                ModelStep::CallTool {
+                    tool_id: "floe.source.calendar".into(),
+                    definition_revision: 1,
+                    input: "{}".into(),
+                },
+                ModelStep::Answer {
+                    text: "A persisted answer.".into(),
+                    artifacts: vec![],
+                },
+            ],
+            catalog_revision: record.expert_environment.revision,
+            tool_revisions: vec![floe_agent_contract::PinnedToolRevision {
+                tool_id: "floe.source.calendar".into(),
+                definition_revision: 1,
+            }],
+            agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
+        }
+    }
+
+    fn stable_tool_call(
+        batch: &ValidatedModelBatch,
+        ordinal: u32,
+    ) -> floe_agent_contract::ToolCall {
+        let call_id = Uuid::new_v5(
+            &batch.execution_id,
+            format!("{}:{}:{ordinal}:call", batch.execution_id, batch.batch_id).as_bytes(),
+        );
+        let invocation_key = Uuid::new_v5(
+            &batch.execution_id,
+            format!("{}:{}:{ordinal}:tool", batch.execution_id, batch.batch_id).as_bytes(),
+        );
+        floe_agent_contract::ToolCall {
+            call_id,
+            invocation_key: InvocationKey::from_uuid(invocation_key)
+                .expect("stable invocation key is non-nil"),
+            tool_id: "floe.source.calendar".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        }
+    }
+
+    async fn start_parent_with_pending_batch()
+    -> (StartedRun, ValidatedModelBatch, PreparedModelPlan) {
+        let mut started = start_run().await;
+        let parent = started.record.clone();
+        let attempt_id = Uuid::new_v4();
+        let projection_ref = ProjectionRef::new();
+        let parent_plan = plan(&parent, 7);
+        append_event(
+            &started.vault,
+            parent.run_id,
+            model_intent(attempt_id, projection_ref, parent_plan.clone()),
+        )
+        .await
+        .expect("append the parent's pinned model intent");
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: floe_agent_contract::ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await
+        .expect("settle the parent's model attempt");
+
+        let pending_batch = batch(&parent, attempt_id, projection_ref);
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: pending_batch.clone(),
+            },
+        )
+        .await
+        .expect("persist the parent batch");
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: pending_batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await
+        .expect("persist the parent's pending cursor");
+        let settled_call = stable_tool_call(&pending_batch, 0);
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::ToolIntent {
+                call: settled_call.clone(),
+            },
+        )
+        .await
+        .expect("persist the parent tool intent");
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::ToolResult {
+                result: floe_agent_contract::ToolResult {
+                    call_id: settled_call.call_id,
+                    text: "Persisted calendar observation.".into(),
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                },
+            },
+        )
+        .await
+        .expect("settle the parent tool result");
+        let parent_cursor = BatchCursor {
+            batch_id: pending_batch.batch_id,
+            next_step_index: 1,
+        };
+        append_event(
+            &started.vault,
+            parent.run_id,
+            JournalEvent::BatchProgress {
+                cursor: parent_cursor,
+            },
+        )
+        .await
+        .expect("advance beyond the settled tool result");
+        started.record = started
+            .vault
+            .finish_conversation_run(
+                parent.run_id,
+                parent.aggregate_revision,
+                RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+            )
+            .await
+            .expect("fail parent with its pending batch recoverable");
+        (started, pending_batch, parent_plan)
+    }
+
+    async fn admit_continue_child(
+        vault: &EncryptedAgentVault<TestKeys>,
+        parent: &RunRecord,
+        text: &str,
+    ) -> RunRecord {
+        let continuation = floe_conversation::project_run_receipt(parent.clone())
+            .expect("project parent receipt")
+            .continuation()
+            .expect("failed parent yields a continuation");
+        let mode = TurnMode::Continue(continuation);
+        let principal = parent.person_id.to_string();
+        let intent = CanonicalTurnIntent {
+            session_id: parent.session_id,
+            expected_revision: parent.session_revision,
+            text: text.to_owned(),
+            mode: mode.clone(),
+            retry_of: None,
+        };
+        let admission = vault
+            .admit_conversation_turn(TurnAdmissionRequest {
+                expert_environment: parent.expert_environment,
+                run_id: RunId::new(),
+                command_id: CommandId::new(),
+                session_id: parent.session_id,
+                expected_session_revision: parent.session_revision,
+                principal: principal.clone(),
+                device_id: parent.device_id.clone(),
+                request_digest: intent.digest(&principal).expect("continuation digest"),
+                mode,
+                retry_of: None,
+                input: TurnInput::ExistingMessage {
+                    message_id: parent.user_message_id,
+                },
+            })
+            .await
+            .expect("admit exact Continue child");
+        match admission {
+            VaultConversationAdmission::Created { record, .. } => record,
+            other => panic!("Continue child was not newly admitted: {other:?}"),
+        }
+    }
+
+    async fn replay_pending_batch(
+        vault: &EncryptedAgentVault<TestKeys>,
+        child: &RunRecord,
+        pending_batch: &ValidatedModelBatch,
+        parent_cursor: &BatchCursor,
+    ) {
+        append_event(
+            vault,
+            child.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: pending_batch.clone(),
+            },
+        )
+        .await
+        .expect("re-record the inherited batch");
+        for next_step_index in parent_cursor.next_step_index..=pending_batch.steps.len() as u32 {
+            append_event(
+                vault,
+                child.run_id,
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id: pending_batch.batch_id,
+                        next_step_index,
+                    },
+                },
+            )
+            .await
+            .expect("replay the stored batch through its acknowledged cursor");
+        }
+        append_event(
+            vault,
+            child.run_id,
+            JournalEvent::Checkpoint { iteration: 1 },
+        )
+        .await
+        .expect("settle replayed batch iteration");
+    }
+
+    #[tokio::test]
+    async fn run_owner_requires_a_complete_pin_and_recovers_a_committed_lost_ack() {
+        let StartedRun {
+            root,
+            keys,
+            person_id,
+            vault,
+            record,
+        } = start_run().await;
+        let attempt_id = Uuid::new_v4();
+        let projection_ref = ProjectionRef::new();
+        let mut incomplete = plan(&record, 1);
+        incomplete.selection_commitment = None;
+        incomplete.budget_profile = None;
+        assert_eq!(
+            append_event(
+                &vault,
+                record.run_id,
+                model_intent(attempt_id, projection_ref, incomplete),
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied),
+            "a newly appended plan must include complete model and budget evidence"
+        );
+
+        let accepted = plan(&record, 1);
+        MODEL_SELECTION_ACK_LOSS_VAULTS
+            .get_or_init(Default::default)
+            .lock()
+            .expect("fault-injection mutex")
+            .insert(vault.vault_id);
+        assert_eq!(
+            append_event(
+                &vault,
+                record.run_id,
+                model_intent(attempt_id, projection_ref, accepted.clone()),
+            )
+            .await,
+            Err(AgentFailure::StorageUnavailable),
+            "the injected failure models a lost acknowledgement after commit"
+        );
+        assert_eq!(
+            append_event(
+                &vault,
+                record.run_id,
+                model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&record, 2)),
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied),
+            "the still-open owner retains the committed pin after its ACK was lost"
+        );
+
+        drop(vault);
+        let reopened = EncryptedAgentVault::open(&root.0, person_id, keys)
+            .await
+            .expect("reopen after uncertain append");
+        let persisted = reopened
+            .conversation_journal(record.run_id)
+            .await
+            .expect("read back committed journal");
+        assert_eq!(persisted.len(), 1);
+        let recovered: JournalEvent =
+            serde_json::from_str(&persisted[0].payload).expect("decode acknowledged intent");
+        assert!(matches!(
+            recovered,
+            JournalEvent::ModelIntent { ref plan, .. } if plan == &accepted
+        ));
+        let recovered_record = reopened
+            .conversation_run(record.run_id)
+            .await
+            .expect("read run after reopen")
+            .expect("run receipt persisted");
+        assert_eq!(recovered_record.journal_revision, 1);
+    }
+
+    #[tokio::test]
+    async fn run_owner_restores_a_parent_pin_through_empty_and_batch_only_runs() {
+        for middle_has_batch_only_record in [false, true] {
+            let (started, pending_batch, parent_plan) = start_parent_with_pending_batch().await;
+            let vault = &started.vault;
+            let parent = &started.record;
+            let parent_receipt = floe_conversation::project_run_receipt(parent.clone())
+                .expect("project parent receipt");
+            let parent_connection = vault.connection().expect("read parent journal");
+            let parent_entries = vault
+                .conversation_journal_on(&parent_connection, parent)
+                .await
+                .expect("projectable parent journal");
+            let parent_session =
+                floe_conversation::SessionStore::load(vault, started.person_id, parent.session_id)
+                    .await
+                    .expect("load the admitted turn transcript");
+            let continuation_snapshot = floe_conversation::project_continuation(
+                &floe_conversation::AdmittedTurn {
+                    receipt: parent_receipt.clone(),
+                    transcript: floe_conversation::project_transcript(&parent_session.messages)
+                        .expect("project the admitted transcript"),
+                },
+                &parent_entries,
+            )
+            .expect("project Continue with its stored tool result");
+            assert_eq!(
+                continuation_snapshot.model_selection,
+                ModelSelectionState::Pinned(
+                    parent_plan
+                        .model_execution_selection()
+                        .expect("valid parent plan")
+                        .expect("complete parent selection")
+                )
+            );
+            assert_eq!(
+                continuation_snapshot
+                    .batch_cursor
+                    .as_ref()
+                    .map(|cursor| cursor.next_step_index),
+                Some(1)
+            );
+            assert_eq!(continuation_snapshot.replay.len(), 1);
+            assert_eq!(
+                continuation_snapshot.replay[0].result,
+                "Persisted calendar observation."
+            );
+
+            let middle = admit_continue_child(
+                vault,
+                parent,
+                if middle_has_batch_only_record {
+                    "Continue through a batch-only run."
+                } else {
+                    "Continue through an empty run."
+                },
+            )
+            .await;
+            if middle_has_batch_only_record {
+                append_event(
+                    vault,
+                    middle.run_id,
+                    JournalEvent::ValidatedBatch {
+                        batch: pending_batch.clone(),
+                    },
+                )
+                .await
+                .expect("middle run re-records the inherited batch without claiming it");
+            }
+            let middle = vault
+                .finish_conversation_run(
+                    middle.run_id,
+                    middle.aggregate_revision,
+                    RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+                )
+                .await
+                .expect("middle continuation remains eligible");
+            let child = admit_continue_child(vault, &middle, "Claim the inherited batch.").await;
+            let parent_cursor = BatchCursor {
+                batch_id: pending_batch.batch_id,
+                next_step_index: 1,
+            };
+            replay_pending_batch(vault, &child, &pending_batch, &parent_cursor).await;
+
+            let before = vault
+                .conversation_run(child.run_id)
+                .await
+                .expect("read child before model intent")
+                .expect("child receipt persists");
+            append_event(
+                vault,
+                child.run_id,
+                model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&child, 7)),
+            )
+            .await
+            .expect("unchanged selection inherits the pin through the intermediate run");
+            let after_accepted = vault
+                .conversation_run(child.run_id)
+                .await
+                .expect("read child after accepted model intent")
+                .expect("child receipt persists");
+            let before_rejected = vault
+                .conversation_journal(child.run_id)
+                .await
+                .expect("read child journal before changed selection");
+            assert_eq!(after_accepted.journal_revision, before.journal_revision + 1);
+            assert_eq!(
+                append_event(
+                    vault,
+                    child.run_id,
+                    model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&child, 8),),
+                )
+                .await,
+                Err(AgentFailure::PolicyDenied),
+                "a changed target is denied before journal commit"
+            );
+            let after_rejected = vault
+                .conversation_run(child.run_id)
+                .await
+                .expect("read child after rejected model intent")
+                .expect("child receipt persists");
+            let after_rejected_journal = vault
+                .conversation_journal(child.run_id)
+                .await
+                .expect("read child journal after rejected selection");
+            assert_eq!(
+                after_rejected.journal_revision,
+                after_accepted.journal_revision
+            );
+            assert_eq!(after_rejected_journal.len(), before_rejected.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn run_owner_validates_unpinned_intermediate_ancestry_before_model_intent() {
+        let (started, pending_batch, _) = start_parent_with_pending_batch().await;
+        let StartedRun {
+            root,
+            keys,
+            person_id,
+            vault,
+            record: parent,
+        } = started;
+        let middle =
+            admit_continue_child(&vault, &parent, "Create an empty intermediate run.").await;
+        let middle = vault
+            .finish_conversation_run(
+                middle.run_id,
+                middle.aggregate_revision,
+                RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+            )
+            .await
+            .expect("middle continuation remains eligible");
+        let child = admit_continue_child(&vault, &middle, "Claim the inherited batch.").await;
+        let parent_cursor = BatchCursor {
+            batch_id: pending_batch.batch_id,
+            next_step_index: 1,
+        };
+        replay_pending_batch(&vault, &child, &pending_batch, &parent_cursor).await;
+
+        let mut corrupt_middle = vault
+            .conversation_run(middle.run_id)
+            .await
+            .expect("read intermediate receipt")
+            .expect("intermediate receipt persists");
+        corrupt_middle.continuation_executor_generation = Some(
+            corrupt_middle
+                .executor_generation
+                .checked_add(1)
+                .expect("test generation does not overflow"),
+        );
+        let connection = vault.connection().expect("connect test Vault");
+        connection
+            .execute(
+                "UPDATE agent_conversation_runs SET payload = ? WHERE run_id = ?",
+                (
+                    encode_record(&corrupt_middle).expect("encode changed intermediate lineage"),
+                    middle.run_id.as_uuid().to_string(),
+                ),
+            )
+            .await
+            .expect("inject an invalid unpinned intermediate link");
+        drop(connection);
+        let before = vault
+            .conversation_run(child.run_id)
+            .await
+            .expect("read child before rejected intent")
+            .expect("child receipt persists");
+        let before_journal_len = vault
+            .conversation_journal(child.run_id)
+            .await
+            .expect("read child journal before rejected intent")
+            .len();
+        assert_eq!(
+            append_event(
+                &vault,
+                child.run_id,
+                model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&child, 7),),
+            )
+            .await,
+            Err(AgentFailure::StorageUnavailable),
+            "the complete chain is validated even though the middle run has no pin"
+        );
+        drop(vault);
+        let reopened = EncryptedAgentVault::open(&root.0, person_id, keys)
+            .await
+            .expect("reopen the isolated test Vault after corruption is fenced");
+        let after = reopened
+            .conversation_run(child.run_id)
+            .await
+            .expect("read child after rejected intent")
+            .expect("child receipt persists");
+        let after_journal_len = reopened
+            .conversation_journal(child.run_id)
+            .await
+            .expect("read child journal after rejected intent")
+            .len();
+        assert_eq!(after.journal_revision, before.journal_revision);
+        assert_eq!(after_journal_len, before_journal_len);
+    }
+
+    #[tokio::test]
+    async fn run_owner_rejects_new_dispatch_after_historical_unproven_intent() {
+        let StartedRun {
+            vault, mut record, ..
+        } = start_run().await;
+        let mut legacy = plan(&record, 1);
+        legacy.selection_commitment = None;
+        legacy.budget_profile = None;
+        let event = model_intent(Uuid::new_v4(), ProjectionRef::new(), legacy);
+        let payload = serde_json::to_string(&event).expect("serialize historical intent");
+        let connection = vault.connection().expect("connect test Vault");
+        connection
+            .execute(
+                "INSERT INTO agent_conversation_journal (run_id, revision, kind, payload) VALUES (?, 1, 'intent', ?)",
+                (record.run_id.as_uuid().to_string(), payload),
+            )
+            .await
+            .expect("seed a readable historical prefix");
+        record.journal_revision = 1;
+        connection
+            .execute(
+                "UPDATE agent_conversation_runs SET journal_revision = 1, payload = ? WHERE run_id = ?",
+                (encode_record(&record).expect("encode historical Run head"), record.run_id.as_uuid().to_string()),
+            )
+            .await
+            .expect("advance historical Run head");
+        assert_eq!(
+            append_event(
+                &vault,
+                record.run_id,
+                model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&record, 2)),
+            )
+            .await,
+            Err(AgentFailure::PolicyDenied),
+            "old evidence remains projectable but cannot authorize a newly appended dispatch"
+        );
     }
 }

@@ -173,11 +173,20 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	if !validOutputFormat(in.OutputFormat) || in.OutputFormat.Kind == "json" && len(in.Input.Tools) != 0 {
 		return Failure{Code: Validation}
 	}
-	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || len(in.Instructions) > 9216 || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 16384 {
+	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 16384 {
 		return Failure{Code: Validation}
 	}
+	if len(in.Instructions) > 9216 {
+		return Failure{Code: BodyTooLarge}
+	}
 	encoded, err := json.Marshal(in.Input)
-	if err != nil || len(encoded) > 32768 || len(in.Input.Messages) < 1 || len(in.Input.Messages) > 256 || in.Input.Tools == nil || len(in.Input.Tools) > 64 {
+	if err != nil {
+		return Failure{Code: Validation}
+	}
+	if len(encoded) > 32768 || len(in.Input.Messages) > 256 || len(in.Input.Tools) > 64 {
+		return Failure{Code: BodyTooLarge}
+	}
+	if len(in.Input.Messages) < 1 || in.Input.Tools == nil {
 		return Failure{Code: Validation}
 	}
 	if err := ValidateAgentOutputFrame(in); err != nil {
@@ -226,7 +235,13 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	return nil
 }
 func ValidateStructuredInvocation(in StructuredInvocation) error {
-	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || len(in.Instructions) > 8192 || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 32768 || !validObject(in.Input) || !ValidSchema(in.OutputSchema) {
+	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 32768 {
+		return Failure{Code: Validation}
+	}
+	if len(in.Instructions) > 8192 || len(in.Input) > 32768 || len(in.OutputSchema) > 32768 {
+		return Failure{Code: BodyTooLarge}
+	}
+	if !validObject(in.Input) || !ValidSchema(in.OutputSchema) {
 		return Failure{Code: Validation}
 	}
 	return nil

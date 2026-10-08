@@ -331,7 +331,15 @@ pub fn advance_task_journal(
         return Err(AgentFailure::Conflict);
     }
     let (last, prefix) = journal.split_last().ok_or(AgentFailure::InvalidInput)?;
-    project_task_journal(record, prefix)?;
+    let prior_projection = project_task_journal(record, prefix)?;
+    if let JournalEvent::ModelIntent { plan, .. } = &last.event {
+        // Historical evidence remains readable, but a new append must keep
+        // the execution pin and cannot recover from an Unproven prefix.
+        floe_agent_contract::validate_model_intent_selection(
+            &prior_projection.model_selection,
+            plan,
+        )?;
+    }
     let projection = project_task_journal_contents(record, journal)?;
     // Reserve before dispatch; actual later charges remain recordable even
     // when the provider reports an overrun of that reservation.
@@ -546,6 +554,140 @@ fn journal_coverage(journal: &[JournalEntry]) -> Result<DependencyCoverage, Agen
                 None => Ok(coverage),
             }
         })
+}
+
+#[cfg(test)]
+mod model_selection_append_tests {
+    use super::*;
+    use floe_agent_contract::{
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+        PreparedModelPlan, ProcessingBoundary, ProjectionRef,
+    };
+    use floe_execution::budget::ModelReservationCeiling;
+
+    fn task_record() -> TaskRecord {
+        let task_id = floe_agent_contract::TaskId::new();
+        let principal = "00000000-0000-4000-8000-000000000001".to_owned();
+        let snapshot = TaskSnapshot {
+            task_id,
+            parent_run_id: Some(Uuid::new_v4()),
+            principal,
+            agent_id: "floe.test.expert".into(),
+            definition_revision: 1,
+            state: TaskState::Working,
+            result: None,
+            artifacts: vec![],
+            coverage: DependencyCoverage::Unknown,
+            issue: None,
+            blockage: None,
+        };
+        TaskRecord {
+            snapshot,
+            admission: ExpertAdmissionIdentity {
+                registry_instance_id: Uuid::new_v4(),
+                assignment_id: Uuid::new_v4(),
+                installation_id: Uuid::new_v4(),
+                package: floe_agent_contract::PackageRef {
+                    kind: floe_agent_contract::PackageKind::Expert,
+                    id: "floe.test.expert".into(),
+                    version: "1.0.0".into(),
+                },
+                definition_revision: 1,
+            },
+            selection: crate::ExpertExecutionSelection::without_requirements(1)
+                .expect("valid empty expert binding"),
+            invocation_key: floe_agent_contract::InvocationKey::new(),
+            request_digest: [1; 32],
+            aggregate_revision: 2,
+            executor_generation: 1,
+            execution_id: Uuid::new_v4(),
+            device_id: "device-1".into(),
+            catalog_revision: 1,
+            model_allowance: ModelReservationCeiling {
+                tokens: 100,
+                cost_micros: 100,
+            },
+            maximum_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+            journal_revision: 0,
+            journal_digest: floe_agent_runtime::journal_digest(&[])
+                .expect("empty task journal digest"),
+            receipt: None,
+        }
+    }
+
+    fn plan(record: &TaskRecord, commitment: u8) -> PreparedModelPlan {
+        PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: record.snapshot.principal.clone(),
+            device_id: record.device_id.clone(),
+            purpose: "everyday_assistance".into(),
+            consumer: crate::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        }
+    }
+
+    fn intent(record: &TaskRecord, attempt_id: Uuid, plan: PreparedModelPlan) -> JournalEntry {
+        JournalEntry {
+            revision: 1,
+            event: JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: Some(record.snapshot.task_id),
+                reservation_ceiling: ModelReservationCeiling {
+                    tokens: 10,
+                    cost_micros: 10,
+                },
+                projection_ref: ProjectionRef::new(),
+                plan,
+            },
+        }
+    }
+
+    #[test]
+    fn task_owner_requires_complete_stable_selection_on_each_new_intent() {
+        let record = task_record();
+        let mut incomplete = plan(&record, 1);
+        incomplete.selection_commitment = None;
+        incomplete.budget_profile = None;
+        assert_eq!(
+            advance_task_journal(&record, &[intent(&record, Uuid::new_v4(), incomplete)]),
+            Err(AgentFailure::PolicyDenied)
+        );
+
+        let first = intent(&record, Uuid::new_v4(), plan(&record, 1));
+        let updated = advance_task_journal(&record, std::slice::from_ref(&first))
+            .expect("admit and durably project a complete Task model intent");
+        assert_eq!(updated.journal_revision, 1);
+        let mut conflicting = intent(&record, Uuid::new_v4(), plan(&record, 2));
+        conflicting.revision = 2;
+        assert_eq!(
+            advance_task_journal(&updated, &[first, conflicting]),
+            Err(AgentFailure::PolicyDenied),
+            "the Task owner rejects model or profile drift before committing the next head"
+        );
+    }
+
+    #[test]
+    fn task_owner_does_not_dispatch_from_a_historical_unproven_prefix() {
+        let mut record = task_record();
+        let mut legacy = plan(&record, 1);
+        legacy.selection_commitment = None;
+        legacy.budget_profile = None;
+        let entry = intent(&record, Uuid::new_v4(), legacy);
+        record.journal_revision = 1;
+        record.journal_digest = floe_agent_runtime::journal_digest(std::slice::from_ref(&entry))
+            .expect("historical journal digest");
+        let mut next = intent(&record, Uuid::new_v4(), plan(&record, 2));
+        next.revision = 2;
+        assert_eq!(
+            advance_task_journal(&record, &[entry, next]),
+            Err(AgentFailure::PolicyDenied),
+            "permissive historical projection cannot authorize a new Task model handoff"
+        );
+    }
 }
 
 fn validate_record_capacity(record: &TaskRecord) -> Result<(), AgentFailure> {

@@ -53,7 +53,7 @@ Supported provider setup factories use:
 
 See [OAuth deployment configuration](../docs/deployment/oauth-configuration.md) for external registrations. Source credentials never enter normalized Views, Agent input, signed query payloads or diagnostics. Mail bodies remain outside the four exposed normalized View routes.
 
-## Inference schema 2
+## Inference schema 3
 
 Build the Gateway and Rust caller from the same snapshot. The wire has one schema and no compatibility decoder:
 
@@ -62,7 +62,27 @@ Build the Gateway and Rust caller from the same snapshot. The wire has one schem
 - `POST /v1/generate`: operator-session structured invocation, using the same capability revision and accounting envelope
 - `GET /v1/traces` and `/v1/traces/{trace_id}`: operator-only bounded diagnostics
 
-Available inventory entries contain `status`, `capability_revision` and a sorted unique capability set containing `chat`, with optional `structured_output` and `tool_proposals`. The operator explicitly declares support for each configured model and endpoint; new forms initially select only chat. Provider families, model names and successful text probes do not establish those features. Private configuration requires the declaration and old undeclared configurations fail closed. Explicitly disabled or unconfigured purposes have only their status. Configured provider/account failures and missing required features are errors, never an absence or local-fallback signal. The opaque revision is derived with a private HMAC and binds the current purpose, configured target, effort, declared capabilities, configuration generation and provider/account identity. The service checks it before provider dispatch and before output release.
+Available inventory entries contain `status`, `capability_revision`, a sorted unique capability set containing `chat`, and required `budget_profile` schema 1. `budget_profile` separates known context/output token limits, the selected output-token reservation, the estimator and uncertainty label, and framing byte/message/tool guards. Effective token limits come only from a versioned local operator `budget_override` or a provider-confirmed source; provider-confirmed limits are currently unknown. Catalog facts and provenance remain descriptive and cannot supply effective limits or enable capabilities. Unknown limits remain explicitly unknown while the existing framing guards stay active. The byte-based model-input estimate covers rendered instructions, messages/history, tool schemas, output schema, and serialization; it excludes Gateway correlation/authorization fields and the outer HTTP envelope. It is marked `exact_tokenizer_unavailable`, so it is not a usage counter or an exact tokenizer result. Context preflight runs only when context, output reservation, provider overhead and safety margin are all known; the output reservation is added once. Runtime token/cost observations remain separate from context capacity.
+
+The selected output-token reservation is sent as a provider output cap: OpenAI-compatible Chat Completions receives `max_completion_tokens`, and Ollama receives `options.num_predict`. Codex OAuth cannot enforce this field, so configuration with a selected token reservation is rejected for that provider. `max_output_bytes` remains an independent serialized-response guard and does not substitute for a token cap.
+
+An operator may supply measured limits in the selected purpose's `budget_override`, either through `/manage/api/provider` or the local encrypted `inference.json` configuration. For example:
+
+```json
+{
+  "schema_version": 1,
+  "context_window_tokens": 32768,
+  "max_output_tokens": 4096,
+  "selected_output_reservation_tokens": 2048,
+  "provider_overhead_tokens": 256,
+  "safety_margin_tokens": 512,
+  "max_input_json_bytes": 16000
+}
+```
+
+The override is nested under the configured purpose alongside `model`, `reasoning_effort`, and `capabilities`. Nonpositive, contradictory, unsupported-version and overflowing limits are rejected. Effective input JSON remains bounded by the minimum of the configured limit, the existing 32,768-byte Agent-input guard and the 98,304-byte outer request guard. The other existing caps remain 9,216 instruction bytes, 256 encoded messages, 64 tools, 128 KiB typed conversation bytes and 16,384 output bytes. Rust's typed conversation still caps 128 entries; a tool exchange can render as two encoded messages. A configured limit above 32 KiB does not enlarge that legacy cap.
+
+The operator explicitly declares support for each configured model and endpoint; new forms initially select only chat. Provider families, model names, catalog labels and successful text probes do not establish those features. Private configuration requires the declaration and old undeclared configurations fail closed. Explicitly disabled or unconfigured purposes have only their status. Configured provider/account failures and missing required features are errors, never an absence or local-fallback signal. The opaque revision is derived with a private HMAC and binds the current purpose, configured target, effort, declared capabilities, configuration generation, provider/account identity and effective budget profile. The service checks it before provider dispatch and before output release. A schema-3 request whose captured revision has gone stale fails as `capability_changed`; Rust maps that to `PolicyDenied`. A pre-dispatch size failure is `body_too_large`/HTTP 413 and maps to `ModelInputCapacityExceeded`; neither outcome authorizes replay of tool proposals.
 
 ## Model-selection catalog
 
@@ -84,7 +104,7 @@ Successful Agent output is a typed array of `preamble`, `answer` and `call` step
 
 Agent `output_format` is exactly `{"kind":"text"}` or `{"kind":"json","schema":...}` and must match the first canonical run frame's declaration. JSON mode requires empty tools and exactly one `answer` containing the validated object. Its portable schema is bounded to 16 KiB, depth eight, 256 nodes and closed objects; optional fields may be absent, but present nulls, nullable schemas, references and schema unions are unsupported. Domain schemas pass unchanged to provider output controls and are validated again before release. Codex Agent message interpretation stays separate from its operator structured-input mode. The existing operator `/v1/generate` schema remains separate. See the [DeviceModel contract](../docs/architecture/device-model-contract.md) for the exact portable vocabulary.
 
-Inference request bodies are limited to 98,304 bytes, and responses to 65,536 bytes. Decoding rejects invalid UTF-8, duplicate keys, unknown fixed-shape fields, forbidden nulls, non-integral/out-of-range DTO numbers, trailing values and excessive nesting. Agent input is limited to 32,768 bytes; generated Agent steps to the requested limit up to 16,384 bytes. Inference errors have schema 2, a stable code, required nullable trace/attempt/purpose/capability-revision correlation and required nullable usage dimensions. Only an admitted execution can provide correlation and observed usage, including when its output fails schema validation; pre-admission errors report nulls. Provider error text, prompts, source content and credentials never enter traces.
+Inference request bodies are limited to 98,304 bytes, and responses to 65,536 bytes. Decoding rejects invalid UTF-8, duplicate keys, unknown fixed-shape fields, forbidden nulls, non-integral/out-of-range DTO numbers, trailing values and excessive nesting. Agent input is limited to the effective profile cap, never above 32,768 bytes; generated Agent steps to the requested limit up to 16,384 bytes. Inventory, invocation, response and inference-error DTOs use schema 3 together; schema 2 peers are rejected. Errors have a stable code, required nullable trace/attempt/purpose/capability-revision correlation and required nullable usage dimensions. Only an admitted execution can provide correlation and observed usage, including when its output fails schema validation; pre-admission errors report nulls. Provider error text, prompts, source content and credentials never enter traces.
 
 Paired routes reject all nonempty Origin headers. Operator mutations require the admitted dashboard session, matching Origin and CSRF. No CORS is enabled. Provider endpoints require HTTPS except literal-loopback HTTP for Ollama or OpenAI-compatible endpoints; redirects and environment proxies are disabled. The operator controls targets/models in the dashboard; product callers cannot select endpoints, accounts, model names or reasoning effort. Explicit connection probes use the separate operator-only `ProbeTarget` action with fixed bounded synthetic Agent input. A target may be probed before any purpose route selects it; probes do not fabricate a product principal or bypass product capability checks. Startup performs local initialization checks and does not dispatch model probes.
 

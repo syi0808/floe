@@ -71,10 +71,12 @@ func (store *memoryCredentialStore) Delete(ctx context.Context, name string) err
 }
 
 type consoleFixture struct {
-	address    string
-	adminToken string
-	handler    *Handler
-	trust      *trust.Service
+	address     string
+	adminToken  string
+	handler     *Handler
+	trust       *trust.Service
+	credentials *memoryCredentialStore
+	catalog     *modelcatalog.Store
 }
 
 func newConsoleFixture(t *testing.T) *consoleFixture {
@@ -110,9 +112,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	if err != nil {
 		t.Fatalf("create inference owner: %v", err)
 	}
-	factory := providers.NewFactory(func(context.Context, string) (string, error) {
-		return "", credentials.ErrUnavailable
-	}, nil)
+	factory := providers.NewFactory(credentialsStore.Get, nil)
 	configuration, err := inference.OpenConfiguration(context.Background(), inferenceFiles, inferenceService, trustService, credentialsStore, factory)
 	if err != nil {
 		t.Fatalf("open inference configuration owner: %v", err)
@@ -123,9 +123,11 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 		t.Fatalf("open embedded model catalog: %v", err)
 	}
 	return &consoleFixture{
-		address:    dashboardTestAddress,
-		adminToken: string(adminToken),
-		trust:      trustService,
+		address:     dashboardTestAddress,
+		adminToken:  string(adminToken),
+		trust:       trustService,
+		credentials: credentialsStore,
+		catalog:     catalog,
 		handler: &Handler{
 			Address:       dashboardTestAddress,
 			Trust:         trustService,
@@ -164,6 +166,25 @@ func (fixture *consoleFixture) request(method, path string, body any, cookie *ht
 	response := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(response, request)
 	return response
+}
+
+func TestConsoleServesDashboardModuleGraph(t *testing.T) {
+	fixture := newConsoleFixture(t)
+
+	index := fixture.request(http.MethodGet, "/manage/", nil, nil, "", "", "")
+	if index.Code != http.StatusOK || !bytes.Contains(index.Body.Bytes(), []byte(`<script type="module" src="/manage/app.js"></script>`)) {
+		t.Fatalf("dashboard index omitted its module entry point: status=%d body=%s", index.Code, index.Body.String())
+	}
+
+	app := fixture.request(http.MethodGet, "/manage/app.js", nil, nil, "", "", "")
+	if app.Code != http.StatusOK || app.Header().Get("Content-Type") != "text/javascript; charset=utf-8" || !bytes.Contains(app.Body.Bytes(), []byte(`from './budget-override.mjs'`)) {
+		t.Fatalf("dashboard app module was not served correctly: status=%d content_type=%q", app.Code, app.Header().Get("Content-Type"))
+	}
+
+	helper := fixture.request(http.MethodGet, "/manage/budget-override.mjs", nil, nil, "", "", "")
+	if helper.Code != http.StatusOK || helper.Header().Get("Content-Type") != "text/javascript; charset=utf-8" || !bytes.Contains(helper.Body.Bytes(), []byte("export function budgetOverrideForTarget")) {
+		t.Fatalf("dashboard helper module was not served correctly: status=%d content_type=%q", helper.Code, helper.Header().Get("Content-Type"))
+	}
 }
 
 func (fixture *consoleFixture) login(t *testing.T) (*http.Cookie, string) {

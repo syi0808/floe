@@ -1,3 +1,5 @@
+import {budgetOverrideForTarget} from './budget-override.mjs';
+
 const element = (id) => document.getElementById(id);
 const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
 let csrf = '';
@@ -245,17 +247,26 @@ for (const option of document.querySelectorAll('.provider-option')) {
 element('provider-form').addEventListener('input', () => { editing = true; });
 element('provider-form').addEventListener('submit', (event) => {
   event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target; const configured = {};
+    const form = event.target; const configured = {}; let clearedBudgetOverride = false;
+    const baseURL = form.elements.base_url.value;
     for (const purpose of purposes) {
       const model = form.elements[`${purpose}_model`].value.trim();
       const capabilities = ['chat'];
       if (form.elements[`${purpose}_structured_output`].checked) capabilities.push('structured_output');
       if (form.elements[`${purpose}_tool_proposals`].checked) capabilities.push('tool_proposals');
-      if (model) configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
+      if (model) {
+        configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
+        const targetBudget = budgetOverrideForTarget(state.providers?.[selectedProvider], purpose, model, baseURL);
+        if (targetBudget.budgetOverride) configured[purpose].budget_override = targetBudget.budgetOverride;
+        clearedBudgetOverride ||= targetBudget.cleared;
+      }
     }
-    const input = {provider: selectedProvider, base_url: form.elements.base_url.value, api_key: form.elements.api_key.value, purposes: configured};
+    const input = {provider: selectedProvider, base_url: baseURL, api_key: form.elements.api_key.value, purposes: configured};
     form.elements.api_key.value = '';
-    await api('provider', input); editing = false; await refresh(); notice('Provider configuration saved and active purposes updated.');
+    await api('provider', input); editing = false; await refresh();
+    notice(clearedBudgetOverride
+      ? 'Provider configuration saved. Measured limits were cleared because the model or endpoint changed.'
+      : 'Provider configuration saved and active purposes updated.');
   });
 });
 element('remove-provider').addEventListener('click', () => action(element('remove-provider'), async () => {

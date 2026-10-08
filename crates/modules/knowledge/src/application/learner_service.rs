@@ -283,7 +283,9 @@ impl LearnerService {
             allowed_catalog: AllowedCatalog { cards: vec![], tools: vec![], revision: 1 },
             purpose: crate::LEARNER_INFERENCE_PURPOSE.into(), consumer: crate::LEARNER_INFERENCE_CONSUMER.into(),
             max_iterations: 1, max_output_bytes: budget.max_output_bytes,
-            replay: vec![], resume: None, delegation_context: None,
+            replay: vec![], resume: None,
+            model_selection: floe_agent_contract::ModelSelectionState::Fresh,
+            delegation_context: None,
         }, EnginePorts { model: self.model.as_ref(), projection: &projector, tools: &NoLearnerTools,
             delegation: &NoLearnerTools, journal: journal.as_ref(), validator: &LearnerValidator { input: &job.input } }).await)
         } else {

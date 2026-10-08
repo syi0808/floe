@@ -202,6 +202,9 @@ fn strict_object(raw: &str) -> Result<serde_json::Value, AgentFailure> {
 
 fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
     let bytes = serde_json::to_vec(input).map_err(|_| AgentFailure::InvalidInput)?;
+    if bytes.len() > 32_768 {
+        return Err(AgentFailure::ModelInputCapacityExceeded);
+    }
     strict_json_bytes(&bytes, 32768)?;
     let messages = input["messages"]
         .as_array()
@@ -209,8 +212,11 @@ fn validate_input(input: &serde_json::Value) -> Result<(), AgentFailure> {
     let tools = input["tools"]
         .as_array()
         .ok_or(AgentFailure::InvalidInput)?;
-    if messages.is_empty() || messages.len() > 256 || tools.len() > 64 {
+    if messages.is_empty() {
         return Err(AgentFailure::InvalidInput);
+    }
+    if messages.len() > 256 || tools.len() > 64 {
+        return Err(AgentFailure::ModelInputCapacityExceeded);
     }
     let mut used = std::collections::BTreeSet::new();
     let mut pending = std::collections::BTreeSet::new();

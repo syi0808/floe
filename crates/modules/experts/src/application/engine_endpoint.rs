@@ -531,6 +531,7 @@ impl AgentEndpoint for EngineExpertEndpoint {
                         max_output_bytes: request.execution_context.max_output_bytes,
                         replay: vec![],
                         resume: None,
+                        model_selection: floe_agent_contract::ModelSelectionState::Fresh,
                         delegation_context: None,
                     },
                     EnginePorts {

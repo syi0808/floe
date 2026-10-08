@@ -132,7 +132,7 @@ func New(config Config) (*Node, error) {
 	}
 	pairing := pairing.NewOperations(t, vault, nil)
 	clients := trust.NewClientAdministration(t, sources, pairing)
-	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, ModelCatalog: modelCatalog, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
+	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, ModelCatalog: modelCatalog, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, ModelCatalog: modelCatalog, Address: config.Address}}
 	ctx, cancel := context.WithCancel(context.Background())
 	catalogDone := make(chan struct{})
 	go func() {

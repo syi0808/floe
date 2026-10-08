@@ -302,6 +302,9 @@ pub struct ContinuationSnapshot {
     /// resuming run.
     pub pending_batch: Option<ValidatedModelBatch>,
     pub batch_cursor: Option<BatchCursor>,
+    /// Selection carried by a pending batch's logical execution. Fresh when
+    /// there is no pending batch and the next Continue starts a new execution.
+    pub model_selection: floe_agent_contract::ModelSelectionState,
     pub completed_iterations: u32,
     pub usage: floe_execution::budget::ModelUsage,
 }

@@ -15,13 +15,15 @@ pub use api::{
 pub use application::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, ConversationModelProjection, ConversationService, DecideInteractionCommand,
-    GovernedSessionRepository, GovernedSessionStore, HistoryProjection, PreparedResume,
-    ProjectedModelConversation, ResumePreparationRequest, ResumeSuppression,
+    GovernedSessionRepository, GovernedSessionStore, HistoryProjection, JournalLineage,
+    MAX_CONTINUATION_JOURNAL_ENTRIES, ModelSelectionJournalProjection, PreparedResume,
+    ProjectedModelConversation, ResumeLineageFold, ResumePreparationRequest, ResumeSuppression,
     RunCancellationRegistry, admit_unscoped_session, admitted_session, cancel_run_command,
-    compact_session, continuation, decide_interaction, expire_interaction, get_command, get_run,
-    get_session, list_run_interactions, load_interaction, prepare_resume, project_continuation,
-    project_model_conversation_history, read_archive, resolve_interaction, resume_gate,
-    resume_session, start_session, supersede_interaction,
+    compact_session, continuation, decide_interaction, expire_interaction, fold_resume_lineage,
+    get_command, get_run, get_session, list_run_interactions, load_interaction, prepare_resume,
+    project_continuation, project_model_conversation_history, project_model_selection_journal,
+    read_archive, reconcile_resume_lineage, reconcile_resume_selection, resolve_interaction,
+    resume_gate, resume_session, start_session, supersede_interaction,
 };
 pub use domain::{
     AdmittedExecution, AdmittedTurn, BlockedInteractionLink, CommandQuery, CompactionReceipt,

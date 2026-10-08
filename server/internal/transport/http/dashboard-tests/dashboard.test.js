@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {JSDOM} from 'jsdom';
+import {budgetOverrideForTarget} from '../web/budget-override.mjs';
 
 const directory = new URL('.', import.meta.url);
 const html = readFileSync(new URL('../web/index.html', directory), 'utf8');
 const app = readFileSync(new URL('../web/app.js', directory), 'utf8');
+const budgetOverrideImport = "import {budgetOverrideForTarget} from './budget-override.mjs';";
+const appWithoutBudgetOverrideImport = app.replace(budgetOverrideImport, '');
+assert.notEqual(appWithoutBudgetOverrideImport, app, 'dashboard module must import the budget override helper');
 const origin = 'http://127.0.0.1:18431';
 
 function jsonResponse(status, body) {
@@ -65,7 +69,8 @@ function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:
       return Promise.reject(error);
     }
   };
-  window.eval(app);
+  window.budgetOverrideForTarget = budgetOverrideForTarget;
+  window.eval(`const budgetOverrideForTarget = window.budgetOverrideForTarget;\n${appWithoutBudgetOverrideImport}`);
 
   return {
     dom,

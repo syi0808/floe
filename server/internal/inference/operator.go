@@ -17,12 +17,13 @@ type RouteUpdate struct {
 }
 
 type TargetUpdate struct {
-	ID           string
-	Provider     string
-	BaseURL      string
-	Model        string
-	APIKey       string
-	Capabilities []string
+	ID             string
+	Provider       string
+	BaseURL        string
+	Model          string
+	APIKey         string
+	Capabilities   []string
+	BudgetOverride *ModelBudgetOverride
 }
 
 type ProviderUpdate struct {
@@ -33,11 +34,12 @@ type ProviderUpdate struct {
 }
 
 type OperatorPurposeProfile struct {
-	Model           string   `json:"model"`
-	ReasoningEffort string   `json:"reasoning_effort"`
-	Active          bool     `json:"active"`
-	Available       bool     `json:"available"`
-	Capabilities    []string `json:"capabilities"`
+	Model           string               `json:"model"`
+	ReasoningEffort string               `json:"reasoning_effort"`
+	Active          bool                 `json:"active"`
+	Available       bool                 `json:"available"`
+	Capabilities    []string             `json:"capabilities"`
+	BudgetOverride  *ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 
 type OperatorProviderProfile struct {
@@ -95,13 +97,13 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 			baseURL = "https://chatgpt.com/backend-api/codex"
 			apiKey = ""
 		}
-		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, Capabilities: append([]string(nil), input.Capabilities...)}
+		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, Capabilities: append([]string(nil), input.Capabilities...), BudgetOverride: cloneModelBudgetOverride(input.BudgetOverride)}
 		if apiKey != "" {
 			target.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(trust.Token())
 		} else if old.Provider == target.Provider && old.BaseURL == target.BaseURL {
 			target.APIKeyEnv = old.APIKeyEnv
 		}
-		if c.factory.ValidateTarget(target) != nil {
+		if target.BudgetOverride != nil && target.BudgetOverride.Validate() != nil || c.factory.ValidateTarget(target) != nil {
 			return operation.Reject(operation.Invalid, "invalid_target")
 		}
 		next := cloneConfigurationState(c.state)
@@ -149,7 +151,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 			profile.APIKeyEnv = old.APIKeyEnv
 		}
 		for purpose, configured := range profile.Purposes {
-			if !ValidPurpose(purpose) || !ValidEffort(configured.ReasoningEffort) || c.factory.ValidateTarget(profileTarget(input.Provider, purpose, profile)) != nil {
+			if !ValidPurpose(purpose) || !ValidEffort(configured.ReasoningEffort) || configured.BudgetOverride != nil && configured.BudgetOverride.Validate() != nil || c.factory.ValidateTarget(profileTarget(input.Provider, purpose, profile)) != nil {
 				return operation.Reject(operation.Invalid, "invalid_provider_configuration")
 			}
 			next.Routes[Purpose(purpose)] = PurposeRoute{TargetID: profileTargetID(input.Provider, purpose), ReasoningEffort: configured.ReasoningEffort, Enabled: true}
@@ -205,6 +207,7 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 					Active:          route.TargetID == targetID && route.Enabled,
 					Available:       available,
 					Capabilities:    append([]string(nil), model.Capabilities...),
+					BudgetOverride:  cloneModelBudgetOverride(model.BudgetOverride),
 				}
 			}
 			profiles[provider] = OperatorProviderProfile{BaseURL: configured.BaseURL, HasCredential: configured.APIKeyEnv != "", Purposes: purposes}
@@ -274,6 +277,7 @@ func clonePurposeModels(purposes map[string]PurposeModel) map[string]PurposeMode
 	out := make(map[string]PurposeModel, len(purposes))
 	for purpose, configured := range purposes {
 		configured.Capabilities = append([]string(nil), configured.Capabilities...)
+		configured.BudgetOverride = cloneModelBudgetOverride(configured.BudgetOverride)
 		out[purpose] = configured
 	}
 	return out

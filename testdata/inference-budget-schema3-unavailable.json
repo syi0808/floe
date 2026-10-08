@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "purposes": {
+    "quick_response": {
+      "status": "available",
+      "capability_revision": "1111111111111111111111111111111111111111111111111111111111111111",
+      "capabilities": ["chat"],
+      "budget_profile": {
+        "schema_version": 1,
+        "context_window": {"status": "unknown", "tokens": null, "source": "unknown"},
+        "max_output": {"status": "unknown", "tokens": null, "source": "unknown"},
+        "selected_output_reservation": {"status": "unknown", "tokens": null, "source": "unknown"},
+        "estimator": {
+          "version": 1,
+          "method": "utf8_model_input_bytes_upper_estimate_v1",
+          "uncertainty": "exact_tokenizer_unavailable",
+          "provider_overhead_tokens": null,
+          "safety_margin_tokens": null
+        },
+        "framing": {
+          "configured_input_json_bytes": null,
+          "max_input_json_bytes": 32768,
+          "max_instruction_bytes": 9216,
+          "max_messages": 256,
+          "max_tools": 64,
+          "max_conversation_bytes": 131072,
+          "max_request_bytes": 98304,
+          "max_output_bytes": 16384
+        },
+        "sources": {
+          "catalog": {
+            "status": "unavailable",
+            "revision": null,
+            "context_window_tokens": null,
+            "max_output_tokens": null,
+            "provenance": null
+          },
+          "operator_configuration": "unconfigured",
+          "provider_confirmed": "unknown",
+          "operator_configuration_version": null
+        }
+      }
+    },
+    "everyday_assistance": {"status": "not_configured"},
+    "deep_work": {"status": "disabled"}
+  }
+}
