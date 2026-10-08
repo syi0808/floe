@@ -2173,6 +2173,503 @@ mod model_selection_owner_tests {
             .await
     }
 
+    fn resolved_binding_interaction(
+        record: &RunRecord,
+    ) -> floe_conversation::ConversationInteraction {
+        use floe_conversation::{
+            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
+            InteractionRequirement, InteractionRequirementKind, InteractionResolutionCause,
+            InteractionResolutionReceipt, InteractionState, OwnerResolutionReceipt,
+            ReviewAuditRecord, ReviewedTarget, canonical_requirement_digest,
+            canonical_target_digest, interaction_publication_id,
+        };
+
+        let review_ref = floe_experts::BindingReviewRef {
+            id: Uuid::new_v4(),
+            digest: [3; 32],
+        };
+        let execution = floe_agent_contract::TaskExecutionReceiptRef {
+            execution: floe_agent_contract::TaskExecutionKey {
+                task_id: floe_agent_contract::TaskId::new(),
+                execution_id: Uuid::new_v4(),
+                executor_generation: 1,
+            },
+            task_revision: 2,
+            journal_revision: 0,
+            digest: [4; 32],
+        };
+        let origin = InteractionOrigin::Task {
+            execution: execution.clone(),
+            capability_call_id: None,
+        };
+        let target = ReviewedTarget::ExpertBinding(review_ref.clone());
+        let requirement = InteractionRequirement {
+            kind: InteractionRequirementKind::ConfigureExpertBinding,
+            source_id: "floe.expert.binding".into(),
+            connection_id: None,
+            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+            purpose: "configuration".into(),
+            inline: false,
+        };
+        let owner_receipt = OwnerResolutionReceipt::ExpertBinding {
+            receipt: floe_experts::BindingMutationReceipt {
+                command_id: CommandId::new(),
+                review_ref: review_ref.clone(),
+                assignment_ref: Uuid::new_v4(),
+                binding_revision: 1,
+                registry_revision: 1,
+                committed_at_unix_ms: 1,
+            },
+        };
+        let receipt = InteractionResolutionReceipt {
+            cause: InteractionResolutionCause::Refresh {
+                command_id: Uuid::new_v4(),
+            },
+            owner_command_id: owner_receipt.command_id(),
+            owner_operation_id: owner_receipt.operation_id(),
+            owner_receipt,
+            resolved_at_unix_ms: 1,
+        };
+        let audit = ReviewAuditRecord {
+            person_id: record.person_id,
+            device_id: record.device_id.clone(),
+            session_id: record.session_id,
+            run_id: record.run_id,
+            executor_generation: record.executor_generation,
+            operation_id: Uuid::new_v4(),
+            evidence: BlockedReviewEvidence::ExpertBinding {
+                execution,
+                requirement_key: "calendar".into(),
+                review: review_ref,
+            },
+        };
+        let requirement_digest =
+            canonical_requirement_digest(&requirement).expect("valid binding requirement digest");
+        let target_digest = canonical_target_digest(&target).expect("valid binding target digest");
+        let id =
+            interaction_publication_id(record.run_id, &origin, &requirement_digest, &target_digest)
+                .expect("valid publication identity");
+        let interaction = ConversationInteraction {
+            id,
+            person_id: record.person_id,
+            session_id: record.session_id,
+            origin_run_id: record.run_id,
+            origin_turn_id: record.run_id.as_uuid(),
+            origin,
+            audit,
+            kind: floe_agent_contract::UserInteractionKind::ExpertBinding,
+            requirement,
+            requirement_digest,
+            target,
+            target_digest,
+            state: InteractionState::Resolved { receipt },
+            revision: 2,
+            created_at_unix_ms: 1,
+            expires_at_unix_ms: 1 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
+        };
+        interaction
+            .validate()
+            .expect("valid resolved interaction fixture");
+        interaction
+    }
+
+    async fn persist_resolved_interaction_fixture(
+        vault: &EncryptedAgentVault<TestKeys>,
+        interaction: &floe_conversation::ConversationInteraction,
+    ) {
+        let mut connection = vault.connection().expect("connect to fixture Vault");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .expect("begin interaction fixture transaction");
+        super::conversation_interactions::insert_interaction(&transaction, interaction)
+            .await
+            .expect("persist valid resolved interaction fixture");
+        transaction
+            .commit()
+            .await
+            .expect("commit interaction fixture");
+    }
+
+    async fn finish_completed_run(
+        vault: &EncryptedAgentVault<TestKeys>,
+        record: &RunRecord,
+    ) -> RunRecord {
+        use floe_agent_contract::{BatchCursor, EngineStep, JournalEvent, ModelStep};
+
+        let text = "A completed owner run.".to_owned();
+        let artifacts = Vec::new();
+        let attempt_id = Uuid::new_v4();
+        let projection_ref = ProjectionRef::new();
+        append_event(
+            vault,
+            record.run_id,
+            model_intent(attempt_id, projection_ref, plan(record, 8)),
+        )
+        .await
+        .expect("append a pinned model intent");
+        append_event(
+            vault,
+            record.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: floe_agent_contract::ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await
+        .expect("settle the model attempt");
+        let batch = ValidatedModelBatch {
+            execution_id: record.run_id.as_uuid(),
+            attempt_id,
+            projection_ref,
+            batch_id: Uuid::new_v4(),
+            steps: vec![ModelStep::Answer {
+                text: text.clone(),
+                artifacts: artifacts.clone(),
+            }],
+            catalog_revision: record.expert_environment.revision,
+            tool_revisions: vec![],
+            agent_revisions: vec![],
+            projection_coverage: DependencyCoverage::Independent,
+            delegation_context: None,
+        };
+        append_event(
+            vault,
+            record.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        )
+        .await
+        .expect("persist the answer batch");
+        append_event(
+            vault,
+            record.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await
+        .expect("persist the answer cursor");
+        append_event(
+            vault,
+            record.run_id,
+            JournalEvent::Output {
+                text: text.clone(),
+                artifacts: artifacts.clone(),
+            },
+        )
+        .await
+        .expect("persist the final answer");
+        vault
+            .finish_conversation_run(
+                record.run_id,
+                record.aggregate_revision,
+                RunTerminal {
+                    state: RunState::Completed,
+                    output: Some(text.clone()),
+                    steps: vec![EngineStep::Answer { text, artifacts }],
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                    blocked: None,
+                    interactions: vec![],
+                },
+            )
+            .await
+            .expect("finish owner Run and enqueue any eligible resume")
+    }
+
+    async fn admit_new_run(started: &StartedRun, expected_revision: u64, text: &str) -> RunRecord {
+        let command_id = CommandId::new();
+        let run_id = RunId::new();
+        let principal = started.person_id.to_string();
+        let intent = CanonicalTurnIntent {
+            session_id: started.record.session_id,
+            expected_revision,
+            text: text.to_owned(),
+            mode: TurnMode::New,
+            retry_of: None,
+        };
+        let admission = started
+            .vault
+            .admit_conversation_turn(TurnAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [1; 32],
+                },
+                run_id,
+                command_id,
+                session_id: started.record.session_id,
+                expected_session_revision: expected_revision,
+                principal: principal.clone(),
+                device_id: started.record.device_id.clone(),
+                request_digest: intent.digest(&principal).expect("canonical turn digest"),
+                mode: TurnMode::New,
+                retry_of: None,
+                input: TurnInput::NewMessage(floe_agent_contract::AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: floe_agent_contract::MessageRole::User,
+                    text: text.to_owned(),
+                    call_id: None,
+                    coverage: DependencyCoverage::Independent,
+                }),
+            })
+            .await
+            .expect("admit new owner Run");
+        let VaultConversationAdmission::Created { record, .. } = admission else {
+            panic!("new input did not create a Run: {admission:?}");
+        };
+        record
+    }
+
+    async fn count_session_archives(
+        vault: &EncryptedAgentVault<TestKeys>,
+        session_id: Uuid,
+    ) -> u64 {
+        let connection = vault.connection().expect("connect to test Vault");
+        let mut rows = connection
+            .query(
+                "SELECT count(*) FROM agent_session_archives WHERE session_id = ?",
+                [session_id.to_string()],
+            )
+            .await
+            .expect("count session archives");
+        let row = rows
+            .next()
+            .await
+            .expect("read archive count")
+            .expect("count row");
+        u64::try_from(row.get::<i64>(0).expect("archive count value"))
+            .expect("nonnegative archive count")
+    }
+
+    #[tokio::test]
+    async fn pending_resume_refuses_compaction_without_changing_any_state() {
+        let mut started = start_run().await;
+        let first_run = finish_completed_run(&started.vault, &started.record).await;
+        started.record = first_run.clone();
+        let first_session = floe_conversation::SessionStore::load(
+            &started.vault,
+            started.person_id,
+            first_run.session_id,
+        )
+        .await
+        .expect("load first completed Session");
+        let origin = admit_new_run(&started, first_session.revision, "Resume this turn").await;
+        let interaction = resolved_binding_interaction(&origin);
+        persist_resolved_interaction_fixture(&started.vault, &interaction).await;
+        let origin = finish_completed_run(&started.vault, &origin).await;
+
+        let actor = floe_kernel::OwnerActor {
+            person_id: started.person_id,
+            device_id: origin.device_id.clone(),
+            runtime_epoch: 1,
+        };
+        let pending = started
+            .vault
+            .pending_conversation_resume_request(&actor, origin.run_id)
+            .await
+            .expect("read durable resume request")
+            .expect("completed Run with resolved interaction queues a resume");
+        let session = floe_conversation::SessionStore::load(
+            &started.vault,
+            started.person_id,
+            started.record.session_id,
+        )
+        .await
+        .expect("load completed Session");
+        assert_eq!(pending.expected_session_revision, session.revision);
+        assert_ne!(first_run.run_id.as_uuid(), origin.run_id.as_uuid());
+        let prefix_end = session
+            .messages
+            .iter()
+            .rposition(|message| message.turn_id() == first_run.run_id.as_uuid())
+            .expect("first completed turn defines the archive prefix");
+        let origin_position = session
+            .messages
+            .iter()
+            .position(|message| message.turn_id() == origin.run_id.as_uuid())
+            .expect("resume origin remains in the Session");
+        assert!(
+            origin_position > prefix_end,
+            "resume origin is outside the selected archive prefix"
+        );
+        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
+
+        assert_eq!(
+            started
+                .vault
+                .compact_session(
+                    session.id,
+                    session.revision,
+                    first_run.run_id.as_uuid(),
+                    "Completed turn summary".into(),
+                )
+                .await,
+            Err(AgentFailure::Conflict),
+            "the origin turn being retained does not make a revision bump safe"
+        );
+        assert_eq!(
+            floe_conversation::SessionStore::load(&started.vault, started.person_id, session.id,)
+                .await
+                .expect("reload Session after refusal"),
+            session,
+            "refused compaction preserves the complete Session"
+        );
+        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
+        assert_eq!(
+            started
+                .vault
+                .pending_conversation_resume_request(&actor, origin.run_id)
+                .await
+                .expect("read preserved resume request"),
+            Some(pending.clone())
+        );
+        assert_eq!(
+            started
+                .vault
+                .reconcile_conversation_resume_request(&actor, origin.run_id)
+                .await
+                .expect("reconcile stored resume"),
+            Some(pending.clone()),
+            "the exact expected revision remains reconcilable"
+        );
+        assert_eq!(
+            started
+                .vault
+                .pending_conversation_resume_request(&actor, origin.run_id)
+                .await
+                .expect("read pending resume after reconciliation"),
+            Some(pending)
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_without_a_pending_resume_preserves_coverage_and_archive() {
+        let started = start_run().await;
+        let completed = finish_completed_run(&started.vault, &started.record).await;
+        let session = floe_conversation::SessionStore::load(
+            &started.vault,
+            started.person_id,
+            completed.session_id,
+        )
+        .await
+        .expect("load completed Session");
+        let actor = floe_kernel::OwnerActor {
+            person_id: started.person_id,
+            device_id: completed.device_id.clone(),
+            runtime_epoch: 1,
+        };
+        assert_eq!(
+            started
+                .vault
+                .pending_conversation_resume_request(&actor, completed.run_id)
+                .await
+                .expect("read absent resume request"),
+            None
+        );
+
+        let compaction = started
+            .vault
+            .compact_session(
+                session.id,
+                session.revision,
+                completed.run_id.as_uuid(),
+                "Completed turn summary".into(),
+            )
+            .await
+            .expect("compact quiescent Session");
+        assert_eq!(compaction.session.revision, session.revision + 1);
+        assert_eq!(
+            compaction.summary_coverage,
+            DependencyCoverage::Independent,
+            "the archived turn's coverage is merged into its summary"
+        );
+        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
+        let recovered = started
+            .vault
+            .recover_session_with_coverage(&compaction.recovery)
+            .await
+            .expect("recover archived source snapshot");
+        assert_eq!(recovered.session, session);
+        assert_eq!(
+            recovered.coverage_by_turn.get(&completed.run_id.as_uuid()),
+            Some(&DependencyCoverage::Independent)
+        );
+    }
+
+    #[tokio::test]
+    async fn new_input_supersedes_pending_resume_before_compaction() {
+        let started = start_run().await;
+        let interaction = resolved_binding_interaction(&started.record);
+        persist_resolved_interaction_fixture(&started.vault, &interaction).await;
+        let origin = finish_completed_run(&started.vault, &started.record).await;
+        let actor = floe_kernel::OwnerActor {
+            person_id: started.person_id,
+            device_id: origin.device_id.clone(),
+            runtime_epoch: 1,
+        };
+        let pending = started
+            .vault
+            .pending_conversation_resume_request(&actor, origin.run_id)
+            .await
+            .expect("read pending resume")
+            .expect("resolved interaction queues resume");
+        let next = admit_new_run(
+            &started,
+            pending.expected_session_revision,
+            "A new explicit turn",
+        )
+        .await;
+        assert_eq!(
+            started
+                .vault
+                .pending_conversation_resume_request(&actor, origin.run_id)
+                .await
+                .expect("read request after New input"),
+            None,
+            "New input legitimately supersedes the old resume slot"
+        );
+
+        let next = finish_completed_run(&started.vault, &next).await;
+        let session = floe_conversation::SessionStore::load(
+            &started.vault,
+            started.person_id,
+            next.session_id,
+        )
+        .await
+        .expect("load Session after new turn");
+        let compaction = started
+            .vault
+            .compact_session(
+                session.id,
+                session.revision,
+                origin.run_id.as_uuid(),
+                "Earlier turn summary".into(),
+            )
+            .await
+            .expect("compact after the request was superseded");
+        assert_eq!(compaction.session.revision, session.revision + 1);
+        assert!(
+            compaction
+                .session
+                .messages
+                .iter()
+                .any(|message| message.turn_id() == next.run_id.as_uuid()),
+            "newer turn remains in the retained suffix"
+        );
+        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
+    }
+
     fn batch(
         record: &RunRecord,
         attempt_id: Uuid,

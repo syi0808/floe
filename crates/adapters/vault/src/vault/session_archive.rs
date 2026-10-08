@@ -140,6 +140,27 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if source.active_turn.is_some() || source.pending_output.is_some() {
                 return Err(AgentFailure::Conflict);
             }
+            let mut pending_resume = transaction
+                .query(
+                    "SELECT 1 FROM agent_conversation_resume_requests WHERE person_id = ? AND session_id = ? AND state = 'pending' LIMIT 1",
+                    (self.person_id.to_string(), session_id.to_string()),
+                )
+                .await
+                .map_err(database_failure)?;
+            let has_pending_resume = pending_resume
+                .next()
+                .await
+                .map_err(database_failure)?
+                .is_some();
+            drop(pending_resume);
+            if has_pending_resume {
+                // A compaction revision bump would make reconciliation
+                // supersede this durable user resume, even if its origin turn
+                // is outside the selected archive prefix. A New admission
+                // settles the slot as superseded in its own Immediate
+                // transaction before compaction may proceed.
+                return Err(AgentFailure::Conflict);
+            }
             let split = source
                 .messages
                 .iter()
