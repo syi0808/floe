@@ -14,11 +14,11 @@ Direct Day display has a separate Access product-read admission over the configu
 | Contract | `floe-model-contract` — `crates/contracts/model` | backend-neutral bounded schema, output format and DeviceModel wire values; no domain or authority dependencies |
 | Contract | `floe-context-contract` — `crates/contracts/context` | source views, grants, processing restrictions, provenance, coverage and Health-transform evidence values |
 | Contract | `floe-agent-contract` — `crates/contracts/agent` | prepared-model, canonical journal, Tool/Delegate, immutable Task receipt, blockage and artifact contracts |
-| Contract | `floe-conversation-contract` — `crates/contracts/conversation` | role-neutral agent/conversation identities, transcript/admission/checkpoint values; no persistence or authorization |
+| Contract | `floe-conversation-contract` — `crates/contracts/conversation` | role-neutral agent/conversation identities, transcript/admission/checkpoint values and content-addressed evidence references; no persistence or authorization |
 | Runtime | `floe-execution` — `crates/runtime/execution` | scoped cancellation, monotonic budget leases, dispatch facts and immutable per-attempt accounting |
 | Runtime | `floe-agent-runtime` — `crates/runtime/agent` | common prepare/project/model/Tool/Delegate Engine, validated final payloads and canonical journal projection |
-| Module | `floe-conversation-core` — `crates/modules/conversation-core` | role-neutral admission/replay, FIFO inbox, single-writer and checkpoint-prefix transitions; current contract model only |
-| Module | `floe-a2a` — `crates/modules/a2a` | versioned transport-neutral exchange, peer ID mapping and host Task/peer exchange ports; no HTTP binding |
+| Module | `floe-conversation-core` — `crates/modules/conversation-core` | inbound-work admission/replay, FIFO inbox, single-writer and completed-prefix checkpoint transitions; output recording and production storage are future work |
+| Module | `floe-a2a` — `crates/modules/a2a` | bounded versioned transport-neutral exchange, peer ID mapping and host Task/peer exchange/cancellation observation ports; no HTTP binding |
 | Module | `floe-access` — `crates/modules/access` | source grants, immutable reviews and receipts, source-processing/model dispatch fences, separate product Calendar read permits |
 | Module | `floe-connections` — `crates/modules/connections` | Connection, OAuth and pairing lifecycle; durable Calendar and standing personal source identity, resources, local configuration CAS, `SourceAuthority` and trusted native subject identity |
 | Module | `floe-inference` — `crates/modules/inference` | Gateway-primary preparation with verified-absence local fallback, owned prepared calls and Access-consumed attempt dispatch/accounting |

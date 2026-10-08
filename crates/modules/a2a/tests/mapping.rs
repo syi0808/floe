@@ -1,7 +1,8 @@
 use floe_a2a::{
-    A2A_EXCHANGE_CONTRACT_VERSION, A2aEnvelope, A2aFailure, A2aInboundMapping, A2aMessage,
-    A2aPeerAgentId, A2aPeerContextId, A2aPeerId, A2aPeerMessageId, A2aPeerTaskId,
-    A2aProtocolPolicy, A2aTaskObservation, AuthenticatedPeerAgent, map_inbound_message,
+    A2A_EXCHANGE_CONTRACT_VERSION, A2aArtifactPart, A2aEnvelope, A2aFailure, A2aInboundMapping,
+    A2aMessage, A2aPeerAgentId, A2aPeerContextId, A2aPeerId, A2aPeerMessageId, A2aPeerTaskId,
+    A2aProtocolPolicy, A2aTaskObservation, AuthenticatedPeerAgent, HostedTaskAdmission,
+    map_inbound_message,
 };
 use floe_conversation_contract::{
     AdmissionTarget, AgentIdentity, AgentInstanceId, AssignmentId, ConversationBranchId,
@@ -150,13 +151,13 @@ fn same_remote_context_maps_to_isolated_local_conversations_per_peer() {
     assert_eq!(
         first_request.message.message.origin,
         MessageOrigin::Agent {
-            agent_instance_id: first_peer.agent_instance_id
+            agent_instance_id: first_peer.agent_instance_id()
         }
     );
     assert_eq!(
         second_request.message.message.origin,
         MessageOrigin::Agent {
-            agent_instance_id: second_peer.agent_instance_id
+            agent_instance_id: second_peer.agent_instance_id()
         }
     );
     assert_ne!(
@@ -208,6 +209,35 @@ fn mismatched_authenticated_peer_or_local_agent_mapping_is_rejected() {
 }
 
 #[test]
+fn host_task_admission_rechecks_the_stored_evidence_commitment() {
+    let policy = A2aProtocolPolicy::new(["urn:floe:test:context:v1".to_owned()])
+        .expect("valid extension policy");
+    let request = envelope("peer-a");
+    let peer = AuthenticatedPeerAgent::from_verified_binding(
+        request.message.peer_id.clone(),
+        request.message.sender_agent_id.clone(),
+        AgentInstanceId::from_uuid(uuid(30)).expect("host agent instance"),
+    )
+    .expect("verified peer mapping");
+    let mapped = map_inbound_message(&request, &policy, &peer, &mapping("peer-a", 20, 100))
+        .expect("map message and evidence");
+    mapped.validate().expect("mapped evidence is committed");
+
+    let mut hosted = HostedTaskAdmission {
+        message: mapped.message,
+        artifacts: mapped.artifacts,
+    };
+    hosted
+        .validate()
+        .expect("host port sees a matching evidence reference");
+    let A2aArtifactPart::Text { text } = &mut hosted.artifacts[0].parts[0] else {
+        panic!("fixture's first artifact part is text");
+    };
+    text.push_str(" mutated before persistence");
+    assert_eq!(hosted.validate(), Err(A2aFailure::MappingMismatch));
+}
+
+#[test]
 fn remote_task_observation_keeps_external_status_and_id_separate() {
     let observation = A2aTaskObservation {
         peer_id: peer("peer-a"),
@@ -221,4 +251,62 @@ fn remote_task_observation_keeps_external_status_and_id_separate() {
     assert_eq!(observation.task_id.as_str(), "task:9");
     // The A2A observation has no conversion into a host TaskReceipt; only the
     // host Task port returns that immutable, host-owned value.
+}
+
+#[test]
+fn mapping_rejects_malformed_deserialized_target_values() {
+    let policy = A2aProtocolPolicy::new(["urn:floe:test:context:v1".to_owned()])
+        .expect("valid extension policy");
+    let request = envelope("peer-a");
+    let peer = AuthenticatedPeerAgent::from_verified_binding(
+        peer("peer-a"),
+        request.message.sender_agent_id.clone(),
+        AgentInstanceId::from_uuid(uuid(30)).expect("host agent instance"),
+    )
+    .expect("verified peer mapping");
+
+    let mut nil_conversation = mapping("peer-a", 20, 100);
+    let mut target = serde_json::to_value(&nil_conversation.local_target).expect("target JSON");
+    target["conversation_id"] = serde_json::json!(Uuid::nil().to_string());
+    nil_conversation.local_target =
+        serde_json::from_value(target).expect("deserialize a nil wrapped ID");
+    assert_eq!(
+        map_inbound_message(&request, &policy, &peer, &nil_conversation),
+        Err(A2aFailure::MappingMismatch)
+    );
+
+    let mut nil_branch = mapping("peer-a", 20, 100);
+    let mut target = serde_json::to_value(&nil_branch.local_target).expect("target JSON");
+    target["branch_id"] = serde_json::json!(Uuid::nil().to_string());
+    nil_branch.local_target = serde_json::from_value(target).expect("deserialize a nil branch ID");
+    assert_eq!(
+        map_inbound_message(&request, &policy, &peer, &nil_branch),
+        Err(A2aFailure::MappingMismatch)
+    );
+
+    let mut nil_message_id = mapping("peer-a", 20, 100);
+    nil_message_id.local_message_id =
+        serde_json::from_value(serde_json::json!(Uuid::nil().to_string()))
+            .expect("deserialize a nil local Message ID");
+    assert_eq!(
+        map_inbound_message(&request, &policy, &peer, &nil_message_id),
+        Err(A2aFailure::MappingMismatch)
+    );
+
+    let mut zero_head = mapping("peer-a", 20, 100);
+    let continue_json = serde_json::json!({
+        "kind": "continue",
+        "reference": {
+            "conversation_id": uuid(100).to_string(),
+            "branch_id": uuid(101).to_string(),
+            "identity": serde_json::to_value(agent_identity(20, 30)).expect("identity JSON"),
+            "head_revision": 0
+        }
+    });
+    zero_head.local_target =
+        serde_json::from_value(continue_json).expect("deserialize a zero-head continuation target");
+    assert_eq!(
+        map_inbound_message(&request, &policy, &peer, &zero_head),
+        Err(A2aFailure::MappingMismatch)
+    );
 }

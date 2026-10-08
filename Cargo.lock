@@ -626,6 +626,8 @@ dependencies = [
  "floe-execution",
  "floe-kernel",
  "serde",
+ "serde_json",
+ "sha2",
  "uuid",
 ]
 
@@ -824,6 +826,7 @@ dependencies = [
 name = "floe-conversation-core"
 version = "0.1.0"
 dependencies = [
+ "floe-a2a",
  "floe-conversation-contract",
  "floe-execution",
  "floe-kernel",

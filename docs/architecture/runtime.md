@@ -70,10 +70,18 @@ Conversation owns the durable Session/root-Run lifecycle and projects the state 
 `floe-conversation-contract` defines role-neutral Person/agent-assignment,
 Conversation/branch, Message, transcript, Run/Task-link and checkpoint values.
 `floe-conversation-core` supplies deterministic New/Continue, replay/conflict,
-FIFO inbox, single-writer and prefix-bound checkpoint transitions behind a
-Core-owned store port. Its fixtures exercise Manager and Expert identities
-through the same transitions while keeping provenance and conversation IDs
-isolated. A changed pinned agent definition selects a new Conversation.
+FIFO inbox, single-writer and completed-prefix checkpoint transitions behind a
+Core-owned store port. Replay identity includes a content-addressed host
+evidence reference, so changed attachments conflict with a reused Message ID.
+Checkpoints cannot cover active or pending input; they may cover a completed
+prefix while later input remains queued, and they cannot regress. Its fixtures
+exercise Manager and Expert identities through the same transitions while
+keeping provenance and conversation IDs isolated. A changed pinned agent
+definition selects a new Conversation.
+
+Core admission is specifically inbound work admission: it places accepted
+messages into the Run inbox. Generated assistant and Tool output must not use
+this API; a separate output-recording path remains future work.
 
 This is contract-only: the current Conversation/Expert execution path, Run
 journal, V1 Task receipts and stored sessions are unchanged. No production
@@ -83,11 +91,20 @@ role or an agent identity is not authentication or an authority grant.
 
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
-and ports to the host Task owner and peer binding. Remote Task observations and
-artifacts remain external exchange data until the host Task owner accepts them.
-The module does not depend on Conversation Core or duplicate host Task state;
-HTTP transport and standard conformance are future binding work. An in-process
-binding will call the same operation directly rather than loop through HTTP.
+and ports to the host Task owner and peer binding, including a bounded remote
+cancellation request that returns an observation without claiming effect
+rollback. Admission commits a semantic digest for mapped artifacts, and
+`HostedTaskAdmission::validate` lets a future host owner verify that reference
+before it stores evidence bytes; no production Task adapter is connected. The
+A2A wire DTO is not a persistence schema. Provisional part, aggregate artifact
+and serialized envelope limits are framing guards, not measured context or
+user-content defaults. Remote Task
+observations and artifacts remain external exchange data until the host Task
+owner accepts them. Each exchange call carries the host agent identity and
+execution scope for owner authorization and peer/Task binding checks. The module
+does not depend on Conversation Core or duplicate host Task state; HTTP transport
+and standard conformance are future binding work. An in-process binding will
+call the same operation directly rather than loop through HTTP.
 
 ### Model path
 

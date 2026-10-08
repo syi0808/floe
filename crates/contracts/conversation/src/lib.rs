@@ -1,7 +1,8 @@
-//! Role-neutral identity, transcript, admission, and storage-port contracts.
+//! Role-neutral identity, transcript, admission, and checkpoint contracts.
 //!
 //! These values describe an agent conversation; they do not authenticate a
-//! sender, grant source access, or define a persisted Vault schema.
+//! sender, grant source access, own a persistence port, or define a persisted
+//! Vault schema.
 
 mod identity;
 mod message;
@@ -12,7 +13,8 @@ pub use identity::{
 };
 pub use message::{
     AdmissionDisposition, AdmissionReceipt, AdmissionResult, AdmissionTarget,
-    ConversationCheckpoint, ConversationMessage, MessageAdmissionRequest, MessageOrigin,
+    ConversationCheckpoint, ConversationMessage, MessageAdmissionRequest, MessageEvidenceReference,
+    MessageOrigin,
 };
 
 /// A semantic failure for the role-neutral conversation contract.

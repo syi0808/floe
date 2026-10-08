@@ -1,8 +1,10 @@
 //! Pure role-neutral conversation state transitions.
 //!
 //! This crate owns no persistence, product policy, Agent Directory, Task
-//! lifecycle, A2A binding, or learning hooks. A production store must apply
-//! these transitions atomically through `floe-conversation-contract`'s port.
+//! lifecycle, A2A binding, or learning hooks. Its admission API accepts
+//! inbound work and schedules it for a Run; it does not record generated
+//! assistant or Tool output. A production store must apply transitions
+//! atomically through the Core-owned store port.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -25,7 +27,8 @@ pub struct WriterClaim {
 /// Core-owned persistence port. Implementations must commit an admission's
 /// message, head revision, Task link, pending-schedule marker and
 /// command/message receipt atomically. Dispatch is allowed only after this
-/// method returns a durable receipt.
+/// method returns a durable receipt. `admit` represents inbound work scheduled
+/// for a Run; generated assistant/Tool output uses a distinct future path.
 pub trait ConversationStorePort: Send + Sync {
     fn admit<'a>(
         &'a self,
@@ -47,7 +50,9 @@ pub trait ConversationStorePort: Send + Sync {
         run_id: RunId,
     ) -> BoxFuture<'a, Result<(), ConversationFailure>>;
 
-    /// Apply a checkpoint only to the exact verified transcript prefix.
+    /// Apply a checkpoint only to an exact completed prefix. Active and queued
+    /// input stays protected; later appended messages may remain outside the
+    /// prefix. Implementations reject stale scope or checkpoint regression.
     fn apply_checkpoint<'a>(
         &'a self,
         checkpoint: ConversationCheckpoint,
@@ -74,6 +79,7 @@ pub struct ConversationCore {
     conversation_id: ConversationId,
     branch_id: floe_conversation_contract::ConversationBranchId,
     head_revision: u64,
+    completed_prefix: u64,
     state_revision: u64,
     transcript: Vec<TranscriptEntry>,
     pending: VecDeque<TranscriptReference>,
@@ -86,7 +92,8 @@ pub struct ConversationCore {
 }
 
 impl ConversationCore {
-    /// Create a new isolated conversation with its first admitted message.
+    /// Admit inbound work to a new isolated conversation and queue it for a
+    /// Run. Generated assistant/Tool output needs a separate recording path.
     pub fn open(
         request: MessageAdmissionRequest,
     ) -> Result<(Self, AdmissionResult), ConversationFailure> {
@@ -106,6 +113,7 @@ impl ConversationCore {
             conversation_id,
             branch_id,
             head_revision: 0,
+            completed_prefix: 0,
             state_revision: 0,
             transcript: Vec::new(),
             pending: VecDeque::new(),
@@ -120,8 +128,8 @@ impl ConversationCore {
         Ok((conversation, result))
     }
 
-    /// Admit a distinct follow-up message against an explicit current head.
-    /// Exact message replay is classified before the mutable revision check.
+    /// Admit inbound work against an explicit current head and queue it for a
+    /// Run. Exact replay is classified before the mutable revision check.
     pub fn continue_with(
         &mut self,
         request: MessageAdmissionRequest,
@@ -194,11 +202,19 @@ impl ConversationCore {
         if active.link.run_id != run_id {
             return Err(ConversationFailure::WrongWriter);
         }
+        let expected_sequence = self
+            .completed_prefix
+            .checked_add(1)
+            .ok_or(ConversationFailure::InvalidInput)?;
+        if active.message.sequence != expected_sequence {
+            return Err(ConversationFailure::ConversationMismatch);
+        }
         let next_state_revision = self
             .state_revision
             .checked_add(1)
             .ok_or(ConversationFailure::InvalidInput)?;
         self.active_writer = None;
+        self.completed_prefix = active.message.sequence;
         self.completed_runs.push(active.link);
         self.state_revision = next_state_revision;
         Ok(active.link)
@@ -215,10 +231,14 @@ impl ConversationCore {
         {
             return Err(ConversationFailure::CheckpointMismatch);
         }
-        let index = usize::try_from(checkpoint.through.sequence)
-            .ok()
-            .and_then(|sequence| sequence.checked_sub(1))
-            .ok_or(ConversationFailure::CheckpointMismatch)?;
+        let index = self.checkpoint_prefix_index(checkpoint.through)?;
+        if self
+            .checkpoint
+            .as_ref()
+            .is_some_and(|current| checkpoint.through.sequence < current.through.sequence)
+        {
+            return Err(ConversationFailure::CheckpointMismatch);
+        }
         let entry = self
             .transcript
             .get(index)
@@ -246,10 +266,7 @@ impl ConversationCore {
         if through.conversation_id != self.conversation_id || through.branch_id != self.branch_id {
             return Err(ConversationFailure::CheckpointMismatch);
         }
-        let index = usize::try_from(through.sequence)
-            .ok()
-            .and_then(|sequence| sequence.checked_sub(1))
-            .ok_or(ConversationFailure::CheckpointMismatch)?;
+        let index = self.checkpoint_prefix_index(through)?;
         if self
             .transcript
             .get(index)
@@ -316,6 +333,28 @@ impl ConversationCore {
             return Err(ConversationFailure::AgentMismatch);
         }
         Ok(())
+    }
+
+    fn checkpoint_prefix_index(
+        &self,
+        through: TranscriptReference,
+    ) -> Result<usize, ConversationFailure> {
+        through.validate()?;
+        if through.sequence > self.completed_prefix {
+            return Err(ConversationFailure::CheckpointMismatch);
+        }
+        let index = usize::try_from(through.sequence)
+            .ok()
+            .and_then(|sequence| sequence.checked_sub(1))
+            .ok_or(ConversationFailure::CheckpointMismatch)?;
+        if self
+            .transcript
+            .get(index)
+            .is_none_or(|entry| entry.reference != through)
+        {
+            return Err(ConversationFailure::CheckpointMismatch);
+        }
+        Ok(index)
     }
 
     fn replay(

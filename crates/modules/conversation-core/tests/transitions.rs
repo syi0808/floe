@@ -1,7 +1,7 @@
 use floe_conversation_contract::{
     AdmissionDisposition, AdmissionTarget, AgentIdentity, AgentInstanceId, AssignmentId,
-    ConversationBranchId, ConversationId, ConversationMessage, MessageAdmissionRequest, MessageId,
-    MessageOrigin, RunTaskLink,
+    ConversationBranchId, ConversationCheckpoint, ConversationId, ConversationMessage,
+    MessageAdmissionRequest, MessageId, MessageOrigin, RunTaskLink,
 };
 use floe_conversation_core::ConversationCore;
 use floe_kernel::{CommandId, PersonId, RunId, TaskId};
@@ -29,6 +29,7 @@ fn message(id: u128, command: u128, text: &str, task: Option<TaskId>) -> Convers
             person_id: PersonId::from_uuid(uuid(10)).expect("person ID"),
         },
         text: text.into(),
+        evidence: None,
         task_id: task,
     }
 }
@@ -430,20 +431,117 @@ fn active_writer_queues_follow_up_and_next_run_keeps_the_same_task_link() {
 }
 
 #[test]
-fn checkpoint_cannot_cross_conversation_or_transcript_prefix() {
+fn checkpoint_protects_active_and_pending_work_and_advances_monotonically() {
     let (mut conversation, first) = ConversationCore::open(new_request(
         identity(20, 30, 1),
         50,
         message(60, 70, "checkpoint source", None),
     ))
     .expect("open conversation");
+    assert_eq!(
+        conversation.checkpoint_for(first.receipt.transcript, "too early"),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+    let forged_pending = ConversationCheckpoint {
+        through: first.receipt.transcript,
+        prefix_digest: [0; 32],
+        summary: "must not summarize pending work".into(),
+    };
+    assert_eq!(
+        conversation.apply_checkpoint(forged_pending),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+
+    let first_run = RunId::from_uuid(uuid(41)).expect("first Run");
+    conversation
+        .claim_next_writer(RunTaskLink {
+            run_id: first_run,
+            task_id: None,
+        })
+        .expect("claim current input");
+    assert_eq!(
+        conversation.checkpoint_for(first.receipt.transcript, "still active"),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+
+    let queued = conversation
+        .continue_with(MessageAdmissionRequest {
+            target: AdmissionTarget::Continue {
+                reference: conversation.reference(),
+            },
+            message: message(61, 71, "concurrently appended tail", None),
+        })
+        .expect("append a new input while current Run is active");
+    assert_eq!(queued.disposition, AdmissionDisposition::Queued);
+    conversation
+        .complete_writer(first_run)
+        .expect("complete the protected current input");
+
     let checkpoint = conversation
         .checkpoint_for(first.receipt.transcript, "bounded summary")
-        .expect("build a checkpoint for the exact prefix");
+        .expect("checkpoint completed prefix while later input remains queued");
+    let mut wrong_branch = first.receipt.transcript;
+    wrong_branch.branch_id =
+        ConversationBranchId::from_uuid(uuid(999)).expect("different branch ID");
+    assert_eq!(
+        conversation.checkpoint_for(wrong_branch, "wrong branch"),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+    let mut wrong_branch_checkpoint = checkpoint.clone();
+    wrong_branch_checkpoint.through.branch_id =
+        ConversationBranchId::from_uuid(uuid(998)).expect("different checkpoint branch");
+    assert_eq!(
+        conversation.apply_checkpoint(wrong_branch_checkpoint),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
     conversation
         .apply_checkpoint(checkpoint.clone())
         .expect("apply checkpoint to its source conversation");
     assert_eq!(conversation.checkpoint(), Some(&checkpoint));
+
+    let second_run = RunId::from_uuid(uuid(42)).expect("second Run");
+    conversation
+        .claim_next_writer(RunTaskLink {
+            run_id: second_run,
+            task_id: None,
+        })
+        .expect("claim queued tail");
+    conversation
+        .complete_writer(second_run)
+        .expect("complete queued tail");
+    let newer = conversation
+        .checkpoint_for(queued.receipt.transcript, "newer completed prefix")
+        .expect("checkpoint the longer completed prefix");
+    conversation
+        .apply_checkpoint(newer)
+        .expect("advance checkpoint to a longer prefix");
+    assert_eq!(
+        conversation.apply_checkpoint(checkpoint),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+}
+
+#[test]
+fn checkpoint_cannot_cross_conversation_or_incompatible_branch() {
+    let (mut conversation, first) = ConversationCore::open(new_request(
+        identity(20, 30, 1),
+        50,
+        message(60, 70, "checkpoint source", None),
+    ))
+    .expect("open conversation");
+    let run_id = RunId::from_uuid(uuid(41)).expect("Run");
+    conversation
+        .claim_next_writer(RunTaskLink {
+            run_id,
+            task_id: None,
+        })
+        .expect("claim first message");
+    conversation
+        .complete_writer(run_id)
+        .expect("complete first message");
+    let checkpoint = conversation
+        .checkpoint_for(first.receipt.transcript, "completed prefix")
+        .expect("build a checkpoint for the exact prefix");
 
     let (mut other, _) = ConversationCore::open(new_request(
         identity(21, 31, 1),
@@ -451,6 +549,16 @@ fn checkpoint_cannot_cross_conversation_or_transcript_prefix() {
         message(90, 91, "other conversation", None),
     ))
     .expect("separate conversation");
+    let other_run = RunId::from_uuid(uuid(92)).expect("other Run");
+    other
+        .claim_next_writer(RunTaskLink {
+            run_id: other_run,
+            task_id: None,
+        })
+        .expect("claim other message");
+    other
+        .complete_writer(other_run)
+        .expect("complete other message");
     assert_eq!(
         other.apply_checkpoint(checkpoint),
         Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)

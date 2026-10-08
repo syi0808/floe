@@ -1,8 +1,9 @@
 use floe_conversation_contract::{
-    AdmissionTarget, AgentIdentity, AgentInstanceId, ConversationMessage, MessageAdmissionRequest,
-    MessageId, MessageOrigin,
+    AdmissionTarget, AgentInstanceId, ConversationMessage, MessageAdmissionRequest,
+    MessageEvidenceReference, MessageId, MessageOrigin,
 };
 use floe_kernel::{CommandId, TaskId};
+use sha2::{Digest, Sha256};
 
 use crate::{
     A2aArtifact, A2aEnvelope, A2aFailure, A2aPeerAgentId, A2aPeerContextId, A2aPeerId,
@@ -13,14 +14,16 @@ use crate::{
 /// Neither the peer's role label nor its model output constructs this value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthenticatedPeerAgent {
-    pub peer_id: A2aPeerId,
-    pub agent_id: A2aPeerAgentId,
-    pub agent_instance_id: AgentInstanceId,
+    peer_id: A2aPeerId,
+    agent_id: A2aPeerAgentId,
+    agent_instance_id: AgentInstanceId,
 }
 
 impl AuthenticatedPeerAgent {
     /// Call only after the binding has authenticated this peer and resolved its
-    /// stable agent instance. This value grants no source or product authority.
+    /// stable agent instance. This constructor validates and packages that
+    /// result; it does not authenticate a transport or grant source/product
+    /// authority.
     pub fn from_verified_binding(
         peer_id: A2aPeerId,
         agent_id: A2aPeerAgentId,
@@ -36,6 +39,27 @@ impl AuthenticatedPeerAgent {
             agent_id,
             agent_instance_id,
         })
+    }
+
+    pub fn peer_id(&self) -> &A2aPeerId {
+        &self.peer_id
+    }
+
+    pub fn agent_id(&self) -> &A2aPeerAgentId {
+        &self.agent_id
+    }
+
+    pub fn agent_instance_id(&self) -> AgentInstanceId {
+        self.agent_instance_id
+    }
+
+    fn validate(&self) -> Result<(), A2aFailure> {
+        self.peer_id.validate()?;
+        self.agent_id.validate()?;
+        if !self.agent_instance_id.is_valid() {
+            return Err(A2aFailure::InvalidPeerBinding);
+        }
+        Ok(())
     }
 }
 
@@ -54,12 +78,21 @@ pub struct A2aInboundMapping {
     pub local_task_id: Option<TaskId>,
 }
 
-/// Validated remote payload mapped to a host Conversation admission, with
-/// artifacts preserved for the host Task owner to interpret explicitly.
+/// Validated remote payload mapped to a host Conversation admission. The
+/// message's evidence reference commits to the artifacts, which remain
+/// separate for the host Task owner to persist and interpret explicitly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct A2aInboundAdmission {
     pub message: MessageAdmissionRequest,
     pub artifacts: Vec<A2aArtifact>,
+}
+
+impl A2aInboundAdmission {
+    /// Recheck the message and artifact commitment before the host persists or
+    /// forwards this mapped payload.
+    pub fn validate(&self) -> Result<(), A2aFailure> {
+        validate_artifact_commitment(&self.message, &self.artifacts)
+    }
 }
 
 impl A2aInboundMapping {
@@ -77,10 +110,10 @@ impl A2aInboundMapping {
         {
             return Err(A2aFailure::MappingMismatch);
         }
-        let identity = target_identity(&self.local_target);
-        identity
+        self.local_target
             .validate()
             .map_err(|_| A2aFailure::MappingMismatch)?;
+        let identity = target_identity(&self.local_target);
         if identity.agent_instance_id != self.host_agent_instance_id {
             return Err(A2aFailure::MappingMismatch);
         }
@@ -96,6 +129,7 @@ pub fn map_inbound_message(
 ) -> Result<A2aInboundAdmission, A2aFailure> {
     envelope.validate(policy)?;
     mapping.validate()?;
+    peer.validate()?;
     let message = &envelope.message;
     if peer.peer_id != message.peer_id || peer.agent_id != message.sender_agent_id {
         return Err(A2aFailure::InvalidPeerBinding);
@@ -108,26 +142,83 @@ pub fn map_inbound_message(
     {
         return Err(A2aFailure::MappingMismatch);
     }
-    Ok(A2aInboundAdmission {
-        message: MessageAdmissionRequest {
-            target: mapping.local_target.clone(),
-            message: ConversationMessage {
-                message_id: mapping.local_message_id,
-                command_id: mapping.local_command_id,
-                origin: MessageOrigin::Agent {
-                    agent_instance_id: peer.agent_instance_id,
-                },
-                text: message.content.clone(),
-                task_id: mapping.local_task_id,
+    let evidence = artifact_evidence_reference(&message.artifacts);
+    let admission = MessageAdmissionRequest {
+        target: mapping.local_target.clone(),
+        message: ConversationMessage {
+            message_id: mapping.local_message_id,
+            command_id: mapping.local_command_id,
+            origin: MessageOrigin::Agent {
+                agent_instance_id: peer.agent_instance_id,
             },
+            text: message.content.clone(),
+            evidence,
+            task_id: mapping.local_task_id,
         },
+    };
+    admission
+        .validate()
+        .map_err(|_| A2aFailure::MappingMismatch)?;
+    let admission = A2aInboundAdmission {
+        message: admission,
         artifacts: message.artifacts.clone(),
-    })
+    };
+    admission.validate()?;
+    Ok(admission)
 }
 
-fn target_identity(target: &AdmissionTarget) -> &AgentIdentity {
+fn target_identity(target: &AdmissionTarget) -> &floe_conversation_contract::AgentIdentity {
     match target {
         AdmissionTarget::New { identity, .. } => identity,
         AdmissionTarget::Continue { reference } => &reference.identity,
     }
+}
+
+pub(crate) fn validate_artifact_commitment(
+    message: &MessageAdmissionRequest,
+    artifacts: &[A2aArtifact],
+) -> Result<(), A2aFailure> {
+    message
+        .validate()
+        .map_err(|_| A2aFailure::MappingMismatch)?;
+    crate::exchange::validate_artifacts(artifacts)?;
+    if message.message.evidence != artifact_evidence_reference(artifacts) {
+        return Err(A2aFailure::MappingMismatch);
+    }
+    Ok(())
+}
+
+fn artifact_evidence_reference(artifacts: &[A2aArtifact]) -> Option<MessageEvidenceReference> {
+    if artifacts.is_empty() {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"floe-a2a-semantic-artifacts-v1\0");
+    digest.update((artifacts.len() as u64).to_be_bytes());
+    for artifact in artifacts {
+        digest_string(&mut digest, &artifact.artifact_id);
+        digest_string(&mut digest, &artifact.name);
+        digest.update((artifact.parts.len() as u64).to_be_bytes());
+        for part in &artifact.parts {
+            match part {
+                crate::A2aArtifactPart::Text { text } => {
+                    digest.update([0]);
+                    digest_string(&mut digest, text);
+                }
+                crate::A2aArtifactPart::Data { media_type, data } => {
+                    digest.update([1]);
+                    digest_string(&mut digest, media_type);
+                    digest_string(&mut digest, data);
+                }
+            }
+        }
+    }
+    Some(MessageEvidenceReference::from_digest(
+        digest.finalize().into(),
+    ))
+}
+
+fn digest_string(digest: &mut Sha256, value: &str) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value.as_bytes());
 }

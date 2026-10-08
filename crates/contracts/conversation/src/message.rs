@@ -61,7 +61,31 @@ pub struct ConversationMessage {
     pub command_id: CommandId,
     pub origin: MessageOrigin,
     pub text: String,
+    /// Content-addressed reference to separately stored host evidence, such
+    /// as attachments. The reference carries no authority and is not a wire
+    /// payload or storage schema.
+    pub evidence: Option<MessageEvidenceReference>,
     pub task_id: Option<TaskId>,
+}
+
+/// A stable commitment to semantic evidence associated with a message.
+/// Evidence bytes remain owned and stored by their host domain.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageEvidenceReference {
+    digest: [u8; 32],
+}
+
+impl MessageEvidenceReference {
+    /// Store a content digest computed over the host-defined semantic evidence
+    /// encoding. Callers must use a deterministic, domain-separated digest.
+    pub fn from_digest(digest: [u8; 32]) -> Self {
+        Self { digest }
+    }
+
+    pub fn digest(&self) -> [u8; 32] {
+        self.digest
+    }
 }
 
 impl ConversationMessage {
@@ -81,8 +105,19 @@ impl ConversationMessage {
         self.origin.validate()
     }
 
+    /// Digest text and the associated evidence reference as one semantic body.
     pub fn body_digest(&self) -> [u8; 32] {
-        Sha256::digest(self.text.as_bytes()).into()
+        let mut digest = Sha256::new();
+        digest.update(b"floe-conversation-message-body-v1\0");
+        digest.update((self.text.len() as u64).to_be_bytes());
+        digest.update(self.text.as_bytes());
+        if let Some(evidence) = &self.evidence {
+            digest.update([1]);
+            digest.update(evidence.digest());
+        } else {
+            digest.update([0]);
+        }
+        digest.finalize().into()
     }
 
     /// Compare the stable message identity, body, authenticated origin and

@@ -39,9 +39,11 @@ are:
   matches; an identity or definition revision change defaults to a new isolated
   conversation.
 - A message ID is scoped to its conversation. The same message ID, body,
-  authenticated origin and Task association replays its receipt. Reusing that
-  ID with changed delivery content is a conflict. Command IDs remain a separate
-  idempotency key.
+  authenticated origin, Task association and host evidence commitment replays
+  its receipt. Reusing that ID with changed delivery content or evidence is a
+  conflict. The role-neutral message stores only a content-addressed evidence
+  reference; the owning host domain stores the evidence bytes. Command IDs
+  remain a separate idempotency key.
 - Each admitted message receives a transcript sequence. A message admitted
   while a writer is active joins the FIFO inbox. A conversation has at most one
   active Run writer; only that Run can complete its claim before the next queued
@@ -50,9 +52,16 @@ are:
   Task lifecycle and may link more than one Run. These values reuse the existing
   `RunId`, `CommandId` and `TaskId` types. Existing Run journals and V1 Task
   receipts remain immutable.
-- A checkpoint names an exact conversation branch and transcript prefix and
-  carries that prefix's digest. It is not an authorization proof or a portable
-  source of context.
+- A checkpoint names an exact conversation branch and completed transcript
+  prefix and carries that prefix's digest. It cannot cover the active writer or
+  queued inbound messages. A completed prefix may be checkpointed while a
+  later input is appended; applied checkpoints cannot regress. It is not an
+  authorization proof or a portable source of context.
+
+Core admission APIs schedule inbound work into the Run inbox. They do not
+record generated assistant or Tool output; a separate output-recording port is
+future work. A caller must not infer that every transcript append should start
+a Run.
 
 `MessageOrigin` records provenance supplied by a host-verified boundary. A model
 role, role name, prompt or generated output does not authenticate an origin or
@@ -64,7 +73,13 @@ not grants.
 `floe-a2a` owns the transport-neutral exchange envelope, internal contract
 version and extension policy, peer-scoped external IDs, explicit local/remote
 identity mapping, external Task observations, and ports for peer exchange and
-the host Task owner. It depends on neutral Conversation and Agent contracts; it
+the host Task owner, including bounded cancellation requests that return a
+peer observation rather than proof of effect rollback. Its part-count,
+aggregate artifact and serialized envelope limits are provisional framing
+resource guards, not measured prompt, context or user-content defaults. Each
+exchange port call carries an execution scope and host agent identity; a
+binding must authorize that scope and verify peer/Task binding rather than
+treating IDs as grants. It depends on neutral Conversation and Agent contracts; it
 does not depend on Conversation Core, Manager Conversation, Experts, Vault or
 the built-in Expert packages.
 
