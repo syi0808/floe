@@ -450,11 +450,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::PolicyDenied);
         }
         let payload = serde_json::to_string(session).map_err(storage)?;
-        if payload.len() > AgentBudget::default().max_session_bytes {
-            return Err(AgentFailure::BudgetExceeded);
-        }
+        validate_session_payload_size(&payload)?;
         Ok(payload)
     }
+
+    fn decode_session_payload(&self, payload: &str) -> Result<AgentSession, AgentFailure> {
+        validate_session_payload_size(payload)?;
+        let session: AgentSession = serde_json::from_str(payload).map_err(unavailable)?;
+        self.payload(&session)?;
+        Ok(session)
+    }
+}
+
+fn validate_session_payload_size(payload: &str) -> Result<(), AgentFailure> {
+    // `str::len` measures UTF-8 bytes, matching the serialized bytes stored in Vault.
+    if payload.as_bytes().len() > AgentBudget::default().max_session_bytes {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(())
 }
 
 impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
@@ -488,11 +501,7 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
             .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
         let payload = row.get::<String>(1).map_err(storage)?;
-        if payload.len() > AgentBudget::default().max_session_bytes {
-            return Err(AgentFailure::BudgetExceeded);
-        }
-        let session: AgentSession = serde_json::from_str(&payload).map_err(unavailable)?;
-        self.payload(&session)?;
+        let session = self.decode_session_payload(&payload)?;
         if session.id != session_id
             || i64::try_from(session.revision).ok() != Some(row.get::<i64>(0).map_err(storage)?)
         {
@@ -756,5 +765,365 @@ impl<Keys: VaultKeyProvider> floe_conversation::GovernedSessionRepository
             )
             .await
         })
+    }
+}
+
+#[cfg(test)]
+mod session_payload_tests {
+    use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::PathBuf, sync::Mutex};
+
+    use super::*;
+    use floe_conversation::AgentMessage;
+
+    const OLD_SESSION_QUERY_LIMIT: usize = 256 * 1024;
+    const CURRENT_SESSION_LIMIT: usize = 2_097_152;
+
+    #[derive(Default)]
+    struct TestKeys(Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>);
+
+    impl VaultKeyProvider for TestKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(RootKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &RootKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    struct TestRoot(PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("floe-session-test-{}", Uuid::new_v4()));
+            std::fs::create_dir(&path).expect("create isolated Vault test root");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .expect("restrict isolated Vault test root");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct SessionVault {
+        // Drop the Vault's open database and host lock before removing its root.
+        vault: EncryptedAgentVault<TestKeys>,
+        _root: TestRoot,
+        person_id: PersonId,
+    }
+
+    impl SessionVault {
+        async fn new() -> Self {
+            let root = TestRoot::new();
+            let person_id = PersonId::new();
+            let vault = EncryptedAgentVault::create(&root.0, person_id, TestKeys::default())
+                .await
+                .expect("create isolated encrypted Vault");
+            Self {
+                vault,
+                _root: root,
+                person_id,
+            }
+        }
+
+        async fn insert_payload(&self, id: Uuid, row_revision: i64, payload: String) {
+            let connection = self.vault.connection().expect("connect to test Vault");
+            connection
+                .execute(
+                    "INSERT INTO agent_sessions (id, revision, payload) VALUES (?, ?, ?)",
+                    (id.to_string(), row_revision, payload),
+                )
+                .await
+                .expect("insert exact session fixture");
+        }
+
+        async fn load_transactionally(&self, id: Uuid) -> Result<AgentSession, AgentFailure> {
+            let connection = self.vault.connection()?;
+            self.vault.session_on(&connection, id).await
+        }
+
+        async fn load(&self, person_id: PersonId, id: Uuid) -> Result<AgentSession, AgentFailure> {
+            <EncryptedAgentVault<TestKeys> as SessionStore>::load(&self.vault, person_id, id).await
+        }
+    }
+
+    fn session_with_exact_payload_bytes(
+        person_id: PersonId,
+        payload_bytes: usize,
+    ) -> (AgentSession, String) {
+        let mut session = AgentSession::new(person_id);
+        session.messages.push(AgentMessage::User {
+            turn_id: Uuid::new_v4(),
+            message_id: Uuid::new_v4(),
+            text: String::new(),
+        });
+        let empty_payload = serde_json::to_string(&session).expect("serialize empty fixture");
+        let fill_bytes = payload_bytes
+            .checked_sub(empty_payload.len())
+            .expect("boundary leaves room for realistic session JSON");
+        let mut text = "é".repeat(fill_bytes / 2);
+        if fill_bytes % 2 != 0 {
+            text.push('x');
+        }
+        let AgentMessage::User { text: content, .. } = &mut session.messages[0] else {
+            unreachable!("the fixture starts with a User message");
+        };
+        *content = text;
+
+        let payload = serde_json::to_string(&session).expect("serialize exact-size fixture");
+        assert_eq!(payload.as_bytes().len(), payload_bytes);
+        assert!(content_is_multibyte(&session));
+        (session, payload)
+    }
+
+    fn content_is_multibyte(session: &AgentSession) -> bool {
+        match session.messages.first() {
+            Some(AgentMessage::User { text, .. }) => text.len() > text.chars().count(),
+            _ => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn transactional_reads_accept_payloads_at_and_below_256_kibibytes() {
+        let store = SessionVault::new().await;
+        assert_eq!(
+            AgentBudget::default().max_session_bytes,
+            CURRENT_SESSION_LIMIT
+        );
+
+        for size in [OLD_SESSION_QUERY_LIMIT - 1, OLD_SESSION_QUERY_LIMIT] {
+            let (session, payload) = session_with_exact_payload_bytes(store.person_id, size);
+            assert_eq!(payload.as_bytes().len(), size);
+            store.insert_payload(session.id, 0, payload).await;
+
+            assert_eq!(
+                store.load_transactionally(session.id).await,
+                Ok(session.clone()),
+                "transactional read should accept serialized payload size {size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn session_store_load_accepts_payloads_above_256_kibibytes_through_two_mibibytes() {
+        let store = SessionVault::new().await;
+        assert_eq!(
+            AgentBudget::default().max_session_bytes,
+            CURRENT_SESSION_LIMIT
+        );
+
+        for size in [OLD_SESSION_QUERY_LIMIT + 1, CURRENT_SESSION_LIMIT] {
+            let (session, payload) = session_with_exact_payload_bytes(store.person_id, size);
+            assert_eq!(payload.as_bytes().len(), size);
+            store.insert_payload(session.id, 0, payload).await;
+
+            assert_eq!(
+                store.load(store.person_id, session.id).await,
+                Ok(session.clone()),
+                "SessionStore::load should accept serialized payload size {size}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn transactional_cas_can_update_a_session_above_256_kibibytes() {
+        let store = SessionVault::new().await;
+        let (session, payload) =
+            session_with_exact_payload_bytes(store.person_id, OLD_SESSION_QUERY_LIMIT + 1);
+        store.insert_payload(session.id, 0, payload).await;
+
+        let mut updated = session.clone();
+        updated.revision = 1;
+        updated.messages.push(AgentMessage::User {
+            turn_id: Uuid::new_v4(),
+            message_id: Uuid::new_v4(),
+            text: "A second person-provided message.".to_owned(),
+        });
+        <EncryptedAgentVault<TestKeys> as SessionStore>::compare_and_swap(
+            &store.vault,
+            &updated,
+            0,
+        )
+        .await
+        .expect("CAS should read and update a valid session over the old query limit");
+
+        assert_eq!(store.load(store.person_id, session.id).await, Ok(updated));
+    }
+
+    #[tokio::test]
+    async fn transactional_cas_accepts_the_inclusive_two_mibibyte_write_limit() {
+        let store = SessionVault::new().await;
+        let (session, payload) =
+            session_with_exact_payload_bytes(store.person_id, CURRENT_SESSION_LIMIT);
+        assert_eq!(payload.as_bytes().len(), CURRENT_SESSION_LIMIT);
+        store.insert_payload(session.id, 0, payload).await;
+
+        let mut updated = session;
+        updated.revision = 1;
+        assert_eq!(
+            serde_json::to_string(&updated)
+                .expect("serialize revision update")
+                .as_bytes()
+                .len(),
+            CURRENT_SESSION_LIMIT
+        );
+        <EncryptedAgentVault<TestKeys> as SessionStore>::compare_and_swap(
+            &store.vault,
+            &updated,
+            0,
+        )
+        .await
+        .expect("the current session byte limit is inclusive");
+        assert_eq!(store.load(store.person_id, updated.id).await, Ok(updated));
+    }
+
+    #[tokio::test]
+    async fn oversized_reads_and_writes_return_budget_exceeded_before_json_decode() {
+        let store = SessionVault::new().await;
+        let (oversized_session, oversized_payload) =
+            session_with_exact_payload_bytes(store.person_id, CURRENT_SESSION_LIMIT + 1);
+        store
+            .insert_payload(oversized_session.id, 0, oversized_payload.clone())
+            .await;
+
+        assert_eq!(
+            store.load(store.person_id, oversized_session.id).await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+        assert_eq!(
+            store.load_transactionally(oversized_session.id).await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+
+        let mut oversized_candidate = oversized_session.clone();
+        oversized_candidate.revision = 1;
+        assert_eq!(
+            serde_json::to_string(&oversized_candidate)
+                .expect("serialize oversized write fixture")
+                .as_bytes()
+                .len(),
+            CURRENT_SESSION_LIMIT + 1
+        );
+        assert_eq!(
+            <EncryptedAgentVault<TestKeys> as SessionStore>::compare_and_swap(
+                &store.vault,
+                &oversized_candidate,
+                0,
+            )
+            .await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+
+        let malformed_id = Uuid::new_v4();
+        store
+            .insert_payload(malformed_id, 0, "{".repeat(CURRENT_SESSION_LIMIT + 1))
+            .await;
+        assert_eq!(
+            store.load(store.person_id, malformed_id).await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+        assert_eq!(
+            store.load_transactionally(malformed_id).await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+    }
+
+    #[tokio::test]
+    async fn session_reads_preserve_absence_person_schema_and_revision_checks() {
+        let store = SessionVault::new().await;
+        let missing_id = Uuid::new_v4();
+        assert_eq!(
+            store.load(store.person_id, missing_id).await,
+            Err(AgentFailure::NotFound)
+        );
+        assert_eq!(
+            store.load_transactionally(missing_id).await,
+            Err(AgentFailure::NotFound)
+        );
+
+        let (valid, payload) = session_with_exact_payload_bytes(store.person_id, 1_024);
+        store.insert_payload(valid.id, 1, payload).await;
+        assert_eq!(
+            store.load(PersonId::new(), valid.id).await,
+            Err(AgentFailure::NotFound),
+            "the requested caller remains person-scoped"
+        );
+        assert_eq!(
+            store.load(store.person_id, valid.id).await,
+            Err(AgentFailure::VaultUnavailable),
+            "the stored row revision remains checked"
+        );
+
+        let mut wrong_person = valid.clone();
+        wrong_person.id = Uuid::new_v4();
+        wrong_person.person_id = PersonId::new();
+        let wrong_person_payload =
+            serde_json::to_string(&wrong_person).expect("serialize wrong-person fixture");
+        store
+            .insert_payload(wrong_person.id, 0, wrong_person_payload)
+            .await;
+        assert_eq!(
+            store.load(store.person_id, wrong_person.id).await,
+            Err(AgentFailure::NotFound)
+        );
+        assert_eq!(
+            store.load_transactionally(wrong_person.id).await,
+            Err(AgentFailure::NotFound)
+        );
+
+        let wrong_row_id = Uuid::new_v4();
+        let mut mismatched_id = wrong_person.clone();
+        mismatched_id.id = Uuid::new_v4();
+        mismatched_id.person_id = store.person_id;
+        let mismatched_id_payload =
+            serde_json::to_string(&mismatched_id).expect("serialize mismatched-ID fixture");
+        store
+            .insert_payload(wrong_row_id, 0, mismatched_id_payload)
+            .await;
+        assert_eq!(
+            store.load(store.person_id, wrong_row_id).await,
+            Err(AgentFailure::VaultUnavailable)
+        );
+        assert_eq!(
+            store.load_transactionally(wrong_row_id).await,
+            Err(AgentFailure::VaultUnavailable)
+        );
+
+        let mut unsupported = valid;
+        unsupported.id = Uuid::new_v4();
+        unsupported.revision = 0;
+        unsupported.schema_version = AGENT_VERSION + 1;
+        let unsupported_payload =
+            serde_json::to_string(&unsupported).expect("serialize unsupported schema fixture");
+        store
+            .insert_payload(unsupported.id, 0, unsupported_payload)
+            .await;
+        assert_eq!(
+            store.load(store.person_id, unsupported.id).await,
+            Err(AgentFailure::UnsupportedVersion)
+        );
+        assert_eq!(
+            store.load_transactionally(unsupported.id).await,
+            Err(AgentFailure::UnsupportedVersion)
+        );
     }
 }
