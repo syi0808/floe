@@ -9,22 +9,30 @@ import (
 	codexauth "floe/server/internal/inference/codex"
 	"floe/server/internal/inference/providers"
 	"floe/server/internal/integrations"
+	"floe/server/internal/modelcatalog"
 	"floe/server/internal/pairing"
 	httptransport "floe/server/internal/transport/http"
 	"floe/server/internal/trust"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
+	"time"
 )
 
-type Config struct{ Directory, Address string }
+type Config struct {
+	Directory                   string
+	Address                     string
+	ModelCatalogRefreshInterval time.Duration
+}
 type Node struct {
 	handler      *httptransport.Handler
 	integrations *integrations.Service
 	clients      *trust.ClientAdministration
 	runtime      *codexauth.Runtime
 	storage      *admittedStorage
+	catalogDone  chan struct{}
 	close        sync.Once
 	mu           sync.Mutex
 	active       sync.WaitGroup
@@ -34,6 +42,13 @@ type Node struct {
 }
 
 func New(config Config) (*Node, error) {
+	refreshInterval := config.ModelCatalogRefreshInterval
+	if refreshInterval == 0 {
+		refreshInterval = modelcatalog.DefaultRefreshInterval
+	}
+	if refreshInterval < modelcatalog.MinRefreshInterval || refreshInterval > modelcatalog.MaxRefreshInterval {
+		return nil, errors.New("model catalog refresh interval out of bounds")
+	}
 	host, port, err := net.SplitHostPort(config.Address)
 	if err != nil || host != "127.0.0.1" || port == "" {
 		return nil, errors.New("node requires 127.0.0.1:port")
@@ -52,6 +67,10 @@ func New(config Config) (*Node, error) {
 			storageRoot.Close()
 		}
 	}()
+	modelCatalog, err := modelcatalog.Open(filepath.Join(config.Directory, modelcatalog.FileName))
+	if err != nil {
+		return nil, err
+	}
 	trustFiles, err := storageRoot.files.Scope("trust")
 	if err != nil {
 		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
@@ -113,10 +132,15 @@ func New(config Config) (*Node, error) {
 	}
 	pairing := pairing.NewOperations(t, vault, nil)
 	clients := trust.NewClientAdministration(t, sources, pairing)
-	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
-	failed = false
+	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, ModelCatalog: modelCatalog, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, Address: config.Address}}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Node{handler: handler, integrations: sources, clients: clients, runtime: runtime, storage: storageRoot, ctx: ctx, cancel: cancel}, nil
+	catalogDone := make(chan struct{})
+	go func() {
+		defer close(catalogDone)
+		_ = modelCatalog.Run(ctx, refreshInterval)
+	}()
+	failed = false
+	return &Node{handler: handler, integrations: sources, clients: clients, runtime: runtime, storage: storageRoot, catalogDone: catalogDone, ctx: ctx, cancel: cancel}, nil
 }
 func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n.mu.Lock()
@@ -140,6 +164,9 @@ func (n *Node) Close() {
 		n.closed = true
 		n.cancel()
 		n.mu.Unlock()
+		if n.catalogDone != nil {
+			<-n.catalogDone
+		}
 		n.handler.Inference.Service.DenyConfiguration()
 		n.active.Wait()
 		n.clients.Close()

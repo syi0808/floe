@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "revision": 2,
+  "version": "example-revision-2",
+  "providers": [
+    {
+      "provider_id": "codex_oauth",
+      "models": [
+        {
+          "model_id": "gpt-5.5",
+          "source": "migrated_repository_suggestions"
+        }
+      ]
+    }
+  ]
+}

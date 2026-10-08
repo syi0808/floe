@@ -9,6 +9,7 @@ import (
 	"floe/server/internal/authority"
 	"floe/server/internal/inference"
 	"floe/server/internal/integrations"
+	"floe/server/internal/modelcatalog"
 	"floe/server/internal/operation"
 	"floe/server/internal/pairing"
 	"floe/server/internal/trust"
@@ -49,6 +50,7 @@ type Handler struct {
 	Configuration *inference.Configuration
 	Accounts      *inference.AccountManagement
 	Clients       *trust.ClientAdministration
+	ModelCatalog  *modelcatalog.Store
 }
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -325,7 +327,11 @@ func (handler *Handler) managementState(request *http.Request, operator trust.Op
 	if err != nil {
 		return trust.Result(err)
 	}
-	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory})
+	var catalog any
+	if handler.ModelCatalog != nil {
+		catalog = handler.ModelCatalog.Projection()
+	}
+	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory, "model_catalog": catalog})
 }
 
 func (handler *Handler) ServeUnavailable(writer http.ResponseWriter) {

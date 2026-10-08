@@ -195,15 +195,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         id: Uuid,
     ) -> Result<AgentSession, AgentFailure> {
-        let mut rows = connection.query("SELECT revision, payload FROM agent_sessions WHERE id = ? AND length(CAST(payload AS BLOB)) <= 262144", [id.to_string()]).await.map_err(database_failure)?;
+        let mut rows = connection
+            .query(
+                "SELECT revision, payload FROM agent_sessions WHERE id = ?",
+                [id.to_string()],
+            )
+            .await
+            .map_err(database_failure)?;
         let row = rows
             .next()
             .await
             .map_err(database_failure)?
             .ok_or(AgentFailure::NotFound)?;
-        let session: AgentSession =
-            serde_json::from_str(&row.get::<String>(1).map_err(storage)?).map_err(unavailable)?;
-        self.payload(&session)?;
+        let payload = row.get::<String>(1).map_err(storage)?;
+        let session = self.decode_session_payload(&payload)?;
         if session.id != id || integer(session.revision)? != row.get::<i64>(0).map_err(storage)? {
             return Err(AgentFailure::VaultUnavailable);
         }

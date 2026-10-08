@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "version": "migrated-dashboard-seed",
+  "providers": [
+    {
+      "provider_id": "codex_oauth",
+      "models": [
+        {"model_id": "gpt-6-astra", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.6-sol", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.6-terra", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.6-luna", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.5", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.2", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.3-codex", "source": "migrated_repository_suggestions"},
+        {"model_id": "gpt-5.3-codex-spark", "source": "migrated_repository_suggestions"}
+      ]
+    }
+  ]
+}

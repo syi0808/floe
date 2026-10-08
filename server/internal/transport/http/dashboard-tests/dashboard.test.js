@@ -92,8 +92,8 @@ function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:
   };
 }
 
-function state({csrf = 'csrf-current-session', clients = [], pairing = null} = {}) {
-  return {csrf, clients, providers: {}, address: `${origin}`, pairing};
+function state({csrf = 'csrf-current-session', clients = [], pairing = null, providers = {}, model_catalog = null} = {}) {
+  return {csrf, clients, providers, address: `${origin}`, pairing, model_catalog};
 }
 
 function pairing({
@@ -119,6 +119,40 @@ function pairing({
 function element(window, id) {
   return window.document.getElementById(id);
 }
+
+test('catalog suggestions preserve a removed selected model and leave entry open', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({
+      providers: {codex_oauth: {purposes: {
+        quick_response: {model: 'removed-model', capabilities: ['chat']},
+        everyday_assistance: {model: 'retired-model', capabilities: ['chat']},
+      }}},
+      model_catalog: {
+        catalog: {providers: [{provider_id: 'codex_oauth', models: [
+          {model_id: 'gpt-5.5', display_name: 'Suggested model'},
+          {model_id: 'retired-model', deprecated: true},
+        ]}]},
+        status: {source: 'previous', version: 'revision-2', last_error: 'invalid_catalog'},
+      },
+    })))} ,
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  env.window.document.querySelector('.provider-option[data-provider="codex_oauth"]').click();
+
+  const modelInput = env.window.document.querySelector('[name="quick_response_model"]');
+  const deprecatedInput = env.window.document.querySelector('[name="everyday_assistance_model"]');
+  assert.equal(modelInput.value, 'removed-model');
+  assert.equal(deprecatedInput.value, 'retired-model');
+  assert.equal(modelInput.getAttribute('list'), 'model-suggestions');
+  const choices = [...element(env.window, 'model-suggestions').options].map((option) => option.value);
+  assert.deepEqual(choices, ['gpt-5.5']);
+  modelInput.value = 'operator-entered-model';
+  assert.equal(modelInput.value, 'operator-entered-model');
+  assert.match(element(env.window, 'model-catalog-status').textContent, /revision-2/);
+  assert.match(element(env.window, 'model-catalog-status').textContent, /failed validation/i);
+  env.assertDrained();
+});
 
 async function startSignedIn(env, initialPairing = null) {
   env.expect('login', 'POST', jsonResponse(200, {ok: true}));
