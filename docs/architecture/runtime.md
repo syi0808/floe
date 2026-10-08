@@ -129,15 +129,26 @@ opaque Core digest and Task evidence from the typed payload plus the exact
 stored Task receipt and parent journal. Bounded reverse-input and transcript-
 link reads use explicit keys and never create or repair schema. Existing
 unbound rows are not backfilled, and inbound mapping alone does not fabricate
-typed evidence. The current live composer accepts Assistant, Capability and
-Delegation messages only. It rejects User, Preamble, Compaction and Interaction;
-the codec retains all variants, but this composer has no textless Interaction
-write path. A review harness built from the exact c025 source rejected the new
-family as `catalog/unexpected_object` and returned UnsupportedVersion from
-Vault open. It ran against a disposable fixture after the writer and host lock
-were released; database bytes and the complete catalog were identical before
-and after. This is still an internal prerequisite: no Manager or Expert
-production caller uses the composer.
+typed evidence. The live composer supports Assistant, Capability, admitted
+Delegation, owner-validated Unadmitted Delegation, and Interaction. Interaction
+requires a current `read_interaction` result whose validated Person, Session,
+origin Run/turn and kind match; it creates a neutral Host transcript record
+with empty display text and preserves the exact typed reference. Historical
+Interaction output does not freeze status or grant a decision: current owner
+state remains authoritative on replay. An Unadmitted Delegation requires the
+exact producer Run's DelegationIntent/DelegationResult pair and a validated
+Unadmitted TaskReceipt matching its Task ID, principal, selected agent and
+definition, and snapshot, with no stored Task record. Its typed snapshot keeps
+the attempted Task ID and no execution receipt; Core has no producing-Task
+reference or task ID. Admitted Delegation retains the stronger actual Task
+snapshot, receipt and parent-journal checks. User, Preamble and Compaction
+remain outside this generated terminal-output slice. A review harness built
+from the exact c025 source rejected the new family as
+`catalog/unexpected_object` and returned UnsupportedVersion from Vault open.
+It ran against a disposable fixture after the writer and host lock were
+released; database bytes and the complete catalog were identical before and
+after. This remains an internal prerequisite: no Manager or Expert production
+caller uses the composer.
 
 Conversation also exposes an explicit pure preparation step for one bounded
 legacy `AgentSession` snapshot. It checks the exact source-byte SHA-256,

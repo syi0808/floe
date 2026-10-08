@@ -2,6 +2,333 @@
 
 use super::*;
 
+fn typed_interaction_request(
+    recorder: RecorderFence,
+    turn_id: Uuid,
+    interaction_id: Uuid,
+    interaction_kind: floe_agent_contract::UserInteractionKind,
+) -> TypedConversationRecordingRequest {
+    TypedConversationRecordingRequest {
+        recorder,
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        typed_message: floe_conversation::AgentMessage::Interaction {
+            turn_id,
+            interaction_id,
+            interaction_kind,
+        },
+    }
+}
+
+fn pending_navigation_interaction(
+    run: &RunRecord,
+    execution: floe_agent_contract::TaskExecutionReceiptRef,
+) -> floe_conversation::ConversationInteraction {
+    use floe_context_contract::{
+        GrantConsumer, GrantOperation, GrantPurpose, SourceAccessRequirement,
+        SourceAccessRequirementKind,
+    };
+    use floe_conversation::{
+        BlockedReviewEvidence, ConversationInteraction, InteractionOrigin, InteractionRequirement,
+        InteractionState, NavigationDestination, NavigationOnlyTarget, ReviewAuditRecord,
+        ReviewedTarget, canonical_requirement_digest, canonical_target_digest,
+        interaction_publication_id,
+    };
+
+    let source = SourceAccessRequirement::try_new(
+        "floe.source.calendar",
+        None,
+        None,
+        GrantOperation::Read,
+        GrantConsumer::builtin("manager").expect("valid owner publication consumer"),
+        GrantPurpose::Assistant,
+        Vec::new(),
+        None,
+        SourceAccessRequirementKind::SelectResource,
+        None,
+        None,
+        false,
+    )
+    .expect("valid navigation source requirement");
+    let requirement = InteractionRequirement::from_source(&source, false);
+    let target = NavigationOnlyTarget {
+        destination: NavigationDestination::ResourcePicker,
+        source_id: source.source_id().to_owned(),
+        connection_id: source
+            .connection_id()
+            .map(|connection| connection.as_str().to_owned()),
+        consumer: source.consumer().identifier().to_owned(),
+        purpose: requirement.purpose.clone(),
+    };
+    let target = ReviewedTarget::NavigationOnly(target);
+    let origin = InteractionOrigin::Task {
+        execution: execution.clone(),
+        capability_call_id: None,
+    };
+    let audit = ReviewAuditRecord {
+        person_id: run.person_id,
+        device_id: run.device_id.clone(),
+        session_id: run.session_id,
+        run_id: run.run_id,
+        executor_generation: run.executor_generation,
+        operation_id: Uuid::new_v4(),
+        evidence: BlockedReviewEvidence::Navigation {
+            execution,
+            requirement: source,
+            target: match &target {
+                ReviewedTarget::NavigationOnly(target) => target.clone(),
+                _ => unreachable!(),
+            },
+        },
+    };
+    let requirement_digest =
+        canonical_requirement_digest(&requirement).expect("canonical navigation requirement");
+    let target_digest = canonical_target_digest(&target).expect("canonical navigation target");
+    let id = interaction_publication_id(run.run_id, &origin, &requirement_digest, &target_digest)
+        .expect("canonical owner publication ID");
+    let interaction = ConversationInteraction {
+        id,
+        person_id: run.person_id,
+        session_id: run.session_id,
+        origin_run_id: run.run_id,
+        origin_turn_id: run.run_id.as_uuid(),
+        origin,
+        audit,
+        kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+        requirement,
+        requirement_digest,
+        target,
+        target_digest,
+        state: InteractionState::Pending,
+        revision: 1,
+        created_at_unix_ms: 1,
+        expires_at_unix_ms: 1 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
+    };
+    interaction
+        .validate()
+        .expect("valid owner interaction publication fixture");
+    interaction
+}
+
+async fn publish_interaction_with_owner_audit(
+    scenario: &Scenario,
+    run: &RunRecord,
+    interaction: floe_conversation::ConversationInteraction,
+) {
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to owner Interaction publication fixture");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start owner Interaction publication transaction");
+    let current = scenario
+        .vault()
+        .conversation_run_on(&transaction, run.run_id)
+        .await
+        .expect("load Interaction owner Run")
+        .expect("Interaction owner Run exists");
+    assert_eq!(current.state, floe_conversation::RunState::Working);
+    scenario
+        .vault()
+        .check_interaction_origin_on(&transaction, &interaction)
+        .await
+        .expect("validate actual Task and Run journal origin");
+    scenario
+        .vault()
+        .store_review_audit_on(&transaction, &current, &interaction.audit, false)
+        .await
+        .expect("store the exact owner publication audit and evidence");
+    super::super::super::conversation_interactions::insert_interaction(&transaction, &interaction)
+        .await
+        .expect("publish owner-validated ConversationInteraction row");
+    transaction
+        .commit()
+        .await
+        .expect("commit owner Interaction publication transaction");
+}
+
+async fn unadmitted_terminal_task_receipt(
+    scenario: &Scenario,
+    run: &RunRecord,
+) -> floe_agent_contract::TaskReceipt {
+    use floe_agent_contract::{
+        AgentContext, DelegationExecutionContext, DelegationRequest, JournalEvent,
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+        PinnedAgentRevision, PreparedModelPlan, ProcessingBoundary, ProjectionRef,
+        TaskExecutionEvidence, TaskSnapshot, TaskState, ValidatedModelBatch,
+    };
+
+    let batch_id = Uuid::new_v4();
+    let attempt_id = Uuid::new_v4();
+    let task_id = TaskId::from_uuid(Uuid::new_v5(
+        &run.run_id.as_uuid(),
+        format!("{}:{batch_id}:0:task", run.run_id.as_uuid()).as_bytes(),
+    ))
+    .expect("derive owner journal's stable Task ID");
+    let invocation_key = floe_agent_contract::InvocationKey::from_uuid(Uuid::new_v5(
+        &run.run_id.as_uuid(),
+        format!("{}:{batch_id}:0:delegation", run.run_id.as_uuid()).as_bytes(),
+    ))
+    .expect("derive owner journal's stable delegation invocation");
+    let projection_ref = ProjectionRef::new();
+    let execution_context = DelegationExecutionContext {
+        session_id: run.session_id,
+        device_id: run.device_id.clone(),
+        agent_context: AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+        projection_coverage: DependencyCoverage::Independent,
+    };
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([91; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([92; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: floe_agent_contract::ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![floe_agent_contract::ModelStep::Delegate {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                        message: "unadmitted terminal failure".into(),
+                        context_refs: vec![],
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![PinnedAgentRevision {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                    }],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: Some(execution_context.clone()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: floe_agent_contract::BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    let request = DelegationRequest {
+        task_id,
+        parent_run_id: Some(run.run_id.as_uuid()),
+        principal: scenario.person_id.to_string(),
+        invocation_key,
+        selected_agent_id: "fixture.expert".into(),
+        selected_definition_revision: 1,
+        message: "unadmitted terminal failure".into(),
+        context_refs: vec![],
+        execution_context,
+    };
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::DelegationIntent {
+                request: request.clone(),
+            },
+        )
+        .await;
+    let receipt = floe_agent_contract::TaskReceipt {
+        task_id,
+        snapshot: TaskSnapshot {
+            task_id,
+            parent_run_id: request.parent_run_id,
+            principal: request.principal,
+            agent_id: request.selected_agent_id,
+            definition_revision: request.selected_definition_revision,
+            state: TaskState::Rejected,
+            result: None,
+            artifacts: vec![],
+            coverage: DependencyCoverage::Independent,
+            issue: Some(AgentFailure::Interrupted),
+            blockage: None,
+        },
+        replay: None,
+        execution: TaskExecutionEvidence::Unadmitted,
+    };
+    receipt
+        .validate(floe_agent_contract::MAX_OUTPUT_BYTES)
+        .expect("valid owner Unadmitted terminal failure receipt");
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::DelegationResult {
+                receipt: Box::new(receipt.clone()),
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: floe_agent_contract::BatchCursor {
+                    batch_id,
+                    next_step_index: 1,
+                },
+            },
+        )
+        .await;
+    receipt
+}
+
 #[tokio::test]
 async fn owner_input_reverse_lookup_uses_exact_mapping_keys_with_unrelated_runs_present() {
     let mut scenario = Scenario::new().await;
@@ -742,6 +1069,23 @@ async fn typed_delegation_requires_actual_task_snapshot_receipt_and_owner_journa
         typed_message: typed_message.clone(),
     };
 
+    let mut unadmitted_request = valid_request.clone();
+    if let floe_conversation::AgentMessage::Delegation {
+        execution_receipt, ..
+    } = &mut unadmitted_request.typed_message
+    {
+        *execution_receipt = None;
+    }
+    unadmitted_request.contribution_id = LogicalContributionId::new();
+    unadmitted_request.typed_entry_id = Uuid::new_v4();
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), unadmitted_request).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "an admitted Task result cannot be presented as Unadmitted"
+    );
+
     let mut wrong_parent_snapshot = task.snapshot.clone();
     wrong_parent_snapshot.parent_run_id = Some(Uuid::new_v4());
     let wrong_parent = TypedConversationRecordingRequest {
@@ -800,6 +1144,464 @@ async fn typed_delegation_requires_actual_task_snapshot_receipt_and_owner_journa
     assert_eq!(
         link.transcript_entry.message.task_id,
         Some(accepted_reference.execution.task_id)
+    );
+}
+
+#[tokio::test]
+async fn typed_unadmitted_delegation_requires_exact_owner_pair_and_replays_original_producer() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("typed unadmitted Task proof")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open Unadmitted terminal recorder");
+
+    let unproven = floe_agent_contract::TaskSnapshot {
+        task_id: TaskId::new(),
+        parent_run_id: Some(run.run_id.as_uuid()),
+        principal: scenario.person_id.to_string(),
+        agent_id: "fixture.expert".into(),
+        definition_revision: 1,
+        state: floe_agent_contract::TaskState::Rejected,
+        result: None,
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: Some(AgentFailure::Interrupted),
+        blockage: None,
+    };
+    let unproven_request = TypedConversationRecordingRequest {
+        recorder: open.fence.clone(),
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        typed_message: floe_conversation::AgentMessage::Delegation {
+            turn_id: run.run_id.as_uuid(),
+            task: unproven.clone(),
+            execution_receipt: None,
+        },
+    };
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), unproven_request).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "None execution evidence without the owning journal pair is not proof"
+    );
+
+    let terminal_receipt = unadmitted_terminal_task_receipt(&scenario, &run).await;
+    assert!(
+        scenario
+            .vault()
+            .task(terminal_receipt.task_id)
+            .await
+            .expect("inspect Task owner after Unadmitted result")
+            .is_none(),
+        "the Unadmitted result has no admitted Task owner record"
+    );
+    let mut mismatched_snapshot = terminal_receipt.snapshot.clone();
+    mismatched_snapshot.agent_id = "counterfeit.agent".into();
+    let mismatched_request = TypedConversationRecordingRequest {
+        recorder: open.fence.clone(),
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        typed_message: floe_conversation::AgentMessage::Delegation {
+            turn_id: run.run_id.as_uuid(),
+            task: mismatched_snapshot,
+            execution_receipt: None,
+        },
+    };
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), mismatched_request).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "the typed Task snapshot must equal the validated journal receipt"
+    );
+
+    let mut wrong_task_id = terminal_receipt.snapshot.clone();
+    wrong_task_id.task_id = TaskId::new();
+    let mismatched_journal_result = TypedConversationRecordingRequest {
+        recorder: open.fence.clone(),
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        typed_message: floe_conversation::AgentMessage::Delegation {
+            turn_id: run.run_id.as_uuid(),
+            task: wrong_task_id,
+            execution_receipt: None,
+        },
+    };
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), mismatched_journal_result).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a journal result for another Task ID cannot prove this output"
+    );
+
+    let request = TypedConversationRecordingRequest {
+        recorder: open.fence.clone(),
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        typed_message: floe_conversation::AgentMessage::Delegation {
+            turn_id: run.run_id.as_uuid(),
+            task: terminal_receipt.snapshot.clone(),
+            execution_receipt: None,
+        },
+    };
+    let original_receipt = compose_typed_recording(scenario.vault(), request.clone())
+        .await
+        .expect("compose validated owner Unadmitted terminal failure");
+    assert_eq!(original_receipt.producing_task, None);
+    let original_link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("load linked Unadmitted Task output");
+    assert_eq!(original_link.first_recording_run_id, run.run_id);
+    assert_eq!(original_link.original_task_receipt, None);
+    assert_eq!(
+        original_link.transcript_entry.producer_run,
+        Some(run.run_id)
+    );
+    assert_eq!(original_link.transcript_entry.producing_task, None);
+    assert_eq!(
+        original_link.transcript_entry.message.origin,
+        MessageOrigin::Host
+    );
+    assert_eq!(original_link.transcript_entry.message.task_id, None);
+    let resolved = {
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to typed Task output");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .expect("start typed Task payload read");
+        let resolved = scenario
+            .vault()
+            .resolve_typed_agent_message_on(
+                &transaction,
+                &original_link.typed_reference,
+                floe_conversation::MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES,
+            )
+            .await
+            .expect("resolve original typed Unadmitted Task");
+        transaction
+            .commit()
+            .await
+            .expect("finish typed Task payload read");
+        resolved.message
+    };
+    assert_eq!(resolved, request.typed_message);
+
+    let terminal = scenario.budget_exceeded_owner_run(&run).await;
+    scenario
+        .vault()
+        .close_conversation_recorder(open.fence)
+        .await
+        .expect("close original Unadmitted Task recorder");
+    let (continued, _) = scenario
+        .admit_owner_run_reusing_input(&terminal, "Continue after Unadmitted failure")
+        .await;
+    let continued_open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&continued, input.receipt.transcript))
+        .await
+        .expect("open Continue recorder for Unadmitted contribution replay");
+    let mut replay_request = request.clone();
+    replay_request.recorder = continued_open.fence;
+    let replay = compose_typed_recording(scenario.vault(), replay_request)
+        .await
+        .expect("Continue validates the original Unadmitted journal producer");
+    assert_eq!(replay, original_receipt);
+    assert_eq!(replay.recorder.run_id, run.run_id);
+    assert_eq!(
+        stored_typed_link(
+            scenario.vault(),
+            scenario.person_id,
+            request.contribution_id,
+        )
+        .await,
+        Some(original_link),
+        "Continue replay retains the first journal producer and typed Task snapshot"
+    );
+}
+
+#[tokio::test]
+async fn typed_interaction_requires_current_valid_owner_row_and_stays_textless() {
+    let mut scenario = Scenario::new().await;
+    let original_session_revision = scenario.session_revision;
+    let task_generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task owner for real publication fixtures")
+        .executor_generation;
+    let (other_session_id, other_session_revision) = match scenario
+        .vault()
+        .start_conversation_session(StartSessionRequest {
+            principal: scenario.person_id.to_string(),
+            command_id: CommandId::new(),
+        })
+        .await
+        .expect("create foreign Session in the same owner Vault")
+    {
+        SessionStartAdmission::Started(receipt) => (receipt.session_id, receipt.session_revision),
+        other => panic!("unexpected foreign Session admission: {other:?}"),
+    };
+    let foreign_run = scenario
+        .admit_unbound_owner_run(scenario.owner_request_for_session(
+            other_session_id,
+            other_session_revision,
+            "owner-published foreign Session Interaction",
+        ))
+        .await;
+    let foreign_task = scenario
+        .terminal_task_receipts(&foreign_run, task_generation)
+        .await
+        .into_iter()
+        .next()
+        .expect("foreign Run has a real owner Task receipt");
+    let foreign_interaction = pending_navigation_interaction(&foreign_run, foreign_task);
+    publish_interaction_with_owner_audit(&scenario, &foreign_run, foreign_interaction.clone())
+        .await;
+    scenario.budget_exceeded_owner_run(&foreign_run).await;
+    scenario.session_revision = original_session_revision;
+
+    let (run, input) = scenario
+        .admit_run_and_append_input("typed Interaction terminal")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open terminal Interaction recorder");
+
+    let missing = typed_interaction_request(
+        open.fence.clone(),
+        run.run_id.as_uuid(),
+        Uuid::new_v4(),
+        floe_agent_contract::UserInteractionKind::SourceAccess,
+    );
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), missing).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a typed historical reference without a ConversationInteraction row is rejected"
+    );
+
+    let owner_task = scenario
+        .terminal_task_receipts(&run, task_generation)
+        .await
+        .into_iter()
+        .next()
+        .expect("origin Run has a real owner Task receipt");
+    let interaction = pending_navigation_interaction(&run, owner_task);
+    publish_interaction_with_owner_audit(&scenario, &run, interaction.clone()).await;
+
+    let wrong_kind = typed_interaction_request(
+        open.fence.clone(),
+        run.run_id.as_uuid(),
+        interaction.id,
+        floe_agent_contract::UserInteractionKind::ExpertBinding,
+    );
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), wrong_kind).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "the typed Interaction kind must match the current owner row"
+    );
+
+    let request = typed_interaction_request(
+        open.fence.clone(),
+        run.run_id.as_uuid(),
+        interaction.id,
+        interaction.kind,
+    );
+    let original_receipt = compose_typed_recording(scenario.vault(), request.clone())
+        .await
+        .expect("compose the exact owner-published textless Interaction");
+    assert_eq!(original_receipt.producing_task, None);
+    let original_link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("load Interaction evidence link");
+    assert_eq!(original_link.first_recording_run_id, run.run_id);
+    assert_eq!(
+        original_link.transcript_entry.producer_run,
+        Some(run.run_id)
+    );
+    assert_eq!(original_link.transcript_entry.producing_task, None);
+    assert_eq!(original_link.original_task_receipt, None);
+    assert_eq!(
+        original_link.transcript_entry.message.origin,
+        MessageOrigin::Host
+    );
+    assert!(original_link.transcript_entry.message.text.is_empty());
+    assert_eq!(original_link.transcript_entry.message.task_id, None);
+    assert_eq!(
+        original_link
+            .transcript_entry
+            .message
+            .evidence
+            .as_ref()
+            .expect("neutral Core entry preserves typed digest")
+            .digest(),
+        original_link.typed_reference.digest(),
+    );
+    let resolved = {
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to exact typed Interaction payload");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .expect("start Interaction payload lookup");
+        let resolved = scenario
+            .vault()
+            .resolve_typed_agent_message_on(
+                &transaction,
+                &original_link.typed_reference,
+                floe_conversation::MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES,
+            )
+            .await
+            .expect("resolve exact Interaction reference");
+        transaction
+            .commit()
+            .await
+            .expect("finish Interaction payload lookup");
+        resolved.message
+    };
+    assert_eq!(resolved, request.typed_message);
+
+    let foreign_reference = typed_interaction_request(
+        open.fence.clone(),
+        run.run_id.as_uuid(),
+        foreign_interaction.id,
+        foreign_interaction.kind,
+    );
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), foreign_reference).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "an owner-published interaction from another Session cannot be attached"
+    );
+
+    let expired = scenario
+        .vault()
+        .expire_conversation_interaction(floe_conversation::ExpireInteraction {
+            interaction_id: interaction.id,
+            person_id: scenario.person_id,
+            now_unix_ms: interaction.expires_at_unix_ms,
+        })
+        .await
+        .expect("advance current Interaction status through owner expiry");
+    assert!(matches!(
+        expired,
+        floe_conversation::ExpireOutcome::Expired(_)
+    ));
+    let same_run_replay = compose_typed_recording(scenario.vault(), request.clone())
+        .await
+        .expect("historical Interaction replay observes the current Expired row");
+    assert_eq!(same_run_replay, original_receipt);
+    let stale_decision = scenario
+        .vault()
+        .record_conversation_interaction_decision(floe_conversation::InteractionDecision {
+            command_id: Uuid::new_v4(),
+            interaction_id: interaction.id,
+            interaction_revision: interaction.revision,
+            kind: floe_conversation::InteractionDecisionKind::Approve,
+            target_digest: interaction.target_digest,
+            principal: scenario.person_id.to_string(),
+            decided_at_unix_ms: interaction.expires_at_unix_ms - 1,
+        })
+        .await;
+    assert!(
+        matches!(
+            stale_decision,
+            Err(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::Conflict
+            ))
+        ),
+        "historical typed output does not authorize a decision against today's expired row"
+    );
+    assert!(matches!(
+        scenario
+            .vault()
+            .conversation_interaction(interaction.id)
+            .await
+            .expect("read authoritative current Interaction status")
+            .expect("Interaction remains in owner storage")
+            .state,
+        floe_conversation::InteractionState::Expired
+    ));
+
+    let terminal = scenario.budget_exceeded_owner_run(&run).await;
+    scenario.session_revision = terminal.session_revision;
+
+    scenario
+        .vault()
+        .close_conversation_recorder(open.fence)
+        .await
+        .expect("close the terminal Interaction recorder");
+    let (continued, _) = scenario
+        .admit_owner_run_reusing_input(&terminal, "Continue with Interaction history")
+        .await;
+    let continued_open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&continued, input.receipt.transcript))
+        .await
+        .expect("open Continue recorder for Interaction replay");
+    let mut replay_request = request.clone();
+    replay_request.recorder = continued_open.fence.clone();
+    let replay = compose_typed_recording(scenario.vault(), replay_request)
+        .await
+        .expect("Continue revalidates and replays the original Interaction producer");
+    assert_eq!(replay, original_receipt);
+    assert_eq!(replay.recorder.run_id, run.run_id);
+    assert_eq!(
+        stored_typed_link(
+            scenario.vault(),
+            scenario.person_id,
+            request.contribution_id,
+        )
+        .await,
+        Some(original_link),
+        "Continue replay preserves the original typed Interaction and producer"
+    );
+
+    let foreign_run = typed_interaction_request(
+        continued_open.fence,
+        continued.run_id.as_uuid(),
+        interaction.id,
+        interaction.kind,
+    );
+    assert_eq!(
+        compose_typed_recording(scenario.vault(), foreign_run).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a different Run cannot attach the original Run's Interaction"
     );
 }
 

@@ -11,7 +11,7 @@ use super::conversation_core::{
     positive_integer, recording_receipt_on, schema_error, task_evidence_reference, unavailable,
 };
 use super::{EncryptedAgentVault, VaultKeyProvider};
-use floe_agent_contract::TaskExecutionReceiptRef;
+use floe_agent_contract::{TaskExecutionEvidence, TaskExecutionReceiptRef, TaskReceipt};
 use floe_conversation::{
     AgentMessage, RunRecord, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE, TypedAgentMessageProvenance,
     TypedAgentMessageReference,
@@ -789,8 +789,18 @@ fn typed_output_message(
                 Some(task.task_id),
             )
         }
-        // User, Preamble, Compaction and Interaction are not generated output
-        // contributions in this live transcript contract.
+        AgentMessage::Delegation { task, .. } if producing_task.is_none() => (
+            MessageOrigin::Host,
+            task.result
+                .clone()
+                .unwrap_or_else(|| format!("{}: {:?}", task.agent_id, task.state)),
+            None,
+        ),
+        AgentMessage::Interaction { .. } if producing_task.is_none() => {
+            (MessageOrigin::Host, String::new(), None)
+        }
+        // User, Preamble and Compaction are outside this generated terminal
+        // output slice.
         _ => {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::OwnerEvidenceMismatch,
@@ -931,17 +941,191 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 Ok((Some(execution_receipt.clone()), Some(verified)))
             }
-            AgentMessage::Delegation { .. } => Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            )),
+            AgentMessage::Delegation {
+                task,
+                execution_receipt: None,
+                ..
+            } => {
+                self.verified_unadmitted_task_on(transaction, producer_run_id, task)
+                    .await?;
+                Ok((None, None))
+            }
             AgentMessage::Assistant { .. } | AgentMessage::Capability { .. } => Ok((None, None)),
+            AgentMessage::Interaction { .. } => Ok((None, None)),
             AgentMessage::User { .. }
             | AgentMessage::Preamble { .. }
-            | AgentMessage::Compaction { .. }
-            | AgentMessage::Interaction { .. } => Err(ConversationStoreFailure::Transition(
+            | AgentMessage::Compaction { .. } => Err(ConversationStoreFailure::Transition(
                 ConversationFailure::OwnerEvidenceMismatch,
             )),
         }
+    }
+
+    async fn verified_unadmitted_task_on(
+        &self,
+        transaction: &Transaction<'_>,
+        producer_run_id: RunId,
+        typed_snapshot: &floe_agent_contract::TaskSnapshot,
+    ) -> Result<(), ConversationStoreFailure> {
+        let open = open_receipt_on(transaction, self.person_id, producer_run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let (_, owner_run, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                producer_run_id,
+                &open.fence.identity,
+                open.fence.conversation_id,
+                open.fence.branch_id,
+                open.fence.input,
+                open.fence.executor_domain,
+                open.fence.executor_generation,
+            )
+            .await?;
+        if !typed_snapshot.task_id.is_valid()
+            || typed_snapshot.parent_run_id != Some(producer_run_id.as_uuid())
+            || typed_snapshot.principal != self.person_id.to_string()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        // An Unadmitted receipt is meaningful only while the Task owner has
+        // no durable record for this identity. The exact Run journal pair
+        // below preserves the owner's positive absence observation.
+        if self
+            .task_on(transaction, typed_snapshot.task_id)
+            .await
+            .map_err(owner_error)?
+            .is_some()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let journal = self
+            .conversation_journal_on(transaction, &owner_run)
+            .await
+            .map_err(owner_error)?;
+        let mut intent = None;
+        let mut intent_revision = 0;
+        let mut result: Option<Box<TaskReceipt>> = None;
+        let mut result_revision = 0;
+        for entry in journal {
+            match entry.event {
+                floe_agent_contract::JournalEvent::DelegationIntent { request }
+                    if request.task_id == typed_snapshot.task_id =>
+                {
+                    if intent.replace(request).is_some() {
+                        return Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ));
+                    }
+                    intent_revision = entry.revision;
+                }
+                floe_agent_contract::JournalEvent::DelegationResult { receipt }
+                    if receipt.task_id == typed_snapshot.task_id =>
+                {
+                    if result.replace(receipt).is_some() {
+                        return Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ));
+                    }
+                    result_revision = entry.revision;
+                }
+                _ => {}
+            }
+        }
+        let request = intent.ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+        let receipt = result.ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+        if receipt
+            .validate(floe_agent_contract::MAX_OUTPUT_BYTES)
+            .is_err()
+            || !matches!(&receipt.execution, TaskExecutionEvidence::Unadmitted)
+            || receipt.snapshot != *typed_snapshot
+            || receipt.task_id != typed_snapshot.task_id
+            || intent_revision == 0
+            || result_revision <= intent_revision
+            || request.task_id != receipt.task_id
+            || request.parent_run_id != Some(producer_run_id.as_uuid())
+            || request.principal != self.person_id.to_string()
+            || request.selected_agent_id != typed_snapshot.agent_id
+            || request.selected_definition_revision != typed_snapshot.definition_revision
+            || request.execution_context.session_id != owner_run.session_id
+            || request.execution_context.device_id != owner_run.device_id
+            || request.execution_context.validate().is_err()
+            || !floe_agent_contract::valid_context_refs(&request.context_refs)
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(())
+    }
+
+    async fn verified_typed_interaction_on(
+        &self,
+        transaction: &Transaction<'_>,
+        producer_run_id: RunId,
+        typed_message: &AgentMessage,
+    ) -> Result<(), ConversationStoreFailure> {
+        let AgentMessage::Interaction {
+            turn_id,
+            interaction_id,
+            interaction_kind,
+        } = typed_message
+        else {
+            return Ok(());
+        };
+        let open = open_receipt_on(transaction, self.person_id, producer_run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let (_, owner_run, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                producer_run_id,
+                &open.fence.identity,
+                open.fence.conversation_id,
+                open.fence.branch_id,
+                open.fence.input,
+                open.fence.executor_domain,
+                open.fence.executor_generation,
+            )
+            .await?;
+        // read_interaction validates the serialized row, its duplicated
+        // indexed columns, and its owner audit/evidence links. The current
+        // status is deliberately not copied into the transcript.
+        let interaction = super::conversation_interactions::read_interaction(
+            transaction,
+            self.person_id,
+            *interaction_id,
+        )
+        .await
+        .map_err(owner_error)?
+        .ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+        interaction.validate().map_err(owner_error)?;
+        if interaction.id != *interaction_id
+            || interaction.person_id != self.person_id
+            || interaction.session_id != owner_run.session_id
+            || interaction.origin_run_id != producer_run_id
+            || interaction.origin_turn_id != *turn_id
+            || interaction.kind != *interaction_kind
+            || *turn_id != producer_run_id.as_uuid()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(())
     }
 
     /// Compose owner-typed evidence, the neutral Core output receipt, and its
@@ -1009,6 +1193,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let (original_task_receipt, producing_task) = self
             .verified_typed_task_on(transaction, request.recorder.run_id, &request.typed_message)
             .await?;
+        self.verified_typed_interaction_on(
+            transaction,
+            request.recorder.run_id,
+            &request.typed_message,
+        )
+        .await?;
 
         // A unique immutable link family is required for this composed write.
         // It is never created by any read/open path.
@@ -1171,6 +1361,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .as_ref()
             .map(task_evidence_reference)
             .transpose()?;
+        self.verified_typed_interaction_on(
+            transaction,
+            link.first_recording_run_id,
+            &request.typed_message,
+        )
+        .await?;
         let message = typed_output_message(
             &request.typed_message,
             &mapping.original_binding.identity,
@@ -1203,15 +1399,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationFailure::OwnerEvidenceMismatch,
                 ));
             }
-            if let Some(task_reference) = producing_task.as_ref() {
-                let verified = self
-                    .verified_task_reference_on(
+            if matches!(request.typed_message, AgentMessage::Delegation { .. }) {
+                let (original_task_receipt, verified_task) = self
+                    .verified_typed_task_on(
                         transaction,
                         link.first_recording_run_id,
-                        task_reference,
+                        &request.typed_message,
                     )
                     .await?;
-                if verified != *task_reference {
+                if original_task_receipt != link.original_task_receipt
+                    || verified_task != producing_task
+                {
                     return Err(ConversationStoreFailure::Transition(
                         ConversationFailure::OwnerEvidenceMismatch,
                     ));
