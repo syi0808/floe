@@ -99,14 +99,9 @@ fn command_out(
         (
             ProductCommand::Day(DayCommand::Refresh(_)),
             ProductCommandOutcome::Day(floe_app::DayCommandOutcome::Refresh(value)),
-        ) => {
-            if value.operation_ref != command_id {
-                return Err(internal_error());
-            }
-            AppCommandResultDto::DayRefresh {
-                refresh: crate::day_wire::refresh(value).map_err(structural_error)?,
-            }
-        }
+        ) => AppCommandResultDto::DayRefresh {
+            refresh: crate::day_wire::refresh(value).map_err(structural_error)?,
+        },
         (
             ProductCommand::Day(DayCommand::Mutate { .. }),
             ProductCommandOutcome::Day(floe_app::DayCommandOutcome::Mutation(value)),

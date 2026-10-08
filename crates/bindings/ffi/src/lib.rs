@@ -19,6 +19,9 @@ mod memory_wire;
 mod native_lane;
 mod product_wire;
 
+#[cfg(all(test, feature = "qa-fixtures", target_os = "linux"))]
+mod day_refresh_ffi_tests;
+
 pub use abi::*;
 pub use bridge::{FloeHandle, FloeNativeHostLane};
 
