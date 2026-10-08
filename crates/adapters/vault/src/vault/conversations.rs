@@ -107,10 +107,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         request: TurnAdmissionRequest,
     ) -> Result<VaultConversationAdmission, floe_kernel::CommandFailure<AgentFailure>> {
-        if matches!(request.mode, TurnMode::Resume(_)) {
-            return Err(floe_kernel::CommandFailure::NotApplied(
-                AgentFailure::InvalidInput,
-            ));
+        if let Some(failure) = direct_resume_admission_failure(&request) {
+            return Err(failure);
         }
         if !request.command_id.is_valid() {
             return Err(floe_kernel::CommandFailure::NotApplied(
@@ -1184,6 +1182,80 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Conflict);
         }
         Ok(active)
+    }
+}
+
+/// Linked resume admissions must go through the atomic resume-slot claim. This
+/// lower-level entry point cannot prove a valid command ID is unused before it
+/// rejects the mode, so preserve that ID as uncertain instead of freeing it.
+fn direct_resume_admission_failure(
+    request: &TurnAdmissionRequest,
+) -> Option<floe_kernel::CommandFailure<AgentFailure>> {
+    matches!(&request.mode, TurnMode::Resume(_)).then(|| {
+        if request.command_id.is_valid() {
+            floe_kernel::CommandFailure::Indeterminate(AgentFailure::InvalidInput)
+        } else {
+            floe_kernel::CommandFailure::NotApplied(AgentFailure::InvalidInput)
+        }
+    })
+}
+
+#[cfg(test)]
+mod command_admission_tests {
+    use super::*;
+
+    fn resume_request(
+        command_id: CommandId,
+        revision: u64,
+        digest: [u8; 32],
+    ) -> TurnAdmissionRequest {
+        TurnAdmissionRequest {
+            expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                revision: 1,
+                digest: [1; 32],
+            },
+            run_id: RunId::new(),
+            command_id,
+            session_id: Uuid::new_v4(),
+            expected_session_revision: revision,
+            principal: "person".to_owned(),
+            device_id: "device".to_owned(),
+            request_digest: digest,
+            mode: TurnMode::Resume(floe_conversation::InteractionResumeRef {
+                origin_run_id: RunId::new(),
+                lineage: 1,
+            }),
+            retry_of: None,
+            input: TurnInput::ExistingMessage {
+                message_id: Uuid::new_v4(),
+            },
+        }
+    }
+
+    #[test]
+    fn rejected_direct_resume_keeps_a_reused_valid_command_id_uncertain() {
+        let command_id = CommandId::new();
+        let original = resume_request(command_id, 4, [2; 32]);
+        let changed_body = resume_request(command_id, 9, [3; 32]);
+
+        assert_eq!(
+            direct_resume_admission_failure(&original),
+            Some(floe_kernel::CommandFailure::Indeterminate(
+                AgentFailure::InvalidInput
+            ))
+        );
+        assert_eq!(
+            direct_resume_admission_failure(&changed_body),
+            Some(floe_kernel::CommandFailure::Indeterminate(
+                AgentFailure::InvalidInput
+            ))
+        );
+        assert_eq!(
+            direct_resume_admission_failure(&resume_request(CommandId(Uuid::nil()), 4, [2; 32])),
+            Some(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::InvalidInput
+            ))
+        );
     }
 }
 

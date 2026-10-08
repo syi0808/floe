@@ -142,11 +142,17 @@ impl ActionsService {
                 AgentFailure::InvalidInput,
             ));
         }
+        let _command = self
+            .lock_command(command_id, scope)
+            .await
+            .map_err(floe_kernel::CommandFailure::Indeterminate)?;
         let request_digest = action_digest(
             b"floe.actions.submit.v1\0",
             &(actor.person_id, &actor.device_id, command_id, &intent),
         )
-        .map_err(floe_kernel::CommandFailure::NotApplied)?;
+        // Until the owner checks the shared command namespace, a digest
+        // failure cannot prove this reusable ID was never admitted elsewhere.
+        .map_err(floe_kernel::CommandFailure::Indeterminate)?;
         if let Some(record) = self
             .repository
             .find_admission(actor.person_id, command_id, request_digest)

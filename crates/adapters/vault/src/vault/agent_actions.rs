@@ -343,7 +343,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 if let Err(error) = self.check_access() {
                     if transaction.rollback().await.is_err() {
                         self.unavailable.store(true, Ordering::Release);
-                        return Err(CommandFailure::Indeterminate(ActionStoreError::Unavailable));
+                        return Err(actions_command_rollback_unknown());
                     }
                     return Err(if prior_command {
                         CommandFailure::Admitted(access_error(error))
@@ -353,11 +353,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 if transaction.commit().await.is_err() {
                     self.unavailable.store(true, Ordering::Release);
-                    return Err(if prior_command {
-                        CommandFailure::Admitted(ActionStoreError::Unavailable)
-                    } else {
-                        CommandFailure::Indeterminate(ActionStoreError::Unavailable)
-                    });
+                    return Err(actions_command_commit_unknown(prior_command));
                 }
                 self.check_access()
                     .map_err(|error| CommandFailure::Admitted(access_error(error)))?;
@@ -366,13 +362,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Err(error) => {
                 if transaction.rollback().await.is_err() {
                     self.unavailable.store(true, Ordering::Release);
-                    return Err(CommandFailure::Indeterminate(ActionStoreError::Unavailable));
+                    return Err(actions_command_rollback_unknown());
                 }
-                Err(if prior_command || !replay_checked {
-                    CommandFailure::Indeterminate(error)
-                } else {
-                    CommandFailure::NotApplied(error)
-                })
+                Err(actions_command_rolled_back_failure(
+                    error,
+                    replay_checked,
+                    prior_command,
+                ))
             }
         }
     }
@@ -1167,6 +1163,71 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(ActionStoreError::Conflict);
         }
         Ok(())
+    }
+}
+
+fn actions_command_commit_unknown(prior_command: bool) -> CommandFailure<ActionStoreError> {
+    if prior_command {
+        CommandFailure::Admitted(ActionStoreError::Unavailable)
+    } else {
+        CommandFailure::Indeterminate(ActionStoreError::Unavailable)
+    }
+}
+
+fn actions_command_rollback_unknown() -> CommandFailure<ActionStoreError> {
+    CommandFailure::Indeterminate(ActionStoreError::Unavailable)
+}
+
+fn actions_command_rolled_back_failure(
+    error: ActionStoreError,
+    replay_checked: bool,
+    prior_command: bool,
+) -> CommandFailure<ActionStoreError> {
+    if prior_command || !replay_checked {
+        CommandFailure::Indeterminate(error)
+    } else {
+        CommandFailure::NotApplied(error)
+    }
+}
+
+#[cfg(test)]
+mod command_finish_tests {
+    use super::{
+        ActionStoreError, actions_command_commit_unknown, actions_command_rollback_unknown,
+        actions_command_rolled_back_failure,
+    };
+    use floe_kernel::CommandFailure;
+
+    #[test]
+    fn commit_failure_keeps_fresh_or_previously_admitted_command_identity() {
+        assert_eq!(
+            actions_command_commit_unknown(false),
+            CommandFailure::Indeterminate(ActionStoreError::Unavailable)
+        );
+        assert_eq!(
+            actions_command_commit_unknown(true),
+            CommandFailure::Admitted(ActionStoreError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn rollback_failure_is_indeterminate_and_only_verified_rollback_releases_fresh_id() {
+        assert_eq!(
+            actions_command_rollback_unknown(),
+            CommandFailure::Indeterminate(ActionStoreError::Unavailable)
+        );
+        assert_eq!(
+            actions_command_rolled_back_failure(ActionStoreError::Conflict, true, false),
+            CommandFailure::NotApplied(ActionStoreError::Conflict)
+        );
+        assert_eq!(
+            actions_command_rolled_back_failure(ActionStoreError::Conflict, true, true),
+            CommandFailure::Indeterminate(ActionStoreError::Conflict)
+        );
+        assert_eq!(
+            actions_command_rolled_back_failure(ActionStoreError::Conflict, false, false),
+            CommandFailure::Indeterminate(ActionStoreError::Conflict)
+        );
     }
 }
 

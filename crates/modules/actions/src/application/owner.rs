@@ -5,7 +5,7 @@ use floe_kernel::{AgentFailure, OwnerActor};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
@@ -34,6 +34,7 @@ pub struct ActionsService {
     pub(super) closed: Arc<AtomicBool>,
     pub(super) jobs: Arc<Mutex<HashMap<Uuid, Cancellation>>>,
     activation: Arc<AtomicU8>,
+    command_locks: Arc<Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>>,
 }
 
 impl ActionsService {
@@ -50,7 +51,36 @@ impl ActionsService {
             closed: Arc::new(AtomicBool::new(false)),
             jobs: Arc::new(Mutex::new(HashMap::new())),
             activation: Arc::new(AtomicU8::new(0)),
+            command_locks: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Serialize every command family by the shared immutable command ID.
+    /// The guard spans replay lookup, mutable-source validation and durable
+    /// admission so a concurrent family cannot claim an ID after an absence
+    /// check but before this command reports a precommit rejection.
+    pub(super) async fn lock_command(
+        &self,
+        command_id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, AgentFailure> {
+        let lock = {
+            let mut locks = self
+                .command_locks
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?;
+            if locks.len() >= 64 {
+                locks.retain(|_, lock| lock.strong_count() > 0);
+            }
+            if let Some(lock) = locks.get(&command_id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(tokio::sync::Mutex::new(()));
+                locks.insert(command_id, Arc::downgrade(&lock));
+                lock
+            }
+        };
+        scope.run(async { Ok(lock.lock_owned().await) }).await
     }
     pub(super) fn admit_actor(
         &self,
@@ -155,6 +185,10 @@ impl ActionsService {
                 AgentFailure::InvalidInput,
             ));
         }
+        let _command = self
+            .lock_command(command_id, scope)
+            .await
+            .map_err(floe_kernel::CommandFailure::Indeterminate)?;
         Ok(self
             .repository
             .compare_and_set_authority(AuthorityChange {
@@ -178,6 +212,15 @@ impl ActionsService {
     ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
         self.admit_actor(actor, scope)
             .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
+        if command_id.is_nil() {
+            return Err(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        let _command = self
+            .lock_command(command_id, scope)
+            .await
+            .map_err(floe_kernel::CommandFailure::Indeterminate)?;
         let record = self
             .repository
             .record_decision(ActionDecision {
@@ -211,6 +254,15 @@ impl ActionsService {
     ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
         self.admit_actor(actor, scope)
             .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
+        if command_id.is_nil() {
+            return Err(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::InvalidInput,
+            ));
+        }
+        let _command = self
+            .lock_command(command_id, scope)
+            .await
+            .map_err(floe_kernel::CommandFailure::Indeterminate)?;
         let record = self
             .repository
             .admit_reconciliation(ActionReconciliation {
@@ -405,6 +457,10 @@ impl ActionsService {
             .map_err(day_failure)
     }
 }
+
+#[cfg(test)]
+#[path = "owner_tests.rs"]
+mod tests;
 
 pub(super) fn day_failure(error: floe_day::DayError) -> AgentFailure {
     match error.code {
