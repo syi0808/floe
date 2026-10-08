@@ -35,6 +35,7 @@ mod conversations;
 mod expert_actions;
 pub(crate) mod expert_binding_reviews;
 mod owner_custody;
+mod owner_transcript_reads;
 mod typed_history;
 pub use expert_actions::VaultExpertProposalReader;
 #[cfg(feature = "development-storage")]
@@ -111,6 +112,8 @@ pub struct EncryptedAgentVault<Keys> {
     conversation_core_typed_write_fault: AtomicU8,
     #[cfg(test)]
     typed_history_payload_hydrations: AtomicU64,
+    #[cfg(test)]
+    context_coverage_payload_hydrations: AtomicU64,
     _host_lock: File,
 }
 
@@ -238,6 +241,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_typed_write_fault: AtomicU8::new(0),
             #[cfg(test)]
             typed_history_payload_hydrations: AtomicU64::new(0),
+            #[cfg(test)]
+            context_coverage_payload_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         vault.create_schema().await?;
@@ -305,6 +310,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_typed_write_fault: AtomicU8::new(0),
             #[cfg(test)]
             typed_history_payload_hydrations: AtomicU64::new(0),
+            #[cfg(test)]
+            context_coverage_payload_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;

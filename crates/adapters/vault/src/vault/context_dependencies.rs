@@ -55,7 +55,38 @@ pub(super) async fn read_context_dependency_coverage(
     session_id: Uuid,
     turn_id: Uuid,
 ) -> Result<DependencyCoverage, AgentFailure> {
+    read_context_dependency_coverage_inner(connection, person_id, session_id, turn_id, None).await
+}
+
+#[cfg(test)]
+pub(super) async fn read_context_dependency_coverage_counted(
+    connection: &turso::Connection,
+    person_id: PersonId,
+    session_id: Uuid,
+    turn_id: Uuid,
+    query_count: &std::sync::atomic::AtomicU64,
+) -> Result<DependencyCoverage, AgentFailure> {
+    read_context_dependency_coverage_inner(
+        connection,
+        person_id,
+        session_id,
+        turn_id,
+        Some(query_count),
+    )
+    .await
+}
+
+async fn read_context_dependency_coverage_inner(
+    connection: &turso::Connection,
+    person_id: PersonId,
+    session_id: Uuid,
+    turn_id: Uuid,
+    query_count: Option<&std::sync::atomic::AtomicU64>,
+) -> Result<DependencyCoverage, AgentFailure> {
     validate_key(person_id, session_id, turn_id)?;
+    if let Some(query_count) = query_count {
+        query_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
     let mut rows = connection
         .query(
             "SELECT version, payload FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
@@ -66,19 +97,108 @@ pub(super) async fn read_context_dependency_coverage(
     let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(DependencyCoverage::Unknown);
     };
+    if rows.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    decode_context_dependency_coverage(
+        person_id,
+        row.get::<i64>(0).map_err(storage)?,
+        row.get::<String>(1).map_err(storage)?,
+    )
+}
+
+/// Metadata for the transaction-scoped second-phase owner read. The normal
+/// learning read above deliberately remains a single SELECT of version and
+/// body so it cannot race between separate metadata and hydration queries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ContextDependencyCoverageHeader {
+    stored_bytes: Option<usize>,
+}
+
+impl ContextDependencyCoverageHeader {
+    pub(super) fn accounted_bytes(self) -> Result<usize, AgentFailure> {
+        match self.stored_bytes {
+            Some(bytes) => Ok(bytes),
+            None => DependencyCoverage::Unknown
+                .as_persisted_bytes()
+                .map(|bytes| bytes.len())
+                .map_err(|_| AgentFailure::VaultUnavailable),
+        }
+    }
+}
+
+/// Preflight the live coverage row without selecting its body. This helper
+/// requires the caller's explicit transaction so the later hydration observes
+/// the same snapshot.
+pub(super) async fn preflight_context_dependency_coverage_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    turn_id: Uuid,
+) -> Result<ContextDependencyCoverageHeader, AgentFailure> {
+    validate_key(person_id, session_id, turn_id)?;
+    let mut rows = transaction
+        .query(
+            "SELECT version, length(CAST(payload AS BLOB)) FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (person_id.to_string(), session_id.to_string(), turn_id.to_string()),
+        )
+        .await
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
+        return Ok(ContextDependencyCoverageHeader { stored_bytes: None });
+    };
+    let version = row.get::<i64>(0).map_err(storage)?;
+    let length = row.get::<i64>(1).map_err(storage)?;
     if rows.next().await.map_err(database_failure)?.is_some()
-        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
+        || version != CONTEXT_DEPENDENCY_RECORD_VERSION
     {
         return Err(AgentFailure::VaultUnavailable);
     }
-    let payload = row.get::<String>(1).map_err(storage)?;
-    if payload.is_empty() || payload.len() > MAX_CONTEXT_DEPENDENCY_BYTES {
+    let length = usize::try_from(length).map_err(|_| AgentFailure::VaultUnavailable)?;
+    if length == 0 || length > MAX_CONTEXT_DEPENDENCY_BYTES {
         return Err(AgentFailure::VaultUnavailable);
     }
-    let coverage = DependencyCoverage::from_persisted_bytes(payload.as_bytes())
-        .map_err(|_| AgentFailure::VaultUnavailable)?;
-    ensure_coverage_person(&coverage, person_id)?;
-    Ok(coverage)
+    Ok(ContextDependencyCoverageHeader {
+        stored_bytes: Some(length),
+    })
+}
+
+/// Hydrate the body corresponding to a transaction-scoped preflight header.
+/// A missing row is represented by encoded `Unknown` and does not trigger a
+/// second query.
+pub(super) async fn hydrate_context_dependency_coverage_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    turn_id: Uuid,
+    header: ContextDependencyCoverageHeader,
+    #[cfg(test)] payload_hydrations: &std::sync::atomic::AtomicU64,
+) -> Result<DependencyCoverage, AgentFailure> {
+    validate_key(person_id, session_id, turn_id)?;
+    let Some(expected_bytes) = header.stored_bytes else {
+        return Ok(DependencyCoverage::Unknown);
+    };
+    #[cfg(test)]
+    payload_hydrations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut rows = transaction
+        .query(
+            "SELECT version, payload FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (person_id.to_string(), session_id.to_string(), turn_id.to_string()),
+        )
+        .await
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
+        return Err(AgentFailure::VaultUnavailable);
+    };
+    if rows.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    let version = row.get::<i64>(0).map_err(storage)?;
+    let payload = row.get::<String>(1).map_err(storage)?;
+    if payload.len() != expected_bytes {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    decode_context_dependency_coverage(person_id, version, payload)
 }
 
 pub(super) async fn merge_context_dependency_coverage(
@@ -184,19 +304,29 @@ async fn read_context_dependency_row(
     let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
-    if rows.next().await.map_err(database_failure)?.is_some()
-        || row.get::<i64>(0).map_err(storage)? != CONTEXT_DEPENDENCY_RECORD_VERSION
-    {
+    if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
+    let version = row.get::<i64>(0).map_err(storage)?;
     let payload = row.get::<String>(1).map_err(storage)?;
-    if payload.is_empty() || payload.len() > MAX_CONTEXT_DEPENDENCY_BYTES {
+    decode_context_dependency_coverage(person_id, version, payload).map(Some)
+}
+
+fn decode_context_dependency_coverage(
+    person_id: PersonId,
+    version: i64,
+    payload: String,
+) -> Result<DependencyCoverage, AgentFailure> {
+    if version != CONTEXT_DEPENDENCY_RECORD_VERSION
+        || payload.is_empty()
+        || payload.len() > MAX_CONTEXT_DEPENDENCY_BYTES
+    {
         return Err(AgentFailure::VaultUnavailable);
     }
     let coverage = DependencyCoverage::from_persisted_bytes(payload.as_bytes())
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     ensure_coverage_person(&coverage, person_id)?;
-    Ok(Some(coverage))
+    Ok(coverage)
 }
 
 fn validate_key(person_id: PersonId, session_id: Uuid, turn_id: Uuid) -> Result<(), AgentFailure> {

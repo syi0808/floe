@@ -28,9 +28,26 @@ pub(crate) struct ResolvedTypedAgentMessage {
 }
 
 #[derive(Clone, Debug)]
-struct StoredHeader {
-    reference: TypedAgentMessageReference,
+pub(super) struct StoredHeader {
+    pub(super) reference: TypedAgentMessageReference,
     actual_payload_bytes: usize,
+}
+
+impl StoredHeader {
+    pub(super) fn encoded_bytes(&self) -> Result<usize, AgentFailure> {
+        let declared = usize::try_from(self.reference.encoded_byte_length())
+            .map_err(|_| AgentFailure::VaultUnavailable)?;
+        if declared == 0 || self.actual_payload_bytes != declared {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let total = declared
+            .checked_add(self.reference.encoded_reference_bytes()?)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        if total > MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(total)
+    }
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -285,6 +302,55 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         .await
     }
 
+    /// Load and validate only immutable typed-evidence metadata. The returned
+    /// header may be budgeted before either the typed payload or its coverage
+    /// body is fetched.
+    pub(super) async fn preflight_typed_agent_message_on(
+        &self,
+        transaction: &Transaction<'_>,
+        reference: &TypedAgentMessageReference,
+    ) -> Result<Option<StoredHeader>, AgentFailure> {
+        reference.validate_for_storage()?;
+        if reference.person_id() != self.person_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        self.check_access()?;
+        if !crate::schema::typed_history_family_present(transaction)
+            .await
+            .map_err(crate::schema::SchemaFailure::into_agent)?
+        {
+            return Ok(None);
+        }
+        let Some(header) = load_header_on(transaction, self.person_id, reference).await? else {
+            return Ok(None);
+        };
+        header.reference.validate_for_storage()?;
+        if header.reference != *reference {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        header.encoded_bytes()?;
+        Ok(Some(header))
+    }
+
+    /// Fetch one typed body after its exact reference and byte length have
+    /// already passed transaction-scoped preflight.
+    pub(super) async fn hydrate_typed_agent_message_on(
+        &self,
+        transaction: &Transaction<'_>,
+        header: &StoredHeader,
+    ) -> Result<AgentMessage, AgentFailure> {
+        let payload = load_payload_on(
+            transaction,
+            &header.reference,
+            #[cfg(test)]
+            &self.typed_history_payload_hydrations,
+        )
+        .await?;
+        let evidence =
+            TypedAgentMessageEvidence::from_stored(header.reference.clone(), payload.into_bytes())?;
+        evidence.decode_message()
+    }
+
     async fn resolve_header_payload_on(
         &self,
         transaction: &Transaction<'_>,
@@ -304,30 +370,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::VaultUnavailable);
         }
-        let declared_bytes = usize::try_from(reference.encoded_byte_length())
-            .map_err(|_| AgentFailure::BudgetExceeded)?;
-        if header.actual_payload_bytes != declared_bytes {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        let record_bytes = declared_bytes
-            .checked_add(reference.encoded_reference_bytes()?)
-            .ok_or(AgentFailure::BudgetExceeded)?;
+        let record_bytes = header.encoded_bytes()?;
         if record_bytes > MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES || record_bytes > byte_budget {
             return Err(AgentFailure::BudgetExceeded);
         }
 
         // The declared and physical byte budgets are proven before this query
         // hydrates the one payload.
-        let payload = load_payload_on(
-            transaction,
-            reference,
-            #[cfg(test)]
-            &self.typed_history_payload_hydrations,
-        )
-        .await?;
-        let evidence =
-            TypedAgentMessageEvidence::from_stored(reference.clone(), payload.into_bytes())?;
-        let message = evidence.decode_message()?;
+        let message = self
+            .hydrate_typed_agent_message_on(transaction, &header)
+            .await?;
         let coverage = context_dependencies::read_context_dependency_coverage(
             transaction,
             person_id,

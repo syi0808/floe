@@ -1,6 +1,161 @@
 // Focused owner-custody regressions reuse the Core scenario fixture.
 
 use super::*;
+use crate::vault::owner_transcript_reads::{
+    OwnerResolvedTranscriptEntry, OwnerTranscriptPageBudget, OwnerTranscriptTypedEvidence,
+};
+use floe_conversation_core::{
+    ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
+};
+
+fn owner_read_target(scenario: &Scenario) -> ConversationReadTarget {
+    ConversationReadTarget {
+        identity: scenario.identity.clone(),
+        conversation_id: scenario.conversation_id,
+        branch_id: scenario.branch_id,
+    }
+}
+
+async fn owner_read_boundary(scenario: &Scenario) -> TranscriptReadBoundary {
+    scenario
+        .vault()
+        .read_conversation_head(owner_read_target(scenario))
+        .await
+        .expect("read exact Core head for owner transcript page")
+}
+
+async fn record_typed_answer(
+    scenario: &Scenario,
+    run: &RunRecord,
+    input: TranscriptReference,
+    text: &str,
+) -> TypedConversationRecordingRequest {
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(run, input))
+        .await
+        .expect("open typed owner recorder");
+    let request = typed_assistant_request(open.fence, text);
+    compose_typed_recording(scenario.vault(), request.clone())
+        .await
+        .expect("record typed owner answer through accepted writer fixture");
+    request
+}
+
+fn typed_message(entry: &OwnerResolvedTranscriptEntry) -> &floe_conversation::AgentMessage {
+    let OwnerTranscriptTypedEvidence::Present { message, .. } = &entry.typed_evidence else {
+        panic!("generated entry must have exact typed evidence");
+    };
+    message
+}
+
+fn large_owner_coverage(person_id: PersonId) -> DependencyCoverage {
+    use chrono::{Duration, Utc};
+    use floe_access::{
+        ConnectionId, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+
+    let connection_id = ConnectionId::try_new("fixture.connection").expect("valid connection ID");
+    let source = GrantSourceBinding::try_new(
+        person_id,
+        connection_id,
+        floe_access::ConnectorId::try_new("fixture.connector").expect("valid connector ID"),
+        ExecutionOwnerId::try_new("fixture.owner").expect("valid execution owner"),
+    )
+    .expect("valid context source binding");
+    let now = Utc::now();
+    DependencyCoverage::Dependent {
+        dependencies: vec![
+            ContextDependency::try_new(
+                person_id,
+                GrantId::new(),
+                GrantAuthority::new(),
+                source,
+                vec![ResourceHandle::try_new("fixture.resource").expect("valid resource")],
+                SourceAuthority::new(),
+                vec![
+                    ResourceHandle::try_new("fixture.source-resource")
+                        .expect("valid source resource"),
+                ],
+                vec![GrantDataCategory::Content],
+                GrantOperation::Read,
+                GrantPurpose::Assistant,
+                GrantConsumer::builtin("manager").expect("valid built-in consumer"),
+                ProcessingRestriction::DeviceOnly,
+                Uuid::new_v4(),
+                vec![b'x'; 4_096],
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                now,
+                now + Duration::minutes(5),
+            )
+            .expect("valid large owner dependency"),
+        ],
+    }
+}
+
+async fn store_owner_coverage(scenario: &Scenario, turn_id: Uuid, coverage: DependencyCoverage) {
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to write live coverage fixture");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start live coverage write transaction");
+    crate::vault::context_dependencies::merge_context_dependency_coverage(
+        &transaction,
+        scenario.person_id,
+        scenario.session_id,
+        turn_id,
+        coverage,
+    )
+    .await
+    .expect("store coverage under the exact Person/Session/turn key");
+    transaction
+        .commit()
+        .await
+        .expect("commit live coverage fixture");
+}
+
+async fn remove_owner_coverage(scenario: &Scenario, turn_id: Uuid) {
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to remove optional coverage fixture");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start optional coverage removal transaction");
+    transaction
+        .execute(
+            "DELETE FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (scenario.person_id.to_string(), scenario.session_id.to_string(), turn_id.to_string()),
+        )
+        .await
+        .expect("remove optional live coverage row");
+    transaction
+        .commit()
+        .await
+        .expect("commit optional coverage removal");
+}
+
+async fn schema_tables(connection: &turso::Connection) -> Vec<String> {
+    let mut rows = connection
+        .query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agent_conversation_%' ORDER BY name",
+            (),
+        )
+        .await
+        .expect("inspect conversation table names");
+    let mut names = Vec::new();
+    while let Some(row) = rows.next().await.expect("read conversation table name") {
+        names.push(row.get::<String>(0).expect("conversation table name"));
+    }
+    names
+}
 
 fn typed_interaction_request(
     recorder: RecorderFence,
@@ -1335,9 +1490,42 @@ async fn typed_unadmitted_delegation_requires_exact_owner_pair_and_replays_origi
             request.contribution_id,
         )
         .await,
-        Some(original_link),
+        Some(original_link.clone()),
         "Continue replay retains the first journal producer and typed Task snapshot"
     );
+
+    let boundary = owner_read_boundary(&scenario).await;
+    let owner_resolved = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            owner_read_target(&scenario),
+            scenario.session_id,
+            boundary,
+            TranscriptEntryLookup::Reference(original_link.transcript_entry.reference),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("owner read keeps Unadmitted Delegation as typed evidence");
+    assert_eq!(owner_resolved.original_owner_run_id, run.run_id);
+    assert_eq!(
+        owner_resolved.transcript_entry.producer_run,
+        Some(run.run_id)
+    );
+    match &owner_resolved.typed_evidence {
+        OwnerTranscriptTypedEvidence::Present {
+            message,
+            first_recording_run_id,
+            original_task_receipt,
+            ..
+        } => {
+            assert_eq!(message, &request.typed_message);
+            assert_eq!(*first_recording_run_id, run.run_id);
+            assert_eq!(*original_task_receipt, None);
+        }
+        OwnerTranscriptTypedEvidence::Absent => {
+            panic!("Unadmitted Delegation has its exact typed owner record")
+        }
+    }
 }
 
 #[tokio::test]
@@ -1492,6 +1680,25 @@ async fn typed_interaction_requires_current_valid_owner_row_and_stays_textless()
         resolved.message
     };
     assert_eq!(resolved, request.typed_message);
+
+    let boundary = owner_read_boundary(&scenario).await;
+    let owner_resolved = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            owner_read_target(&scenario),
+            scenario.session_id,
+            boundary,
+            TranscriptEntryLookup::Reference(original_link.transcript_entry.reference),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("owner read preserves the typed textless Interaction");
+    assert!(owner_resolved.transcript_entry.message.text.is_empty());
+    assert_eq!(typed_message(&owner_resolved), &request.typed_message);
+    assert!(matches!(
+        owner_resolved.typed_evidence,
+        OwnerTranscriptTypedEvidence::Present { .. }
+    ));
 
     let foreign_reference = typed_interaction_request(
         open.fence.clone(),
@@ -1812,6 +2019,43 @@ async fn delegated_contribution_replay_after_continue_preserves_original_task_pr
         "accepted replay preserves the first producer and original Task receipt"
     );
 
+    let boundary = owner_read_boundary(&scenario).await;
+    let owner_resolved = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            owner_read_target(&scenario),
+            scenario.session_id,
+            boundary,
+            TranscriptEntryLookup::Reference(original_link.transcript_entry.reference),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("owner read resolves the original Task proof after Continue");
+    assert_eq!(owner_resolved.original_owner_run_id, run.run_id);
+    assert_eq!(
+        owner_resolved.transcript_entry.producer_run,
+        Some(run.run_id)
+    );
+    match &owner_resolved.typed_evidence {
+        OwnerTranscriptTypedEvidence::Present {
+            message,
+            first_recording_run_id,
+            original_task_receipt: Some(actual_task_receipt),
+            ..
+        } => {
+            assert_eq!(message, &request.typed_message);
+            assert_eq!(*first_recording_run_id, run.run_id);
+            assert_eq!(actual_task_receipt, &original_task_receipt);
+        }
+        OwnerTranscriptTypedEvidence::Present {
+            original_task_receipt: None,
+            ..
+        }
+        | OwnerTranscriptTypedEvidence::Absent => {
+            panic!("admitted Delegation retains its original exact Task evidence")
+        }
+    }
+
     let stored_payload = {
         let mut connection = scenario
             .vault()
@@ -1854,4 +2098,1049 @@ async fn delegated_contribution_replay_after_continue_preserves_original_task_pr
         after_counts, before_counts,
         "replay creates no second contribution"
     );
+}
+
+#[tokio::test]
+async fn owner_exact_input_read_returns_explicit_absent_and_checks_owner_session() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("owner input has no typed Session row")
+        .await;
+    let boundary = owner_read_boundary(&scenario).await;
+    let target = owner_read_target(&scenario);
+    let resolved = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            target.clone(),
+            scenario.session_id,
+            boundary.clone(),
+            TranscriptEntryLookup::Reference(input.receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("resolve exact owner input mapping without inventing typed evidence");
+    assert_eq!(
+        resolved.typed_evidence,
+        OwnerTranscriptTypedEvidence::Absent
+    );
+    assert_eq!(resolved.owner_input, input.receipt.transcript);
+    assert_eq!(resolved.session_id, scenario.session_id);
+    assert_eq!(resolved.owner_identity, scenario.identity);
+    assert_eq!(resolved.original_owner_run_id, run.run_id);
+    assert_ne!(
+        resolved.owner_user_message_id,
+        input.receipt.transcript.message_id.as_uuid(),
+        "owner and Core identifiers remain distinct persisted values"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                target.clone(),
+                Uuid::new_v4(),
+                boundary.clone(),
+                TranscriptEntryLookup::Reference(input.receipt.transcript),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a different Session cannot consume the exact mapping"
+    );
+
+    let mut foreign_person = target.clone();
+    foreign_person.identity.person_id = PersonId::new();
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                foreign_person,
+                scenario.session_id,
+                boundary.clone(),
+                TranscriptEntryLookup::Reference(input.receipt.transcript),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::AgentMismatch
+        )),
+    );
+    let mut foreign_identity = target;
+    foreign_identity.identity.definition_revision += 1;
+    assert!(matches!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                foreign_identity,
+                scenario.session_id,
+                boundary,
+                TranscriptEntryLookup::Reference(input.receipt.transcript),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::InvalidTranscriptBoundary)
+    ));
+}
+
+#[tokio::test]
+async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("page owner history")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open page fixture recorder");
+    let older_request = typed_assistant_request(open.fence.clone(), "typed answer one");
+    let older_receipt = compose_typed_recording(scenario.vault(), older_request.clone())
+        .await
+        .expect("record first page output");
+    let newer_request = typed_assistant_request(open.fence, "typed answer two");
+    let newer_receipt = compose_typed_recording(scenario.vault(), newer_request.clone())
+        .await
+        .expect("record second page output");
+    remove_owner_coverage(&scenario, run.run_id.as_uuid()).await;
+    let boundary = owner_read_boundary(&scenario).await;
+    let target = owner_read_target(&scenario);
+    let older = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            target.clone(),
+            scenario.session_id,
+            boundary.clone(),
+            TranscriptEntryLookup::Reference(older_receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("compute exact older entry cost");
+    let newer = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            target.clone(),
+            scenario.session_id,
+            boundary.clone(),
+            TranscriptEntryLookup::Reference(newer_receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("compute exact newer entry cost");
+    assert_eq!(typed_message(&older), &older_request.typed_message);
+    match &older.typed_evidence {
+        OwnerTranscriptTypedEvidence::Present {
+            message,
+            coverage,
+            first_recording_run_id,
+            original_task_receipt,
+            ..
+        } => {
+            assert_eq!(message, &older_request.typed_message);
+            assert_eq!(coverage, &DependencyCoverage::Unknown);
+            assert_eq!(*first_recording_run_id, run.run_id);
+            assert_eq!(*original_task_receipt, None);
+        }
+        OwnerTranscriptTypedEvidence::Absent => panic!("generated output has typed evidence"),
+    }
+    let exact_total = older.encoded_bytes + newer.encoded_bytes;
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let exact_fit = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target.clone(),
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary.clone()),
+            OwnerTranscriptPageBudget {
+                max_entries: 2,
+                max_bytes: exact_total,
+            },
+        )
+        .await
+        .expect("exact cumulative byte fit includes both generated outputs");
+    assert_eq!(exact_fit.encoded_bytes, exact_total);
+    assert_eq!(exact_fit.entries.len(), 2);
+    assert!(
+        exact_fit.has_more,
+        "the older inbound item remains available"
+    );
+    assert_eq!(
+        exact_fit.entries[0].transcript_entry.reference,
+        older_receipt.transcript
+    );
+    assert_eq!(
+        exact_fit.entries[1].transcript_entry.reference,
+        newer_receipt.transcript
+    );
+    assert_eq!(
+        exact_fit
+            .next_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.before),
+        Some(older_receipt.transcript)
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "missing coverage remains Unknown without a body SELECT"
+    );
+    assert!(exact_fit.entries.iter().all(|entry| matches!(
+        &entry.typed_evidence,
+        OwnerTranscriptTypedEvidence::Present {
+            coverage: DependencyCoverage::Unknown,
+            ..
+        }
+    )));
+
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let one_short = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target.clone(),
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary.clone()),
+            OwnerTranscriptPageBudget {
+                max_entries: 2,
+                max_bytes: exact_total - 1,
+            },
+        )
+        .await
+        .expect("a later record outside the cumulative budget ends the page");
+    assert_eq!(one_short.encoded_bytes, newer.encoded_bytes);
+    assert_eq!(one_short.entries.len(), 1);
+    assert_eq!(
+        one_short.entries[0].transcript_entry.reference,
+        newer_receipt.transcript
+    );
+    assert_eq!(
+        one_short
+            .next_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.before),
+        Some(newer_receipt.transcript)
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the later oversized payload was preflighted but not fetched"
+    );
+
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                target.clone(),
+                scenario.session_id,
+                TranscriptReadCursor::start(boundary.clone()),
+                OwnerTranscriptPageBudget {
+                    max_entries: 2,
+                    max_bytes: newer.encoded_bytes - 1,
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::PageItemExceedsBudget),
+        "a first record that does not fit returns an error"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(matches!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                target.clone(),
+                scenario.session_id,
+                TranscriptReadCursor::start(boundary.clone()),
+                OwnerTranscriptPageBudget {
+                    max_entries: 0,
+                    max_bytes: 1
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::InvalidInput
+        ))
+    ));
+    assert!(matches!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                target.clone(),
+                scenario.session_id,
+                TranscriptReadCursor::start(boundary),
+                OwnerTranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 0
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::InvalidInput
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn owner_reverse_cursor_survives_later_append_and_reopen() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("pinned owner cursor")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open pinned cursor recorder");
+    let first_request = typed_assistant_request(open.fence.clone(), "before pinned head");
+    let first = compose_typed_recording(scenario.vault(), first_request)
+        .await
+        .expect("record entry on pinned head");
+    let boundary = owner_read_boundary(&scenario).await;
+    let second_request = typed_assistant_request(open.fence, "after pinned head");
+    let second = compose_typed_recording(scenario.vault(), second_request)
+        .await
+        .expect("append beyond existing boundary");
+    let target = owner_read_target(&scenario);
+    let first_page = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target.clone(),
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary.clone()),
+            OwnerTranscriptPageBudget {
+                max_entries: 1,
+                max_bytes: floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            },
+        )
+        .await
+        .expect("page remains pinned after a later append");
+    assert_eq!(first_page.entries.len(), 1);
+    assert_eq!(
+        first_page.entries[0].transcript_entry.reference,
+        first.transcript
+    );
+    assert_ne!(
+        first_page.entries[0].transcript_entry.reference,
+        second.transcript
+    );
+    let cursor = first_page.next_cursor.expect("older inbound entry remains");
+    scenario.reopen().await;
+    let replayed = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target.clone(),
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary.clone()),
+            OwnerTranscriptPageBudget {
+                max_entries: 1,
+                max_bytes: floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            },
+        )
+        .await
+        .expect("replaying pinned page after reopen returns the same first page");
+    assert_eq!(replayed.entries, first_page.entries);
+    assert_eq!(replayed.next_cursor, Some(cursor.clone()));
+    let previous_page = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target,
+            scenario.session_id,
+            cursor,
+            OwnerTranscriptPageBudget {
+                max_entries: 2,
+                max_bytes: floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            },
+        )
+        .await
+        .expect("exclusive-before cursor returns the older pinned inbound entry");
+    assert_eq!(previous_page.entries.len(), 1);
+    assert_eq!(
+        previous_page.entries[0].transcript_entry.reference,
+        input.receipt.transcript
+    );
+    assert_eq!(
+        previous_page.entries[0].typed_evidence,
+        OwnerTranscriptTypedEvidence::Absent
+    );
+    assert!(!previous_page.has_more);
+    assert!(previous_page.next_cursor.is_none());
+}
+
+#[tokio::test]
+async fn owner_budget_preflights_large_coverage_and_counts_missing_unknown() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario.admit_run_and_append_input("coverage budget").await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open coverage budget recorder");
+    let request = typed_assistant_request(open.fence, "tiny");
+    let receipt = compose_typed_recording(scenario.vault(), request.clone())
+        .await
+        .expect("record small typed payload");
+    let coverage = large_owner_coverage(scenario.person_id);
+    let coverage_bytes = coverage
+        .as_persisted_bytes()
+        .expect("encode large valid coverage")
+        .len();
+    store_owner_coverage(&scenario, run.run_id.as_uuid(), coverage.clone()).await;
+
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("read exact typed link");
+    let typed_bytes = usize::try_from(link.typed_reference.encoded_byte_length()).unwrap()
+        + link.typed_reference.encoded_reference_bytes().unwrap();
+    let core_bytes = serde_json::to_vec(&link.transcript_entry).unwrap().len();
+    let expected_bytes = core_bytes + typed_bytes + coverage_bytes;
+    assert!(
+        coverage_bytes > typed_bytes,
+        "coverage is larger than typed payload and reference"
+    );
+
+    let ordinary_count = std::sync::atomic::AtomicU64::new(0);
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect for ordinary single-query coverage regression");
+    assert_eq!(
+        crate::vault::context_dependencies::read_context_dependency_coverage_counted(
+            &connection,
+            scenario.person_id,
+            scenario.session_id,
+            run.run_id.as_uuid(),
+            &ordinary_count,
+        )
+        .await
+        .expect("ordinary one-query coverage read"),
+        coverage
+    );
+    assert_eq!(ordinary_count.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_turn_coverage(scenario.session_id, run.run_id.as_uuid())
+            .await
+            .expect("learning gate still uses one plain-Connection coverage query"),
+        coverage
+    );
+    drop(connection);
+
+    let boundary = owner_read_boundary(&scenario).await;
+    let target = owner_read_target(&scenario);
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                target.clone(),
+                scenario.session_id,
+                TranscriptReadCursor::start(boundary.clone()),
+                OwnerTranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: expected_bytes - 1,
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::PageItemExceedsBudget),
+        "large coverage prevents a small typed payload from slipping over budget"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "typed payload body was not prefetched before the total budget fit"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "coverage body was not prefetched before the total budget fit"
+    );
+
+    let exact_fit = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target,
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary),
+            OwnerTranscriptPageBudget {
+                max_entries: 1,
+                max_bytes: expected_bytes,
+            },
+        )
+        .await
+        .expect("exact total fit hydrates both evidence bodies");
+    assert_eq!(exact_fit.encoded_bytes, expected_bytes);
+    assert_eq!(
+        exact_fit.entries[0].transcript_entry.reference,
+        receipt.transcript
+    );
+    assert_eq!(typed_message(&exact_fit.entries[0]), &request.typed_message);
+    assert!(matches!(
+        &exact_fit.entries[0].typed_evidence,
+        OwnerTranscriptTypedEvidence::Present {
+            coverage: actual,
+            ..
+        } if actual == &coverage
+    ));
+    assert!(coverage.as_persisted_bytes().unwrap().len() <= coverage_bytes);
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn owner_reads_reject_wrong_proof_scopes_and_missing_generated_links() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("proof scope checks")
+        .await;
+    let request =
+        record_typed_answer(&scenario, &run, input.receipt.transcript, "linked output").await;
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("read exact generated link");
+    let boundary = owner_read_boundary(&scenario).await;
+    let target = owner_read_target(&scenario);
+
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                target.clone(),
+                Uuid::new_v4(),
+                boundary.clone(),
+                TranscriptEntryLookup::Reference(link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a same-Person but wrong Session cannot reuse the link"
+    );
+    let mut wrong_person = target.clone();
+    wrong_person.identity.person_id = PersonId::new();
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                wrong_person,
+                scenario.session_id,
+                boundary.clone(),
+                TranscriptEntryLookup::Reference(link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::AgentMismatch
+        ))
+    );
+
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to corrupt generated entry kind");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start wrong-kind proof fixture");
+    transaction
+        .execute(
+            "UPDATE agent_conversation_owner_transcript_evidence_v1 SET transcript_entry_json = replace(transcript_entry_json, '\"kind\":\"generated_output\"', '\"kind\":\"inbound\"') WHERE person_id = ? AND contribution_id = ?",
+            (scenario.person_id.to_string(), request.contribution_id.as_uuid().to_string()),
+        )
+        .await
+        .expect("change the persisted link's generated kind");
+    transaction
+        .commit()
+        .await
+        .expect("commit wrong-kind proof fixture");
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                target.clone(),
+                scenario.session_id,
+                boundary.clone(),
+                TranscriptEntryLookup::Reference(link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Unavailable),
+        "a generated owner link cannot be relabeled as an inbound record"
+    );
+
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to remove exact proof");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start exact proof deletion fixture");
+    transaction
+        .execute(
+            "DELETE FROM agent_conversation_owner_transcript_evidence_v1 WHERE person_id = ? AND contribution_id = ?",
+            (scenario.person_id.to_string(), request.contribution_id.as_uuid().to_string()),
+        )
+        .await
+        .expect("remove generated entry's exact typed link");
+    transaction
+        .commit()
+        .await
+        .expect("commit missing-link fixture");
+    assert_eq!(
+        scenario
+            .vault()
+            .read_owner_transcript_entry(
+                target,
+                scenario.session_id,
+                boundary,
+                TranscriptEntryLookup::Reference(link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a generated Core text projection is not accepted without its exact typed link"
+    );
+}
+
+#[tokio::test]
+async fn owner_read_metadata_body_and_coverage_corruption_are_errors() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("metadata integrity")
+        .await;
+    let request = record_typed_answer(
+        &scenario,
+        &run,
+        input.receipt.transcript,
+        "body corrupt probe",
+    )
+    .await;
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("read exact typed proof");
+    let boundary = owner_read_boundary(&scenario).await;
+    let target = owner_read_target(&scenario);
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to corrupt typed metadata");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start typed metadata corruption fixture");
+    transaction
+        .execute(
+            "UPDATE agent_conversation_typed_history_entries SET turn_id = ? WHERE person_id = ? AND session_id = ? AND entry_id = ?",
+            (Uuid::new_v4().to_string(), scenario.person_id.to_string(), scenario.session_id.to_string(), link.typed_reference.entry_id().to_string()),
+        )
+        .await
+        .expect("corrupt typed turn metadata");
+    transaction
+        .commit()
+        .await
+        .expect("commit typed metadata corruption");
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                target,
+                scenario.session_id,
+                TranscriptReadCursor::start(boundary),
+                OwnerTranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 1
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::Unavailable),
+        "malformed typed metadata is an error rather than a byte-boundary stop"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+
+    let mut body_scenario = Scenario::new().await;
+    let (body_run, body_input) = body_scenario
+        .admit_run_and_append_input("typed body corruption")
+        .await;
+    let body_request = record_typed_answer(
+        &body_scenario,
+        &body_run,
+        body_input.receipt.transcript,
+        "body corrupt probe",
+    )
+    .await;
+    let body_link = stored_typed_link(
+        body_scenario.vault(),
+        body_scenario.person_id,
+        body_request.contribution_id,
+    )
+    .await
+    .expect("load body corruption reference");
+    let mut connection = body_scenario
+        .vault()
+        .connection()
+        .expect("connect to corrupt typed body");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start typed body corruption fixture");
+    let mut rows = transaction
+        .query(
+            "SELECT payload FROM agent_conversation_typed_history_entries WHERE person_id = ? AND session_id = ? AND entry_id = ?",
+            (body_scenario.person_id.to_string(), body_scenario.session_id.to_string(), body_link.typed_reference.entry_id().to_string()),
+        )
+        .await
+        .expect("read payload for same-length corruption");
+    let payload = rows
+        .next()
+        .await
+        .expect("read typed payload row")
+        .expect("typed payload exists")
+        .get::<String>(0)
+        .expect("typed payload text");
+    let corrupted_payload = payload.replace("body corrupt probe", "Body corrupt probe");
+    assert_ne!(corrupted_payload, payload);
+    assert_eq!(corrupted_payload.len(), payload.len());
+    drop(rows);
+    transaction
+        .execute(
+            "UPDATE agent_conversation_typed_history_entries SET payload = ? WHERE person_id = ? AND session_id = ? AND entry_id = ?",
+            (corrupted_payload, body_scenario.person_id.to_string(), body_scenario.session_id.to_string(), body_link.typed_reference.entry_id().to_string()),
+        )
+        .await
+        .expect("corrupt typed body without changing its length");
+    transaction
+        .commit()
+        .await
+        .expect("commit typed body corruption");
+    body_scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        body_scenario
+            .vault()
+            .read_owner_transcript_entry(
+                owner_read_target(&body_scenario),
+                body_scenario.session_id,
+                owner_read_boundary(&body_scenario).await,
+                TranscriptEntryLookup::Reference(body_link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Unavailable),
+        "the payload digest is checked after the body fetch"
+    );
+    assert_eq!(
+        body_scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+
+    let mut coverage_scenario = Scenario::new().await;
+    let (coverage_run, coverage_input) = coverage_scenario
+        .admit_run_and_append_input("coverage body corruption")
+        .await;
+    let coverage_request = record_typed_answer(
+        &coverage_scenario,
+        &coverage_run,
+        coverage_input.receipt.transcript,
+        "coverage body",
+    )
+    .await;
+    store_owner_coverage(
+        &coverage_scenario,
+        coverage_run.run_id.as_uuid(),
+        DependencyCoverage::Unknown,
+    )
+    .await;
+    let coverage_link = stored_typed_link(
+        coverage_scenario.vault(),
+        coverage_scenario.person_id,
+        coverage_request.contribution_id,
+    )
+    .await
+    .expect("load coverage-corruption typed link");
+    let mut connection = coverage_scenario
+        .vault()
+        .connection()
+        .expect("connect to corrupt coverage body");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start coverage body corruption fixture");
+    transaction
+        .execute(
+            "UPDATE agent_context_dependency_coverage SET payload = 'x' WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (coverage_scenario.person_id.to_string(), coverage_scenario.session_id.to_string(), coverage_run.run_id.as_uuid().to_string()),
+        )
+        .await
+        .expect("corrupt coverage payload body");
+    transaction
+        .commit()
+        .await
+        .expect("commit coverage body corruption");
+    coverage_scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    coverage_scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        coverage_scenario
+            .vault()
+            .read_owner_transcript_entry(
+                owner_read_target(&coverage_scenario),
+                coverage_scenario.session_id,
+                owner_read_boundary(&coverage_scenario).await,
+                TranscriptEntryLookup::Reference(coverage_link.transcript_entry.reference),
+                floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+            )
+            .await,
+        Err(ConversationStoreFailure::Unavailable)
+    );
+    assert_eq!(
+        coverage_scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        coverage_scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+#[tokio::test]
+async fn owner_coverage_metadata_corruption_is_not_a_page_boundary() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("coverage metadata")
+        .await;
+    let request = record_typed_answer(
+        &scenario,
+        &run,
+        input.receipt.transcript,
+        "coverage metadata",
+    )
+    .await;
+    store_owner_coverage(
+        &scenario,
+        run.run_id.as_uuid(),
+        DependencyCoverage::Independent,
+    )
+    .await;
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("load coverage metadata link");
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to corrupt coverage metadata");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start coverage metadata corruption fixture");
+    transaction
+        .execute(
+            "UPDATE agent_context_dependency_coverage SET payload = '' WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (scenario.person_id.to_string(), scenario.session_id.to_string(), run.run_id.as_uuid().to_string()),
+        )
+        .await
+        .expect("corrupt coverage length metadata");
+    transaction
+        .commit()
+        .await
+        .expect("commit coverage metadata corruption");
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_previous_owner_transcript_page(
+                owner_read_target(&scenario),
+                scenario.session_id,
+                TranscriptReadCursor::start(owner_read_boundary(&scenario).await),
+                OwnerTranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 1
+                },
+            )
+            .await,
+        Err(ConversationStoreFailure::Unavailable),
+        "invalid coverage length metadata is reported even when the item cannot fit"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    let _ = link;
+}
+
+#[tokio::test]
+async fn owner_transcript_read_does_not_mutate_schema() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario.admit_run_and_append_input("schema freeze").await;
+    let _request =
+        record_typed_answer(&scenario, &run, input.receipt.transcript, "schema read").await;
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect before owner read");
+    let before = schema_tables(&connection).await;
+    let result = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            owner_read_target(&scenario),
+            scenario.session_id,
+            owner_read_boundary(&scenario).await,
+            TranscriptEntryLookup::Reference(input.receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await;
+    assert!(result.is_ok());
+    let after = schema_tables(&connection).await;
+    assert_eq!(
+        after, before,
+        "read-only composition performs no schema DDL"
+    );
+}
+
+#[tokio::test]
+async fn owner_read_on_absent_core_family_does_not_initialize_it() {
+    let mut scenario = Scenario::new().await;
+    let target = owner_read_target(&scenario);
+    let boundary = TranscriptReadBoundary {
+        target: target.clone(),
+        head_revision: 0,
+        through: None,
+    };
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect before absent-family read");
+    let before = schema_tables(&connection).await;
+    let result = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target,
+            scenario.session_id,
+            TranscriptReadCursor::start(boundary),
+            OwnerTranscriptPageBudget {
+                max_entries: 1,
+                max_bytes: 1,
+            },
+        )
+        .await;
+    assert!(result.is_err());
+    assert_eq!(schema_tables(&connection).await, before);
 }

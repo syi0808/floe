@@ -245,7 +245,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-fn validate_target_person(
+pub(super) fn validate_target_person(
     person_id: PersonId,
     target: &ConversationReadTarget,
 ) -> Result<(), ConversationStoreFailure> {
@@ -260,7 +260,7 @@ fn validate_target_person(
     Ok(())
 }
 
-fn scope_for(person_id: PersonId, target: &ConversationReadTarget) -> Scope {
+pub(super) fn scope_for(person_id: PersonId, target: &ConversationReadTarget) -> Scope {
     Scope::from_identity(
         person_id,
         &target.identity,
@@ -269,7 +269,7 @@ fn scope_for(person_id: PersonId, target: &ConversationReadTarget) -> Scope {
     )
 }
 
-async fn validate_boundary_on(
+pub(super) async fn validate_boundary_on(
     transaction: &Transaction<'_>,
     person_id: PersonId,
     target: &ConversationReadTarget,
@@ -306,7 +306,7 @@ async fn validate_boundary_on(
     Ok(scope)
 }
 
-fn validate_lookup_reference(
+pub(super) fn validate_lookup_reference(
     target: &ConversationReadTarget,
     boundary: &TranscriptReadBoundary,
     reference: TranscriptReference,
@@ -323,7 +323,7 @@ fn validate_lookup_reference(
     Ok(())
 }
 
-async fn message_sequence_on(
+pub(super) async fn message_sequence_on(
     transaction: &Transaction<'_>,
     scope: Scope,
     message_id: MessageId,
@@ -354,7 +354,7 @@ async fn message_sequence_on(
     Ok(Some(sequence))
 }
 
-async fn reverse_page_sequences_on(
+pub(super) async fn reverse_page_sequences_on(
     transaction: &Transaction<'_>,
     scope: Scope,
     through: u64,
