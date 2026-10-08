@@ -42,6 +42,18 @@ fn agent_message(id: u128, command: u128, text: &str, sender: u128) -> Conversat
     message
 }
 
+fn generated_message(
+    id: u128,
+    command: u128,
+    text: &str,
+    sender: u128,
+    task_id: Option<TaskId>,
+) -> ConversationMessage {
+    let mut message = agent_message(id, command, text, sender);
+    message.task_id = task_id;
+    message
+}
+
 fn exercise_role_fixture(
     agent: u128,
     assignment: u128,
@@ -603,5 +615,254 @@ fn checkpoint_cannot_cross_conversation_or_incompatible_branch() {
     assert_eq!(
         other.apply_checkpoint(checkpoint),
         Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+}
+
+#[test]
+fn generated_output_shares_sequence_without_scheduling_and_completion_settles_prefix() {
+    use floe_conversation_core::{GeneratedOutputRequest, TranscriptEntryKind};
+
+    let (mut core, first) = ConversationCore::open(new_request(
+        identity(20, 30, 1),
+        50,
+        message(60, 70, "input A", None),
+    ))
+    .expect("open conversation with input A");
+    let run_a = RunId::from_uuid(uuid(41)).expect("Run A");
+    let claim_a = core
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: run_a,
+                task_id: None,
+            },
+            1,
+        )
+        .expect("claim input A");
+    let input_b = agent_message(61, 71, "queued input B", 21);
+    let queued_b = core
+        .continue_with(MessageAdmissionRequest {
+            target: AdmissionTarget::Continue {
+                reference: core.reference(),
+            },
+            message: input_b,
+        })
+        .expect("queue input B while A runs");
+    assert_eq!(queued_b.disposition, AdmissionDisposition::Queued);
+
+    let target_before_output = core.reference();
+    let output_a_request = GeneratedOutputRequest {
+        target: target_before_output.clone(),
+        claim: claim_a.clone(),
+        message: generated_message(62, 72, "output A", 20, None),
+    };
+    let output_a = core
+        .record_generated_output(output_a_request.clone())
+        .expect("record output A under Run A's active claim");
+    assert_eq!(output_a.transcript.sequence, 3);
+    assert_eq!(
+        core.record_generated_output(output_a_request.clone())
+            .expect("exact replay returns stored output receipt"),
+        output_a
+    );
+    let mut changed_output_a = output_a_request.clone();
+    changed_output_a.message.text = "changed output A".into();
+    assert_eq!(
+        core.record_generated_output(changed_output_a),
+        Err(floe_conversation_contract::ConversationFailure::MessageIdConflict)
+    );
+    assert_eq!(
+        core.claim_next_writer(
+            RunTaskLink {
+                run_id: RunId::from_uuid(uuid(42)).expect("Run B"),
+                task_id: None,
+            },
+            1,
+        ),
+        Err(floe_conversation_contract::ConversationFailure::WriterAlreadyActive)
+    );
+    assert_eq!(
+        core.pending_messages().collect::<Vec<_>>(),
+        vec![queued_b.receipt.transcript]
+    );
+    let entries = core.transcript_entries().cloned().collect::<Vec<_>>();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].kind, TranscriptEntryKind::Inbound);
+    assert_eq!(entries[1].kind, TranscriptEntryKind::Inbound);
+    assert_eq!(entries[2].kind, TranscriptEntryKind::GeneratedOutput);
+    assert!(matches!(
+        &entries[1].message.origin,
+        MessageOrigin::Agent { .. }
+    ));
+    assert!(matches!(
+        &entries[2].message.origin,
+        MessageOrigin::Agent { .. }
+    ));
+    assert_eq!(entries[2].producer_run, Some(run_a));
+
+    core.complete_writer(claim_a, 1)
+        .expect("settle input A while B remains queued");
+    assert!(
+        core.checkpoint_for(first.receipt.transcript, "A is settled")
+            .is_ok()
+    );
+    assert_eq!(
+        core.checkpoint_for(output_a.transcript, "cannot cross queued B"),
+        Err(floe_conversation_contract::ConversationFailure::CheckpointMismatch)
+    );
+
+    let run_b = RunId::from_uuid(uuid(42)).expect("Run B");
+    let claim_b = core
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: run_b,
+                task_id: None,
+            },
+            1,
+        )
+        .expect("explicitly claim queued input B in FIFO order");
+    assert_eq!(claim_b.message, queued_b.receipt.transcript);
+    let output_b = core
+        .record_generated_output(GeneratedOutputRequest {
+            target: core.reference(),
+            claim: claim_b.clone(),
+            message: generated_message(63, 73, "output B", 20, None),
+        })
+        .expect("record output B under Run B's active claim");
+    assert_eq!(output_b.transcript.sequence, 4);
+    assert_eq!(core.pending_messages().count(), 0);
+    core.complete_writer(claim_b, 1)
+        .expect("settle input B and all interleaved output");
+    assert!(
+        core.checkpoint_for(output_b.transcript, "the contiguous transcript is settled")
+            .is_ok()
+    );
+    assert_eq!(core.completed_runs().len(), 2);
+
+    let person_reusing_output_command = core
+        .continue_with(MessageAdmissionRequest {
+            target: AdmissionTarget::Continue {
+                reference: core.reference(),
+            },
+            message: message(64, 72, "human command ID is independently admitted", None),
+        })
+        .expect("output did not create an inbound command receipt");
+    assert_eq!(
+        person_reusing_output_command.disposition,
+        AdmissionDisposition::Appended
+    );
+    assert_eq!(
+        core.continue_with(MessageAdmissionRequest {
+            target: AdmissionTarget::Continue {
+                reference: core.reference(),
+            },
+            message: message(62, 74, "colliding inbound message ID", None),
+        }),
+        Err(floe_conversation_contract::ConversationFailure::MessageIdConflict)
+    );
+}
+
+#[test]
+fn generated_output_rejects_wrong_writers_and_isolated_agents_can_reuse_ids() {
+    use floe_conversation_core::GeneratedOutputRequest;
+
+    let (mut manager, _) = ConversationCore::open(new_request(
+        identity(20, 30, 1),
+        50,
+        message(60, 70, "manager input", None),
+    ))
+    .expect("Manager conversation");
+    let manager_run = RunId::from_uuid(uuid(41)).expect("Manager Run");
+    let manager_claim = manager
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: manager_run,
+                task_id: None,
+            },
+            3,
+        )
+        .expect("Manager claim");
+    let valid = GeneratedOutputRequest {
+        target: manager.reference(),
+        claim: manager_claim.clone(),
+        message: generated_message(62, 72, "Manager answer", 20, None),
+    };
+    let mut wrong_run = valid.clone();
+    wrong_run.claim.link.run_id = RunId::from_uuid(uuid(99)).expect("wrong Run");
+    wrong_run.message.message_id = MessageId::from_uuid(uuid(98)).expect("wrong output ID");
+    assert_eq!(
+        manager.record_generated_output(wrong_run),
+        Err(floe_conversation_contract::ConversationFailure::WrongWriter)
+    );
+    let mut stale_generation = valid.clone();
+    stale_generation.claim.executor_generation = 2;
+    stale_generation.message.message_id = MessageId::from_uuid(uuid(97)).expect("stale output ID");
+    assert_eq!(
+        manager.record_generated_output(stale_generation),
+        Err(floe_conversation_contract::ConversationFailure::WrongWriter)
+    );
+    let mut wrong_origin = valid.clone();
+    wrong_origin.message.origin = MessageOrigin::Agent {
+        agent_instance_id: AgentInstanceId::from_uuid(uuid(21)).expect("foreign sender"),
+    };
+    wrong_origin.message.message_id = MessageId::from_uuid(uuid(96)).expect("foreign output ID");
+    assert_eq!(
+        manager.record_generated_output(wrong_origin),
+        Err(floe_conversation_contract::ConversationFailure::AgentMismatch)
+    );
+
+    let manager_output = manager
+        .record_generated_output(valid.clone())
+        .expect("valid Manager output");
+    manager
+        .complete_writer(manager_claim, 3)
+        .expect("settle Manager Run");
+    assert_eq!(
+        manager.record_generated_output(GeneratedOutputRequest {
+            target: manager.reference(),
+            claim: valid.claim,
+            message: generated_message(95, 73, "late new output", 20, None),
+        }),
+        Err(floe_conversation_contract::ConversationFailure::WrongWriter)
+    );
+    assert_eq!(
+        manager
+            .record_generated_output(GeneratedOutputRequest {
+                target: manager.reference(),
+                claim: manager_output.producer.clone(),
+                message: generated_message(62, 72, "Manager answer", 20, None),
+            })
+            .expect("exact completed output replay remains readable"),
+        manager_output
+    );
+
+    let (mut expert, _) = ConversationCore::open(new_request(
+        identity(21, 31, 1),
+        80,
+        message(60, 71, "Expert input", None),
+    ))
+    .expect("isolated Expert conversation");
+    let expert_claim = expert
+        .claim_next_writer(
+            RunTaskLink {
+                run_id: manager_run,
+                task_id: None,
+            },
+            3,
+        )
+        .expect("independent Expert claim");
+    let expert_output = expert
+        .record_generated_output(GeneratedOutputRequest {
+            target: expert.reference(),
+            claim: expert_claim,
+            message: generated_message(62, 72, "Expert answer", 21, None),
+        })
+        .expect("another agent can use the same message ID in its own scope");
+    assert_eq!(
+        expert_output.transcript.message_id,
+        manager_output.transcript.message_id
+    );
+    assert_ne!(
+        expert_output.transcript.conversation_id,
+        manager_output.transcript.conversation_id
     );
 }

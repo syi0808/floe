@@ -8,6 +8,7 @@ use floe_conversation_contract::{
     ConversationMessage, ConversationReference, MessageAdmissionRequest, MessageId, MessageOrigin,
     RunTaskLink, TranscriptReference,
 };
+use floe_kernel::RunId;
 use sha2::{Digest, Sha256};
 
 /// The initial value fed to the chained transcript prefix commitment.
@@ -38,8 +39,27 @@ impl ConversationHead {
 pub struct TranscriptEntry {
     pub reference: TranscriptReference,
     pub message: ConversationMessage,
+    pub kind: TranscriptEntryKind,
+    /// The producing Run is present only for generated output. Inbound
+    /// messages remain independently schedulable work, regardless of origin.
+    pub producer_run: Option<RunId>,
+    pub commitment_version: PrefixCommitmentVersion,
     /// Commitment to every transcript entry through this entry, inclusive.
     pub prefix_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptEntryKind {
+    Inbound,
+    GeneratedOutput,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PrefixCommitmentVersion {
+    /// Existing revision-2 rows keep their original commitment unchanged.
+    V1,
+    /// New entries bind their kind and producer Run into the prefix chain.
+    V2,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -74,6 +94,9 @@ pub struct AdmissionFacts {
     pub head: Option<ConversationHead>,
     pub active_writer: Option<WriterClaim>,
     pub message: Option<StoredAdmission>,
+    /// True when this stable message ID is already present as a generated
+    /// entry without an inbound admission receipt.
+    pub message_id_in_transcript: bool,
     pub command: Option<StoredCommand>,
     pub previous_prefix_digest: [u8; 32],
 }
@@ -115,6 +138,44 @@ pub struct CompletionFacts {
     pub head: ConversationHead,
     pub active_writer: Option<WriterClaim>,
     pub executor_generation: u64,
+    /// First queued input after the active input has settled. Outputs are
+    /// already settled, so this one bounded fact determines the new prefix.
+    pub earliest_pending_sequence: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedOutputRequest {
+    pub target: ConversationReference,
+    pub claim: WriterClaim,
+    pub message: ConversationMessage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedOutputReceipt {
+    pub identity: AgentIdentity,
+    pub producer: WriterClaim,
+    pub transcript: TranscriptReference,
+    pub content_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedOutputFacts {
+    /// Omitted on exact receipt readback, which must precede mutable checks.
+    pub head: Option<ConversationHead>,
+    pub active_writer: Option<WriterClaim>,
+    pub executor_generation: u64,
+    pub stored_receipt: Option<GeneratedOutputReceipt>,
+    pub message_id_in_transcript: bool,
+    pub previous_prefix_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedOutputTransition {
+    pub receipt: GeneratedOutputReceipt,
+    /// Set only for a newly appended entry.
+    pub appended: Option<TranscriptEntry>,
+    /// Set only when a new entry changes the current head.
+    pub next_head: Option<ConversationHead>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -222,6 +283,9 @@ pub fn admit(
             head_changed: true,
         });
     }
+    if facts.message_id_in_transcript {
+        return Err(ConversationFailure::MessageIdConflict);
+    }
     if is_new && existing_head {
         return Err(ConversationFailure::ConversationConflict);
     }
@@ -247,11 +311,21 @@ pub fn admit(
         head_revision: sequence,
         task_id: request.message.task_id,
     };
-    let prefix_digest =
-        advance_prefix_digest(facts.previous_prefix_digest, reference, &request.message)?;
+    let commitment_version = PrefixCommitmentVersion::V2;
+    let prefix_digest = advance_entry_prefix_digest(
+        facts.previous_prefix_digest,
+        reference,
+        &request.message,
+        TranscriptEntryKind::Inbound,
+        None,
+        commitment_version,
+    )?;
     let appended = TranscriptEntry {
         reference,
         message: request.message.clone(),
+        kind: TranscriptEntryKind::Inbound,
+        producer_run: None,
+        commitment_version,
         prefix_digest,
     };
     let disposition = if facts.active_writer.is_some() {
@@ -357,12 +431,125 @@ pub fn complete_writer(
         return Err(ConversationFailure::ConversationMismatch);
     }
     let mut head = facts.head;
-    head.completed_prefix = claim.message.sequence;
+    head.completed_prefix = match facts.earliest_pending_sequence {
+        Some(sequence) if sequence > claim.message.sequence && sequence <= head.head_revision => {
+            sequence - 1
+        }
+        Some(_) => return Err(ConversationFailure::ConversationMismatch),
+        None => head.head_revision,
+    };
     head.state_revision = head
         .state_revision
         .checked_add(1)
         .ok_or(ConversationFailure::InvalidInput)?;
     Ok(head)
+}
+
+/// Append one generated assistant/Tool/host entry to the current transcript.
+/// A receipt is classified first so an exact retry can recover a lost commit
+/// acknowledgement after the writer has completed or its generation changed.
+pub fn record_generated_output(
+    request: GeneratedOutputRequest,
+    facts: GeneratedOutputFacts,
+) -> Result<GeneratedOutputTransition, ConversationFailure> {
+    request.target.validate()?;
+    let content_digest = generated_output_content_digest(&request.message)?;
+
+    if let Some(receipt) = facts.stored_receipt {
+        if receipt.identity != request.target.identity
+            || receipt.identity != request.claim.identity
+            || receipt.transcript.conversation_id != request.target.conversation_id
+            || receipt.transcript.branch_id != request.target.branch_id
+            || receipt.transcript.message_id != request.message.message_id
+            || receipt.producer != request.claim
+            || receipt.content_digest != content_digest
+        {
+            return Err(ConversationFailure::MessageIdConflict);
+        }
+        return Ok(GeneratedOutputTransition {
+            receipt,
+            appended: None,
+            next_head: None,
+        });
+    }
+
+    request.message.validate()?;
+    validate_generated_origin(&request.claim.identity, &request.message)?;
+    if request.message.task_id != request.claim.link.task_id {
+        return Err(ConversationFailure::TaskMismatch);
+    }
+    if facts.message_id_in_transcript {
+        return Err(ConversationFailure::MessageIdConflict);
+    }
+    let head = facts
+        .head
+        .ok_or(ConversationFailure::ConversationMismatch)?;
+    validate_target(&head, &request.target)?;
+    if request.claim.identity != head.identity
+        || request.claim.message.conversation_id != head.conversation_id
+        || request.claim.message.branch_id != head.branch_id
+    {
+        return Err(ConversationFailure::WrongWriter);
+    }
+    if facts.active_writer.as_ref() != Some(&request.claim)
+        || facts.executor_generation == 0
+        || facts.executor_generation != request.claim.executor_generation
+    {
+        return Err(ConversationFailure::WrongWriter);
+    }
+    if request.claim.message.sequence
+        != head
+            .completed_prefix
+            .checked_add(1)
+            .ok_or(ConversationFailure::InvalidInput)?
+    {
+        return Err(ConversationFailure::WrongWriter);
+    }
+
+    let sequence = head
+        .head_revision
+        .checked_add(1)
+        .ok_or(ConversationFailure::InvalidInput)?;
+    let transcript = TranscriptReference {
+        conversation_id: head.conversation_id,
+        branch_id: head.branch_id,
+        message_id: request.message.message_id,
+        sequence,
+    };
+    let commitment_version = PrefixCommitmentVersion::V2;
+    let prefix_digest = advance_entry_prefix_digest(
+        facts.previous_prefix_digest,
+        transcript,
+        &request.message,
+        TranscriptEntryKind::GeneratedOutput,
+        Some(request.claim.link.run_id),
+        commitment_version,
+    )?;
+    let entry = TranscriptEntry {
+        reference: transcript,
+        message: request.message,
+        kind: TranscriptEntryKind::GeneratedOutput,
+        producer_run: Some(request.claim.link.run_id),
+        commitment_version,
+        prefix_digest,
+    };
+    let receipt = GeneratedOutputReceipt {
+        identity: head.identity.clone(),
+        producer: request.claim,
+        transcript,
+        content_digest,
+    };
+    let mut next_head = head;
+    next_head.head_revision = sequence;
+    next_head.state_revision = next_head
+        .state_revision
+        .checked_add(1)
+        .ok_or(ConversationFailure::InvalidInput)?;
+    Ok(GeneratedOutputTransition {
+        receipt,
+        appended: Some(entry),
+        next_head: Some(next_head),
+    })
 }
 
 pub fn apply_checkpoint(
@@ -423,10 +610,52 @@ pub fn advance_prefix_digest(
     reference: TranscriptReference,
     message: &ConversationMessage,
 ) -> Result<[u8; 32], ConversationFailure> {
+    advance_entry_prefix_digest(
+        previous,
+        reference,
+        message,
+        TranscriptEntryKind::Inbound,
+        None,
+        PrefixCommitmentVersion::V1,
+    )
+}
+
+pub fn advance_entry_prefix_digest(
+    previous: [u8; 32],
+    reference: TranscriptReference,
+    message: &ConversationMessage,
+    kind: TranscriptEntryKind,
+    producer_run: Option<RunId>,
+    version: PrefixCommitmentVersion,
+) -> Result<[u8; 32], ConversationFailure> {
+    if (kind == TranscriptEntryKind::Inbound && producer_run.is_some())
+        || (kind == TranscriptEntryKind::GeneratedOutput && producer_run.is_none())
+        || (version == PrefixCommitmentVersion::V1
+            && (kind != TranscriptEntryKind::Inbound || producer_run.is_some()))
+    {
+        return Err(ConversationFailure::InvalidInput);
+    }
     let origin =
         serde_json::to_vec(&message.origin).map_err(|_| ConversationFailure::InvalidInput)?;
     let mut digest = Sha256::new();
-    digest.update(b"floe-conversation-transcript-prefix-chain-v1\0");
+    match version {
+        PrefixCommitmentVersion::V1 => {
+            digest.update(b"floe-conversation-transcript-prefix-chain-v1\0");
+        }
+        PrefixCommitmentVersion::V2 => {
+            digest.update(b"floe-conversation-transcript-prefix-chain-v2\0");
+            digest.update([match kind {
+                TranscriptEntryKind::Inbound => 0,
+                TranscriptEntryKind::GeneratedOutput => 1,
+            }]);
+            if let Some(run_id) = producer_run {
+                digest.update([1]);
+                digest.update(run_id.as_uuid().as_bytes());
+            } else {
+                digest.update([0]);
+            }
+        }
+    }
     digest.update(previous);
     digest.update(reference.conversation_id.as_uuid().as_bytes());
     digest.update(reference.branch_id.as_uuid().as_bytes());
@@ -442,6 +671,36 @@ pub fn advance_prefix_digest(
         digest.update([0]);
     }
     Ok(digest.finalize().into())
+}
+
+/// Hash the complete normalized output message. The evidence bytes themselves
+/// remain outside the transcript; only their content-addressed reference is
+/// included in this canonical serialization.
+pub fn generated_output_content_digest(
+    message: &ConversationMessage,
+) -> Result<[u8; 32], ConversationFailure> {
+    let encoded = serde_json::to_vec(message).map_err(|_| ConversationFailure::InvalidInput)?;
+    let mut digest = Sha256::new();
+    digest.update(b"floe-conversation-generated-output-content-v1\0");
+    digest.update((encoded.len() as u64).to_be_bytes());
+    digest.update(encoded);
+    Ok(digest.finalize().into())
+}
+
+fn validate_generated_origin(
+    identity: &AgentIdentity,
+    message: &ConversationMessage,
+) -> Result<(), ConversationFailure> {
+    match &message.origin {
+        MessageOrigin::Person { .. } => Err(ConversationFailure::AgentMismatch),
+        MessageOrigin::Agent { agent_instance_id }
+        | MessageOrigin::Tool {
+            agent_instance_id, ..
+        } if *agent_instance_id != identity.agent_instance_id => {
+            Err(ConversationFailure::AgentMismatch)
+        }
+        MessageOrigin::Agent { .. } | MessageOrigin::Tool { .. } | MessageOrigin::Host => Ok(()),
+    }
 }
 
 fn validate_message_owner(

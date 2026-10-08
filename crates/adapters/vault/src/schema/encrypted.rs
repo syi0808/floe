@@ -305,6 +305,29 @@ pub(super) const CONVERSATION_CORE: &[SchemaObject] = &[
     ),
 ];
 
+/// Additive generated-output storage extension. The original Core family
+/// remains revision 2; this separately versioned marker lets older encrypted
+/// Vaults retain that schema until a Core transaction upgrades it atomically.
+pub(super) const CONVERSATION_CORE_OUTPUTS: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_conversation_core_outputs_schema",
+        1,
+        "CREATE TABLE agent_conversation_core_outputs_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_entry_metadata",
+        "CREATE TABLE agent_conversation_core_entry_metadata (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), entry_kind TEXT NOT NULL CHECK (entry_kind IN ('inbound', 'generated_output')), producer_run_id TEXT, commitment_version INTEGER NOT NULL CHECK (commitment_version IN (1, 2)), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence), CHECK ((entry_kind = 'inbound' AND producer_run_id IS NULL) OR (entry_kind = 'generated_output' AND producer_run_id IS NOT NULL AND commitment_version = 2)))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_output_receipts",
+        "CREATE TABLE agent_conversation_core_output_receipts (person_id TEXT NOT NULL, agent_instance_id TEXT NOT NULL, message_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, producer_run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), PRIMARY KEY (person_id, agent_instance_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, producer_run_id) REFERENCES agent_conversation_core_writer_receipts(person_id, conversation_id, branch_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_core_output_sequence",
+        "CREATE INDEX agent_conversation_core_output_sequence ON agent_conversation_core_output_receipts (person_id, conversation_id, branch_id, sequence)",
+    ),
+];
+
 pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_interaction_schema",

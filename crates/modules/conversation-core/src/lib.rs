@@ -1,10 +1,9 @@
 //! Pure role-neutral conversation state transitions.
 //!
 //! This crate owns no persistence, product policy, Agent Directory, Task
-//! lifecycle, A2A binding, or learning hooks. Its admission API accepts
-//! inbound work and schedules it for a Run; it does not record generated
-//! assistant or Tool output. A production store must apply transitions
-//! atomically through the Core-owned store port.
+//! lifecycle, A2A binding, or learning hooks. It separates inbound work
+//! admission from generated assistant/Tool output recording. A production
+//! store applies both transitions atomically through the Core-owned port.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -19,14 +18,19 @@ use floe_kernel::{CommandId, RunId};
 mod transitions;
 pub use transitions::{
     AdmissionFacts, AdmissionTransition, CheckpointFacts, ClaimFacts, ClaimTransition,
-    CompletionFacts, ConversationHead, EMPTY_PREFIX_DIGEST, PendingMessage, StoredAdmission,
-    StoredCommand, TranscriptEntry, WriterClaim, admit as admit_transition, advance_prefix_digest,
+    CompletionFacts, ConversationHead, EMPTY_PREFIX_DIGEST, GeneratedOutputFacts,
+    GeneratedOutputReceipt, GeneratedOutputRequest, GeneratedOutputTransition, PendingMessage,
+    PrefixCommitmentVersion, StoredAdmission, StoredCommand, TranscriptEntry, TranscriptEntryKind,
+    WriterClaim, admit as admit_transition, advance_entry_prefix_digest, advance_prefix_digest,
     apply_checkpoint as apply_checkpoint_transition, claim_writer as claim_writer_transition,
-    complete_writer as complete_writer_transition, validate_target as validate_reference_target,
+    complete_writer as complete_writer_transition, generated_output_content_digest,
+    record_generated_output as record_generated_output_transition,
+    validate_target as validate_reference_target,
 };
 use transitions::{
     admit as transition_admit, apply_checkpoint as transition_checkpoint, checkpoint_from_prefix,
     claim_writer as transition_claim_writer, complete_writer as transition_complete_writer,
+    record_generated_output as transition_record_generated_output,
 };
 
 /// Storage failures preserve the distinction between a confirmed rollback and
@@ -91,16 +95,21 @@ pub struct WriterRecoveryObservation {
     pub current_executor_generation: u64,
 }
 
-/// Core-owned persistence port. Implementations must commit an admission's
-/// message, head revision, Task link, pending-schedule marker and
-/// command/message receipt atomically. Dispatch is allowed only after this
-/// method returns a durable receipt. `admit` represents inbound work scheduled
-/// for a Run; generated assistant/Tool output uses a distinct future path.
+/// Core-owned persistence port. Implementations commit inbound admission and
+/// generated output through separate atomic transitions. Only inbound
+/// admission adds a pending-schedule marker or inbound command receipt.
 pub trait ConversationStorePort: Send + Sync {
     fn admit<'a>(
         &'a self,
         request: MessageAdmissionRequest,
     ) -> BoxFuture<'a, Result<AdmissionResult, ConversationStoreFailure>>;
+
+    /// Record generated output from one exact active writer. This never queues
+    /// another Run and exact receipt readback does not grant dispatch authority.
+    fn record_generated_output<'a>(
+        &'a self,
+        request: GeneratedOutputRequest,
+    ) -> BoxFuture<'a, Result<GeneratedOutputReceipt, ConversationStoreFailure>>;
 
     /// Read a stable sequence page under independent item and serialized-byte
     /// budgets. The requested page is never materialized as a full history.
@@ -160,6 +169,7 @@ pub struct ConversationCore {
     pending: VecDeque<TranscriptReference>,
     messages: HashMap<MessageId, StoredAdmission>,
     commands: HashMap<CommandId, StoredCommand>,
+    outputs: HashMap<(RunId, MessageId), GeneratedOutputReceipt>,
     active_writer: Option<WriterClaim>,
     used_runs: HashSet<RunId>,
     completed_runs: Vec<RunTaskLink>,
@@ -194,6 +204,7 @@ impl ConversationCore {
             pending: VecDeque::new(),
             messages: HashMap::new(),
             commands: HashMap::new(),
+            outputs: HashMap::new(),
             active_writer: None,
             used_runs: HashSet::new(),
             completed_runs: Vec::new(),
@@ -204,6 +215,7 @@ impl ConversationCore {
                 head: None,
                 active_writer: None,
                 message: None,
+                message_id_in_transcript: false,
                 command: None,
                 previous_prefix_digest: EMPTY_PREFIX_DIGEST,
             },
@@ -275,6 +287,7 @@ impl ConversationCore {
                 head: self.head(),
                 active_writer: self.active_writer.clone(),
                 executor_generation,
+                earliest_pending_sequence: self.pending.front().map(|reference| reference.sequence),
             },
         )?;
         self.active_writer = None;
@@ -282,6 +295,42 @@ impl ConversationCore {
         self.completed_runs.push(link);
         self.state_revision = head.state_revision;
         Ok(link)
+    }
+
+    /// Append generated assistant/Tool/host output to the same monotonically
+    /// ordered transcript without creating inbound command or pending rows.
+    pub fn record_generated_output(
+        &mut self,
+        request: GeneratedOutputRequest,
+    ) -> Result<GeneratedOutputReceipt, ConversationFailure> {
+        let key = (request.claim.link.run_id, request.message.message_id);
+        let transition = transition_record_generated_output(
+            request.clone(),
+            GeneratedOutputFacts {
+                head: Some(self.head()),
+                active_writer: self.active_writer.clone(),
+                executor_generation: request.claim.executor_generation,
+                stored_receipt: self.outputs.get(&key).cloned(),
+                message_id_in_transcript: self
+                    .transcript
+                    .iter()
+                    .any(|entry| entry.reference.message_id == request.message.message_id),
+                previous_prefix_digest: self
+                    .transcript
+                    .last()
+                    .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest),
+            },
+        )?;
+        if let Some(entry) = transition.appended {
+            self.transcript.push(entry);
+            self.outputs.insert(key, transition.receipt.clone());
+        }
+        if let Some(head) = transition.next_head {
+            self.head_revision = head.head_revision;
+            self.state_revision = head.state_revision;
+            self.completed_prefix = head.completed_prefix;
+        }
+        Ok(transition.receipt)
     }
 
     /// Apply a checkpoint only when it names this conversation's exact prefix.
@@ -360,6 +409,10 @@ impl ConversationCore {
             .map(|entry| (&entry.reference, &entry.message))
     }
 
+    pub fn transcript_entries(&self) -> impl Iterator<Item = &TranscriptEntry> {
+        self.transcript.iter()
+    }
+
     pub fn checkpoint(&self) -> Option<&ConversationCheckpoint> {
         self.checkpoint.as_ref()
     }
@@ -387,6 +440,10 @@ impl ConversationCore {
             head: Some(self.head()),
             active_writer: self.active_writer.clone(),
             message: self.messages.get(&request.message.message_id).cloned(),
+            message_id_in_transcript: self
+                .transcript
+                .iter()
+                .any(|entry| entry.reference.message_id == request.message.message_id),
             command: self.commands.get(&request.message.command_id).cloned(),
             previous_prefix_digest: self
                 .transcript

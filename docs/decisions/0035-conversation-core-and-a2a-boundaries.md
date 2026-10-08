@@ -44,10 +44,12 @@ are:
   conflict. The role-neutral message stores only a content-addressed evidence
   reference; the owning host domain stores the evidence bytes. Command IDs
   remain a separate idempotency key.
-- Each admitted message receives a transcript sequence. A message admitted
-  while a writer is active joins the FIFO inbox. A conversation has at most one
-  active Run writer; only that Run can complete its claim before the next queued
-  message is claimed.
+- Each admitted inbound message receives a transcript sequence. A message
+  admitted while a writer is active joins the FIFO inbox. A conversation has
+  at most one active Run writer; only that Run can complete its claim before
+  the next queued message is claimed. Generated output also receives a
+  sequence in the same transcript but is already settled and never enters the
+  inbox.
 - A Run ID identifies one execution segment. A Task ID identifies host-owned
   Task lifecycle and may link more than one Run. These values reuse the existing
   `RunId`, `CommandId` and `TaskId` types. Existing Run journals and V1 Task
@@ -58,10 +60,31 @@ are:
   later input is appended; applied checkpoints cannot regress. It is not an
   authorization proof or a portable source of context.
 
-Core admission APIs schedule inbound work into the Run inbox. They do not
-record generated assistant or Tool output; a separate output-recording port is
-future work. A caller must not infer that every transcript append should start
-a Run.
+Core admission APIs schedule inbound work into the Run inbox. The separate
+generated-output API appends assistant, Tool or host output only under the
+exact active WriterClaim, with the producer Run stored separately from message
+origin. Its idempotent receipt binds the producer identity, transcript scope,
+message ID and canonical content/evidence digest. Exact stored-receipt lookup
+comes before mutable writer and generation checks to recover a lost ACK; it
+does not authorize dispatch. Output writes create neither an inbound message
+receipt nor a Person-global CommandId binding. A caller must not infer that
+every transcript append should start a Run.
+
+The checkpoint boundary is the contiguous settled transcript prefix. An active
+input and queued inputs are unfinished, even when later generated output is
+already settled. Completion advances only to the earliest unfinished sequence
+minus one, or the transcript head if nothing remains unfinished.
+
+The encrypted Vault implements this generic Core port with normalized bounded
+rows and Core-owned transitions inside immediate transactions. The existing
+revision-2 Core family is preserved; a separately marked output extension
+stores explicit entry metadata and output receipts. Pre-extension entries
+remain implicit inbound/v1 and are verified against their original prefix
+commitments. New entries use a domain-separated v2 prefix commitment that
+binds entry kind and producer Run. The extension is created atomically with
+the first Core transaction using it; partial or malformed extension state is
+rejected. Layout-3 Vaults without Core remain openable. This storage work does
+not migrate or rewrite legacy Session, Run journal or Task receipt rows.
 
 `MessageOrigin` records provenance supplied by a host-verified boundary. A model
 role, role name, prompt or generated output does not authenticate an origin or
@@ -105,9 +128,10 @@ separate concerns.
 
 ## Consequences and status
 
-The R1 contracts and deterministic transition fixtures do not change the
-production Manager Session path, connect Expert conversation resume, implement
-durable storage, migrate stored sessions, or change Task receipts. Those caller,
-storage and resume slices remain future work and are tracked in the single
-active architecture-refactor plan. Passing contract fixtures is not production
-integration or persistence evidence.
+The R1 contract slice established pure transitions. The R2 custody slice adds
+generic encrypted persistence and generated-output recording, but it does not
+change the production Manager Session path, connect Expert conversation
+resume, migrate stored Sessions, or change Task receipts. Those caller and
+legacy Session migration slices remain future work and are tracked in the
+single active architecture-refactor plan. Core/Vault tests are persistence
+evidence for the generic store, not evidence of production caller integration.

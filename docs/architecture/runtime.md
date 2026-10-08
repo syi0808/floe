@@ -65,29 +65,48 @@ external write or crash recovery behavior.
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.
 
-### R1 admission contracts (not connected to production)
+### Conversation Core custody (not connected to production callers)
 
 `floe-conversation-contract` defines role-neutral Person/agent-assignment,
 Conversation/branch, Message, transcript, Run/Task-link and checkpoint values.
 `floe-conversation-core` supplies deterministic New/Continue, replay/conflict,
-FIFO inbox, single-writer and completed-prefix checkpoint transitions behind a
-Core-owned store port. Replay identity includes a content-addressed host
+FIFO inbox, single-writer, generated-output and checkpoint transitions behind
+a Core-owned store port. Replay identity includes a content-addressed host
 evidence reference, so changed attachments conflict with a reused Message ID.
-Checkpoints cannot cover active or pending input; they may cover a completed
-prefix while later input remains queued, and they cannot regress. Its fixtures
-exercise Manager and Expert identities through the same transitions while
-keeping provenance and conversation IDs isolated. A changed pinned agent
-definition selects a new Conversation.
+Inbound work receives FIFO scheduling; generated assistant, Tool or host output
+is attached to the exact active `WriterClaim`, gets a stable ID and its own
+receipt, and never creates another inbox item or Person-global CommandId
+binding. Inputs and outputs share one monotonic transcript sequence. Exact
+output receipt readback precedes mutable writer checks after a lost ACK, but a
+new output requires the matching active Run and executor fence.
 
-Core admission is specifically inbound work admission: it places accepted
-messages into the Run inbox. Generated assistant and Tool output must not use
-this API; a separate output-recording path remains future work.
+Checkpoint eligibility is the contiguous settled prefix, not the number of
+settled input messages. The active input and every queued input remain
+unfinished; generated output is already settled. A checkpoint cannot cross an
+active or queued input, though it may cover settled output before the next
+queued input, and it cannot regress. Fixtures exercise Manager and Expert
+identities through the same transitions while keeping provenance and
+conversation IDs isolated. A changed pinned agent definition selects a new
+Conversation.
 
-This is contract-only: the current Conversation/Expert execution path, Run
-journal, V1 Task receipts and stored sessions are unchanged. No production
-caller, durable store, migration or Expert resume behavior is connected by this
-slice. `MessageOrigin` is supplied only by a host-verified boundary; a model
-role or an agent identity is not authentication or an authority grant.
+The encrypted Vault port stores bounded normalized rows and applies the same
+Core transitions transactionally. Its output metadata/receipt extension is
+versioned separately from the existing revision-2 Core family. Legacy rows
+without extension metadata remain inbound/v1 and their original prefix hashes
+are verified without rewriting; new entries bind kind and producer Run into a
+v2 commitment. Both the extension and its marker are created in the immediate
+write transaction, so rollback leaves the old family intact. Encrypted layout
+3 Vaults without Core remain openable and initialize Core only when its port is
+used. Transcript pages have stable sequence cursors and independent entry and
+UTF-8 byte budgets; an oversized next entry is reported without advancing the
+cursor.
+
+This slice implements generic Core custody only. The current
+Conversation/Manager and Expert execution paths, Run journal, V1 Task receipts,
+and stored Session records are unchanged; their production callers and legacy
+Session migration remain separate work. `MessageOrigin` is supplied only by a
+host-verified boundary; a model role or an agent identity is not authentication
+or an authority grant.
 
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping

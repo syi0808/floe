@@ -61,6 +61,7 @@ pub(crate) enum Family {
     Context,
     Conversation,
     ConversationCore,
+    ConversationCoreOutputs,
     Interactions,
     Tasks,
     Cleanup,
@@ -81,6 +82,7 @@ impl Family {
             Self::Context => encrypted::CONTEXT,
             Self::Conversation => encrypted::CONVERSATION,
             Self::ConversationCore => encrypted::CONVERSATION_CORE,
+            Self::ConversationCoreOutputs => encrypted::CONVERSATION_CORE_OUTPUTS,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::Cleanup => encrypted::CLEANUP,
@@ -216,6 +218,7 @@ fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
     }
     if matches!(layout, Layout::Encrypted) {
         validate_family_declarations(Family::ConversationCore, &mut names)?;
+        validate_family_declarations(Family::ConversationCoreOutputs, &mut names)?;
     }
     Ok(())
 }
@@ -257,6 +260,7 @@ pub(crate) async fn create(connection: &Connection, layout: Layout) -> Result<()
         // layouts remain openable; the family is initialized on first explicit
         // use of the Conversation Core storage port.
         create_family(connection, Family::ConversationCore).await?;
+        create_family(connection, Family::ConversationCoreOutputs).await?;
     }
     Ok(())
 }
@@ -300,7 +304,22 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ConversationCoreOutputs
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::ConversationCore)?;
+        validate_optional_family_presence(&stored, Family::ConversationCoreOutputs)?;
+        if family_present(&stored, Family::ConversationCoreOutputs)
+            && !family_present(&stored, Family::ConversationCore)
+        {
+            return Err(unsupported(
+                "agent_conversation_core_outputs_schema",
+                "extension_without_core",
+            ));
+        }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
         return Err(unsupported("catalog", "unexpected_object"));
@@ -310,6 +329,9 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
     }
     if matches!(layout, Layout::Encrypted) && family_present(&stored, Family::ConversationCore) {
         inspect_declared(connection, Family::ConversationCore, &stored).await?;
+        if family_present(&stored, Family::ConversationCoreOutputs) {
+            inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await?;
+        }
     }
     Ok(())
 }
@@ -331,10 +353,7 @@ fn validate_optional_family_presence(
         .filter(|object| stored.contains_key(object.name))
         .count();
     if present != 0 && present != family.objects().len() {
-        return Err(unsupported(
-            "agent_conversation_core_schema",
-            "partial_family",
-        ));
+        return Err(unsupported(family.objects()[0].name, "partial_family"));
     }
     Ok(())
 }
@@ -347,8 +366,20 @@ pub(crate) async fn conversation_core_family_present(
 ) -> Result<bool, SchemaFailure> {
     let stored = inventory(connection).await?;
     validate_optional_family_presence(&stored, Family::ConversationCore)?;
+    validate_optional_family_presence(&stored, Family::ConversationCoreOutputs)?;
+    if family_present(&stored, Family::ConversationCoreOutputs)
+        && !family_present(&stored, Family::ConversationCore)
+    {
+        return Err(unsupported(
+            "agent_conversation_core_outputs_schema",
+            "extension_without_core",
+        ));
+    }
     if family_present(&stored, Family::ConversationCore) {
         inspect_declared(connection, Family::ConversationCore, &stored).await?;
+        if family_present(&stored, Family::ConversationCoreOutputs) {
+            inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await?;
+        }
         Ok(true)
     } else {
         Ok(false)
@@ -361,11 +392,24 @@ pub(crate) async fn ensure_conversation_core_family(
     connection: &Connection,
 ) -> Result<(), SchemaFailure> {
     if conversation_core_family_present(connection).await? {
-        return Ok(());
+        if !family_present(
+            &inventory(connection).await?,
+            Family::ConversationCoreOutputs,
+        ) {
+            // Revision-2 Core rows and prefix commitments are left untouched.
+            // The marker and normalized output tables are created in this same
+            // immediate transaction before the store uses them.
+            create_family(connection, Family::ConversationCoreOutputs).await?;
+        }
+        let stored = inventory(connection).await?;
+        inspect_declared(connection, Family::ConversationCore, &stored).await?;
+        return inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await;
     }
     create_family(connection, Family::ConversationCore).await?;
+    create_family(connection, Family::ConversationCoreOutputs).await?;
     let stored = inventory(connection).await?;
-    inspect_declared(connection, Family::ConversationCore, &stored).await
+    inspect_declared(connection, Family::ConversationCore, &stored).await?;
+    inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await
 }
 pub(crate) async fn inspect_family(
     connection: &Connection,
@@ -387,6 +431,12 @@ pub(crate) async fn inspect_family(
     if matches!(layout, Layout::Encrypted) {
         expected.extend(
             Family::ConversationCore
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
+        expected.extend(
+            Family::ConversationCoreOutputs
                 .objects()
                 .iter()
                 .map(|object| object.name),
