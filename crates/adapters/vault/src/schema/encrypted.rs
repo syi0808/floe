@@ -258,73 +258,70 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
 ];
 
-/// Role-neutral Conversation Core custody is versioned independently from the
-/// existing Session/Run journal family. The rows are append-oriented and never
-/// encode a whole conversation as one growing payload.
-pub(super) const CONVERSATION_CORE: &[SchemaObject] = &[
+/// Root-owned recorder custody family, versioned independently from the
+/// Session/Run journal family. It reuses the stable Core marker table name and
+/// bumps its stored value so older binaries fail before reading normalized rows.
+pub(super) const CONVERSATION_CORE_V3: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_core_schema",
-        2,
-        "CREATE TABLE agent_conversation_core_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
+        3,
+        "CREATE TABLE agent_conversation_core_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_heads",
-        "CREATE TABLE agent_conversation_core_heads (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, identity_json TEXT NOT NULL CHECK (length(CAST(identity_json AS BLOB)) BETWEEN 1 AND 1024), head_revision INTEGER NOT NULL CHECK (head_revision > 0), state_revision INTEGER NOT NULL CHECK (state_revision > 0), completed_prefix INTEGER NOT NULL CHECK (completed_prefix >= 0 AND completed_prefix <= head_revision), PRIMARY KEY (person_id, conversation_id, branch_id))",
+        "agent_conversation_core_v3_heads",
+        "CREATE TABLE agent_conversation_core_v3_heads (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, identity_json TEXT NOT NULL CHECK (length(CAST(identity_json AS BLOB)) BETWEEN 1 AND 1024), head_revision INTEGER NOT NULL CHECK (head_revision >= 0), state_revision INTEGER NOT NULL CHECK (state_revision >= 0), settled_prefix INTEGER NOT NULL CHECK (settled_prefix >= 0 AND settled_prefix <= head_revision), recorder_epoch INTEGER NOT NULL CHECK (recorder_epoch >= 0), PRIMARY KEY (person_id, conversation_id, branch_id))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_entries",
-        "CREATE TABLE agent_conversation_core_entries (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, message_json TEXT NOT NULL CHECK (length(CAST(message_json AS BLOB)) BETWEEN 1 AND 132096), message_bytes INTEGER NOT NULL CHECK (message_bytes = length(CAST(message_json AS BLOB))), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id) REFERENCES agent_conversation_core_heads(person_id, conversation_id, branch_id))",
+        "agent_conversation_core_v3_entries",
+        "CREATE TABLE agent_conversation_core_v3_entries (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, message_json TEXT NOT NULL CHECK (length(CAST(message_json AS BLOB)) BETWEEN 1 AND 132096), message_bytes INTEGER NOT NULL CHECK (message_bytes = length(CAST(message_json AS BLOB))), entry_kind TEXT NOT NULL CHECK (entry_kind IN ('inbound', 'generated_output')), producer_run_id TEXT, contribution_id TEXT, producing_task_json TEXT CHECK (producing_task_json IS NULL OR length(CAST(producing_task_json AS BLOB)) BETWEEN 1 AND 4096), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id) REFERENCES agent_conversation_core_v3_heads(person_id, conversation_id, branch_id), CHECK ((entry_kind = 'inbound' AND producer_run_id IS NULL AND contribution_id IS NULL AND producing_task_json IS NULL) OR (entry_kind = 'generated_output' AND producer_run_id IS NOT NULL AND contribution_id IS NOT NULL)))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_message_receipts",
-        "CREATE TABLE agent_conversation_core_message_receipts (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 1024), PRIMARY KEY (person_id, conversation_id, branch_id, message_id), UNIQUE (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+        "agent_conversation_core_v3_input_receipts",
+        "CREATE TABLE agent_conversation_core_v3_input_receipts (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, message_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 2048), PRIMARY KEY (person_id, conversation_id, branch_id, message_id), UNIQUE (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_command_receipts",
-        "CREATE TABLE agent_conversation_core_command_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, message_id TEXT NOT NULL, PRIMARY KEY (person_id, command_id), FOREIGN KEY (person_id, conversation_id, branch_id, message_id) REFERENCES agent_conversation_core_message_receipts(person_id, conversation_id, branch_id, message_id))",
+        "agent_conversation_core_v3_owner_bindings",
+        "CREATE TABLE agent_conversation_core_v3_owner_bindings (person_id TEXT NOT NULL, run_id TEXT NOT NULL, session_id TEXT NOT NULL, owner_user_message_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, input_sequence INTEGER NOT NULL CHECK (input_sequence > 0), input_message_id TEXT NOT NULL, binding_json TEXT NOT NULL CHECK (length(CAST(binding_json AS BLOB)) BETWEEN 1 AND 4096), PRIMARY KEY (person_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, input_sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence))",
     ),
     SchemaObject::index(
-        "agent_conversation_core_command_scope",
-        "CREATE INDEX agent_conversation_core_command_scope ON agent_conversation_core_command_receipts (person_id, conversation_id, branch_id, command_id, message_id)",
+        "agent_conversation_core_v3_owner_bindings_input",
+        "CREATE INDEX agent_conversation_core_v3_owner_bindings_input ON agent_conversation_core_v3_owner_bindings(person_id, session_id, owner_user_message_id, run_id)",
     ),
     SchemaObject::table(
-        "agent_conversation_core_pending_inputs",
-        "CREATE TABLE agent_conversation_core_pending_inputs (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, PRIMARY KEY (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+        "agent_conversation_core_v3_open_receipts",
+        "CREATE TABLE agent_conversation_core_v3_open_receipts (person_id TEXT NOT NULL, run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 4096), PRIMARY KEY (person_id, run_id))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_active_writers",
-        "CREATE TABLE agent_conversation_core_active_writers (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT, message_sequence INTEGER NOT NULL CHECK (message_sequence > 0), writer_epoch INTEGER NOT NULL CHECK (writer_epoch > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), PRIMARY KEY (person_id, conversation_id, branch_id), UNIQUE (person_id, conversation_id, branch_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, message_sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+        "agent_conversation_core_v3_active_recorders",
+        "CREATE TABLE agent_conversation_core_v3_active_recorders (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, fence_json TEXT NOT NULL CHECK (length(CAST(fence_json AS BLOB)) BETWEEN 1 AND 4096), PRIMARY KEY (person_id, conversation_id, branch_id), UNIQUE (person_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id) REFERENCES agent_conversation_core_v3_heads(person_id, conversation_id, branch_id))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_writer_receipts",
-        "CREATE TABLE agent_conversation_core_writer_receipts (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, task_id TEXT, message_sequence INTEGER NOT NULL CHECK (message_sequence > 0), writer_epoch INTEGER NOT NULL CHECK (writer_epoch > 0), executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), state TEXT NOT NULL CHECK (state IN ('active', 'completed')), PRIMARY KEY (person_id, conversation_id, branch_id, run_id), UNIQUE (person_id, conversation_id, branch_id, message_sequence), FOREIGN KEY (person_id, conversation_id, branch_id, message_sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+        "agent_conversation_core_v3_recording_receipts",
+        "CREATE TABLE agent_conversation_core_v3_recording_receipts (person_id TEXT NOT NULL, contribution_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, contribution_id), UNIQUE (person_id, conversation_id, branch_id, sequence), UNIQUE (person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_checkpoints",
-        "CREATE TABLE agent_conversation_core_checkpoints (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 65536), PRIMARY KEY (person_id, conversation_id, branch_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
+        "agent_conversation_core_v3_close_receipts",
+        "CREATE TABLE agent_conversation_core_v3_close_receipts (person_id TEXT NOT NULL, run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, run_id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_v3_retirement_receipts",
+        "CREATE TABLE agent_conversation_core_v3_retirement_receipts (person_id TEXT NOT NULL, run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, run_id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_core_v3_checkpoints",
+        "CREATE TABLE agent_conversation_core_v3_checkpoints (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 65536), PRIMARY KEY (person_id, conversation_id, branch_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence))",
     ),
 ];
 
-/// Additive generated-output storage extension. The original Core family
-/// remains revision 2; this separately versioned marker lets older encrypted
-/// Vaults retain that schema until a Core transaction upgrades it atomically.
-pub(super) const CONVERSATION_CORE_OUTPUTS: &[SchemaObject] = &[
+pub(super) const CONVERSATION_CORE_OUTPUTS_V2: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_core_outputs_schema",
-        1,
-        "CREATE TABLE agent_conversation_core_outputs_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+        2,
+        "CREATE TABLE agent_conversation_core_outputs_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
     ),
     SchemaObject::table(
-        "agent_conversation_core_entry_metadata",
-        "CREATE TABLE agent_conversation_core_entry_metadata (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), entry_kind TEXT NOT NULL CHECK (entry_kind IN ('inbound', 'generated_output')), producer_run_id TEXT, commitment_version INTEGER NOT NULL CHECK (commitment_version IN (1, 2)), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence), CHECK ((entry_kind = 'inbound' AND producer_run_id IS NULL) OR (entry_kind = 'generated_output' AND producer_run_id IS NOT NULL AND commitment_version = 2)))",
-    ),
-    SchemaObject::table(
-        "agent_conversation_core_output_receipts",
-        "CREATE TABLE agent_conversation_core_output_receipts (person_id TEXT NOT NULL, agent_instance_id TEXT NOT NULL, message_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, producer_run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), PRIMARY KEY (person_id, agent_instance_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, producer_run_id) REFERENCES agent_conversation_core_writer_receipts(person_id, conversation_id, branch_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_entries(person_id, conversation_id, branch_id, sequence))",
-    ),
-    SchemaObject::index(
-        "agent_conversation_core_output_sequence",
-        "CREATE INDEX agent_conversation_core_output_sequence ON agent_conversation_core_output_receipts (person_id, conversation_id, branch_id, sequence)",
+        "agent_conversation_core_output_receipts_v2",
+        "CREATE TABLE agent_conversation_core_output_receipts_v2 (person_id TEXT NOT NULL, agent_instance_id TEXT NOT NULL, message_id TEXT NOT NULL, contribution_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, producer_run_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), content_digest TEXT NOT NULL CHECK (length(content_digest) = 64), producing_task_json TEXT CHECK (producing_task_json IS NULL OR length(CAST(producing_task_json AS BLOB)) BETWEEN 1 AND 4096), receipt_json TEXT NOT NULL CHECK (length(CAST(receipt_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, contribution_id), UNIQUE (person_id, agent_instance_id, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence))",
     ),
 ];
 

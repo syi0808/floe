@@ -1,40 +1,36 @@
-//! Pure role-neutral conversation state transitions.
+//! Neutral transcript integrity and owner-driven recorder custody.
 //!
-//! This crate owns no persistence, product policy, Agent Directory, Task
-//! lifecycle, A2A binding, or learning hooks. It separates inbound work
-//! admission from generated assistant/Tool output recording. A production
-//! store applies both transitions atomically through the Core-owned port.
+//! Core never schedules work or owns command occupancy. Host owners admit and
+//! schedule Runs, then compose these pure transitions with their durable owner
+//! writes inside one Vault transaction.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 use floe_conversation_contract::{
-    AdmissionResult, AdmissionTarget, ConversationCheckpoint, ConversationFailure, ConversationId,
-    ConversationMessage, ConversationReference, MessageAdmissionRequest, MessageId, RunTaskLink,
-    TranscriptReference,
+    AdmissionResult, ConversationBranchId, ConversationCheckpoint, ConversationFailure,
+    ConversationId, ConversationReference, LogicalContributionId, MessageAdmissionRequest,
+    MessageId, TaskEvidenceReference, TranscriptReference,
 };
-use floe_execution::BoxFuture;
-use floe_kernel::{CommandId, RunId};
+use floe_kernel::RunId;
 
 mod transitions;
 pub use transitions::{
-    AdmissionFacts, AdmissionTransition, CheckpointFacts, ClaimFacts, ClaimTransition,
-    CompletionFacts, ConversationHead, EMPTY_PREFIX_DIGEST, GeneratedOutputFacts,
-    GeneratedOutputReceipt, GeneratedOutputRequest, GeneratedOutputTransition, PendingMessage,
-    PrefixCommitmentVersion, StoredAdmission, StoredCommand, TranscriptEntry, TranscriptEntryKind,
-    WriterClaim, admit as admit_transition, advance_entry_prefix_digest, advance_prefix_digest,
-    apply_checkpoint as apply_checkpoint_transition, claim_writer as claim_writer_transition,
-    complete_writer as complete_writer_transition, generated_output_content_digest,
-    record_generated_output as record_generated_output_transition,
+    AppendFacts, AppendTransition, CheckpointFacts, ConversationHead, EMPTY_PREFIX_DIGEST,
+    ExecutorDomain, OwnerGenerationFence, OwnerRunEvidence, OwnerRunState, OwnerSettlementEvidence,
+    RecorderCloseFacts, RecorderCloseReceipt, RecorderCloseTransition, RecorderFence,
+    RecorderOpenFacts, RecorderOpenReceipt, RecorderOpenTransition, RecorderRetirementFacts,
+    RecorderRetirementReceipt, RecorderRetirementTransition, RecorderStartRequest, RecordingFacts,
+    RecordingReceipt, RecordingRequest, RecordingTransition, TranscriptEntry, TranscriptEntryKind,
+    advance_core_prefix_digest, advance_prefix_digest, append_input as append_input_transition,
+    apply_checkpoint as apply_checkpoint_transition, close_recording as close_recording_transition,
+    open_recording as open_recording_transition, record_entry as record_entry_transition,
+    recording_content_digest, replay_close_recording, replay_open_recording,
+    replay_recording_entry, replay_retirement,
+    retire_stale_recording as retire_stale_recording_transition,
     validate_target as validate_reference_target,
 };
-use transitions::{
-    admit as transition_admit, apply_checkpoint as transition_checkpoint, checkpoint_from_prefix,
-    claim_writer as transition_claim_writer, complete_writer as transition_complete_writer,
-    record_generated_output as transition_record_generated_output,
-};
 
-/// Storage failures preserve the distinction between a confirmed rollback and
-/// a commit whose acknowledgement or settlement is unknown.
+/// Storage failures preserve confirmed rollback versus unknown commit outcomes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConversationStoreFailure {
     Transition(ConversationFailure),
@@ -43,6 +39,9 @@ pub enum ConversationStoreFailure {
     NotCommitted,
     OutcomeUnknown,
     PageItemExceedsBudget,
+    UnsupportedOwnerDomain,
+    UnsupportedOwnerIntent,
+    UnsupportedStoredMeaning,
 }
 
 impl From<ConversationFailure> for ConversationStoreFailure {
@@ -56,284 +55,247 @@ pub const MAX_TRANSCRIPT_PAGE_ENTRIES: usize = 128;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TranscriptPageBudget {
     pub max_entries: usize,
-    /// Sum of serialized UTF-8 `ConversationMessage` payload bytes.
+    /// Sum of serialized UTF-8 ConversationMessage payload bytes.
     pub max_bytes: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranscriptPage {
     pub entries: Vec<TranscriptEntry>,
-    /// Cursor for the last returned entry. Reuse it as `after` on the next page.
     pub next_cursor: Option<TranscriptReference>,
     pub has_more: bool,
     pub encoded_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WriterRecoveryState {
-    /// No exact Run receipt exists in the requested conversation branch.
+pub enum RecorderRecoveryState {
     Absent,
-    /// The exact claim is still active and fenced by the current owner
-    /// executor generation. This observation does not authorize dispatch.
     ActiveCurrentGeneration,
-    /// The exact claim remains stored as active, but its executor generation
-    /// is stale. It must not be released or re-executed by this API.
     Interrupted,
-    /// The exact writer receipt is durably completed.
-    Completed,
+    Closed,
+    Retired,
 }
 
-/// Bounded readback for one exact Run receipt. `active_writer` describes the
-/// conversation head now; `writer` describes the requested Run receipt. A
-/// missing observation is a successful read only when state is `Absent`.
+/// A bounded read-only observation. It never closes or retires a recorder.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WriterRecoveryObservation {
-    pub state: WriterRecoveryState,
+pub struct RecorderRecoveryObservation {
+    pub state: RecorderRecoveryState,
     pub head: ConversationHead,
-    pub writer: Option<WriterClaim>,
-    pub active_writer: Option<WriterClaim>,
-    pub current_executor_generation: u64,
+    pub recorder: Option<RecorderFence>,
+    pub active_recorder: Option<RecorderFence>,
+    pub current_generation: u64,
 }
 
-/// Core-owned persistence port. Implementations commit inbound admission and
-/// generated output through separate atomic transitions. Only inbound
-/// admission adds a pending-schedule marker or inbound command receipt.
-pub trait ConversationStorePort: Send + Sync {
-    fn admit<'a>(
-        &'a self,
-        request: MessageAdmissionRequest,
-    ) -> BoxFuture<'a, Result<AdmissionResult, ConversationStoreFailure>>;
-
-    /// Record generated output from one exact active writer. This never queues
-    /// another Run and exact receipt readback does not grant dispatch authority.
-    fn record_generated_output<'a>(
-        &'a self,
-        request: GeneratedOutputRequest,
-    ) -> BoxFuture<'a, Result<GeneratedOutputReceipt, ConversationStoreFailure>>;
-
-    /// Read a stable sequence page under independent item and serialized-byte
-    /// budgets. The requested page is never materialized as a full history.
-    fn read_transcript_page<'a>(
-        &'a self,
-        target: ConversationReference,
-        after: Option<TranscriptReference>,
-        budget: TranscriptPageBudget,
-    ) -> BoxFuture<'a, Result<TranscriptPage, ConversationStoreFailure>>;
-
-    /// Atomically claim the next queued message for one Run writer. A second
-    /// writer must fail while the current claim remains active.
-    fn claim_writer<'a>(
-        &'a self,
-        target: ConversationReference,
-        link: RunTaskLink,
-        executor_generation: u64,
-    ) -> BoxFuture<'a, Result<WriterClaim, ConversationStoreFailure>>;
-
-    /// Release only the matching active Run/Task/transcript/writer/executor
-    /// fence after its owner has settled.
-    fn complete_writer<'a>(
-        &'a self,
-        claim: WriterClaim,
-    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>>;
-
-    /// Read the exact stored receipt for one Run together with the current
-    /// head and active claim. This is observability only: it does not grant
-    /// dispatch authority, release an interrupted claim, or resume its Run.
-    fn observe_writer<'a>(
-        &'a self,
-        target: ConversationReference,
-        run_id: RunId,
-    ) -> BoxFuture<'a, Result<WriterRecoveryObservation, ConversationStoreFailure>>;
-
-    /// Apply a checkpoint only to an exact completed prefix. Active and queued
-    /// input stays protected; later appended messages may remain outside the
-    /// prefix. Implementations reject stale scope or checkpoint regression.
-    fn apply_checkpoint<'a>(
-        &'a self,
-        target: ConversationReference,
-        checkpoint: ConversationCheckpoint,
-    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>>;
-}
-
-/// One in-memory transition model, suitable for deterministic contract tests.
-/// It is not a Vault row or a replacement for the existing Session aggregate.
+/// Deterministic pure-state harness that delegates every mutation to the same
+/// transition functions used by Vault. It is not a second persistence API.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConversationCore {
-    identity: floe_conversation_contract::AgentIdentity,
-    conversation_id: ConversationId,
-    branch_id: floe_conversation_contract::ConversationBranchId,
-    head_revision: u64,
-    completed_prefix: u64,
-    state_revision: u64,
+    head: ConversationHead,
     transcript: Vec<TranscriptEntry>,
-    pending: VecDeque<TranscriptReference>,
-    messages: HashMap<MessageId, StoredAdmission>,
-    commands: HashMap<CommandId, StoredCommand>,
-    outputs: HashMap<(RunId, MessageId), GeneratedOutputReceipt>,
-    active_writer: Option<WriterClaim>,
-    used_runs: HashSet<RunId>,
-    completed_runs: Vec<RunTaskLink>,
+    append_receipts: HashMap<MessageId, floe_conversation_contract::AdmissionReceipt>,
+    open_receipts: HashMap<RunId, RecorderOpenReceipt>,
+    active_recorder: Option<RecorderFence>,
+    recordings: HashMap<LogicalContributionId, RecordingReceipt>,
+    close_receipts: HashMap<RunId, RecorderCloseReceipt>,
+    retirement_receipts: HashMap<RunId, RecorderRetirementReceipt>,
     checkpoint: Option<ConversationCheckpoint>,
 }
 
 impl ConversationCore {
-    /// Admit inbound work to a new isolated conversation and queue it for a
-    /// Run. Generated assistant/Tool output needs a separate recording path.
-    pub fn open(
-        request: MessageAdmissionRequest,
-    ) -> Result<(Self, AdmissionResult), ConversationFailure> {
-        request.validate()?;
-        let (identity, conversation_id, branch_id) = match &request.target {
-            AdmissionTarget::New {
+    pub fn new(
+        identity: floe_conversation_contract::AgentIdentity,
+        conversation_id: ConversationId,
+        branch_id: ConversationBranchId,
+    ) -> Result<Self, ConversationFailure> {
+        identity.validate()?;
+        if !conversation_id.is_valid() || !branch_id.is_valid() {
+            return Err(ConversationFailure::InvalidInput);
+        }
+        Ok(Self {
+            head: ConversationHead {
                 identity,
                 conversation_id,
                 branch_id,
-            } => (identity.clone(), *conversation_id, *branch_id),
-            AdmissionTarget::Continue { .. } => {
-                return Err(ConversationFailure::ConversationMismatch);
-            }
-        };
-        let mut conversation = Self {
-            identity,
-            conversation_id,
-            branch_id,
-            head_revision: 0,
-            completed_prefix: 0,
-            state_revision: 0,
-            transcript: Vec::new(),
-            pending: VecDeque::new(),
-            messages: HashMap::new(),
-            commands: HashMap::new(),
-            outputs: HashMap::new(),
-            active_writer: None,
-            used_runs: HashSet::new(),
-            completed_runs: Vec::new(),
-            checkpoint: None,
-        };
-        let transition = transition_admit(
-            AdmissionFacts {
-                head: None,
-                active_writer: None,
-                message: None,
-                message_id_in_transcript: false,
-                command: None,
-                previous_prefix_digest: EMPTY_PREFIX_DIGEST,
+                head_revision: 0,
+                settled_prefix: 0,
+                state_revision: 0,
+                recorder_epoch: 0,
             },
-            request.clone(),
-        )?;
-        let result = transition.result.clone();
-        conversation.apply_admission_transition(transition, request.message);
-        Ok((conversation, result))
+            transcript: Vec::new(),
+            append_receipts: HashMap::new(),
+            open_receipts: HashMap::new(),
+            active_recorder: None,
+            recordings: HashMap::new(),
+            close_receipts: HashMap::new(),
+            retirement_receipts: HashMap::new(),
+            checkpoint: None,
+        })
     }
 
-    /// Admit inbound work against an explicit current head and queue it for a
-    /// Run. Exact replay is classified before the mutable revision check.
-    pub fn continue_with(
+    /// Append an inbound transcript entry. This records custody only; it never
+    /// enqueues or selects work and never claims a CommandId receipt.
+    pub fn append_input(
         &mut self,
         request: MessageAdmissionRequest,
     ) -> Result<AdmissionResult, ConversationFailure> {
-        let facts = self.admission_facts(&request);
-        let transition = transition_admit(facts, request.clone())?;
-        let result = transition.result.clone();
-        self.apply_admission_transition(transition, request.message);
-        Ok(result)
-    }
-
-    /// Reserve the next FIFO inbox message for one execution writer.
-    pub fn claim_next_writer(
-        &mut self,
-        link: RunTaskLink,
-        executor_generation: u64,
-    ) -> Result<WriterClaim, ConversationFailure> {
-        let earliest_pending = self.pending.front().and_then(|reference| {
-            usize::try_from(reference.sequence)
-                .ok()
-                .and_then(|sequence| sequence.checked_sub(1))
-                .and_then(|index| self.transcript.get(index))
-                .filter(|entry| entry.reference == *reference)
-                .cloned()
-                .map(|entry| PendingMessage { entry })
-        });
-        let transition = transition_claim_writer(
-            &self.reference(),
-            link,
-            ClaimFacts {
-                head: self.head(),
-                active_writer: self.active_writer.clone(),
-                earliest_pending,
-                run_already_used: self.used_runs.contains(&link.run_id),
-                requested_executor_generation: executor_generation,
-                executor_generation,
-            },
-        )?;
-        self.pending.pop_front();
-        self.used_runs.insert(link.run_id);
-        self.active_writer = Some(transition.claim.clone());
-        self.state_revision = transition.head.state_revision;
-        Ok(transition.claim)
-    }
-
-    /// Release exactly the matching writer. A later Run may retain the same
-    /// host Task ID without changing any Task state or legacy receipt.
-    pub fn complete_writer(
-        &mut self,
-        claim: WriterClaim,
-        executor_generation: u64,
-    ) -> Result<RunTaskLink, ConversationFailure> {
-        let link = claim.link;
-        let head = transition_complete_writer(
-            claim.clone(),
-            CompletionFacts {
-                head: self.head(),
-                active_writer: self.active_writer.clone(),
-                executor_generation,
-                earliest_pending_sequence: self.pending.front().map(|reference| reference.sequence),
-            },
-        )?;
-        self.active_writer = None;
-        self.completed_prefix = head.completed_prefix;
-        self.completed_runs.push(link);
-        self.state_revision = head.state_revision;
-        Ok(link)
-    }
-
-    /// Append generated assistant/Tool/host output to the same monotonically
-    /// ordered transcript without creating inbound command or pending rows.
-    pub fn record_generated_output(
-        &mut self,
-        request: GeneratedOutputRequest,
-    ) -> Result<GeneratedOutputReceipt, ConversationFailure> {
-        let key = (request.claim.link.run_id, request.message.message_id);
-        let transition = transition_record_generated_output(
-            request.clone(),
-            GeneratedOutputFacts {
-                head: Some(self.head()),
-                active_writer: self.active_writer.clone(),
-                executor_generation: request.claim.executor_generation,
-                stored_receipt: self.outputs.get(&key).cloned(),
-                message_id_in_transcript: self
-                    .transcript
-                    .iter()
-                    .any(|entry| entry.reference.message_id == request.message.message_id),
-                previous_prefix_digest: self
-                    .transcript
-                    .last()
-                    .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest),
+        let message_id = request.message.message_id;
+        let stored_receipt = self.append_receipts.get(&message_id).cloned();
+        let message_id_in_transcript = self
+            .transcript
+            .iter()
+            .any(|entry| entry.reference.message_id == message_id);
+        let stored_message = self
+            .transcript
+            .iter()
+            .find(|entry| entry.reference.message_id == message_id)
+            .map(|entry| entry.message.clone());
+        let previous_prefix_digest = self
+            .transcript
+            .last()
+            .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest);
+        let transition = append_input_transition(
+            request,
+            AppendFacts {
+                head: self.head.clone(),
+                stored_receipt,
+                stored_message,
+                message_id_in_transcript,
+                previous_prefix_digest,
             },
         )?;
         if let Some(entry) = transition.appended {
+            self.append_receipts.insert(
+                entry.reference.message_id,
+                transition.result.receipt.clone(),
+            );
             self.transcript.push(entry);
-            self.outputs.insert(key, transition.receipt.clone());
         }
-        if let Some(head) = transition.next_head {
-            self.head_revision = head.head_revision;
-            self.state_revision = head.state_revision;
-            self.completed_prefix = head.completed_prefix;
+        self.head = transition.head;
+        Ok(transition.result)
+    }
+
+    pub fn open_recording(
+        &mut self,
+        request: RecorderStartRequest,
+        owner: Option<OwnerRunEvidence>,
+    ) -> Result<RecorderOpenReceipt, ConversationFailure> {
+        let run_id = request.run_id;
+        let input_entry = self
+            .transcript
+            .iter()
+            .find(|entry| entry.reference == request.input)
+            .cloned();
+        let transition = open_recording_transition(
+            request,
+            RecorderOpenFacts {
+                owner,
+                head: self.head.clone(),
+                stored_receipt: self.open_receipts.get(&run_id).cloned(),
+                active_recorder: self.active_recorder.clone(),
+                input_entry,
+            },
+        )?;
+        if let Some(head) = transition.head {
+            self.head = head;
+            self.active_recorder = Some(transition.receipt.fence.clone());
+            self.open_receipts
+                .insert(transition.receipt.fence.run_id, transition.receipt.clone());
         }
         Ok(transition.receipt)
     }
 
-    /// Apply a checkpoint only when it names this conversation's exact prefix.
+    pub fn record_entry(
+        &mut self,
+        request: RecordingRequest,
+        verified_task_reference: Option<TaskEvidenceReference>,
+        owner: Option<OwnerRunEvidence>,
+    ) -> Result<RecordingReceipt, ConversationFailure> {
+        let contribution_id = request.contribution_id;
+        let message_id = request.message.message_id;
+        let stored_receipt = self.recordings.get(&contribution_id).cloned();
+        let message_id_in_transcript = self
+            .transcript
+            .iter()
+            .any(|entry| entry.reference.message_id == message_id);
+        let previous_prefix_digest = self
+            .transcript
+            .last()
+            .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest);
+        let transition = record_entry_transition(
+            request,
+            RecordingFacts {
+                head: self.head.clone(),
+                active_recorder: self.active_recorder.clone(),
+                owner,
+                verified_task_reference,
+                stored_receipt,
+                message_id_in_transcript,
+                previous_prefix_digest,
+            },
+        )?;
+        if let Some(entry) = transition.appended {
+            self.recordings
+                .insert(contribution_id, transition.receipt.clone());
+            self.transcript.push(entry);
+        }
+        if let Some(head) = transition.head {
+            self.head = head;
+        }
+        Ok(transition.receipt)
+    }
+
+    pub fn close_recording(
+        &mut self,
+        fence: RecorderFence,
+        owner: Option<OwnerSettlementEvidence>,
+        settlement_prefix_verified: bool,
+    ) -> Result<RecorderCloseReceipt, ConversationFailure> {
+        let stored_receipt = self.close_receipts.get(&fence.run_id).cloned();
+        let transition = close_recording_transition(
+            fence,
+            RecorderCloseFacts {
+                head: self.head.clone(),
+                active_recorder: self.active_recorder.clone(),
+                owner,
+                stored_receipt,
+                settlement_prefix_verified,
+            },
+        )?;
+        if let Some(head) = transition.head {
+            self.head = head;
+            self.active_recorder = None;
+            self.close_receipts
+                .insert(transition.receipt.fence.run_id, transition.receipt.clone());
+        }
+        Ok(transition.receipt)
+    }
+
+    pub fn retire_stale_recording(
+        &mut self,
+        fence: RecorderFence,
+        generation_fence: OwnerGenerationFence,
+        owner: Option<OwnerRunEvidence>,
+    ) -> Result<RecorderRetirementReceipt, ConversationFailure> {
+        let stored_receipt = self.retirement_receipts.get(&fence.run_id).cloned();
+        let transition = retire_stale_recording_transition(
+            fence,
+            generation_fence.clone(),
+            RecorderRetirementFacts {
+                head: self.head.clone(),
+                active_recorder: self.active_recorder.clone(),
+                owner,
+                stored_receipt,
+            },
+        )?;
+        if let Some(head) = transition.head {
+            self.head = head;
+            self.active_recorder = None;
+            self.retirement_receipts
+                .insert(transition.receipt.fence.run_id, transition.receipt.clone());
+        }
+        Ok(transition.receipt)
+    }
+
     pub fn apply_checkpoint(
         &mut self,
         checkpoint: ConversationCheckpoint,
@@ -341,72 +303,142 @@ impl ConversationCore {
         let stored_prefix_digest = self
             .entry(checkpoint.through)
             .map(|entry| entry.prefix_digest);
-        let head = transition_checkpoint(
-            &self.reference(),
+        self.head = apply_checkpoint_transition(
+            &self.head.reference(),
             &checkpoint,
             CheckpointFacts {
-                head: self.head(),
-                current_checkpoint_sequence: self.checkpoint.as_ref().map(|v| v.through.sequence),
+                head: self.head.clone(),
+                current_checkpoint_sequence: self
+                    .checkpoint
+                    .as_ref()
+                    .map(|value| value.through.sequence),
                 stored_prefix_digest,
             },
         )?;
-        self.state_revision = head.state_revision;
         self.checkpoint = Some(checkpoint);
         Ok(())
     }
 
-    /// Build a checkpoint request from this exact transcript prefix. This
-    /// helper does not grant permission to reuse the summary elsewhere.
     pub fn checkpoint_for(
         &self,
         through: TranscriptReference,
         summary: impl Into<String>,
     ) -> Result<ConversationCheckpoint, ConversationFailure> {
-        if through.conversation_id != self.conversation_id || through.branch_id != self.branch_id {
-            return Err(ConversationFailure::CheckpointMismatch);
-        }
-        if through.sequence > self.completed_prefix {
+        if through.conversation_id != self.head.conversation_id
+            || through.branch_id != self.head.branch_id
+            || through.sequence > self.head.settled_prefix
+        {
             return Err(ConversationFailure::CheckpointMismatch);
         }
         let entry = self
             .entry(through)
             .ok_or(ConversationFailure::CheckpointMismatch)?;
-        checkpoint_from_prefix(through, entry.prefix_digest, summary)
+        Ok(ConversationCheckpoint {
+            through,
+            prefix_digest: entry.prefix_digest,
+            summary: summary.into(),
+        })
     }
 
-    pub fn reference(&self) -> ConversationReference {
-        ConversationReference {
-            conversation_id: self.conversation_id,
-            branch_id: self.branch_id,
-            identity: self.identity.clone(),
-            head_revision: self.head_revision,
+    pub fn observe_recorder(
+        &self,
+        run_id: RunId,
+        current_generation: u64,
+    ) -> RecorderRecoveryObservation {
+        let recorder = self
+            .open_receipts
+            .get(&run_id)
+            .map(|receipt| receipt.fence.clone());
+        let state = if self.retirement_receipts.contains_key(&run_id) {
+            RecorderRecoveryState::Retired
+        } else if self.close_receipts.contains_key(&run_id) {
+            RecorderRecoveryState::Closed
+        } else if let Some(recorder) = &recorder {
+            if self.active_recorder.as_ref() != Some(recorder) {
+                RecorderRecoveryState::Interrupted
+            } else if recorder.executor_generation == current_generation {
+                RecorderRecoveryState::ActiveCurrentGeneration
+            } else {
+                RecorderRecoveryState::Interrupted
+            }
+        } else {
+            RecorderRecoveryState::Absent
+        };
+        RecorderRecoveryObservation {
+            state,
+            head: self.head.clone(),
+            recorder,
+            active_recorder: self.active_recorder.clone(),
+            current_generation,
         }
     }
 
-    pub fn head_revision(&self) -> u64 {
-        self.head_revision
-    }
-
-    pub fn state_revision(&self) -> u64 {
-        self.state_revision
-    }
-
-    pub fn active_writer(&self) -> Option<WriterClaim> {
-        self.active_writer.clone()
-    }
-
-    pub fn pending_messages(&self) -> impl Iterator<Item = TranscriptReference> + '_ {
-        self.pending.iter().copied()
-    }
-
-    pub fn completed_runs(&self) -> &[RunTaskLink] {
-        &self.completed_runs
-    }
-
-    pub fn transcript(&self) -> impl Iterator<Item = (&TranscriptReference, &ConversationMessage)> {
-        self.transcript
+    pub fn read_page(
+        &self,
+        target: &ConversationReference,
+        after: Option<TranscriptReference>,
+        budget: TranscriptPageBudget,
+    ) -> Result<TranscriptPage, ConversationFailure> {
+        validate_reference_target(&self.head, target)?;
+        if budget.max_entries == 0 || budget.max_bytes == 0 {
+            return Err(ConversationFailure::InvalidInput);
+        }
+        let max_entries = budget.max_entries.min(MAX_TRANSCRIPT_PAGE_ENTRIES);
+        let mut cursor_sequence = 0;
+        if let Some(cursor) = after {
+            cursor.validate()?;
+            if cursor.conversation_id != self.head.conversation_id
+                || cursor.branch_id != self.head.branch_id
+                || self.entry(cursor).is_none()
+            {
+                return Err(ConversationFailure::ConversationMismatch);
+            }
+            cursor_sequence = cursor.sequence;
+        }
+        let mut entries = Vec::with_capacity(max_entries.min(32));
+        let mut encoded_bytes = 0usize;
+        for entry in self
+            .transcript
             .iter()
-            .map(|entry| (&entry.reference, &entry.message))
+            .filter(|entry| entry.reference.sequence > cursor_sequence)
+        {
+            if entries.len() >= max_entries {
+                break;
+            }
+            let entry_bytes = serde_json::to_vec(&entry.message)
+                .map_err(|_| ConversationFailure::InvalidInput)?
+                .len();
+            if entry_bytes > budget.max_bytes.saturating_sub(encoded_bytes) {
+                if entries.is_empty() {
+                    return Err(ConversationFailure::StorageUnavailable);
+                }
+                break;
+            }
+            encoded_bytes = encoded_bytes
+                .checked_add(entry_bytes)
+                .ok_or(ConversationFailure::InvalidInput)?;
+            entries.push(entry.clone());
+        }
+        let next_cursor = entries.last().map(|entry| entry.reference);
+        let through = next_cursor.map_or(cursor_sequence, |cursor| cursor.sequence);
+        Ok(TranscriptPage {
+            entries,
+            next_cursor,
+            has_more: self.head.head_revision > through,
+            encoded_bytes,
+        })
+    }
+
+    pub fn reference(&self) -> ConversationReference {
+        self.head.reference()
+    }
+
+    pub fn head(&self) -> &ConversationHead {
+        &self.head
+    }
+
+    pub fn active_recorder(&self) -> Option<&RecorderFence> {
+        self.active_recorder.as_ref()
     }
 
     pub fn transcript_entries(&self) -> impl Iterator<Item = &TranscriptEntry> {
@@ -417,75 +449,10 @@ impl ConversationCore {
         self.checkpoint.as_ref()
     }
 
-    fn head(&self) -> ConversationHead {
-        ConversationHead {
-            identity: self.identity.clone(),
-            conversation_id: self.conversation_id,
-            branch_id: self.branch_id,
-            head_revision: self.head_revision,
-            completed_prefix: self.completed_prefix,
-            state_revision: self.state_revision,
-        }
-    }
-
     fn entry(&self, reference: TranscriptReference) -> Option<&TranscriptEntry> {
         let index = usize::try_from(reference.sequence).ok()?.checked_sub(1)?;
         self.transcript
             .get(index)
             .filter(|entry| entry.reference == reference)
-    }
-
-    fn admission_facts(&self, request: &MessageAdmissionRequest) -> AdmissionFacts {
-        AdmissionFacts {
-            head: Some(self.head()),
-            active_writer: self.active_writer.clone(),
-            message: self.messages.get(&request.message.message_id).cloned(),
-            message_id_in_transcript: self
-                .transcript
-                .iter()
-                .any(|entry| entry.reference.message_id == request.message.message_id),
-            command: self.commands.get(&request.message.command_id).cloned(),
-            previous_prefix_digest: self
-                .transcript
-                .last()
-                .map_or(EMPTY_PREFIX_DIGEST, |entry| entry.prefix_digest),
-        }
-    }
-
-    fn apply_admission_transition(
-        &mut self,
-        transition: AdmissionTransition,
-        message: ConversationMessage,
-    ) {
-        if let Some(entry) = transition.appended {
-            self.pending.push_back(entry.reference);
-            self.transcript.push(entry);
-            self.messages.insert(
-                message.message_id,
-                StoredAdmission {
-                    message: message.clone(),
-                    receipt: transition.result.receipt.clone(),
-                },
-            );
-        }
-        if transition.command_receipt.is_some() {
-            let admission = self
-                .messages
-                .get(&message.message_id)
-                .cloned()
-                .expect("command receipts refer to an admitted message");
-            self.commands.insert(
-                message.command_id,
-                StoredCommand {
-                    identity: self.identity.clone(),
-                    conversation_id: self.conversation_id,
-                    branch_id: self.branch_id,
-                    admission,
-                },
-            );
-        }
-        self.head_revision = transition.head.head_revision;
-        self.completed_prefix = transition.head.completed_prefix;
-        self.state_revision = transition.head.state_revision;
     }
 }

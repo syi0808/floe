@@ -1,28 +1,40 @@
-//! Encrypted storage adapter for the role-neutral Conversation Core port.
+//! Vault persistence for owner-driven neutral Conversation recorder custody.
 //!
-//! Transcript entries, receipts, FIFO scheduling, writer fences and checkpoint
-//! commitments are separate bounded rows. Admission and writer/checkpoint state
-//! changes run in short immediate transactions; dispatch remains owned by the
-//! caller and may follow only a returned durable admission receipt.
+//! Core 3 is the only supported stored meaning for neutral recorder custody.
+//! The internal `*_on` methods accept the caller's transaction so an
+//! owner admission, journal, terminal write, and the matching Core receipt can
+//! be composed atomically by a later product cutover.
+
+use std::collections::HashSet;
 
 use super::{EncryptedAgentVault, VaultKeyProvider, database_failure};
 use crate::write_fence::JournalWriteGuard;
+use floe_agent_contract::TaskExecutionReceiptRef;
+use floe_conversation::{
+    CanonicalTurnIntent, RunRecord, RunState, TurnAdmissionRequest, TurnInput, TurnMode,
+};
 use floe_conversation_contract::{
-    AdmissionResult, AgentIdentity, ConversationBranchId, ConversationCheckpoint,
-    ConversationFailure, ConversationId, ConversationMessage, ConversationReference,
-    MessageAdmissionRequest, MessageId, RunTaskLink, TranscriptReference,
+    AdmissionDisposition, AdmissionResult, AdmissionTarget, AgentIdentity, ConversationBranchId,
+    ConversationCheckpoint, ConversationFailure, ConversationId, ConversationMessage,
+    ConversationReference, MessageAdmissionRequest, MessageId, TaskEvidenceReference,
+    TranscriptReference,
 };
 use floe_conversation_core::{
-    AdmissionFacts, CheckpointFacts, ClaimFacts, CompletionFacts, ConversationHead,
-    ConversationStoreFailure, ConversationStorePort, EMPTY_PREFIX_DIGEST, GeneratedOutputFacts,
-    GeneratedOutputReceipt, GeneratedOutputRequest, MAX_TRANSCRIPT_PAGE_ENTRIES, PendingMessage,
-    PrefixCommitmentVersion, StoredAdmission, StoredCommand, TranscriptEntry, TranscriptEntryKind,
-    TranscriptPage, TranscriptPageBudget, WriterClaim, WriterRecoveryObservation,
-    WriterRecoveryState,
+    AppendFacts, CheckpointFacts, ConversationHead, ConversationStoreFailure, EMPTY_PREFIX_DIGEST,
+    ExecutorDomain, MAX_TRANSCRIPT_PAGE_ENTRIES, OwnerGenerationFence, OwnerRunEvidence,
+    OwnerRunState, OwnerSettlementEvidence, RecorderCloseFacts, RecorderCloseReceipt,
+    RecorderFence, RecorderOpenFacts, RecorderOpenReceipt, RecorderRecoveryObservation,
+    RecorderRecoveryState, RecorderRetirementFacts, RecorderRetirementReceipt,
+    RecorderStartRequest, RecordingFacts, RecordingReceipt, RecordingRequest, TranscriptEntry,
+    TranscriptEntryKind, TranscriptPage, TranscriptPageBudget, advance_core_prefix_digest,
+    append_input_transition, apply_checkpoint_transition, close_recording_transition,
+    open_recording_transition, record_entry_transition, recording_content_digest,
+    replay_close_recording, replay_open_recording, replay_recording_entry,
+    retire_stale_recording_transition, validate_reference_target,
 };
-use floe_execution::BoxFuture;
-use floe_kernel::{AgentFailure, CommandId, PersonId, RunId, TaskId};
-use serde::{Serialize, de::DeserializeOwned};
+use floe_kernel::{AgentFailure, PersonId, RunId};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
@@ -35,7 +47,48 @@ struct LoadedHead {
     identity_json: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OwnerInputBinding {
+    run_id: RunId,
+    session_id: Uuid,
+    owner_user_message_id: Uuid,
+    identity: AgentIdentity,
+    conversation_id: ConversationId,
+    branch_id: ConversationBranchId,
+    input: TranscriptReference,
+    executor_domain: ExecutorDomain,
+    executor_generation: u64,
+}
+
+impl OwnerInputBinding {
+    fn validate(&self, person_id: PersonId) -> Result<(), ConversationStoreFailure> {
+        self.identity
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        self.input
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        if !self.run_id.is_valid()
+            || self.session_id.is_nil()
+            || self.owner_user_message_id.is_nil()
+            || self.identity.person_id != person_id
+            || !self.conversation_id.is_valid()
+            || !self.branch_id.is_valid()
+            || self.input.conversation_id != self.conversation_id
+            || self.input.branch_id != self.branch_id
+            || self.executor_domain != ExecutorDomain::HostRun
+            || self.executor_generation == 0
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Scope {
     person_id: PersonId,
     conversation_id: ConversationId,
@@ -43,6 +96,19 @@ struct Scope {
 }
 
 impl Scope {
+    fn from_identity(
+        person_id: PersonId,
+        _identity: &AgentIdentity,
+        conversation_id: ConversationId,
+        branch_id: ConversationBranchId,
+    ) -> Self {
+        Self {
+            person_id,
+            conversation_id,
+            branch_id,
+        }
+    }
+
     fn sql(self) -> (String, String, String) {
         (
             self.person_id.to_string(),
@@ -81,6 +147,27 @@ fn start_error(error: AgentFailure) -> ConversationStoreFailure {
     }
 }
 
+fn schema_error(error: crate::schema::SchemaFailure) -> ConversationStoreFailure {
+    match error {
+        crate::schema::SchemaFailure::Unsupported { .. } => {
+            ConversationStoreFailure::UnsupportedStoredMeaning
+        }
+        crate::schema::SchemaFailure::Busy => ConversationStoreFailure::Busy,
+        _ => unavailable(),
+    }
+}
+
+fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
+    match error {
+        AgentFailure::StorageBusy => ConversationStoreFailure::Busy,
+        AgentFailure::UnsupportedVersion => ConversationStoreFailure::UnsupportedStoredMeaning,
+        AgentFailure::Conflict | AgentFailure::NotFound | AgentFailure::CapabilityDenied => {
+            ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+        }
+        _ => unavailable(),
+    }
+}
+
 fn encode<T: Serialize>(value: &T) -> Result<String, ConversationStoreFailure> {
     serde_json::to_string(value).map_err(|_| unavailable())
 }
@@ -94,8 +181,13 @@ fn integer(value: u64) -> Result<i64, ConversationStoreFailure> {
         .map_err(|_| ConversationStoreFailure::Transition(ConversationFailure::InvalidInput))
 }
 
-fn positive_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
+fn nonnegative_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
     u64::try_from(value).map_err(|_| unavailable())
+}
+
+fn positive_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
+    let value = u64::try_from(value).map_err(|_| unavailable())?;
+    (value > 0).then_some(value).ok_or_else(unavailable)
 }
 
 fn parse_uuid(value: &str) -> Result<Uuid, ConversationStoreFailure> {
@@ -116,12 +208,6 @@ fn parse_conversation_id(value: &str) -> Result<ConversationId, ConversationStor
 
 fn parse_branch_id(value: &str) -> Result<ConversationBranchId, ConversationStoreFailure> {
     ConversationBranchId::from_uuid(parse_uuid(value)?).ok_or_else(unavailable)
-}
-
-fn parse_task_id(value: Option<String>) -> Result<Option<TaskId>, ConversationStoreFailure> {
-    value
-        .map(|value| TaskId::from_uuid(parse_uuid(&value)?).ok_or_else(unavailable))
-        .transpose()
 }
 
 fn hex_digest(value: [u8; 32]) -> String {
@@ -146,6 +232,20 @@ fn parse_digest(value: &str) -> Result<[u8; 32], ConversationStoreFailure> {
     Ok(digest)
 }
 
+fn task_evidence_reference(
+    reference: &TaskExecutionReceiptRef,
+) -> Result<TaskEvidenceReference, ConversationStoreFailure> {
+    reference.validate().map_err(|_| {
+        ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+    })?;
+    let encoded = serde_json::to_vec(&("floe-conversation-task-evidence-reference-v1", reference))
+        .map_err(|_| unavailable())?;
+    Ok(TaskEvidenceReference::from_digest(
+        reference.execution.task_id,
+        Sha256::digest(encoded).into(),
+    ))
+}
+
 fn hex_nibble(value: u8) -> Option<u8> {
     match value {
         b'0'..=b'9' => Some(value - b'0'),
@@ -155,106 +255,55 @@ fn hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
-fn decode_stored_message(
-    scope: Scope,
-    sequence: u64,
-    message_id: &str,
-    payload: String,
-    stored_bytes: i64,
-    prefix_digest: &str,
-    kind: TranscriptEntryKind,
-    producer_run: Option<RunId>,
-    commitment_version: PrefixCommitmentVersion,
-) -> Result<TranscriptEntry, ConversationStoreFailure> {
-    let actual_bytes = payload.as_bytes().len();
-    if actual_bytes == 0
-        || actual_bytes > MAX_STORED_MESSAGE_BYTES
-        || usize::try_from(stored_bytes).ok() != Some(actual_bytes)
-    {
-        return Err(unavailable());
-    }
-    let message: ConversationMessage = decode(&payload)?;
-    message.validate().map_err(|_| unavailable())?;
-    if matches!(
-        &message.origin,
-        floe_conversation_contract::MessageOrigin::Person { person_id }
-            if *person_id != scope.person_id
-    ) {
-        return Err(unavailable());
-    }
-    if encode(&message)? != payload {
-        return Err(unavailable());
-    }
-    let message_id = parse_message_id(message_id)?;
-    if message.message_id != message_id {
-        return Err(unavailable());
-    }
-    Ok(TranscriptEntry {
-        reference: scope.transcript_reference(message_id, sequence),
-        message,
-        kind,
-        producer_run,
-        commitment_version,
-        prefix_digest: parse_digest(prefix_digest)?,
-    })
+fn map_transition<T>(
+    result: Result<T, ConversationFailure>,
+) -> Result<T, ConversationStoreFailure> {
+    result.map_err(ConversationStoreFailure::Transition)
 }
 
-async fn entry_metadata_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    sequence: u64,
-) -> Result<(TranscriptEntryKind, Option<RunId>, PrefixCommitmentVersion), ConversationStoreFailure>
-{
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(
-            "SELECT entry_kind, producer_run_id, commitment_version FROM agent_conversation_core_entry_metadata WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
-            (person, conversation, branch, integer(sequence)?),
-        )
-        .await
-        .map_err(database_error)?;
-    let metadata = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            let kind = row.get::<String>(0).map_err(|_| unavailable())?;
-            let producer_run = row
-                .get::<Option<String>>(1)
-                .map_err(|_| unavailable())?
-                .map(|value| parse_run_id(&value))
-                .transpose()?;
-            let version = row.get::<i64>(2).map_err(|_| unavailable())?;
-            let kind = match kind.as_str() {
-                "inbound" => TranscriptEntryKind::Inbound,
-                "generated_output" => TranscriptEntryKind::GeneratedOutput,
-                _ => return Err(unavailable()),
-            };
-            let commitment_version = match version {
-                1 => PrefixCommitmentVersion::V1,
-                2 => PrefixCommitmentVersion::V2,
-                _ => return Err(unavailable()),
-            };
-            if (kind == TranscriptEntryKind::Inbound && producer_run.is_some())
-                || (kind == TranscriptEntryKind::GeneratedOutput
-                    && (producer_run.is_none()
-                        || commitment_version != PrefixCommitmentVersion::V2))
-                || (commitment_version == PrefixCommitmentVersion::V1
-                    && kind != TranscriptEntryKind::Inbound)
-            {
-                return Err(unavailable());
-            }
-            Ok::<_, ConversationStoreFailure>((kind, producer_run, commitment_version))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
+fn request_scope(
+    person_id: PersonId,
+    request: &MessageAdmissionRequest,
+) -> Result<(Scope, AgentIdentity, bool), ConversationStoreFailure> {
+    let (identity, conversation_id, branch_id, is_new) = match &request.target {
+        floe_conversation_contract::AdmissionTarget::New {
+            identity,
+            conversation_id,
+            branch_id,
+        } => (identity.clone(), *conversation_id, *branch_id, true),
+        floe_conversation_contract::AdmissionTarget::AppendToExisting { reference } => (
+            reference.identity.clone(),
+            reference.conversation_id,
+            reference.branch_id,
+            false,
+        ),
+    };
+    if identity.person_id != person_id {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::AgentMismatch,
+        ));
     }
-    Ok(metadata.unwrap_or((
-        TranscriptEntryKind::Inbound,
-        None,
-        PrefixCommitmentVersion::V1,
-    )))
+    Ok((
+        Scope::from_identity(person_id, &identity, conversation_id, branch_id),
+        identity,
+        is_new,
+    ))
+}
+
+async fn ensure_core_v3_on(transaction: &Transaction<'_>) -> Result<(), ConversationStoreFailure> {
+    crate::schema::ensure_conversation_core_v3_family(transaction)
+        .await
+        .map_err(schema_error)
+}
+
+async fn require_core_v3_on(transaction: &Transaction<'_>) -> Result<(), ConversationStoreFailure> {
+    match crate::schema::conversation_core_family_version(transaction)
+        .await
+        .map_err(schema_error)?
+    {
+        crate::schema::ConversationCoreFamilyVersion::RecorderV3 => Ok(()),
+        crate::schema::ConversationCoreFamilyVersion::Absent => Err(unavailable()),
+    }
 }
 
 async fn load_head_on(
@@ -264,7 +313,7 @@ async fn load_head_on(
     let (person, conversation, branch) = scope.sql();
     let mut rows = transaction
         .query(
-            "SELECT identity_json, head_revision, state_revision, completed_prefix FROM agent_conversation_core_heads WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+            "SELECT identity_json, head_revision, state_revision, settled_prefix, recorder_epoch FROM agent_conversation_core_v3_heads WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
             (person, conversation, branch),
         )
         .await
@@ -273,10 +322,10 @@ async fn load_head_on(
         return Ok(None);
     };
     let identity_json = row.get::<String>(0).map_err(|_| unavailable())?;
-    let head_revision = positive_integer(row.get::<i64>(1).map_err(|_| unavailable())?)?;
-    let state_revision = positive_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?;
-    let completed_prefix =
-        u64::try_from(row.get::<i64>(3).map_err(|_| unavailable())?).map_err(|_| unavailable())?;
+    let head_revision = nonnegative_integer(row.get::<i64>(1).map_err(|_| unavailable())?)?;
+    let state_revision = nonnegative_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?;
+    let settled_prefix = nonnegative_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?;
+    let recorder_epoch = nonnegative_integer(row.get::<i64>(4).map_err(|_| unavailable())?)?;
     if rows.next().await.map_err(database_error)?.is_some() {
         return Err(unavailable());
     }
@@ -285,7 +334,9 @@ async fn load_head_on(
     identity.validate().map_err(|_| unavailable())?;
     if encode(&identity)? != identity_json
         || identity.person_id != scope.person_id
-        || completed_prefix > head_revision
+        || settled_prefix > head_revision
+        || head_revision > 4096
+        || state_revision < head_revision
     {
         return Err(unavailable());
     }
@@ -295,11 +346,66 @@ async fn load_head_on(
             conversation_id: scope.conversation_id,
             branch_id: scope.branch_id,
             head_revision,
-            completed_prefix,
+            settled_prefix,
             state_revision,
+            recorder_epoch,
         },
         identity_json,
     }))
+}
+
+async fn save_head_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    previous: Option<&LoadedHead>,
+    next: &ConversationHead,
+) -> Result<(), ConversationStoreFailure> {
+    let next_identity_json = encode(&next.identity)?;
+    if let Some(previous) = previous {
+        let changed = transaction
+            .execute(
+                "UPDATE agent_conversation_core_v3_heads SET head_revision = ?, state_revision = ?, settled_prefix = ?, recorder_epoch = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND identity_json = ? AND head_revision = ? AND state_revision = ? AND settled_prefix = ? AND recorder_epoch = ?",
+                (
+                    integer(next.head_revision)?,
+                    integer(next.state_revision)?,
+                    integer(next.settled_prefix)?,
+                    integer(next.recorder_epoch)?,
+                    scope.person_id.to_string(),
+                    scope.conversation_id.as_uuid().to_string(),
+                    scope.branch_id.as_uuid().to_string(),
+                    previous.identity_json.clone(),
+                    integer(previous.state.head_revision)?,
+                    integer(previous.state.state_revision)?,
+                    integer(previous.state.settled_prefix)?,
+                    integer(previous.state.recorder_epoch)?,
+                ),
+            )
+            .await
+            .map_err(database_error)?;
+        if changed != 1 {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RevisionConflict,
+            ));
+        }
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_core_v3_heads (person_id, conversation_id, branch_id, identity_json, head_revision, state_revision, settled_prefix, recorder_epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    scope.person_id.to_string(),
+                    scope.conversation_id.as_uuid().to_string(),
+                    scope.branch_id.as_uuid().to_string(),
+                    next_identity_json,
+                    integer(next.head_revision)?,
+                    integer(next.state_revision)?,
+                    integer(next.settled_prefix)?,
+                    integer(next.recorder_epoch)?,
+                ),
+            )
+            .await
+            .map_err(database_error)?;
+    }
+    Ok(())
 }
 
 async fn raw_entry_on(
@@ -310,7 +416,7 @@ async fn raw_entry_on(
     let (person, conversation, branch) = scope.sql();
     let mut rows = transaction
         .query(
-            "SELECT message_id, message_json, message_bytes, prefix_digest FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
+            "SELECT message_id, message_json, message_bytes, entry_kind, producer_run_id, contribution_id, producing_task_json, prefix_digest FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
             (person, conversation, branch, integer(sequence)?),
         )
         .await
@@ -318,27 +424,86 @@ async fn raw_entry_on(
     let Some(row) = rows.next().await.map_err(database_error)? else {
         return Ok(None);
     };
-    let message_id = row.get::<String>(0).map_err(|_| unavailable())?;
+    let message_id_text = row.get::<String>(0).map_err(|_| unavailable())?;
     let payload = row.get::<String>(1).map_err(|_| unavailable())?;
     let stored_bytes = row.get::<i64>(2).map_err(|_| unavailable())?;
-    let prefix_digest = row.get::<String>(3).map_err(|_| unavailable())?;
+    let kind_text = row.get::<String>(3).map_err(|_| unavailable())?;
+    let producer_run_text = row.get::<Option<String>>(4).map_err(|_| unavailable())?;
+    let contribution_text = row.get::<Option<String>>(5).map_err(|_| unavailable())?;
+    let task_json = row.get::<Option<String>>(6).map_err(|_| unavailable())?;
+    let prefix_digest_text = row.get::<String>(7).map_err(|_| unavailable())?;
     if rows.next().await.map_err(database_error)?.is_some() {
         return Err(unavailable());
     }
     drop(rows);
-    let (kind, producer_run, commitment_version) =
-        entry_metadata_on(transaction, scope, sequence).await?;
-    Ok(Some(decode_stored_message(
-        scope,
-        sequence,
-        &message_id,
-        payload,
-        stored_bytes,
-        &prefix_digest,
+
+    let actual_bytes = payload.as_bytes().len();
+    if actual_bytes == 0
+        || actual_bytes > MAX_STORED_MESSAGE_BYTES
+        || usize::try_from(stored_bytes).ok() != Some(actual_bytes)
+    {
+        return Err(unavailable());
+    }
+    let message: ConversationMessage = decode(&payload)?;
+    message.validate().map_err(|_| unavailable())?;
+    if encode(&message)? != payload {
+        return Err(unavailable());
+    }
+    if matches!(
+        &message.origin,
+        floe_conversation_contract::MessageOrigin::Person { person_id }
+            if *person_id != scope.person_id
+    ) {
+        return Err(unavailable());
+    }
+    let message_id = parse_message_id(&message_id_text)?;
+    if message.message_id != message_id {
+        return Err(unavailable());
+    }
+    let kind = match kind_text.as_str() {
+        "inbound" => TranscriptEntryKind::Inbound,
+        "generated_output" => TranscriptEntryKind::GeneratedOutput,
+        _ => return Err(unavailable()),
+    };
+    let producer_run = producer_run_text.as_deref().map(parse_run_id).transpose()?;
+    let contribution_id = contribution_text
+        .as_deref()
+        .map(parse_logical_contribution_id)
+        .transpose()?;
+    let producing_task = task_json
+        .as_deref()
+        .map(decode::<TaskEvidenceReference>)
+        .transpose()?;
+    if let Some(reference) = producing_task.as_ref() {
+        reference.validate().map_err(|_| unavailable())?;
+    }
+    if task_json.as_deref().is_some_and(|json| {
+        producing_task
+            .as_ref()
+            .and_then(|value| serde_json::to_string(value).ok())
+            .as_deref()
+            != Some(json)
+    }) {
+        return Err(unavailable());
+    }
+    let kind_is_valid = match kind {
+        TranscriptEntryKind::Inbound => {
+            producer_run.is_none() && contribution_id.is_none() && producing_task.is_none()
+        }
+        TranscriptEntryKind::GeneratedOutput => producer_run.is_some() && contribution_id.is_some(),
+    };
+    if !kind_is_valid {
+        return Err(unavailable());
+    }
+    Ok(Some(TranscriptEntry {
+        reference: scope.transcript_reference(message_id, sequence),
+        message,
         kind,
         producer_run,
-        commitment_version,
-    )?))
+        contribution_id,
+        producing_task,
+        prefix_digest: parse_digest(&prefix_digest_text)?,
+    }))
 }
 
 async fn entry_on(
@@ -355,7 +520,7 @@ async fn entry_on(
         let (person, conversation, branch) = scope.sql();
         let mut rows = transaction
             .query(
-                "SELECT prefix_digest FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
+                "SELECT prefix_digest FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
                 (person, conversation, branch, integer(sequence - 1)?),
             )
             .await
@@ -371,62 +536,247 @@ async fn entry_on(
         }
         digest
     };
-    let calculated = floe_conversation_core::advance_entry_prefix_digest(
+    let calculated = advance_core_prefix_digest(
         previous,
         entry.reference,
         &entry.message,
         entry.kind,
         entry.producer_run,
-        entry.commitment_version,
+        entry.contribution_id,
+        entry.producing_task.as_ref(),
     )
     .map_err(|_| unavailable())?;
     if calculated != entry.prefix_digest {
         return Err(unavailable());
     }
-    if entry.kind == TranscriptEntryKind::GeneratedOutput {
-        let (person, conversation, branch) = scope.sql();
-        let mut rows = transaction
-            .query(
-                "SELECT message_id, producer_run_id FROM agent_conversation_core_output_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
-                (person, conversation, branch, integer(sequence)?),
-            )
-            .await
-            .map_err(database_error)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(database_error)?
-            .ok_or_else(unavailable)?;
-        let message_id = parse_message_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
-        let producer_run = parse_run_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
-        if rows.next().await.map_err(database_error)?.is_some()
-            || message_id != entry.reference.message_id
-            || Some(producer_run) != entry.producer_run
-        {
-            return Err(unavailable());
+    match entry.kind {
+        TranscriptEntryKind::Inbound => {
+            validate_input_receipt_on(transaction, scope, &entry).await?
+        }
+        TranscriptEntryKind::GeneratedOutput => {
+            validate_output_receipt_on(transaction, scope, &entry).await?
         }
     }
     Ok(Some(entry))
 }
 
-async fn next_entry_sequence_on(
+async fn validate_input_receipt_on(
     transaction: &Transaction<'_>,
     scope: Scope,
-    after_sequence: u64,
-) -> Result<Option<u64>, ConversationStoreFailure> {
+    entry: &TranscriptEntry,
+) -> Result<(), ConversationStoreFailure> {
     let (person, conversation, branch) = scope.sql();
     let mut rows = transaction
         .query(
-            "SELECT sequence FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence > ? ORDER BY sequence LIMIT 1",
-            (person, conversation, branch, integer(after_sequence)?),
+            "SELECT sequence, receipt_json FROM agent_conversation_core_v3_input_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ?",
+            (person, conversation, branch, entry.reference.message_id.as_uuid().to_string()),
         )
         .await
         .map_err(database_error)?;
-    rows.next()
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Err(unavailable());
+    };
+    let sequence = positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(1).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let receipt: AdmissionResult = decode(&receipt_json)?;
+    if encode(&receipt)? != receipt_json
+        || sequence != entry.reference.sequence
+        || receipt.receipt.transcript != entry.reference
+        || receipt.receipt.head_revision != entry.reference.sequence
+        || receipt.receipt.task_id != entry.message.task_id
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+async fn validate_output_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    entry: &TranscriptEntry,
+) -> Result<(), ConversationStoreFailure> {
+    let contribution_id = entry.contribution_id.ok_or_else(unavailable)?;
+    let receipt = recording_receipt_on(transaction, scope.person_id, contribution_id)
+        .await?
+        .ok_or_else(unavailable)?;
+    let expected_digest = recording_content_digest(
+        &entry.message,
+        contribution_id,
+        entry.producing_task.as_ref(),
+    )
+    .map_err(|_| unavailable())?;
+    if receipt.transcript != entry.reference
+        || receipt.recorder.run_id != entry.producer_run.ok_or_else(unavailable)?
+        || receipt.contribution_id != contribution_id
+        || receipt.producing_task != entry.producing_task
+        || receipt.content_digest != expected_digest
+    {
+        return Err(unavailable());
+    }
+    Ok(())
+}
+
+async fn input_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    message_id: MessageId,
+) -> Result<Option<(AdmissionResult, ConversationMessage)>, ConversationStoreFailure> {
+    let (person, conversation, branch) = scope.sql();
+    let mut rows = transaction
+        .query(
+            "SELECT sequence, receipt_json FROM agent_conversation_core_v3_input_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ?",
+            (person, conversation, branch, message_id.as_uuid().to_string()),
+        )
         .await
-        .map_err(database_error)?
-        .map(|row| positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?))
-        .transpose()
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let sequence = positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(1).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let receipt: AdmissionResult = decode(&receipt_json)?;
+    let entry = entry_on(transaction, scope, sequence)
+        .await?
+        .ok_or_else(unavailable)?;
+    if encode(&receipt)? != receipt_json
+        || receipt.receipt.transcript != entry.reference
+        || entry.reference.message_id != message_id
+        || entry.kind != TranscriptEntryKind::Inbound
+    {
+        return Err(unavailable());
+    }
+    Ok(Some((receipt, entry.message)))
+}
+
+async fn owner_input_binding_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    run_id: RunId,
+) -> Result<Option<OwnerInputBinding>, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT session_id, owner_user_message_id, conversation_id, branch_id, input_sequence, input_message_id, binding_json FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? AND run_id = ?",
+            (person_id.to_string(), run_id.as_uuid().to_string()),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let session_id = parse_uuid(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let owner_user_message_id = parse_uuid(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let conversation_id = parse_conversation_id(&row.get::<String>(2).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(3).map_err(|_| unavailable())?)?;
+    let sequence = positive_integer(row.get::<i64>(4).map_err(|_| unavailable())?)?;
+    let message_id = parse_message_id(&row.get::<String>(5).map_err(|_| unavailable())?)?;
+    let binding_json = row.get::<String>(6).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let binding: OwnerInputBinding = decode(&binding_json)?;
+    binding.validate(person_id)?;
+    if encode(&binding)? != binding_json
+        || binding.run_id != run_id
+        || binding.session_id != session_id
+        || binding.owner_user_message_id != owner_user_message_id
+        || binding.conversation_id != conversation_id
+        || binding.branch_id != branch_id
+        || binding.input.sequence != sequence
+        || binding.input.message_id != message_id
+    {
+        return Err(unavailable());
+    }
+    Ok(Some(binding))
+}
+
+async fn owner_input_binding_for_message_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    owner_user_message_id: Uuid,
+) -> Result<Option<OwnerInputBinding>, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? AND session_id = ? AND owner_user_message_id = ? ORDER BY run_id LIMIT 4097",
+            (
+                person_id.to_string(),
+                session_id.to_string(),
+                owner_user_message_id.to_string(),
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    let mut run_ids = Vec::new();
+    while let Some(row) = rows.next().await.map_err(database_error)? {
+        if run_ids.len() == 4096 {
+            return Err(unavailable());
+        }
+        run_ids.push(parse_run_id(
+            &row.get::<String>(0).map_err(|_| unavailable())?,
+        )?);
+    }
+    drop(rows);
+
+    let mut selected: Option<OwnerInputBinding> = None;
+    for run_id in run_ids {
+        let binding = owner_input_binding_on(transaction, person_id, run_id)
+            .await?
+            .ok_or_else(unavailable)?;
+        if binding.session_id != session_id
+            || binding.owner_user_message_id != owner_user_message_id
+        {
+            return Err(unavailable());
+        }
+        if let Some(previous) = &selected {
+            if previous.identity != binding.identity
+                || previous.conversation_id != binding.conversation_id
+                || previous.branch_id != binding.branch_id
+                || previous.input != binding.input
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+        } else {
+            selected = Some(binding);
+        }
+    }
+    Ok(selected)
+}
+
+async fn insert_owner_input_binding_on(
+    transaction: &Transaction<'_>,
+    binding: &OwnerInputBinding,
+) -> Result<(), ConversationStoreFailure> {
+    binding.validate(binding.identity.person_id)?;
+    let binding_json = encode(binding)?;
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_owner_bindings (person_id, run_id, session_id, owner_user_message_id, conversation_id, branch_id, input_sequence, input_message_id, binding_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                binding.identity.person_id.to_string(),
+                binding.run_id.as_uuid().to_string(),
+                binding.session_id.to_string(),
+                binding.owner_user_message_id.to_string(),
+                binding.conversation_id.as_uuid().to_string(),
+                binding.branch_id.as_uuid().to_string(),
+                integer(binding.input.sequence)?,
+                binding.input.message_id.as_uuid().to_string(),
+                binding_json,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
 }
 
 async fn transcript_has_message_id_on(
@@ -437,518 +787,26 @@ async fn transcript_has_message_id_on(
     let (person, conversation, branch) = scope.sql();
     let mut rows = transaction
         .query(
-            "SELECT 1 FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? LIMIT 1",
-            (
-                person,
-                conversation,
-                branch,
-                message_id.as_uuid().to_string(),
-            ),
+            "SELECT 1 FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? LIMIT 1",
+            (person, conversation, branch, message_id.as_uuid().to_string()),
         )
         .await
         .map_err(database_error)?;
     Ok(rows.next().await.map_err(database_error)?.is_some())
 }
 
-async fn has_entry_after_on(
+async fn tail_prefix_digest_on(
     transaction: &Transaction<'_>,
     scope: Scope,
-    after_sequence: u64,
-) -> Result<bool, ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(
-            "SELECT 1 FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence > ? ORDER BY sequence LIMIT 1",
-            (person, conversation, branch, integer(after_sequence)?),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(rows.next().await.map_err(database_error)?.is_some())
-}
-
-async fn message_receipt_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    message_id: MessageId,
-) -> Result<Option<StoredAdmission>, ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let message_id_text = message_id.as_uuid().to_string();
-    let mut rows = transaction
-        .query(
-            "SELECT sequence, receipt_json FROM agent_conversation_core_message_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ?",
-            (person.clone(), conversation.clone(), branch.clone(), message_id_text.clone()),
-        )
-        .await
-        .map_err(database_error)?;
-    let receipt_row = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?,
-                row.get::<String>(1).map_err(|_| unavailable())?,
-            ))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(rows);
-    let Some((sequence, receipt_json)) = receipt_row else {
-        let mut entries = transaction
-            .query(
-                "SELECT sequence FROM agent_conversation_core_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? LIMIT 1",
-                (person, conversation, branch, message_id_text),
-            )
-            .await
-            .map_err(database_error)?;
-        let orphan = entries.next().await.map_err(database_error)?.is_some();
-        let output = if orphan {
-            drop(entries);
-            let mut rows = transaction
-                .query(
-                    "SELECT m.entry_kind FROM agent_conversation_core_entries e LEFT JOIN agent_conversation_core_entry_metadata m ON m.person_id = e.person_id AND m.conversation_id = e.conversation_id AND m.branch_id = e.branch_id AND m.sequence = e.sequence WHERE e.person_id = ? AND e.conversation_id = ? AND e.branch_id = ? AND e.message_id = ? LIMIT 1",
-                    (
-                        scope.person_id.to_string(),
-                        scope.conversation_id.as_uuid().to_string(),
-                        scope.branch_id.as_uuid().to_string(),
-                        message_id.as_uuid().to_string(),
-                    ),
-                )
-                .await
-                .map_err(database_error)?;
-            let entry_kind = rows
-                .next()
-                .await
-                .map_err(database_error)?
-                .ok_or_else(unavailable)?
-                .get::<Option<String>>(0)
-                .map_err(|_| unavailable())?;
-            match entry_kind.as_deref() {
-                Some("generated_output") => true,
-                Some("inbound") | None => false,
-                _ => return Err(unavailable()),
-            }
-        } else {
-            false
-        };
-        if output {
-            return Ok(None);
-        }
-        if orphan {
-            return Err(unavailable());
-        }
-        return Ok(None);
-    };
-    let entry = entry_on(transaction, scope, sequence)
-        .await?
-        .ok_or_else(unavailable)?;
-    if entry.reference.message_id != message_id {
-        return Err(unavailable());
-    }
-    let receipt: AdmissionResultReceipt = decode(&receipt_json)?;
-    if encode(&receipt)? != receipt_json
-        || receipt.transcript != entry.reference
-        || receipt.head_revision != sequence
-        || receipt.task_id != entry.message.task_id
-    {
-        return Err(unavailable());
-    }
-    Ok(Some(StoredAdmission {
-        message: entry.message,
-        receipt,
-    }))
-}
-
-// Alias kept local so the SQL loader's return type remains explicit.
-type AdmissionResultReceipt = floe_conversation_contract::AdmissionReceipt;
-
-async fn command_message_on(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-    command_id: CommandId,
-) -> Result<Option<StoredCommand>, ConversationStoreFailure> {
-    let command_id = command_id.as_uuid().to_string();
-    let mut rows = transaction
-        .query(
-            "SELECT conversation_id, branch_id, message_id FROM agent_conversation_core_command_receipts WHERE person_id = ? AND command_id = ?",
-            (person_id.to_string(), command_id.clone()),
-        )
-        .await
-        .map_err(database_error)?;
-    let receipt_values = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                row.get::<String>(0).map_err(|_| unavailable())?,
-                row.get::<String>(1).map_err(|_| unavailable())?,
-                row.get::<String>(2).map_err(|_| unavailable())?,
-            ))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(rows);
-    let Some((conversation_id, branch_id, message_id)) = receipt_values else {
-        return Ok(None);
-    };
-    let scope = Scope {
-        person_id,
-        conversation_id: parse_conversation_id(&conversation_id)?,
-        branch_id: parse_branch_id(&branch_id)?,
-    };
-    let head = load_head_on(transaction, scope)
-        .await?
-        .ok_or_else(unavailable)?;
-    let message_id = parse_message_id(&message_id)?;
-    let admission = message_receipt_on(transaction, scope, message_id)
-        .await?
-        .ok_or_else(unavailable)?;
-    Ok(Some(StoredCommand {
-        identity: head.state.identity,
-        conversation_id: scope.conversation_id,
-        branch_id: scope.branch_id,
-        admission,
-    }))
-}
-
-async fn active_claim_on(
-    transaction: &Transaction<'_>,
     head: &ConversationHead,
-) -> Result<Option<WriterClaim>, ConversationStoreFailure> {
-    let scope = Scope {
-        person_id: head.identity.person_id,
-        conversation_id: head.conversation_id,
-        branch_id: head.branch_id,
-    };
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(
-            "SELECT run_id, task_id, message_sequence, writer_epoch, executor_generation FROM agent_conversation_core_active_writers WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-            (person, conversation, branch),
-        )
-        .await
-        .map_err(database_error)?;
-    let claim_values = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                row.get::<String>(0).map_err(|_| unavailable())?,
-                parse_task_id(row.get::<Option<String>>(1).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(4).map_err(|_| unavailable())?)?,
-            ))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
+) -> Result<[u8; 32], ConversationStoreFailure> {
+    if head.head_revision == 0 {
+        return Ok(EMPTY_PREFIX_DIGEST);
     }
-    drop(rows);
-    let Some((run_id, task_id, sequence, writer_epoch, executor_generation)) = claim_values else {
-        return Ok(None);
-    };
-    let entry = entry_on(transaction, scope, sequence)
+    entry_on(transaction, scope, head.head_revision)
         .await?
-        .ok_or_else(unavailable)?;
-    if entry.kind != TranscriptEntryKind::Inbound || entry.message.task_id != task_id {
-        return Err(unavailable());
-    }
-    Ok(Some(WriterClaim {
-        identity: head.identity.clone(),
-        link: RunTaskLink {
-            run_id: parse_run_id(&run_id)?,
-            task_id,
-        },
-        message: entry.reference,
-        writer_epoch,
-        executor_generation,
-    }))
-}
-
-async fn writer_receipt_on(
-    transaction: &Transaction<'_>,
-    head: &ConversationHead,
-    run_id: RunId,
-) -> Result<Option<(WriterClaim, bool)>, ConversationStoreFailure> {
-    let scope = Scope {
-        person_id: head.identity.person_id,
-        conversation_id: head.conversation_id,
-        branch_id: head.branch_id,
-    };
-    let (person, conversation, branch) = scope.sql();
-    let run_id_text = run_id.as_uuid().to_string();
-    let mut rows = transaction
-        .query(
-            "SELECT task_id, message_sequence, writer_epoch, executor_generation, state FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ?",
-            (person, conversation, branch, run_id_text.clone()),
-        )
-        .await
-        .map_err(database_error)?;
-    let values = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                parse_task_id(row.get::<Option<String>>(0).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(1).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?,
-                row.get::<String>(4).map_err(|_| unavailable())?,
-            ))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(rows);
-    let Some((task_id, sequence, writer_epoch, executor_generation, state)) = values else {
-        return Ok(None);
-    };
-    let entry = entry_on(transaction, scope, sequence)
-        .await?
-        .ok_or_else(unavailable)?;
-    if entry.kind != TranscriptEntryKind::Inbound || entry.message.task_id != task_id {
-        return Err(unavailable());
-    }
-    let completed = match state.as_str() {
-        "active" => false,
-        "completed" => true,
-        _ => return Err(unavailable()),
-    };
-    Ok(Some((
-        WriterClaim {
-            identity: head.identity.clone(),
-            link: RunTaskLink {
-                run_id: parse_run_id(&run_id_text)?,
-                task_id,
-            },
-            message: entry.reference,
-            writer_epoch,
-            executor_generation,
-        },
-        completed,
-    )))
-}
-
-async fn generated_output_receipt_on(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-    agent_instance_id: floe_conversation_contract::AgentInstanceId,
-    message_id: MessageId,
-) -> Result<Option<GeneratedOutputReceipt>, ConversationStoreFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT conversation_id, branch_id, producer_run_id, sequence, content_digest FROM agent_conversation_core_output_receipts WHERE person_id = ? AND agent_instance_id = ? AND message_id = ?",
-            (
-                person_id.to_string(),
-                agent_instance_id.as_uuid().to_string(),
-                message_id.as_uuid().to_string(),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    let values = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                row.get::<String>(0).map_err(|_| unavailable())?,
-                row.get::<String>(1).map_err(|_| unavailable())?,
-                parse_run_id(&row.get::<String>(2).map_err(|_| unavailable())?)?,
-                positive_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?,
-                parse_digest(&row.get::<String>(4).map_err(|_| unavailable())?)?,
-            ))
-        })
-        .transpose()?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(rows);
-    let Some((conversation_id, branch_id, run_id, sequence, stored_digest)) = values else {
-        return Ok(None);
-    };
-    let scope = Scope {
-        person_id,
-        conversation_id: parse_conversation_id(&conversation_id)?,
-        branch_id: parse_branch_id(&branch_id)?,
-    };
-    let head = load_head_on(transaction, scope)
-        .await?
-        .ok_or_else(unavailable)?;
-    if head.state.identity.agent_instance_id != agent_instance_id {
-        return Err(unavailable());
-    }
-    let (producer, _) = writer_receipt_on(transaction, &head.state, run_id)
-        .await?
-        .ok_or_else(unavailable)?;
-    let entry = entry_on(transaction, scope, sequence)
-        .await?
-        .ok_or_else(unavailable)?;
-    let calculated_digest = floe_conversation_core::generated_output_content_digest(&entry.message)
-        .map_err(|_| unavailable())?;
-    if entry.kind != TranscriptEntryKind::GeneratedOutput
-        || entry.producer_run != Some(run_id)
-        || entry.reference.message_id != message_id
-        || entry.reference.sequence != sequence
-        || producer.identity != head.state.identity
-        || producer.link.run_id != run_id
-        || producer.message.sequence >= sequence
-        || producer.link.task_id != entry.message.task_id
-        || calculated_digest != stored_digest
-    {
-        return Err(unavailable());
-    }
-    Ok(Some(GeneratedOutputReceipt {
-        identity: head.state.identity,
-        producer,
-        transcript: entry.reference,
-        content_digest: stored_digest,
-    }))
-}
-
-async fn pending_first_on(
-    transaction: &Transaction<'_>,
-    head: &ConversationHead,
-) -> Result<Option<PendingMessage>, ConversationStoreFailure> {
-    let scope = Scope {
-        person_id: head.identity.person_id,
-        conversation_id: head.conversation_id,
-        branch_id: head.branch_id,
-    };
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(
-            "SELECT sequence, message_id FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY sequence LIMIT 1",
-            (person, conversation, branch),
-        )
-        .await
-        .map_err(database_error)?;
-    let pending = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>((
-                positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?,
-                parse_message_id(&row.get::<String>(1).map_err(|_| unavailable())?)?,
-            ))
-        })
-        .transpose()?;
-    drop(rows);
-    let Some((sequence, message_id)) = pending else {
-        return Ok(None);
-    };
-    let entry = entry_on(transaction, scope, sequence)
-        .await?
-        .ok_or_else(unavailable)?;
-    if entry.reference.message_id != message_id || entry.kind != TranscriptEntryKind::Inbound {
-        return Err(unavailable());
-    }
-    Ok(Some(PendingMessage { entry }))
-}
-
-async fn run_was_used_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    run_id: RunId,
-) -> Result<bool, ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(
-            "SELECT 1 FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ? LIMIT 1",
-            (
-                person,
-                conversation,
-                branch,
-                run_id.as_uuid().to_string(),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    let found = rows.next().await.map_err(database_error)?.is_some();
-    Ok(found)
-}
-
-async fn executor_generation_on(
-    transaction: &Transaction<'_>,
-) -> Result<u64, ConversationStoreFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT generation FROM agent_conversation_executor WHERE id = 1",
-            (),
-        )
-        .await
-        .map_err(database_error)?;
-    let generation = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?
-        .get::<i64>(0)
-        .map_err(|_| unavailable())?;
-    u64::try_from(generation).map_err(|_| unavailable())
-}
-
-async fn update_head_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    previous: Option<&LoadedHead>,
-    next: &ConversationHead,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let identity_json = encode(&next.identity)?;
-    let head_revision = integer(next.head_revision)?;
-    let state_revision = integer(next.state_revision)?;
-    let completed_prefix = integer(next.completed_prefix)?;
-    let changed = if let Some(previous) = previous {
-        transaction
-            .execute(
-                "UPDATE agent_conversation_core_heads SET head_revision = ?, state_revision = ?, completed_prefix = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND identity_json = ? AND head_revision = ? AND state_revision = ? AND completed_prefix = ?",
-                (
-                    head_revision,
-                    state_revision,
-                    completed_prefix,
-                    person,
-                    conversation,
-                    branch,
-                    previous.identity_json.clone(),
-                    integer(previous.state.head_revision)?,
-                    integer(previous.state.state_revision)?,
-                    integer(previous.state.completed_prefix)?,
-                ),
-            )
-            .await
-            .map_err(database_error)?
-    } else {
-        transaction
-            .execute(
-                "INSERT INTO agent_conversation_core_heads (person_id, conversation_id, branch_id, identity_json, head_revision, state_revision, completed_prefix) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    person,
-                    conversation,
-                    branch,
-                    identity_json,
-                    head_revision,
-                    state_revision,
-                    completed_prefix,
-                ),
-            )
-            .await
-            .map_err(database_error)?
-    };
-    if changed != 1 {
-        return Err(unavailable());
-    }
-    Ok(())
+        .map(|entry| entry.prefix_digest)
+        .ok_or_else(unavailable)
 }
 
 async fn insert_entry_on(
@@ -956,113 +814,59 @@ async fn insert_entry_on(
     scope: Scope,
     entry: &TranscriptEntry,
 ) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
     let payload = encode(&entry.message)?;
-    let payload_bytes = payload.as_bytes().len();
-    if payload_bytes == 0 || payload_bytes > MAX_STORED_MESSAGE_BYTES {
+    if payload.is_empty() || payload.len() > MAX_STORED_MESSAGE_BYTES {
         return Err(ConversationStoreFailure::Transition(
             ConversationFailure::InvalidInput,
         ));
     }
+    let kind = match entry.kind {
+        TranscriptEntryKind::Inbound => "inbound",
+        TranscriptEntryKind::GeneratedOutput => "generated_output",
+    };
+    let producer_run = entry.producer_run.map(|value| value.as_uuid().to_string());
+    let contribution = entry
+        .contribution_id
+        .map(|value| value.as_uuid().to_string());
+    let task_json = entry.producing_task.as_ref().map(encode).transpose()?;
     transaction
         .execute(
-            "INSERT INTO agent_conversation_core_entries (person_id, conversation_id, branch_id, sequence, message_id, message_json, message_bytes, prefix_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agent_conversation_core_v3_entries (person_id, conversation_id, branch_id, sequence, message_id, message_json, message_bytes, entry_kind, producer_run_id, contribution_id, producing_task_json, prefix_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                person,
-                conversation,
-                branch,
+                scope.person_id.to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
                 integer(entry.reference.sequence)?,
                 entry.reference.message_id.as_uuid().to_string(),
-                payload,
-                i64::try_from(payload_bytes).map_err(|_| unavailable())?,
+                payload.clone(),
+                i64::try_from(payload.len()).map_err(|_| unavailable())?,
+                kind,
+                producer_run,
+                contribution,
+                task_json,
                 hex_digest(entry.prefix_digest),
             ),
         )
         .await
         .map_err(database_error)?;
-    let (entry_kind, producer_run_id) = match entry.kind {
-        TranscriptEntryKind::Inbound => ("inbound", None),
-        TranscriptEntryKind::GeneratedOutput => (
-            "generated_output",
-            Some(
-                entry
-                    .producer_run
-                    .ok_or_else(unavailable)?
-                    .as_uuid()
-                    .to_string(),
-            ),
-        ),
-    };
-    let commitment_version = match entry.commitment_version {
-        PrefixCommitmentVersion::V1 => 1_i64,
-        PrefixCommitmentVersion::V2 => 2_i64,
-    };
+    Ok(())
+}
+
+async fn insert_input_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    result: &AdmissionResult,
+) -> Result<(), ConversationStoreFailure> {
+    let receipt_json = encode(result)?;
     transaction
         .execute(
-            "INSERT INTO agent_conversation_core_entry_metadata (person_id, conversation_id, branch_id, sequence, entry_kind, producer_run_id, commitment_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agent_conversation_core_v3_input_receipts (person_id, conversation_id, branch_id, message_id, sequence, receipt_json) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 scope.person_id.to_string(),
                 scope.conversation_id.as_uuid().to_string(),
                 scope.branch_id.as_uuid().to_string(),
-                integer(entry.reference.sequence)?,
-                entry_kind,
-                producer_run_id,
-                commitment_version,
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(())
-}
-
-async fn insert_output_receipt_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    receipt: &GeneratedOutputReceipt,
-) -> Result<(), ConversationStoreFailure> {
-    if receipt.identity.person_id != scope.person_id
-        || receipt.transcript.conversation_id != scope.conversation_id
-        || receipt.transcript.branch_id != scope.branch_id
-        || receipt.transcript.sequence <= receipt.producer.message.sequence
-        || receipt.producer.link.run_id.as_uuid().is_nil()
-    {
-        return Err(unavailable());
-    }
-    transaction
-        .execute(
-            "INSERT INTO agent_conversation_core_output_receipts (person_id, agent_instance_id, message_id, conversation_id, branch_id, producer_run_id, sequence, content_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                scope.person_id.to_string(),
-                receipt.identity.agent_instance_id.as_uuid().to_string(),
-                receipt.transcript.message_id.as_uuid().to_string(),
-                scope.conversation_id.as_uuid().to_string(),
-                scope.branch_id.as_uuid().to_string(),
-                receipt.producer.link.run_id.as_uuid().to_string(),
-                integer(receipt.transcript.sequence)?,
-                hex_digest(receipt.content_digest),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(())
-}
-
-async fn insert_message_receipt_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    receipt: &floe_conversation_contract::AdmissionReceipt,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let receipt_json = encode(receipt)?;
-    transaction
-        .execute(
-            "INSERT INTO agent_conversation_core_message_receipts (person_id, conversation_id, branch_id, message_id, sequence, receipt_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                person,
-                conversation,
-                branch,
-                receipt.transcript.message_id.as_uuid().to_string(),
-                integer(receipt.transcript.sequence)?,
+                result.receipt.transcript.message_id.as_uuid().to_string(),
+                integer(result.receipt.transcript.sequence)?,
                 receipt_json,
             ),
         )
@@ -1071,710 +875,1716 @@ async fn insert_message_receipt_on(
     Ok(())
 }
 
-async fn insert_command_receipt_on(
+async fn open_receipt_on(
     transaction: &Transaction<'_>,
-    scope: Scope,
-    command_id: floe_kernel::CommandId,
-    message_id: MessageId,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    transaction
-        .execute(
-            "INSERT INTO agent_conversation_core_command_receipts (person_id, command_id, conversation_id, branch_id, message_id) VALUES (?, ?, ?, ?, ?)",
-            (
-                person,
-                command_id.as_uuid().to_string(),
-                conversation,
-                branch,
-                message_id.as_uuid().to_string(),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(())
-}
-
-async fn insert_pending_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    reference: TranscriptReference,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    transaction
-        .execute(
-            "INSERT INTO agent_conversation_core_pending_inputs (person_id, conversation_id, branch_id, sequence, message_id) VALUES (?, ?, ?, ?, ?)",
-            (
-                person,
-                conversation,
-                branch,
-                integer(reference.sequence)?,
-                reference.message_id.as_uuid().to_string(),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-struct LoadedCheckpoint {
-    sequence: u64,
-    prefix_digest: [u8; 32],
-    summary: String,
-}
-
-async fn checkpoint_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-) -> Result<Option<LoadedCheckpoint>, ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
+    person_id: PersonId,
+    run_id: RunId,
+) -> Result<Option<RecorderOpenReceipt>, ConversationStoreFailure> {
     let mut rows = transaction
         .query(
-            "SELECT sequence, prefix_digest, summary FROM agent_conversation_core_checkpoints WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-            (person, conversation, branch),
+            "SELECT conversation_id, branch_id, receipt_json FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? AND run_id = ?",
+            (person_id.to_string(), run_id.as_uuid().to_string()),
         )
         .await
         .map_err(database_error)?;
-    let checkpoint = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .map(|row| {
-            Ok::<_, ConversationStoreFailure>(LoadedCheckpoint {
-                sequence: positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?,
-                prefix_digest: parse_digest(&row.get::<String>(1).map_err(|_| unavailable())?)?,
-                summary: row.get::<String>(2).map_err(|_| unavailable())?,
-            })
-        })
-        .transpose()?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let conversation_id = parse_conversation_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(2).map_err(|_| unavailable())?;
     if rows.next().await.map_err(database_error)?.is_some() {
         return Err(unavailable());
     }
-    Ok(checkpoint)
-}
-
-async fn write_checkpoint_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    previous: Option<&LoadedCheckpoint>,
-    checkpoint: &ConversationCheckpoint,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let sequence = integer(checkpoint.through.sequence)?;
-    let digest = hex_digest(checkpoint.prefix_digest);
-    match previous {
-        Some(previous) => {
-            let changed = transaction
-                .execute(
-                    "UPDATE agent_conversation_core_checkpoints SET sequence = ?, prefix_digest = ?, summary = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ? AND prefix_digest = ? AND summary = ?",
-                    (
-                        sequence,
-                        digest,
-                        checkpoint.summary.clone(),
-                        person,
-                        conversation,
-                        branch,
-                        integer(previous.sequence)?,
-                        hex_digest(previous.prefix_digest),
-                        previous.summary.clone(),
-                    ),
-                )
-                .await
-                .map_err(database_error)?;
-            if changed != 1 {
-                return Err(unavailable());
-            }
-        }
-        None => {
-            transaction
-                .execute(
-                    "INSERT INTO agent_conversation_core_checkpoints (person_id, conversation_id, branch_id, sequence, prefix_digest, summary) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        person,
-                        conversation,
-                        branch,
-                        sequence,
-                        digest,
-                        checkpoint.summary.clone(),
-                    ),
-                )
-                .await
-                .map_err(database_error)?;
-        }
-    }
-    Ok(())
-}
-
-async fn count_min_max_on(
-    transaction: &Transaction<'_>,
-    query: &str,
-    scope: Scope,
-) -> Result<(u64, Option<u64>, Option<u64>), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let mut rows = transaction
-        .query(query, (person, conversation, branch))
-        .await
-        .map_err(database_error)?;
-    let row = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?;
-    let count =
-        u64::try_from(row.get::<i64>(0).map_err(|_| unavailable())?).map_err(|_| unavailable())?;
-    let min = row
-        .get::<Option<i64>>(1)
-        .map_err(|_| unavailable())?
-        .map(positive_integer)
-        .transpose()?;
-    let max = row
-        .get::<Option<i64>>(2)
-        .map_err(|_| unavailable())?
-        .map(positive_integer)
-        .transpose()?;
-    Ok((count, min, max))
-}
-
-async fn validate_message_receipts_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    identity: &AgentIdentity,
-    entry: &TranscriptEntry,
-) -> Result<(), ConversationStoreFailure> {
-    let (person, conversation, branch) = scope.sql();
-    let message_id = entry.reference.message_id.as_uuid().to_string();
-    if entry.kind == TranscriptEntryKind::GeneratedOutput {
-        let mut inbound = transaction
-            .query(
-                "SELECT 1 FROM agent_conversation_core_message_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? LIMIT 1",
-                (person.clone(), conversation.clone(), branch.clone(), message_id.clone()),
-            )
-            .await
-            .map_err(database_error)?;
-        if inbound.next().await.map_err(database_error)?.is_some() {
-            return Err(unavailable());
-        }
-        drop(inbound);
-        let mut commands = transaction
-            .query(
-                "SELECT 1 FROM agent_conversation_core_command_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? LIMIT 1",
-                (person.clone(), conversation.clone(), branch.clone(), message_id),
-            )
-            .await
-            .map_err(database_error)?;
-        if commands.next().await.map_err(database_error)?.is_some() {
-            return Err(unavailable());
-        }
-        drop(commands);
-        let receipt = generated_output_receipt_on(
-            transaction,
-            scope.person_id,
-            identity.agent_instance_id,
-            entry.reference.message_id,
-        )
-        .await?
-        .ok_or_else(unavailable)?;
-        let expected_digest =
-            floe_conversation_core::generated_output_content_digest(&entry.message)
-                .map_err(|_| unavailable())?;
-        if receipt.transcript != entry.reference
-            || receipt.content_digest != expected_digest
-            || receipt.producer.link.run_id != entry.producer_run.ok_or_else(unavailable)?
-        {
-            return Err(unavailable());
-        }
-        return Ok(());
-    }
-
-    let mut receipts = transaction
-        .query(
-            "SELECT sequence, receipt_json FROM agent_conversation_core_message_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ?",
-            (person.clone(), conversation.clone(), branch.clone(), message_id.clone()),
-        )
-        .await
-        .map_err(database_error)?;
-    let row = receipts
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?;
-    let sequence = positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?;
-    let receipt_json = row.get::<String>(1).map_err(|_| unavailable())?;
-    if receipts.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(receipts);
-    let receipt: AdmissionResultReceipt = decode(&receipt_json)?;
+    drop(rows);
+    let receipt: RecorderOpenReceipt = decode(&receipt_json)?;
     if encode(&receipt)? != receipt_json
-        || sequence != entry.reference.sequence
-        || receipt.transcript != entry.reference
-        || receipt.head_revision != sequence
-        || receipt.task_id != entry.message.task_id
+        || receipt.fence.run_id != run_id
+        || receipt.fence.identity.person_id != person_id
+        || receipt.fence.conversation_id != conversation_id
+        || receipt.fence.branch_id != branch_id
+        || receipt.fence.validate().is_err()
     {
         return Err(unavailable());
     }
-    let mut commands = transaction
-        .query(
-            "SELECT command_id FROM agent_conversation_core_command_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_id = ? ORDER BY command_id",
-            (person, conversation, branch, message_id),
-        )
-        .await
-        .map_err(database_error)?;
-    let expected_command = entry.message.command_id;
-    let mut found_expected = false;
-    let mut found_any = false;
-    while let Some(row) = commands.next().await.map_err(database_error)? {
-        let command_id = parse_uuid(&row.get::<String>(0).map_err(|_| unavailable())?)?;
-        let command_id = CommandId::from_uuid(command_id).ok_or_else(unavailable)?;
-        found_any = true;
-        found_expected |= command_id == expected_command;
-    }
-    if !found_any || !found_expected {
-        drop(commands);
-        return Err(unavailable());
-    }
-    Ok(())
+    Ok(Some(receipt))
 }
 
-async fn validate_writer_state_on(
+async fn active_recorder_on(
     transaction: &Transaction<'_>,
     scope: Scope,
-    head: &ConversationHead,
-) -> Result<Option<WriterClaim>, ConversationStoreFailure> {
-    let active = active_claim_on(transaction, head).await?;
-    if let Some(claim) = &active {
-        if claim.message.sequence != head.completed_prefix.saturating_add(1) {
-            return Err(unavailable());
-        }
-    }
-
-    let (completed_count, completed_min, completed_max) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(message_sequence), MAX(message_sequence) FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND state = 'completed'",
-        scope,
-    )
-    .await?;
-    if (completed_count == 0 && (completed_min.is_some() || completed_max.is_some()))
-        || (completed_count > 0
-            && (completed_min != Some(1)
-                || completed_max.is_none_or(|sequence| sequence > head.completed_prefix)))
-    {
-        return Err(unavailable());
-    }
-
-    let (active_receipt_count, active_min, active_max) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(message_sequence), MAX(message_sequence) FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND state = 'active'",
-        scope,
-    )
-    .await?;
-    if active_receipt_count != u64::from(active.is_some())
-        || active_min != active.as_ref().map(|claim| claim.message.sequence)
-        || active_max != active.as_ref().map(|claim| claim.message.sequence)
-    {
-        return Err(unavailable());
-    }
-
-    let mut previous_completed = 0_u64;
-    let mut after_sequence = 0_u64;
-    loop {
-        let (person, conversation, branch) = scope.sql();
-        let mut rows = transaction
-            .query(
-                "SELECT run_id, task_id, message_sequence, writer_epoch, executor_generation, state FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND message_sequence > ? ORDER BY message_sequence LIMIT 1",
-                (person, conversation, branch, integer(after_sequence)?),
-            )
-            .await
-            .map_err(database_error)?;
-        let receipt = rows
-            .next()
-            .await
-            .map_err(database_error)?
-            .map(|row| {
-                Ok::<_, ConversationStoreFailure>((
-                    parse_run_id(&row.get::<String>(0).map_err(|_| unavailable())?)?,
-                    parse_task_id(row.get::<Option<String>>(1).map_err(|_| unavailable())?)?,
-                    positive_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?,
-                    positive_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?,
-                    positive_integer(row.get::<i64>(4).map_err(|_| unavailable())?)?,
-                    row.get::<String>(5).map_err(|_| unavailable())?,
-                ))
-            })
-            .transpose()?;
-        drop(rows);
-        let Some((run_id, task_id, sequence, writer_epoch, generation, state)) = receipt else {
-            break;
-        };
-        if writer_epoch > head.state_revision {
-            return Err(unavailable());
-        }
-        let entry = entry_on(transaction, scope, sequence)
-            .await?
-            .ok_or_else(unavailable)?;
-        if entry.kind != TranscriptEntryKind::Inbound || entry.message.task_id != task_id {
-            return Err(unavailable());
-        }
-        match state.as_str() {
-            "completed" => {
-                if sequence <= previous_completed || sequence > head.completed_prefix {
-                    return Err(unavailable());
-                }
-                previous_completed = sequence;
-            }
-            "active" => {
-                let claim = active.as_ref().ok_or_else(unavailable)?;
-                if sequence != head.completed_prefix.saturating_add(1)
-                    || claim.link.run_id != run_id
-                    || claim.link.task_id != task_id
-                    || claim.message.sequence != sequence
-                    || claim.writer_epoch != writer_epoch
-                    || claim.executor_generation != generation
-                {
-                    return Err(unavailable());
-                }
-            }
-            _ => return Err(unavailable()),
-        }
-        after_sequence = sequence;
-    }
-    Ok(active)
-}
-
-async fn validate_pending_state_on(
-    transaction: &Transaction<'_>,
-    scope: Scope,
-    head: &ConversationHead,
-    active: Option<&WriterClaim>,
-) -> Result<(), ConversationStoreFailure> {
-    let (count, min, max) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-        scope,
-    )
-    .await?;
-    let after_sequence = active
-        .map(|claim| claim.message.sequence)
-        .unwrap_or(head.completed_prefix);
+) -> Result<Option<RecorderFence>, ConversationStoreFailure> {
     let (person, conversation, branch) = scope.sql();
-    let mut expected_rows = transaction
-        .query(
-            "SELECT COUNT(*), MIN(e.sequence), MAX(e.sequence) FROM agent_conversation_core_entries e LEFT JOIN agent_conversation_core_entry_metadata m ON m.person_id = e.person_id AND m.conversation_id = e.conversation_id AND m.branch_id = e.branch_id AND m.sequence = e.sequence WHERE e.person_id = ? AND e.conversation_id = ? AND e.branch_id = ? AND e.sequence > ? AND (m.entry_kind IS NULL OR m.entry_kind = 'inbound')",
-            (person.clone(), conversation.clone(), branch.clone(), integer(after_sequence)?),
-        )
-        .await
-        .map_err(database_error)?;
-    let row = expected_rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?;
-    let expected_count =
-        u64::try_from(row.get::<i64>(0).map_err(|_| unavailable())?).map_err(|_| unavailable())?;
-    let expected_min = row
-        .get::<Option<i64>>(1)
-        .map_err(|_| unavailable())?
-        .map(positive_integer)
-        .transpose()?;
-    let expected_max = row
-        .get::<Option<i64>>(2)
-        .map_err(|_| unavailable())?
-        .map(positive_integer)
-        .transpose()?;
-    drop(expected_rows);
-    if count != expected_count
-        || min != expected_min
-        || max != expected_max
-        || (count == 0 && (min.is_some() || max.is_some()))
-    {
-        return Err(unavailable());
-    }
-    let mut mismatched = transaction
-        .query(
-            "SELECT COUNT(*) FROM agent_conversation_core_pending_inputs p LEFT JOIN agent_conversation_core_entries e ON e.person_id = p.person_id AND e.conversation_id = p.conversation_id AND e.branch_id = p.branch_id AND e.sequence = p.sequence LEFT JOIN agent_conversation_core_entry_metadata m ON m.person_id = p.person_id AND m.conversation_id = p.conversation_id AND m.branch_id = p.branch_id AND m.sequence = p.sequence LEFT JOIN agent_conversation_core_writer_receipts w ON w.person_id = p.person_id AND w.conversation_id = p.conversation_id AND w.branch_id = p.branch_id AND w.message_sequence = p.sequence WHERE p.person_id = ? AND p.conversation_id = ? AND p.branch_id = ? AND (e.sequence IS NULL OR e.message_id <> p.message_id OR p.sequence <= ? OR p.sequence > ? OR (m.entry_kind IS NOT NULL AND m.entry_kind <> 'inbound') OR w.run_id IS NOT NULL)",
-            (person, conversation, branch, integer(after_sequence)?, integer(head.head_revision)?),
-        )
-        .await
-        .map_err(database_error)?;
-    let mismatch_count = mismatched
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?
-        .get::<i64>(0)
-        .map_err(|_| unavailable())?;
-    if mismatch_count != 0 {
-        return Err(unavailable());
-    }
-    Ok(())
-}
-
-async fn validate_conversation_core_row_scope_on(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-) -> Result<(), ConversationStoreFailure> {
     let mut rows = transaction
         .query(
-            "SELECT (SELECT COUNT(*) FROM agent_conversation_core_heads WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_entries WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_entry_metadata WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_message_receipts WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_output_receipts WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_command_receipts WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_pending_inputs WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_active_writers WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_writer_receipts WHERE person_id <> ?1) + (SELECT COUNT(*) FROM agent_conversation_core_checkpoints WHERE person_id <> ?1)",
-            [person_id.to_string()],
-        )
-        .await
-        .map_err(database_error)?;
-    let foreign_person_rows = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?
-        .get::<i64>(0)
-        .map_err(|_| unavailable())?;
-    if foreign_person_rows != 0 {
-        return Err(unavailable());
-    }
-
-    let mut rows = transaction
-        .query(
-            "SELECT (SELECT COUNT(*) FROM agent_conversation_core_entries e LEFT JOIN agent_conversation_core_heads h ON h.person_id = e.person_id AND h.conversation_id = e.conversation_id AND h.branch_id = e.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_entry_metadata m LEFT JOIN agent_conversation_core_entries e ON e.person_id = m.person_id AND e.conversation_id = m.conversation_id AND e.branch_id = m.branch_id AND e.sequence = m.sequence WHERE e.sequence IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_message_receipts r LEFT JOIN agent_conversation_core_heads h ON h.person_id = r.person_id AND h.conversation_id = r.conversation_id AND h.branch_id = r.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_output_receipts r LEFT JOIN agent_conversation_core_heads h ON h.person_id = r.person_id AND h.conversation_id = r.conversation_id AND h.branch_id = r.branch_id LEFT JOIN agent_conversation_core_entries e ON e.person_id = r.person_id AND e.conversation_id = r.conversation_id AND e.branch_id = r.branch_id AND e.sequence = r.sequence LEFT JOIN agent_conversation_core_writer_receipts w ON w.person_id = r.person_id AND w.conversation_id = r.conversation_id AND w.branch_id = r.branch_id AND w.run_id = r.producer_run_id WHERE h.person_id IS NULL OR e.sequence IS NULL OR w.run_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_command_receipts c LEFT JOIN agent_conversation_core_heads h ON h.person_id = c.person_id AND h.conversation_id = c.conversation_id AND h.branch_id = c.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_pending_inputs p LEFT JOIN agent_conversation_core_heads h ON h.person_id = p.person_id AND h.conversation_id = p.conversation_id AND h.branch_id = p.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_active_writers w LEFT JOIN agent_conversation_core_heads h ON h.person_id = w.person_id AND h.conversation_id = w.conversation_id AND h.branch_id = w.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_writer_receipts w LEFT JOIN agent_conversation_core_heads h ON h.person_id = w.person_id AND h.conversation_id = w.conversation_id AND h.branch_id = w.branch_id WHERE h.person_id IS NULL) + (SELECT COUNT(*) FROM agent_conversation_core_checkpoints c LEFT JOIN agent_conversation_core_heads h ON h.person_id = c.person_id AND h.conversation_id = c.conversation_id AND h.branch_id = c.branch_id WHERE h.person_id IS NULL)",
-            (),
-        )
-        .await
-        .map_err(database_error)?;
-    let orphan_rows = rows
-        .next()
-        .await
-        .map_err(database_error)?
-        .ok_or_else(unavailable)?
-        .get::<i64>(0)
-        .map_err(|_| unavailable())?;
-    if orphan_rows != 0 {
-        return Err(unavailable());
-    }
-    Ok(())
-}
-
-async fn validate_scope_on(
-    transaction: &Transaction<'_>,
-    loaded_head: &LoadedHead,
-) -> Result<(), ConversationStoreFailure> {
-    let head = &loaded_head.state;
-    let scope = Scope {
-        person_id: head.identity.person_id,
-        conversation_id: head.conversation_id,
-        branch_id: head.branch_id,
-    };
-    if head.head_revision == 0
-        || head.state_revision < head.head_revision
-        || head.completed_prefix > head.head_revision
-    {
-        return Err(unavailable());
-    }
-    let checkpoint = checkpoint_on(transaction, scope).await?;
-    if checkpoint
-        .as_ref()
-        .is_some_and(|value| value.sequence > head.completed_prefix)
-    {
-        return Err(unavailable());
-    }
-
-    let mut prefix = EMPTY_PREFIX_DIGEST;
-    let mut checkpoint_digest = None;
-    let mut inbound_count = 0_u64;
-    let mut output_count = 0_u64;
-    let mut sequence = 1;
-    while sequence <= head.head_revision {
-        let entry = raw_entry_on(transaction, scope, sequence)
-            .await?
-            .ok_or_else(unavailable)?;
-        if let floe_conversation_contract::MessageOrigin::Person { person_id } =
-            &entry.message.origin
-        {
-            if *person_id != head.identity.person_id {
-                return Err(unavailable());
-            }
-        }
-        let calculated = floe_conversation_core::advance_entry_prefix_digest(
-            prefix,
-            entry.reference,
-            &entry.message,
-            entry.kind,
-            entry.producer_run,
-            entry.commitment_version,
-        )
-        .map_err(|_| unavailable())?;
-        if calculated != entry.prefix_digest {
-            return Err(unavailable());
-        }
-        prefix = calculated;
-        if checkpoint
-            .as_ref()
-            .is_some_and(|value| value.sequence == sequence)
-        {
-            checkpoint_digest = Some(prefix);
-        }
-        match entry.kind {
-            TranscriptEntryKind::Inbound => {
-                inbound_count = inbound_count.checked_add(1).ok_or_else(unavailable)?
-            }
-            TranscriptEntryKind::GeneratedOutput => {
-                output_count = output_count.checked_add(1).ok_or_else(unavailable)?
-            }
-        }
-        validate_message_receipts_on(transaction, scope, &head.identity, &entry).await?;
-        sequence = sequence.checked_add(1).ok_or_else(unavailable)?;
-    }
-    if has_entry_after_on(transaction, scope, head.head_revision).await? {
-        return Err(unavailable());
-    }
-    let (receipt_count, _, _) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM agent_conversation_core_message_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-        scope,
-    )
-    .await?;
-    if receipt_count != inbound_count {
-        return Err(unavailable());
-    }
-    let (output_receipt_count, _, _) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM agent_conversation_core_output_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-        scope,
-    )
-    .await?;
-    if output_receipt_count != output_count {
-        return Err(unavailable());
-    }
-    let (orphan_command_count, _, _) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(1), MAX(1) FROM agent_conversation_core_command_receipts c LEFT JOIN agent_conversation_core_message_receipts m ON m.person_id = c.person_id AND m.conversation_id = c.conversation_id AND m.branch_id = c.branch_id AND m.message_id = c.message_id WHERE c.person_id = ? AND c.conversation_id = ? AND c.branch_id = ? AND m.message_id IS NULL",
-        scope,
-    )
-    .await?;
-    if orphan_command_count != 0 {
-        return Err(unavailable());
-    }
-    let (person, conversation, branch) = scope.sql();
-    let mut commands = transaction
-        .query(
-            "SELECT command_id, message_id FROM agent_conversation_core_command_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY command_id",
+            "SELECT run_id, fence_json FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
             (person, conversation, branch),
         )
         .await
         .map_err(database_error)?;
-    while let Some(row) = commands.next().await.map_err(database_error)? {
-        let command_id = parse_uuid(&row.get::<String>(0).map_err(|_| unavailable())?)?;
-        CommandId::from_uuid(command_id).ok_or_else(unavailable)?;
-        parse_message_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
-    }
-    drop(commands);
-    let active = validate_writer_state_on(transaction, scope, head).await?;
-    validate_pending_state_on(transaction, scope, head, active.as_ref()).await?;
-    let pending = pending_first_on(transaction, head).await?;
-    let earliest_unfinished = active
-        .as_ref()
-        .map(|claim| claim.message.sequence)
-        .or_else(|| pending.as_ref().map(|value| value.entry.reference.sequence));
-    let expected_completed_prefix = earliest_unfinished
-        .map(|sequence| sequence.saturating_sub(1))
-        .unwrap_or(head.head_revision);
-    if head.completed_prefix != expected_completed_prefix {
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let run_id = parse_run_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let fence_json = row.get::<String>(1).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
         return Err(unavailable());
     }
-    let (writer_receipt_count, _, _) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(message_sequence), MAX(message_sequence) FROM agent_conversation_core_writer_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-        scope,
-    )
-    .await?;
-    let (pending_count, _, _) = count_min_max_on(
-        transaction,
-        "SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-        scope,
-    )
-    .await?;
-    if writer_receipt_count
-        .checked_add(pending_count)
-        .ok_or_else(unavailable)?
-        != inbound_count
+    drop(rows);
+    let fence: RecorderFence = decode(&fence_json)?;
+    if encode(&fence)? != fence_json
+        || fence.run_id != run_id
+        || fence.conversation_id != scope.conversation_id
+        || fence.branch_id != scope.branch_id
+        || fence.identity.person_id != scope.person_id
+        || fence.validate().is_err()
     {
         return Err(unavailable());
     }
+    Ok(Some(fence))
+}
 
-    if let Some(checkpoint) = checkpoint {
-        let Some(prefix_digest) = checkpoint_digest else {
-            return Err(unavailable());
-        };
-        if prefix_digest != checkpoint.prefix_digest {
-            return Err(unavailable());
-        }
-        let entry = raw_entry_on(transaction, scope, checkpoint.sequence)
-            .await?
-            .ok_or_else(unavailable)?;
-        let value = ConversationCheckpoint {
-            through: entry.reference,
-            prefix_digest,
-            summary: checkpoint.summary,
-        };
-        value.validate().map_err(|_| unavailable())?;
+async fn close_receipt_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    run_id: RunId,
+) -> Result<Option<RecorderCloseReceipt>, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT conversation_id, branch_id, receipt_json FROM agent_conversation_core_v3_close_receipts WHERE person_id = ? AND run_id = ?",
+            (person_id.to_string(), run_id.as_uuid().to_string()),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let conversation_id = parse_conversation_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(2).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let receipt: RecorderCloseReceipt = decode(&receipt_json)?;
+    if encode(&receipt)? != receipt_json
+        || receipt.fence.run_id != run_id
+        || receipt.fence.identity.person_id != person_id
+        || receipt.fence.conversation_id != conversation_id
+        || receipt.fence.branch_id != branch_id
+        || receipt.fence.validate().is_err()
+        || receipt.protection_roots.len() > 512
+    {
+        return Err(unavailable());
+    }
+    Ok(Some(receipt))
+}
+
+async fn retirement_receipt_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    run_id: RunId,
+) -> Result<Option<RecorderRetirementReceipt>, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT conversation_id, branch_id, receipt_json FROM agent_conversation_core_v3_retirement_receipts WHERE person_id = ? AND run_id = ?",
+            (person_id.to_string(), run_id.as_uuid().to_string()),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let conversation_id = parse_conversation_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(2).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let receipt: RecorderRetirementReceipt = decode(&receipt_json)?;
+    if encode(&receipt)? != receipt_json
+        || receipt.fence.run_id != run_id
+        || receipt.fence.identity.person_id != person_id
+        || receipt.fence.conversation_id != conversation_id
+        || receipt.fence.branch_id != branch_id
+        || receipt.fence.validate().is_err()
+        || receipt.owner_evidence_digest == [0; 32]
+        || receipt.generation_fence_digest == [0; 32]
+    {
+        return Err(unavailable());
+    }
+    Ok(Some(receipt))
+}
+
+async fn recording_receipt_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    contribution_id: floe_conversation_contract::LogicalContributionId,
+) -> Result<Option<RecordingReceipt>, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT r.conversation_id, r.branch_id, r.run_id, r.sequence, r.message_id, r.receipt_json, o.agent_instance_id, o.message_id, o.conversation_id, o.branch_id, o.producer_run_id, o.sequence, o.content_digest, o.producing_task_json, o.receipt_json FROM agent_conversation_core_v3_recording_receipts r LEFT JOIN agent_conversation_core_output_receipts_v2 o ON o.person_id = r.person_id AND o.contribution_id = r.contribution_id WHERE r.person_id = ? AND r.contribution_id = ?",
+            (
+                person_id.to_string(),
+                contribution_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let conversation_id = parse_conversation_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let run_id = parse_run_id(&row.get::<String>(2).map_err(|_| unavailable())?)?;
+    let sequence = positive_integer(row.get::<i64>(3).map_err(|_| unavailable())?)?;
+    let message_id = parse_message_id(&row.get::<String>(4).map_err(|_| unavailable())?)?;
+    let receipt_json = row.get::<String>(5).map_err(|_| unavailable())?;
+    let output_agent_id = row
+        .get::<Option<String>>(6)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_uuid)
+        .transpose()?;
+    let output_message_id = row
+        .get::<Option<String>>(7)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_message_id)
+        .transpose()?;
+    let output_conversation_id = row
+        .get::<Option<String>>(8)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_conversation_id)
+        .transpose()?;
+    let output_branch_id = row
+        .get::<Option<String>>(9)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_branch_id)
+        .transpose()?;
+    let output_run_id = row
+        .get::<Option<String>>(10)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_run_id)
+        .transpose()?;
+    let output_sequence = row
+        .get::<Option<i64>>(11)
+        .map_err(|_| unavailable())?
+        .map(positive_integer)
+        .transpose()?;
+    let output_digest = row
+        .get::<Option<String>>(12)
+        .map_err(|_| unavailable())?
+        .as_deref()
+        .map(parse_digest)
+        .transpose()?;
+    let output_task_json = row.get::<Option<String>>(13).map_err(|_| unavailable())?;
+    let output_receipt_json = row.get::<Option<String>>(14).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let receipt: RecordingReceipt = decode(&receipt_json)?;
+    if encode(&receipt)? != receipt_json {
+        return Err(unavailable());
+    }
+    let task_json = receipt.producing_task.as_ref().map(encode).transpose()?;
+    if receipt.recorder.run_id != run_id
+        || receipt.recorder.identity.person_id != person_id
+        || receipt.recorder.conversation_id != conversation_id
+        || receipt.recorder.branch_id != branch_id
+        || receipt.transcript.sequence != sequence
+        || receipt.transcript.message_id != message_id
+        || receipt.contribution_id != contribution_id
+        || output_agent_id != Some(receipt.recorder.identity.agent_instance_id.as_uuid())
+        || output_message_id != Some(message_id)
+        || output_conversation_id != Some(conversation_id)
+        || output_branch_id != Some(branch_id)
+        || output_run_id != Some(run_id)
+        || output_sequence != Some(sequence)
+        || output_digest != Some(receipt.content_digest)
+        || output_task_json != task_json
+        || output_receipt_json.as_deref() != Some(receipt_json.as_str())
+    {
+        return Err(unavailable());
+    }
+    Ok(Some(receipt))
+}
+
+async fn insert_open_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    receipt: &RecorderOpenReceipt,
+) -> Result<(), ConversationStoreFailure> {
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_open_receipts (person_id, run_id, conversation_id, branch_id, receipt_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                receipt.fence.run_id.as_uuid().to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                encode(receipt)?,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+async fn insert_active_recorder_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    fence: &RecorderFence,
+) -> Result<(), ConversationStoreFailure> {
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_active_recorders (person_id, conversation_id, branch_id, run_id, fence_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                fence.run_id.as_uuid().to_string(),
+                encode(fence)?,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+async fn insert_recording_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    receipt: &RecordingReceipt,
+) -> Result<(), ConversationStoreFailure> {
+    let receipt_json = encode(receipt)?;
+    let contribution_id = receipt.contribution_id.as_uuid().to_string();
+    let sequence = integer(receipt.transcript.sequence)?;
+    let message_id = receipt.transcript.message_id.as_uuid().to_string();
+    let task_json = receipt.producing_task.as_ref().map(encode).transpose()?;
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_recording_receipts (person_id, contribution_id, conversation_id, branch_id, run_id, sequence, message_id, receipt_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                contribution_id.clone(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                receipt.recorder.run_id.as_uuid().to_string(),
+                sequence,
+                message_id.clone(),
+                receipt_json.clone(),
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_output_receipts_v2 (person_id, agent_instance_id, message_id, contribution_id, conversation_id, branch_id, producer_run_id, sequence, content_digest, producing_task_json, receipt_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                receipt.recorder.identity.agent_instance_id.as_uuid().to_string(),
+                message_id,
+                contribution_id,
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                receipt.recorder.run_id.as_uuid().to_string(),
+                sequence,
+                hex_digest(receipt.content_digest),
+                task_json,
+                receipt_json,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+async fn insert_close_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    receipt: &RecorderCloseReceipt,
+) -> Result<(), ConversationStoreFailure> {
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_close_receipts (person_id, run_id, conversation_id, branch_id, receipt_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                receipt.fence.run_id.as_uuid().to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                encode(receipt)?,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+async fn insert_retirement_receipt_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    receipt: &RecorderRetirementReceipt,
+) -> Result<(), ConversationStoreFailure> {
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_core_v3_retirement_receipts (person_id, run_id, conversation_id, branch_id, receipt_json) VALUES (?, ?, ?, ?, ?)",
+            (
+                scope.person_id.to_string(),
+                receipt.fence.run_id.as_uuid().to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                encode(receipt)?,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+async fn delete_active_recorder_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    fence: &RecorderFence,
+) -> Result<(), ConversationStoreFailure> {
+    let changed = transaction
+        .execute(
+            "DELETE FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ? AND fence_json = ?",
+            (
+                scope.person_id.to_string(),
+                scope.conversation_id.as_uuid().to_string(),
+                scope.branch_id.as_uuid().to_string(),
+                fence.run_id.as_uuid().to_string(),
+                encode(fence)?,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    if changed != 1 {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::WrongWriter,
+        ));
     }
     Ok(())
 }
 
-async fn validate_all_conversations(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-) -> Result<(), ConversationStoreFailure> {
-    let mut after_conversation = String::new();
-    let mut after_branch = String::new();
-    loop {
-        let mut rows = transaction
-            .query(
-                "SELECT conversation_id, branch_id FROM agent_conversation_core_heads WHERE person_id = ? AND (conversation_id > ? OR (conversation_id = ? AND branch_id > ?)) ORDER BY conversation_id, branch_id LIMIT 1",
-                (
-                    person_id.to_string(),
-                    after_conversation.clone(),
-                    after_conversation.clone(),
-                    after_branch.clone(),
-                ),
-            )
-            .await
-            .map_err(database_error)?;
-        let row = rows.next().await.map_err(database_error)?;
-        let Some(row) = row else {
-            break;
-        };
-        let conversation_raw = row.get::<String>(0).map_err(|_| unavailable())?;
-        let branch_raw = row.get::<String>(1).map_err(|_| unavailable())?;
-        drop(rows);
-        let conversation_id =
-            ConversationId::from_uuid(parse_uuid(&conversation_raw)?).ok_or_else(unavailable)?;
-        let branch_id =
-            ConversationBranchId::from_uuid(parse_uuid(&branch_raw)?).ok_or_else(unavailable)?;
-        let scope = Scope {
-            person_id,
-            conversation_id,
-            branch_id,
-        };
-        let head = load_head_on(transaction, scope)
-            .await?
-            .ok_or_else(unavailable)?;
-        validate_scope_on(transaction, &head).await?;
-        after_conversation = conversation_raw;
-        after_branch = branch_raw;
-    }
-    validate_conversation_core_row_scope_on(transaction, person_id).await
+fn parse_logical_contribution_id(
+    value: &str,
+) -> Result<floe_conversation_contract::LogicalContributionId, ConversationStoreFailure> {
+    floe_conversation_contract::LogicalContributionId::from_uuid(parse_uuid(value)?)
+        .ok_or_else(unavailable)
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    fn conversation_core_scope(
+    /// Host composition primitive: append neutral input custody inside the
+    /// caller's owner-admission transaction.
+    pub(super) async fn append_conversation_input_on(
         &self,
-        target: &ConversationReference,
-    ) -> Result<Scope, ConversationStoreFailure> {
-        if target.identity.person_id != self.person_id {
-            return Err(ConversationFailure::AgentMismatch.into());
+        transaction: &Transaction<'_>,
+        request: MessageAdmissionRequest,
+    ) -> Result<AdmissionResult, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        let (scope, identity, is_new) = request_scope(self.person_id, &request)?;
+        let loaded_head = load_head_on(transaction, scope).await?;
+        let head = match &loaded_head {
+            Some(loaded) => loaded.state.clone(),
+            None if is_new => ConversationHead {
+                identity: identity.clone(),
+                conversation_id: scope.conversation_id,
+                branch_id: scope.branch_id,
+                head_revision: 0,
+                settled_prefix: 0,
+                state_revision: 0,
+                recorder_epoch: 0,
+            },
+            None => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ));
+            }
+        };
+        let message_id = request.message.message_id;
+        let stored_input = input_receipt_on(transaction, scope, message_id).await?;
+        let message_id_in_transcript = if stored_input.is_some() {
+            true
+        } else {
+            transcript_has_message_id_on(transaction, scope, message_id).await?
+        };
+        let previous_prefix_digest = tail_prefix_digest_on(transaction, scope, &head).await?;
+        let transition = map_transition(append_input_transition(
+            request,
+            AppendFacts {
+                head: head.clone(),
+                stored_receipt: stored_input
+                    .as_ref()
+                    .map(|(value, _)| value.receipt.clone()),
+                stored_message: stored_input.map(|(_, message)| message),
+                message_id_in_transcript,
+                previous_prefix_digest,
+            },
+        ))?;
+        if let Some(entry) = &transition.appended {
+            save_head_on(transaction, scope, loaded_head.as_ref(), &transition.head).await?;
+            insert_entry_on(transaction, scope, entry).await?;
+            insert_input_receipt_on(transaction, scope, &transition.result).await?;
         }
-        Ok(Scope {
-            person_id: self.person_id,
-            conversation_id: target.conversation_id,
-            branch_id: target.branch_id,
+        Ok(transition.result)
+    }
+
+    /// Admit a Host Run and bind its exact retained Core input in the same
+    /// Vault transaction. New turns append one Person input. Continue turns
+    /// resolve the owner user-message ID through an earlier immutable binding
+    /// and replay that exact Core input. Linked Resume remains on the existing
+    /// owner-only path until one shared transactional resume primitive is
+    /// qualified.
+    pub(super) async fn admit_conversation_run_with_core_input_on(
+        &self,
+        transaction: &Transaction<'_>,
+        owner_request: TurnAdmissionRequest,
+        core_request: MessageAdmissionRequest,
+        replay_checked: &mut bool,
+        prior_command: &mut bool,
+    ) -> Result<(RunRecord, AdmissionResult), ConversationStoreFailure> {
+        if matches!(&owner_request.mode, TurnMode::Resume(_)) {
+            return Err(ConversationStoreFailure::UnsupportedOwnerIntent);
+        }
+        ensure_core_v3_on(transaction).await?;
+        owner_request.validate().map_err(|_| {
+            ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+        })?;
+        core_request
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        let (owner_user_message_id, owner_message_text) =
+            match (&owner_request.mode, &owner_request.input) {
+                (TurnMode::New, TurnInput::NewMessage(message)) => {
+                    (message.message_id, Some(message.text.as_str()))
+                }
+                (TurnMode::Continue(_), TurnInput::ExistingMessage { message_id }) => {
+                    (*message_id, None)
+                }
+                _ => {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+            };
+        if owner_request.principal != self.person_id.to_string()
+            || owner_message_text.is_some_and(|text| text != core_request.message.text)
+            || core_request.message.evidence.is_some()
+            || core_request.message.task_id.is_some()
+            || core_request.message.origin
+                != (floe_conversation_contract::MessageOrigin::Person {
+                    person_id: self.person_id,
+                })
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let source_binding = if owner_message_text.is_none() {
+            Some(
+                owner_input_binding_for_message_on(
+                    transaction,
+                    self.person_id,
+                    owner_request.session_id,
+                    owner_user_message_id,
+                )
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?,
+            )
+        } else {
+            None
+        };
+        let (identity, conversation_id, branch_id) = match &core_request.target {
+            AdmissionTarget::New {
+                identity,
+                conversation_id,
+                branch_id,
+            } => (identity.clone(), *conversation_id, *branch_id),
+            AdmissionTarget::AppendToExisting { reference } => (
+                reference.identity.clone(),
+                reference.conversation_id,
+                reference.branch_id,
+            ),
+        };
+        if identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        if let Some(binding) = source_binding.as_ref()
+            && (binding.identity != identity
+                || binding.conversation_id != conversation_id
+                || binding.branch_id != branch_id
+                || binding.input.message_id != core_request.message.message_id)
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        if let Some(binding) = source_binding.as_ref() {
+            self.verified_owner_evidence_on(
+                transaction,
+                binding.run_id,
+                &binding.identity,
+                binding.conversation_id,
+                binding.branch_id,
+                binding.input,
+                binding.executor_domain,
+                binding.executor_generation,
+            )
+            .await?;
+        }
+        let scope = Scope::from_identity(self.person_id, &identity, conversation_id, branch_id);
+        let admission = self
+            .admit_conversation_turn_on(
+                transaction,
+                owner_request.clone(),
+                replay_checked,
+                prior_command,
+            )
+            .await
+            .map_err(owner_error)?;
+        let (record, newly_created) = match admission {
+            super::VaultConversationAdmission::Created { record, .. } => (record, true),
+            super::VaultConversationAdmission::Existing(record) => (record, false),
+            super::VaultConversationAdmission::Resumed(_) => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+        };
+        if record.run_id != owner_request.run_id
+            || record.expert_environment != owner_request.expert_environment
+            || !record.matches_admission(&owner_request)
+            || record.person_id != self.person_id
+            || record.session_id != owner_request.session_id
+            || record.user_message_id != owner_user_message_id
+            || record.executor_generation == 0
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let existing_binding = if newly_created {
+            None
+        } else {
+            let binding = owner_input_binding_on(transaction, self.person_id, record.run_id)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            if binding.session_id != record.session_id
+                || binding.owner_user_message_id != record.user_message_id
+                || binding.identity != identity
+                || binding.conversation_id != conversation_id
+                || binding.branch_id != branch_id
+                || binding.input.message_id != core_request.message.message_id
+                || binding.executor_domain != ExecutorDomain::HostRun
+                || binding.executor_generation != record.executor_generation
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            let (stored_receipt, stored_message) =
+                input_receipt_on(transaction, scope, binding.input.message_id)
+                    .await?
+                    .ok_or(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ))?;
+            if stored_receipt.receipt.transcript != binding.input
+                || stored_receipt.receipt.task_id.is_some()
+                || stored_message != core_request.message
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            Some(binding)
+        };
+        let core_admission = self
+            .append_conversation_input_on(transaction, core_request)
+            .await?;
+        let expected_disposition = if newly_created && owner_message_text.is_some() {
+            AdmissionDisposition::Appended
+        } else {
+            AdmissionDisposition::Replayed
+        };
+        if core_admission.disposition != expected_disposition
+            || core_admission.receipt.task_id.is_some()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let input_entry = entry_on(
+            transaction,
+            scope,
+            core_admission.receipt.transcript.sequence,
+        )
+        .await?
+        .ok_or_else(unavailable)?;
+        if input_entry.reference != core_admission.receipt.transcript
+            || input_entry.kind != TranscriptEntryKind::Inbound
+            || input_entry.message.origin
+                != (floe_conversation_contract::MessageOrigin::Person {
+                    person_id: self.person_id,
+                })
+            || owner_message_text.is_some_and(|text| text != input_entry.message.text)
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        if owner_message_text.is_some() {
+            let expected_owner_digest = CanonicalTurnIntent {
+                session_id: record.session_id,
+                expected_revision: record.initial_session_revision,
+                text: input_entry.message.text,
+                mode: TurnMode::New,
+                retry_of: record.retry_of,
+            }
+            .digest(&self.person_id.to_string())
+            .map_err(|_| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
+            if record.request_digest != expected_owner_digest {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+        }
+        let binding = OwnerInputBinding {
+            run_id: record.run_id,
+            session_id: record.session_id,
+            owner_user_message_id: record.user_message_id,
+            identity,
+            conversation_id,
+            branch_id,
+            input: core_admission.receipt.transcript,
+            executor_domain: ExecutorDomain::HostRun,
+            executor_generation: record.executor_generation,
+        };
+        binding.validate(self.person_id)?;
+        match existing_binding {
+            Some(existing) if existing == binding => {}
+            Some(_) => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::RunAlreadyUsed,
+                ));
+            }
+            None if newly_created => insert_owner_input_binding_on(transaction, &binding).await?,
+            None => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+        }
+        Ok((record, core_admission))
+    }
+
+    pub(super) async fn append_conversation_input(
+        &self,
+        request: MessageAdmissionRequest,
+    ) -> Result<AdmissionResult, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = self
+            .append_conversation_input_on(&transaction, request)
+            .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    /// Host composition primitive: bind a freshly admitted, exact Run to a
+    /// retained neutral input reference in the same transaction.
+    pub(super) async fn open_conversation_recorder_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: RecorderStartRequest,
+    ) -> Result<RecorderOpenReceipt, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        request
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        if request.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        if let Some(receipt) = open_receipt_on(transaction, self.person_id, request.run_id).await? {
+            return replay_open_recording(request, receipt)
+                .map(|transition| transition.receipt)
+                .map_err(ConversationStoreFailure::Transition);
+        }
+        if request.executor_domain == ExecutorDomain::TaskExecution {
+            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &request.identity,
+            request.conversation_id,
+            request.branch_id,
+        );
+        let loaded_head =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        let current_generation = self
+            .active_conversation_executor_generation(transaction)
+            .await
+            .map_err(owner_error)?;
+        if current_generation != request.executor_generation {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let (owner, _, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                request.run_id,
+                &request.identity,
+                request.conversation_id,
+                request.branch_id,
+                request.input,
+                request.executor_domain,
+                request.executor_generation,
+            )
+            .await?;
+        let active_recorder = active_recorder_on(transaction, scope).await?;
+        let input_entry = entry_on(transaction, scope, request.input.sequence)
+            .await?
+            .filter(|entry| entry.reference == request.input);
+        let transition = open_recording_transition(
+            request,
+            RecorderOpenFacts {
+                owner: Some(owner),
+                head: loaded_head.state.clone(),
+                stored_receipt: None,
+                active_recorder,
+                input_entry,
+            },
+        )
+        .map_err(ConversationStoreFailure::Transition)?;
+        if let Some(next) = &transition.head {
+            save_head_on(transaction, scope, Some(&loaded_head), next).await?;
+            insert_open_receipt_on(transaction, scope, &transition.receipt).await?;
+            insert_active_recorder_on(transaction, scope, &transition.receipt.fence).await?;
+        }
+        Ok(transition.receipt)
+    }
+
+    pub(super) async fn open_conversation_recorder(
+        &self,
+        request: RecorderStartRequest,
+    ) -> Result<RecorderOpenReceipt, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = self
+            .open_conversation_recorder_on(&transaction, request)
+            .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    /// Host composition primitive: append one immutable, owner-proven output
+    /// contribution and its per-entry Task reference.
+    pub(super) async fn record_conversation_entry_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: RecordingRequest,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        if let Some(receipt) =
+            recording_receipt_on(transaction, self.person_id, request.contribution_id).await?
+        {
+            return replay_recording_entry(request, receipt)
+                .map(|transition| transition.receipt)
+                .map_err(ConversationStoreFailure::Transition);
+        }
+        if request.recorder.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        if request.recorder.executor_domain == ExecutorDomain::TaskExecution {
+            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &request.recorder.identity,
+            request.recorder.conversation_id,
+            request.recorder.branch_id,
+        );
+        let loaded_head =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        let active_recorder = active_recorder_on(transaction, scope).await?;
+        let current_generation = self
+            .active_conversation_executor_generation(transaction)
+            .await
+            .map_err(owner_error)?;
+        if current_generation != request.recorder.executor_generation {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::WrongWriter,
+            ));
+        }
+        let (owner, _, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                request.recorder.run_id,
+                &request.recorder.identity,
+                request.recorder.conversation_id,
+                request.recorder.branch_id,
+                request.recorder.input,
+                request.recorder.executor_domain,
+                request.recorder.executor_generation,
+            )
+            .await?;
+        let verified_task_reference = match request.producing_task.as_ref() {
+            Some(reference) => Some(
+                self.verified_task_reference_on(transaction, request.recorder.run_id, reference)
+                    .await?,
+            ),
+            None => None,
+        };
+        let message_id_in_transcript =
+            transcript_has_message_id_on(transaction, scope, request.message.message_id).await?;
+        let previous_prefix_digest =
+            tail_prefix_digest_on(transaction, scope, &loaded_head.state).await?;
+        let transition = record_entry_transition(
+            request,
+            RecordingFacts {
+                head: loaded_head.state.clone(),
+                active_recorder,
+                owner: Some(owner),
+                verified_task_reference,
+                stored_receipt: None,
+                message_id_in_transcript,
+                previous_prefix_digest,
+            },
+        )
+        .map_err(ConversationStoreFailure::Transition)?;
+        if let Some(entry) = &transition.appended {
+            let next = transition.head.as_ref().ok_or_else(unavailable)?;
+            save_head_on(transaction, scope, Some(&loaded_head), next).await?;
+            insert_entry_on(transaction, scope, entry).await?;
+            insert_recording_receipt_on(transaction, scope, &transition.receipt).await?;
+        }
+        Ok(transition.receipt)
+    }
+
+    pub(super) async fn record_conversation_entry(
+        &self,
+        request: RecordingRequest,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = self
+            .record_conversation_entry_on(&transaction, request)
+            .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    /// Host composition primitive. Current Vault owner records do not yet
+    /// expose verified transcript settlement/protection roots, so this close
+    /// persists an unchanged settled prefix and never infers one from queue data.
+    pub(super) async fn close_conversation_recorder_on(
+        &self,
+        transaction: &Transaction<'_>,
+        fence: RecorderFence,
+    ) -> Result<RecorderCloseReceipt, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        if let Some(receipt) = close_receipt_on(transaction, self.person_id, fence.run_id).await? {
+            return replay_close_recording(fence, receipt)
+                .map(|transition| transition.receipt)
+                .map_err(ConversationStoreFailure::Transition);
+        }
+        if retirement_receipt_on(transaction, self.person_id, fence.run_id)
+            .await?
+            .is_some()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed,
+            ));
+        }
+        if fence.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        if fence.executor_domain == ExecutorDomain::TaskExecution {
+            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &fence.identity,
+            fence.conversation_id,
+            fence.branch_id,
+        );
+        let loaded_head =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        let current_generation = self
+            .active_conversation_executor_generation(transaction)
+            .await
+            .map_err(owner_error)?;
+        if current_generation != fence.executor_generation {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::WrongWriter,
+            ));
+        }
+        let active_recorder = active_recorder_on(transaction, scope).await?;
+        let (owner, record, terminal_digest) = self
+            .verified_owner_evidence_on(
+                transaction,
+                fence.run_id,
+                &fence.identity,
+                fence.conversation_id,
+                fence.branch_id,
+                fence.input,
+                fence.executor_domain,
+                fence.executor_generation,
+            )
+            .await?;
+        if owner.state != OwnerRunState::Terminal || terminal_digest.is_none() {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let terminal_digest = terminal_digest.ok_or_else(unavailable)?;
+        let settlement = OwnerSettlementEvidence {
+            owner,
+            terminal_receipt_digest: terminal_digest,
+            settled_through: None,
+            protection_roots: Vec::new(),
+        };
+        let transition = close_recording_transition(
+            fence.clone(),
+            RecorderCloseFacts {
+                head: loaded_head.state.clone(),
+                active_recorder,
+                owner: Some(settlement),
+                stored_receipt: None,
+                settlement_prefix_verified: false,
+            },
+        )
+        .map_err(ConversationStoreFailure::Transition)?;
+        if let Some(next) = &transition.head {
+            save_head_on(transaction, scope, Some(&loaded_head), next).await?;
+            insert_close_receipt_on(transaction, scope, &transition.receipt).await?;
+            delete_active_recorder_on(transaction, scope, &fence).await?;
+        }
+        let _ = record;
+        Ok(transition.receipt)
+    }
+
+    pub(super) async fn close_conversation_recorder(
+        &self,
+        fence: RecorderFence,
+    ) -> Result<RecorderCloseReceipt, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = self
+            .close_conversation_recorder_on(&transaction, fence)
+            .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    /// Retire an abandoned recorder only after a durable, newer Host Run
+    /// executor generation and terminal or pending-terminal owner evidence.
+    pub(super) async fn retire_conversation_recorder_on(
+        &self,
+        transaction: &Transaction<'_>,
+        fence: RecorderFence,
+    ) -> Result<RecorderRetirementReceipt, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        if let Some(receipt) =
+            retirement_receipt_on(transaction, self.person_id, fence.run_id).await?
+        {
+            if receipt.fence != fence {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::RunAlreadyUsed,
+                ));
+            }
+            return Ok(receipt);
+        }
+        if close_receipt_on(transaction, self.person_id, fence.run_id)
+            .await?
+            .is_some()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed,
+            ));
+        }
+        if fence.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        if fence.executor_domain == ExecutorDomain::TaskExecution {
+            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &fence.identity,
+            fence.conversation_id,
+            fence.branch_id,
+        );
+        let loaded_head =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        let active_recorder = active_recorder_on(transaction, scope).await?;
+        let current_generation = self
+            .active_conversation_executor_generation(transaction)
+            .await
+            .map_err(owner_error)?;
+        let generation_fence = owner_generation_fence(
+            fence.executor_domain,
+            fence.run_id,
+            fence.executor_generation,
+            current_generation,
+        )?;
+        let (owner, _, terminal_digest) = self
+            .verified_owner_evidence_on(
+                transaction,
+                fence.run_id,
+                &fence.identity,
+                fence.conversation_id,
+                fence.branch_id,
+                fence.input,
+                fence.executor_domain,
+                fence.executor_generation,
+            )
+            .await?;
+        if owner.state == OwnerRunState::Terminal && terminal_digest.is_none() {
+            return Err(unavailable());
+        }
+        let transition = retire_stale_recording_transition(
+            fence.clone(),
+            generation_fence,
+            RecorderRetirementFacts {
+                head: loaded_head.state.clone(),
+                active_recorder,
+                owner: Some(owner),
+                stored_receipt: None,
+            },
+        )
+        .map_err(ConversationStoreFailure::Transition)?;
+        if let Some(next) = &transition.head {
+            save_head_on(transaction, scope, Some(&loaded_head), next).await?;
+            insert_retirement_receipt_on(transaction, scope, &transition.receipt).await?;
+            delete_active_recorder_on(transaction, scope, &fence).await?;
+        }
+        Ok(transition.receipt)
+    }
+
+    pub(super) async fn retire_conversation_recorder(
+        &self,
+        fence: RecorderFence,
+    ) -> Result<RecorderRetirementReceipt, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = self
+            .retire_conversation_recorder_on(&transaction, fence)
+            .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    pub(super) async fn read_conversation_page(
+        &self,
+        target: ConversationReference,
+        after: Option<TranscriptReference>,
+        budget: TranscriptPageBudget,
+    ) -> Result<TranscriptPage, ConversationStoreFailure> {
+        if target.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        let mut connection = self.connection().map_err(start_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(|error| start_error(database_failure(error)))?;
+        let result = self
+            .read_conversation_page_on(&transaction, &target, after, budget)
+            .await;
+        self.finish_conversation_core_read(transaction, result)
+            .await
+    }
+
+    pub(super) async fn read_conversation_page_on(
+        &self,
+        transaction: &Transaction<'_>,
+        target: &ConversationReference,
+        after: Option<TranscriptReference>,
+        budget: TranscriptPageBudget,
+    ) -> Result<TranscriptPage, ConversationStoreFailure> {
+        require_core_v3_on(transaction).await?;
+        let scope = Scope::from_identity(
+            self.person_id,
+            &target.identity,
+            target.conversation_id,
+            target.branch_id,
+        );
+        let loaded =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        map_transition(validate_reference_target(&loaded.state, target))?;
+        if budget.max_entries == 0 || budget.max_bytes == 0 {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::InvalidInput,
+            ));
+        }
+        let mut cursor_sequence = 0;
+        if let Some(cursor) = after {
+            cursor
+                .validate()
+                .map_err(ConversationStoreFailure::Transition)?;
+            if cursor.conversation_id != scope.conversation_id
+                || cursor.branch_id != scope.branch_id
+                || entry_on(transaction, scope, cursor.sequence)
+                    .await?
+                    .is_none_or(|entry| entry.reference != cursor)
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ));
+            }
+            cursor_sequence = cursor.sequence;
+        }
+        let max_entries = budget.max_entries.min(MAX_TRANSCRIPT_PAGE_ENTRIES);
+        let max_bytes = budget.max_bytes.min(MAX_TRANSCRIPT_PAGE_BYTES);
+        let mut entries = Vec::with_capacity(max_entries.min(32));
+        let mut encoded_bytes = 0usize;
+        let mut sequence = cursor_sequence.saturating_add(1);
+        while sequence <= loaded.state.head_revision && entries.len() < max_entries {
+            let entry = entry_on(transaction, scope, sequence)
+                .await?
+                .ok_or_else(unavailable)?;
+            self.validate_producing_task_reference_on(transaction, &entry)
+                .await?;
+            let entry_bytes = encode(&entry.message)?.as_bytes().len();
+            if entry_bytes > max_bytes.saturating_sub(encoded_bytes) {
+                if entries.is_empty() {
+                    return Err(ConversationStoreFailure::PageItemExceedsBudget);
+                }
+                break;
+            }
+            encoded_bytes = encoded_bytes.checked_add(entry_bytes).ok_or(
+                ConversationStoreFailure::Transition(ConversationFailure::InvalidInput),
+            )?;
+            entries.push(entry);
+            sequence = sequence.saturating_add(1);
+        }
+        let next_cursor = entries.last().map(|entry| entry.reference);
+        let through = next_cursor.map_or(cursor_sequence, |cursor| cursor.sequence);
+        Ok(TranscriptPage {
+            entries,
+            next_cursor,
+            has_more: loaded.state.head_revision > through,
+            encoded_bytes,
         })
+    }
+
+    pub(super) async fn observe_conversation_recorder(
+        &self,
+        target: ConversationReference,
+        run_id: RunId,
+    ) -> Result<RecorderRecoveryObservation, ConversationStoreFailure> {
+        if target.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        let mut connection = self.connection().map_err(start_error)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(|error| start_error(database_failure(error)))?;
+        let scope = Scope::from_identity(
+            self.person_id,
+            &target.identity,
+            target.conversation_id,
+            target.branch_id,
+        );
+        let result = async {
+            require_core_v3_on(&transaction).await?;
+            let loaded = load_head_on(&transaction, scope).await?.ok_or(
+                ConversationStoreFailure::Transition(ConversationFailure::ConversationMismatch),
+            )?;
+            map_transition(validate_reference_target(&loaded.state, &target))?;
+            let open = open_receipt_on(&transaction, self.person_id, run_id).await?;
+            let close = close_receipt_on(&transaction, self.person_id, run_id).await?;
+            let retired = retirement_receipt_on(&transaction, self.person_id, run_id).await?;
+            let active = active_recorder_on(&transaction, scope).await?;
+            let current_generation = self
+                .active_conversation_executor_generation(&transaction)
+                .await
+                .map_err(owner_error)?;
+            let recorder = open.map(|receipt| receipt.fence);
+            let state = if retired.is_some() {
+                RecorderRecoveryState::Retired
+            } else if close.is_some() {
+                RecorderRecoveryState::Closed
+            } else if let Some(fence) = &recorder {
+                if active.as_ref() != Some(fence) || fence.executor_generation != current_generation
+                {
+                    RecorderRecoveryState::Interrupted
+                } else {
+                    RecorderRecoveryState::ActiveCurrentGeneration
+                }
+            } else {
+                RecorderRecoveryState::Absent
+            };
+            Ok(RecorderRecoveryObservation {
+                state,
+                head: loaded.state,
+                recorder,
+                active_recorder: active,
+                current_generation,
+            })
+        }
+        .await;
+        self.finish_conversation_core_read(transaction, result)
+            .await
+    }
+
+    pub(super) async fn apply_conversation_checkpoint_on(
+        &self,
+        transaction: &Transaction<'_>,
+        target: ConversationReference,
+        checkpoint: ConversationCheckpoint,
+    ) -> Result<(), ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        if target.identity.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::AgentMismatch,
+            ));
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &target.identity,
+            target.conversation_id,
+            target.branch_id,
+        );
+        let loaded_head =
+            load_head_on(transaction, scope)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationMismatch,
+                ))?;
+        let current_checkpoint = checkpoint_on(transaction, scope).await?;
+        let stored_prefix_digest = entry_on(transaction, scope, checkpoint.through.sequence)
+            .await?
+            .map(|entry| entry.prefix_digest);
+        let next = apply_checkpoint_transition(
+            &target,
+            &checkpoint,
+            CheckpointFacts {
+                head: loaded_head.state.clone(),
+                current_checkpoint_sequence: current_checkpoint
+                    .as_ref()
+                    .map(|value| value.through.sequence),
+                stored_prefix_digest,
+            },
+        )
+        .map_err(ConversationStoreFailure::Transition)?;
+        save_head_on(transaction, scope, Some(&loaded_head), &next).await?;
+        save_checkpoint_on(transaction, scope, current_checkpoint.as_ref(), &checkpoint).await
+    }
+
+    async fn verified_owner_evidence_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run_id: RunId,
+        identity: &AgentIdentity,
+        conversation_id: ConversationId,
+        branch_id: ConversationBranchId,
+        input: TranscriptReference,
+        executor_domain: ExecutorDomain,
+        executor_generation: u64,
+    ) -> Result<(OwnerRunEvidence, RunRecord, Option<[u8; 32]>), ConversationStoreFailure> {
+        let record = self
+            .conversation_run_on(transaction, run_id)
+            .await
+            .map_err(owner_error)?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        if record.run_id != run_id
+            || record.person_id != self.person_id
+            || identity.person_id != self.person_id
+            || executor_domain != ExecutorDomain::HostRun
+            || record.executor_generation != executor_generation
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let binding = owner_input_binding_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let scope = Scope::from_identity(self.person_id, identity, conversation_id, branch_id);
+        let bound_input = entry_on(transaction, scope, binding.input.sequence)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let owner_request_matches_input = if let Some(source_run_id) =
+            record.continuation_of.or(record.resume_of)
+        {
+            let source = self
+                .conversation_run_on(transaction, source_run_id)
+                .await
+                .map_err(owner_error)?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            let source_binding = owner_input_binding_on(transaction, self.person_id, source_run_id)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            source.person_id == record.person_id
+                && source.session_id == record.session_id
+                && source.user_message_id == record.user_message_id
+                && source_binding.session_id == binding.session_id
+                && source_binding.owner_user_message_id == binding.owner_user_message_id
+                && source_binding.identity == binding.identity
+                && source_binding.conversation_id == binding.conversation_id
+                && source_binding.branch_id == binding.branch_id
+                && source_binding.input == binding.input
+        } else {
+            let expected_owner_digest = CanonicalTurnIntent {
+                session_id: record.session_id,
+                expected_revision: record.initial_session_revision,
+                text: bound_input.message.text.clone(),
+                mode: TurnMode::New,
+                retry_of: record.retry_of,
+            }
+            .digest(&self.person_id.to_string())
+            .map_err(|_| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
+            record.request_digest == expected_owner_digest
+        };
+        if binding.run_id != record.run_id
+            || binding.session_id != record.session_id
+            || binding.owner_user_message_id != record.user_message_id
+            || binding.identity != *identity
+            || binding.conversation_id != conversation_id
+            || binding.branch_id != branch_id
+            || binding.input != input
+            || binding.executor_domain != executor_domain
+            || binding.executor_generation != record.executor_generation
+            || bound_input.reference != input
+            || bound_input.kind != TranscriptEntryKind::Inbound
+            || bound_input.message.origin
+                != (floe_conversation_contract::MessageOrigin::Person {
+                    person_id: self.person_id,
+                })
+            || bound_input.message.task_id.is_some()
+            || bound_input.message.evidence.is_some()
+            || !owner_request_matches_input
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let journal = self
+            .conversation_journal_on(transaction, &record)
+            .await
+            .map_err(owner_error)?;
+        let accounting = self
+            .conversation_lineage_accounting_on(transaction, &record, &journal)
+            .await
+            .map_err(owner_error)?;
+        let terminal_text = super::conversations::terminal_receipt_on(transaction, run_id)
+            .await
+            .map_err(owner_error)?;
+        let terminal_digest = terminal_text.as_deref().map(parse_digest).transpose()?;
+        let state = if record.pending_terminal.is_some() {
+            if terminal_digest.is_some() {
+                return Err(unavailable());
+            }
+            OwnerRunState::PendingTerminal
+        } else if record.state.is_terminal() {
+            if terminal_digest.is_none() {
+                return Err(unavailable());
+            }
+            OwnerRunState::Terminal
+        } else if record.state == RunState::Working {
+            if terminal_digest.is_some() {
+                return Err(unavailable());
+            }
+            OwnerRunState::Working
+        } else {
+            return Err(unavailable());
+        };
+        let mut unresolved = HashSet::new();
+        for attempt in accounting.unresolved_attempts {
+            unresolved.insert(attempt.attempt_id);
+        }
+        for task_id in accounting.unresolved_delegations {
+            unresolved.insert(task_id.as_uuid());
+        }
+        let mut unresolved_effects = unresolved.into_iter().collect::<Vec<_>>();
+        unresolved_effects.sort_unstable();
+        let journal_events = journal.iter().map(|entry| &entry.event).collect::<Vec<_>>();
+        let evidence_bytes = serde_json::to_vec(&(&record, journal_events, &terminal_text))
+            .map_err(|_| unavailable())?;
+        let record_digest = Sha256::digest(evidence_bytes).into();
+        let evidence = OwnerRunEvidence {
+            domain: ExecutorDomain::HostRun,
+            run_id,
+            person_id: self.person_id,
+            input,
+            executor_generation: record.executor_generation,
+            aggregate_revision: record.aggregate_revision,
+            journal_revision: record.journal_revision,
+            state,
+            record_digest,
+            unresolved_effects,
+        };
+        evidence
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        Ok((evidence, record, terminal_digest))
+    }
+
+    async fn verified_task_receipt_on(
+        &self,
+        transaction: &Transaction<'_>,
+        reference: &TaskExecutionReceiptRef,
+    ) -> Result<floe_agent_contract::TaskExecutionReceipt, ConversationStoreFailure> {
+        reference.validate().map_err(|_| {
+            ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+        })?;
+        let actual = self
+            .read_execution_receipt_on(transaction, reference)
+            .await
+            .map_err(owner_error)?;
+        if actual.reference != *reference {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(actual)
+    }
+
+    async fn verified_task_reference_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run_id: RunId,
+        reference: &TaskEvidenceReference,
+    ) -> Result<TaskEvidenceReference, ConversationStoreFailure> {
+        reference
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        let open = open_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let fence = open.fence;
+        let (_, owner_run, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                run_id,
+                &fence.identity,
+                fence.conversation_id,
+                fence.branch_id,
+                fence.input,
+                fence.executor_domain,
+                fence.executor_generation,
+            )
+            .await?;
+        let task = self
+            .task_on(transaction, reference.task_id())
+            .await
+            .map_err(owner_error)?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let receipt_reference = task
+            .receipt
+            .as_ref()
+            .map(|receipt| receipt.reference.clone())
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let verified = self
+            .verified_task_receipt_on(transaction, &receipt_reference)
+            .await?;
+        if task.snapshot.parent_run_id != Some(run_id.as_uuid())
+            || task.snapshot.principal != self.person_id.to_string()
+            || matches!(
+                task.snapshot.state,
+                floe_agent_contract::TaskState::Submitted | floe_agent_contract::TaskState::Working
+            )
+            || verified.snapshot != task.snapshot
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let journal = self
+            .conversation_journal_on(transaction, &owner_run)
+            .await
+            .map_err(owner_error)?;
+        let mut intent: Option<floe_agent_contract::DelegationRequest> = None;
+        let mut intent_revision = 0;
+        let mut result: Option<Box<floe_agent_contract::TaskReceipt>> = None;
+        let mut result_revision = 0;
+        for entry in journal {
+            match entry.event {
+                floe_agent_contract::JournalEvent::DelegationIntent { request }
+                    if request.task_id == reference.task_id() =>
+                {
+                    if intent.replace(request).is_some() {
+                        return Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ));
+                    }
+                    intent_revision = entry.revision;
+                }
+                floe_agent_contract::JournalEvent::DelegationResult { receipt }
+                    if receipt.task_id == reference.task_id() =>
+                {
+                    if result.replace(receipt).is_some() {
+                        return Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ));
+                    }
+                    result_revision = entry.revision;
+                }
+                _ => {}
+            }
+        }
+        let request = intent.ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+        let receipt = result.ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+        let expected_request_digest = floe_agent_contract::delegation_request_digest(&request);
+        let expected_replay_input_digest: [u8; 32] =
+            Sha256::digest(request.message.as_bytes()).into();
+        let exact_receipt = matches!(
+            &receipt.execution,
+            floe_agent_contract::TaskExecutionEvidence::Admitted(stored) if stored == &verified
+        );
+        let replay_matches = receipt.replay.as_ref().is_none_or(|replay| {
+            replay.task_id == Some(reference.task_id())
+                && replay.run_id == Some(run_id)
+                && replay.principal == request.principal
+                && replay.agent_id.as_deref() == Some(request.selected_agent_id.as_str())
+                && replay.definition_revision == request.selected_definition_revision
+                && replay.invocation_key == request.invocation_key
+                && replay.task_execution.as_ref() == Some(&verified)
+                && replay.task_state == Some(task.snapshot.state)
+                && replay.task_result == task.snapshot.result
+                && replay.task_artifacts == task.snapshot.artifacts
+                && replay.task_coverage == task.snapshot.coverage
+                && replay.task_issue == task.snapshot.issue
+                && replay.input_digest == expected_replay_input_digest
+        });
+        if intent_revision == 0
+            || result_revision <= intent_revision
+            || request.parent_run_id != Some(run_id.as_uuid())
+            || request.principal != self.person_id.to_string()
+            || request.invocation_key != task.invocation_key
+            || request.selected_agent_id != task.snapshot.agent_id
+            || request.selected_definition_revision != task.snapshot.definition_revision
+            || request.execution_context.session_id != owner_run.session_id
+            || request.execution_context.device_id != owner_run.device_id
+            || task.device_id != owner_run.device_id
+            || task.request_digest != expected_request_digest
+            || !exact_receipt
+            || receipt.snapshot != task.snapshot
+            || receipt
+                .validate(floe_agent_contract::MAX_OUTPUT_BYTES)
+                .is_err()
+            || !replay_matches
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let resolved = task_evidence_reference(&verified.reference)?;
+        if resolved != *reference {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(resolved)
+    }
+
+    async fn validate_producing_task_reference_on(
+        &self,
+        transaction: &Transaction<'_>,
+        entry: &TranscriptEntry,
+    ) -> Result<(), ConversationStoreFailure> {
+        if let Some(reference) = entry.producing_task.as_ref() {
+            if entry.message.task_id != Some(reference.task_id()) {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            let run_id = entry
+                .producer_run
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            self.verified_task_reference_on(transaction, run_id, reference)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn finish_conversation_core_transaction<'vault, 'transaction, T>(
@@ -1815,7 +2625,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 guard.settled();
                 match failure {
-                    ConversationStoreFailure::Transition(_) => Err(failure),
+                    ConversationStoreFailure::Transition(_)
+                    | ConversationStoreFailure::UnsupportedOwnerDomain
+                    | ConversationStoreFailure::UnsupportedOwnerIntent
+                    | ConversationStoreFailure::UnsupportedStoredMeaning => Err(failure),
                     _ => Err(ConversationStoreFailure::NotCommitted),
                 }
             }
@@ -1824,19 +2637,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     async fn finish_conversation_core_read<T>(
         &self,
-        mut guard: JournalWriteGuard<'_>,
         transaction: Transaction<'_>,
         result: Result<T, ConversationStoreFailure>,
     ) -> Result<T, ConversationStoreFailure> {
         match result {
             Ok(value) => {
                 transaction.commit().await.map_err(|_| unavailable())?;
-                guard.settled();
-                if self.check_access().is_err() {
-                    self.unavailable
-                        .store(true, std::sync::atomic::Ordering::Release);
-                    return Err(unavailable());
-                }
+                self.check_access().map_err(|_| unavailable())?;
                 Ok(value)
             }
             Err(failure) => {
@@ -1845,7 +2652,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         .store(true, std::sync::atomic::Ordering::Release);
                     return Err(unavailable());
                 }
-                guard.settled();
                 Err(failure)
             }
         }
@@ -1853,671 +2659,235 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     pub(super) async fn validate_conversation_core_store(&self) -> Result<(), AgentFailure> {
         let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+        match crate::schema::conversation_core_family_version(&connection)
             .await
-            .map_err(database_failure)?;
-        crate::schema::ensure_conversation_core_family(&transaction)
-            .await
-            .map_err(crate::schema::SchemaFailure::into_agent)?;
-        let result = validate_all_conversations(&transaction, self.person_id)
-            .await
-            .map_err(|_| AgentFailure::VaultUnavailable);
-        self.finish_access_grant_transaction(transaction, result)
-            .await
-    }
-}
-
-impl<Keys: VaultKeyProvider> ConversationStorePort for EncryptedAgentVault<Keys> {
-    fn admit<'a>(
-        &'a self,
-        request: MessageAdmissionRequest,
-    ) -> BoxFuture<'a, Result<AdmissionResult, ConversationStoreFailure>> {
-        Box::pin(async move {
-            let (conversation_id, branch_id, identity) = match &request.target {
-                floe_conversation_contract::AdmissionTarget::New {
-                    conversation_id,
-                    branch_id,
-                    identity,
-                } => (*conversation_id, *branch_id, identity),
-                floe_conversation_contract::AdmissionTarget::Continue { reference } => (
-                    reference.conversation_id,
-                    reference.branch_id,
-                    &reference.identity,
-                ),
-            };
-            if identity.person_id != self.person_id {
-                return Err(ConversationFailure::AgentMismatch.into());
-            }
-            let scope = Scope {
-                person_id: self.person_id,
-                conversation_id,
-                branch_id,
-            };
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
+            .map_err(crate::schema::SchemaFailure::into_agent)?
+        {
+            crate::schema::ConversationCoreFamilyVersion::Absent => Ok(()),
+            crate::schema::ConversationCoreFamilyVersion::RecorderV3 => {
+                let transaction = connection
+                    .transaction_with_behavior(TransactionBehavior::Deferred)
                     .await
-                    .map_err(|_| unavailable())?;
-                let previous_head = load_head_on(&transaction, scope).await?;
-                let message_id_in_transcript =
-                    transcript_has_message_id_on(&transaction, scope, request.message.message_id)
-                        .await?;
-                let message =
-                    message_receipt_on(&transaction, scope, request.message.message_id).await?;
-                let command =
-                    command_message_on(&transaction, self.person_id, request.message.command_id)
-                        .await?;
-                if previous_head.is_none() && message.is_some() {
+                    .map_err(database_failure)?;
+                let result = self
+                    .validate_all_recorder_v3_on(&transaction)
+                    .await
+                    .map_err(|_| AgentFailure::VaultUnavailable);
+                self.finish_registry_transaction_checked(transaction, result)
+                    .await
+            }
+        }
+    }
+
+    async fn validate_all_recorder_v3_on(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), ConversationStoreFailure> {
+        let mut heads = transaction
+            .query(
+                "SELECT conversation_id, branch_id FROM agent_conversation_core_v3_heads WHERE person_id = ? ORDER BY conversation_id, branch_id LIMIT 4097",
+                [self.person_id.to_string()],
+            )
+            .await
+            .map_err(database_error)?;
+        let mut scopes = Vec::new();
+        while let Some(row) = heads.next().await.map_err(database_error)? {
+            if scopes.len() == 4096 {
+                return Err(unavailable());
+            }
+            scopes.push(Scope {
+                person_id: self.person_id,
+                conversation_id: parse_conversation_id(
+                    &row.get::<String>(0).map_err(|_| unavailable())?,
+                )?,
+                branch_id: parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?,
+            });
+        }
+        drop(heads);
+        for scope in &scopes {
+            let loaded = load_head_on(transaction, *scope)
+                .await?
+                .ok_or_else(unavailable)?;
+            for sequence in 1..=loaded.state.head_revision {
+                let entry = entry_on(transaction, *scope, sequence)
+                    .await?
+                    .ok_or_else(unavailable)?;
+                self.validate_producing_task_reference_on(transaction, &entry)
+                    .await?;
+            }
+            let (person, conversation, branch) = scope.sql();
+            let mut active = transaction
+                .query(
+                    "SELECT run_id FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+                    (person, conversation, branch),
+                )
+                .await
+                .map_err(database_error)?;
+            if let Some(row) = active.next().await.map_err(database_error)? {
+                let run_id = parse_run_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+                if open_receipt_on(transaction, self.person_id, run_id)
+                    .await?
+                    .is_none()
+                    || close_receipt_on(transaction, self.person_id, run_id)
+                        .await?
+                        .is_some()
+                    || retirement_receipt_on(transaction, self.person_id, run_id)
+                        .await?
+                        .is_some()
+                {
                     return Err(unavailable());
                 }
-                let active_writer = match &previous_head {
-                    Some(head) => active_claim_on(&transaction, &head.state).await?,
-                    None => None,
-                };
-                let previous_prefix_digest = match &previous_head {
-                    Some(head) => {
-                        let entry = entry_on(&transaction, scope, head.state.head_revision)
-                            .await?
-                            .ok_or_else(unavailable)?;
-                        entry.prefix_digest
-                    }
-                    None => EMPTY_PREFIX_DIGEST,
-                };
-                let transition = floe_conversation_core::admit_transition(
-                    AdmissionFacts {
-                        head: previous_head.as_ref().map(|head| head.state.clone()),
-                        active_writer,
-                        message,
-                        message_id_in_transcript,
-                        command,
-                        previous_prefix_digest,
-                    },
-                    request.clone(),
-                )
-                .map_err(ConversationStoreFailure::Transition)?;
-
-                if transition.head_changed {
-                    update_head_on(
-                        &transaction,
-                        scope,
-                        previous_head.as_ref(),
-                        &transition.head,
-                    )
-                    .await?;
-                }
-                if let Some(entry) = &transition.appended {
-                    insert_entry_on(&transaction, scope, entry).await?;
-                    insert_message_receipt_on(&transaction, scope, &transition.result.receipt)
-                        .await?;
-                    #[cfg(test)]
-                    if self
-                        .conversation_core_failure_before_pending
-                        .swap(false, std::sync::atomic::Ordering::AcqRel)
-                    {
-                        // Execute a real failing SQLite statement after the
-                        // head, transcript and message receipt have changed.
-                        transaction
-                            .execute(
-                                "INSERT INTO floe_conversation_core_fault_injection (id) VALUES (1)",
-                                (),
-                            )
-                            .await
-                            .map_err(database_error)?;
-                    }
-                    insert_pending_on(&transaction, scope, entry.reference).await?;
-                }
-                if transition.command_receipt.is_some() {
-                    insert_command_receipt_on(
-                        &transaction,
-                        scope,
-                        request.message.command_id,
-                        request.message.message_id,
-                    )
-                    .await?;
-                }
-                Ok(transition.result)
             }
-            .await;
-            self.finish_conversation_core_transaction(guard, transaction, result)
-                .await
-        })
+        }
+        let (orphan_inputs, orphan_outputs) =
+            v3_orphan_counts_on(transaction, self.person_id).await?;
+        if orphan_inputs != 0 || orphan_outputs != 0 {
+            return Err(unavailable());
+        }
+        self.validate_recorder_owner_receipts_on(transaction)
+            .await?;
+        Ok(())
     }
 
-    fn record_generated_output<'a>(
-        &'a self,
-        request: GeneratedOutputRequest,
-    ) -> BoxFuture<'a, Result<GeneratedOutputReceipt, ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = self.conversation_core_scope(&request.target)?;
-            if request.claim.identity.person_id != self.person_id {
-                return Err(ConversationFailure::AgentMismatch.into());
+    async fn validate_recorder_owner_receipts_on(
+        &self,
+        transaction: &Transaction<'_>,
+    ) -> Result<(), ConversationStoreFailure> {
+        let mut bindings = transaction
+            .query(
+                "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? ORDER BY run_id LIMIT 4097",
+                [self.person_id.to_string()],
+            )
+            .await
+            .map_err(database_error)?;
+        let mut binding_runs = Vec::new();
+        while let Some(row) = bindings.next().await.map_err(database_error)? {
+            if binding_runs.len() == 4096 {
+                return Err(unavailable());
             }
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
+            binding_runs.push(parse_run_id(
+                &row.get::<String>(0).map_err(|_| unavailable())?,
+            )?);
+        }
+        drop(bindings);
+        for run_id in binding_runs {
+            let binding = owner_input_binding_on(transaction, self.person_id, run_id)
+                .await?
+                .ok_or_else(unavailable)?;
+            self.verified_owner_evidence_on(
+                transaction,
+                run_id,
+                &binding.identity,
+                binding.conversation_id,
+                binding.branch_id,
+                binding.input,
+                binding.executor_domain,
+                binding.executor_generation,
+            )
+            .await?;
+        }
 
-                // The producer/message receipt is resolved before mutable
-                // writer, head-revision, or executor-generation checks. This
-                // readback restores a response whose commit acknowledgement
-                // was lost; it does not permit another dispatch.
-                let stored_receipt = generated_output_receipt_on(
-                    &transaction,
-                    self.person_id,
-                    request.claim.identity.agent_instance_id,
-                    request.message.message_id,
+        let mut rows = transaction
+            .query(
+                "SELECT run_id FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? ORDER BY run_id LIMIT 4097",
+                [self.person_id.to_string()],
+            )
+            .await
+            .map_err(database_error)?;
+        let mut run_ids = Vec::new();
+        while let Some(row) = rows.next().await.map_err(database_error)? {
+            if run_ids.len() == 4096 {
+                return Err(unavailable());
+            }
+            run_ids.push(parse_run_id(
+                &row.get::<String>(0).map_err(|_| unavailable())?,
+            )?);
+        }
+        drop(rows);
+        for run_id in run_ids {
+            let open = open_receipt_on(transaction, self.person_id, run_id)
+                .await?
+                .ok_or_else(unavailable)?;
+            let fence = open.fence;
+            if fence.executor_domain != ExecutorDomain::HostRun {
+                return Err(unavailable());
+            }
+            let scope = Scope::from_identity(
+                self.person_id,
+                &fence.identity,
+                fence.conversation_id,
+                fence.branch_id,
+            );
+            let loaded = load_head_on(transaction, scope)
+                .await?
+                .ok_or_else(unavailable)?;
+            let input = entry_on(transaction, scope, fence.input.sequence)
+                .await?
+                .ok_or_else(unavailable)?;
+            if input.reference != fence.input || input.kind != TranscriptEntryKind::Inbound {
+                return Err(unavailable());
+            }
+            let (owner, record, terminal_digest) = self
+                .verified_owner_evidence_on(
+                    transaction,
+                    run_id,
+                    &fence.identity,
+                    fence.conversation_id,
+                    fence.branch_id,
+                    fence.input,
+                    fence.executor_domain,
+                    fence.executor_generation,
                 )
                 .await?;
-                if let Some(receipt) = stored_receipt {
-                    let transition = floe_conversation_core::record_generated_output_transition(
-                        request.clone(),
-                        GeneratedOutputFacts {
-                            head: None,
-                            active_writer: None,
-                            executor_generation: 0,
-                            stored_receipt: Some(receipt),
-                            message_id_in_transcript: false,
-                            previous_prefix_digest: EMPTY_PREFIX_DIGEST,
-                        },
-                    )
-                    .map_err(ConversationStoreFailure::Transition)?;
-                    return Ok(transition.receipt);
-                }
-
-                let loaded_head = load_head_on(&transaction, scope).await?.ok_or(
-                    ConversationStoreFailure::Transition(ConversationFailure::ConversationMismatch),
-                )?;
-                let active_writer = active_claim_on(&transaction, &loaded_head.state).await?;
-                let executor_generation = executor_generation_on(&transaction).await?;
-                let message_id_in_transcript =
-                    transcript_has_message_id_on(&transaction, scope, request.message.message_id)
-                        .await?;
-                let previous_prefix_digest = if loaded_head.state.head_revision == 0 {
-                    EMPTY_PREFIX_DIGEST
-                } else {
-                    entry_on(&transaction, scope, loaded_head.state.head_revision)
-                        .await?
-                        .ok_or_else(unavailable)?
-                        .prefix_digest
-                };
-                let transition = floe_conversation_core::record_generated_output_transition(
-                    request.clone(),
-                    GeneratedOutputFacts {
-                        head: Some(loaded_head.state.clone()),
-                        active_writer,
-                        executor_generation,
-                        stored_receipt: None,
-                        message_id_in_transcript,
-                        previous_prefix_digest,
-                    },
-                )
-                .map_err(ConversationStoreFailure::Transition)?;
-                let entry = transition.appended.as_ref().ok_or_else(unavailable)?;
-                let next_head = transition.next_head.as_ref().ok_or_else(unavailable)?;
-                update_head_on(&transaction, scope, Some(&loaded_head), next_head).await?;
-                insert_entry_on(&transaction, scope, entry).await?;
-                insert_output_receipt_on(&transaction, scope, &transition.receipt).await?;
-                Ok(transition.receipt)
+            let active = active_recorder_on(transaction, scope).await?;
+            let close = close_receipt_on(transaction, self.person_id, run_id).await?;
+            let retired = retirement_receipt_on(transaction, self.person_id, run_id).await?;
+            if u64::try_from(open.opened_head_revision)
+                .ok()
+                .is_none_or(|value| value > loaded.state.head_revision)
+            {
+                return Err(unavailable());
             }
-            .await;
-            self.finish_conversation_core_transaction(guard, transaction, result)
-                .await
-        })
-    }
-
-    fn read_transcript_page<'a>(
-        &'a self,
-        target: ConversationReference,
-        after: Option<TranscriptReference>,
-        budget: TranscriptPageBudget,
-    ) -> BoxFuture<'a, Result<TranscriptPage, ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = self.conversation_core_scope(&target)?;
-            if budget.max_entries == 0 || budget.max_bytes == 0 {
-                return Err(ConversationFailure::InvalidInput.into());
-            }
-            let max_entries = budget.max_entries.min(MAX_TRANSCRIPT_PAGE_ENTRIES);
-            let max_bytes = budget.max_bytes.min(MAX_TRANSCRIPT_PAGE_BYTES);
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
-                let head = load_head_on(&transaction, scope).await?.ok_or(
-                    ConversationStoreFailure::Transition(ConversationFailure::ConversationMismatch),
-                )?;
-                floe_conversation_core::validate_reference_target(&head.state, &target)
-                    .map_err(ConversationStoreFailure::Transition)?;
-                let mut cursor_sequence = 0;
-                if let Some(cursor) = after {
-                    cursor
-                        .validate()
-                        .map_err(ConversationStoreFailure::Transition)?;
-                    if cursor.conversation_id != scope.conversation_id
-                        || cursor.branch_id != scope.branch_id
-                        || cursor.sequence > head.state.head_revision
-                    {
-                        return Err(ConversationFailure::ConversationMismatch.into());
-                    }
-                    let stored = entry_on(&transaction, scope, cursor.sequence)
-                        .await?
-                        .ok_or(ConversationStoreFailure::Transition(
-                            ConversationFailure::ConversationMismatch,
-                        ))?;
-                    if stored.reference != cursor {
-                        return Err(ConversationFailure::ConversationMismatch.into());
-                    }
-                    cursor_sequence = cursor.sequence;
-                }
-
-                let mut entries = Vec::with_capacity(max_entries.min(32));
-                let mut encoded_bytes = 0usize;
-                while entries.len() < max_entries {
-                    let Some(sequence) =
-                        next_entry_sequence_on(&transaction, scope, cursor_sequence).await?
-                    else {
-                        break;
-                    };
-                    if sequence != cursor_sequence.saturating_add(1)
-                        || sequence > head.state.head_revision
+            match (active.as_ref() == Some(&fence), close, retired) {
+                (true, None, None) => {}
+                (false, Some(receipt), None) => {
+                    if owner.state != OwnerRunState::Terminal
+                        || !owner.unresolved_effects.is_empty()
+                        || terminal_digest != Some(receipt.terminal_receipt_digest)
+                        || record.aggregate_revision != receipt.owner_aggregate_revision
                     {
                         return Err(unavailable());
                     }
-                    let entry = entry_on(&transaction, scope, sequence)
-                        .await?
-                        .ok_or_else(unavailable)?;
-                    let entry_bytes = encode(&entry.message)?.as_bytes().len();
-                    if entry_bytes > max_bytes.saturating_sub(encoded_bytes) {
-                        if entries.is_empty() {
-                            return Err(ConversationStoreFailure::PageItemExceedsBudget);
-                        }
-                        break;
+                }
+                (false, None, Some(receipt)) => {
+                    if !matches!(
+                        owner.state,
+                        OwnerRunState::Terminal | OwnerRunState::PendingTerminal
+                    ) || !owner.unresolved_effects.is_empty()
+                        || owner.record_digest != receipt.owner_evidence_digest
+                        || receipt.generation_fence.domain != fence.executor_domain
+                        || receipt.generation_fence.old_generation != fence.executor_generation
+                        || receipt.generation_fence.current_generation
+                            <= receipt.generation_fence.old_generation
+                        || receipt.generation_fence.evidence_digest
+                            != receipt.generation_fence_digest
+                    {
+                        return Err(unavailable());
                     }
-                    encoded_bytes = encoded_bytes.checked_add(entry_bytes).ok_or(
-                        ConversationStoreFailure::Transition(ConversationFailure::InvalidInput),
+                    let expected = owner_generation_fence(
+                        receipt.generation_fence.domain,
+                        fence.run_id,
+                        receipt.generation_fence.old_generation,
+                        receipt.generation_fence.current_generation,
                     )?;
-                    cursor_sequence = sequence;
-                    entries.push(entry);
-                }
-                let has_more = has_entry_after_on(&transaction, scope, cursor_sequence).await?;
-                let next_cursor = entries.last().map(|entry| entry.reference);
-                Ok(TranscriptPage {
-                    entries,
-                    next_cursor,
-                    has_more,
-                    encoded_bytes,
-                })
-            }
-            .await;
-            self.finish_conversation_core_read(guard, transaction, result)
-                .await
-        })
-    }
-
-    fn claim_writer<'a>(
-        &'a self,
-        target: ConversationReference,
-        link: RunTaskLink,
-        executor_generation: u64,
-    ) -> BoxFuture<'a, Result<WriterClaim, ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = self.conversation_core_scope(&target)?;
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
-                let loaded_head = load_head_on(&transaction, scope)
-                    .await?
-                    .ok_or(ConversationStoreFailure::Transition(
-                        ConversationFailure::ConversationMismatch,
-                    ))?;
-                let active_writer = active_claim_on(&transaction, &loaded_head.state).await?;
-                let earliest_pending = pending_first_on(&transaction, &loaded_head.state).await?;
-                if active_writer.is_none()
-                    && earliest_pending.is_none()
-                    && loaded_head.state.head_revision > loaded_head.state.completed_prefix
-                {
-                    return Err(unavailable());
-                }
-                let actual_generation = executor_generation_on(&transaction).await?;
-                let used = run_was_used_on(&transaction, scope, link.run_id).await?;
-                let transition = floe_conversation_core::claim_writer_transition(
-                    &target,
-                    link,
-                    ClaimFacts {
-                        head: loaded_head.state.clone(),
-                        active_writer,
-                        earliest_pending,
-                        run_already_used: used,
-                        requested_executor_generation: executor_generation,
-                        executor_generation: actual_generation,
-                    },
-                )
-                .map_err(ConversationStoreFailure::Transition)?;
-                let (person, conversation, branch) = scope.sql();
-                let removed = transaction
-                    .execute(
-                        "DELETE FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ? AND message_id = ?",
-                        (
-                            person.clone(),
-                            conversation.clone(),
-                            branch.clone(),
-                            integer(transition.claim.message.sequence)?,
-                            transition.claim.message.message_id.as_uuid().to_string(),
-                        ),
-                    )
-                    .await
-                    .map_err(database_error)?;
-                if removed != 1 {
-                    return Err(unavailable());
-                }
-                update_head_on(
-                    &transaction,
-                    scope,
-                    Some(&loaded_head),
-                    &transition.head,
-                )
-                .await?;
-                let run_id = transition.claim.link.run_id.as_uuid().to_string();
-                let task_id = transition
-                    .claim
-                    .link
-                    .task_id
-                    .map(|id| id.as_uuid().to_string());
-                let sequence = integer(transition.claim.message.sequence)?;
-                let epoch = integer(transition.claim.writer_epoch)?;
-                let generation = integer(transition.claim.executor_generation)?;
-                transaction
-                    .execute(
-                        "INSERT INTO agent_conversation_core_active_writers (person_id, conversation_id, branch_id, run_id, task_id, message_sequence, writer_epoch, executor_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            person.clone(),
-                            conversation.clone(),
-                            branch.clone(),
-                            run_id.clone(),
-                            task_id.clone(),
-                            sequence,
-                            epoch,
-                            generation,
-                        ),
-                    )
-                    .await
-                    .map_err(database_error)?;
-                transaction
-                    .execute(
-                        "INSERT INTO agent_conversation_core_writer_receipts (person_id, conversation_id, branch_id, run_id, task_id, message_sequence, writer_epoch, executor_generation, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
-                        (
-                            person,
-                            conversation,
-                            branch,
-                            run_id,
-                            task_id,
-                            sequence,
-                            epoch,
-                            generation,
-                        ),
-                    )
-                    .await
-                    .map_err(database_error)?;
-                Ok(transition.claim)
-            }
-            .await;
-            self.finish_conversation_core_transaction(guard, transaction, result)
-                .await
-        })
-    }
-
-    fn complete_writer<'a>(
-        &'a self,
-        claim: WriterClaim,
-    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = Scope {
-                person_id: self.person_id,
-                conversation_id: claim.message.conversation_id,
-                branch_id: claim.message.branch_id,
-            };
-            if claim.identity.person_id != self.person_id {
-                return Err(ConversationFailure::AgentMismatch.into());
-            }
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
-                let loaded_head = load_head_on(&transaction, scope)
-                    .await?
-                    .ok_or(ConversationStoreFailure::Transition(
-                        ConversationFailure::WrongWriter,
-                    ))?;
-                let active_writer = active_claim_on(&transaction, &loaded_head.state).await?;
-                let earliest_pending = pending_first_on(&transaction, &loaded_head.state).await?;
-                let actual_generation = executor_generation_on(&transaction).await?;
-                let next_head = floe_conversation_core::complete_writer_transition(
-                    claim.clone(),
-                    CompletionFacts {
-                        head: loaded_head.state.clone(),
-                        active_writer,
-                        executor_generation: actual_generation,
-                        earliest_pending_sequence: earliest_pending
-                            .map(|pending| pending.entry.reference.sequence),
-                    },
-                )
-                .map_err(ConversationStoreFailure::Transition)?;
-                update_head_on(
-                    &transaction,
-                    scope,
-                    Some(&loaded_head),
-                    &next_head,
-                )
-                .await?;
-                let (person, conversation, branch) = scope.sql();
-                let run_id = claim.link.run_id.as_uuid().to_string();
-                let task_id = claim.link.task_id.map(|id| id.as_uuid().to_string());
-                let sequence = integer(claim.message.sequence)?;
-                let epoch = integer(claim.writer_epoch)?;
-                let generation = integer(claim.executor_generation)?;
-                let completed = transaction
-                    .execute(
-                        "UPDATE agent_conversation_core_writer_receipts SET state = 'completed' WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ? AND task_id IS ? AND message_sequence = ? AND writer_epoch = ? AND executor_generation = ? AND state = 'active'",
-                        (
-                            person.clone(),
-                            conversation.clone(),
-                            branch.clone(),
-                            run_id.clone(),
-                            task_id.clone(),
-                            sequence,
-                            epoch,
-                            generation,
-                        ),
-                    )
-                    .await
-                    .map_err(database_error)?;
-                if completed != 1 {
-                    return Err(unavailable());
-                }
-                let removed = transaction
-                    .execute(
-                        "DELETE FROM agent_conversation_core_active_writers WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ? AND task_id IS ? AND message_sequence = ? AND writer_epoch = ? AND executor_generation = ?",
-                        (
-                            person,
-                            conversation,
-                            branch,
-                            run_id,
-                            task_id,
-                            sequence,
-                            epoch,
-                            generation,
-                        ),
-                    )
-                    .await
-                    .map_err(database_error)?;
-                if removed != 1 {
-                    return Err(unavailable());
-                }
-                Ok(())
-            }
-            .await;
-            self.finish_conversation_core_transaction(guard, transaction, result)
-                .await
-        })
-    }
-
-    fn observe_writer<'a>(
-        &'a self,
-        target: ConversationReference,
-        run_id: RunId,
-    ) -> BoxFuture<'a, Result<WriterRecoveryObservation, ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = self.conversation_core_scope(&target)?;
-            if !run_id.is_valid() {
-                return Err(ConversationFailure::InvalidInput.into());
-            }
-            target
-                .validate()
-                .map_err(ConversationStoreFailure::Transition)?;
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
-                let loaded_head = load_head_on(&transaction, scope).await?.ok_or(
-                    ConversationStoreFailure::Transition(ConversationFailure::ConversationMismatch),
-                )?;
-                floe_conversation_core::validate_reference_target(&loaded_head.state, &target)
-                    .map_err(ConversationStoreFailure::Transition)?;
-                let active_writer = active_claim_on(&transaction, &loaded_head.state).await?;
-                let current_executor_generation = executor_generation_on(&transaction).await?;
-                let exact_receipt =
-                    writer_receipt_on(&transaction, &loaded_head.state, run_id).await?;
-                let state = match exact_receipt.as_ref() {
-                    Some((claim, true)) => {
-                        if active_writer.as_ref() == Some(claim)
-                            || claim.message.sequence > loaded_head.state.completed_prefix
-                        {
-                            return Err(unavailable());
-                        }
-                        WriterRecoveryState::Completed
+                    if expected != receipt.generation_fence {
+                        return Err(unavailable());
                     }
-                    Some((claim, false)) => {
-                        if active_writer.as_ref() != Some(claim)
-                            || claim.message.sequence
-                                != loaded_head.state.completed_prefix.saturating_add(1)
-                        {
-                            return Err(unavailable());
-                        }
-                        if claim.executor_generation == current_executor_generation {
-                            WriterRecoveryState::ActiveCurrentGeneration
-                        } else {
-                            WriterRecoveryState::Interrupted
-                        }
-                    }
-                    None => {
-                        if active_writer
-                            .as_ref()
-                            .is_some_and(|claim| claim.link.run_id == run_id)
-                        {
-                            return Err(unavailable());
-                        }
-                        WriterRecoveryState::Absent
-                    }
-                };
-                Ok(WriterRecoveryObservation {
-                    state,
-                    head: loaded_head.state,
-                    writer: exact_receipt.map(|(claim, _)| claim),
-                    active_writer,
-                    current_executor_generation,
-                })
+                }
+                _ => return Err(unavailable()),
             }
-            .await;
-            self.finish_conversation_core_read(guard, transaction, result)
-                .await
-        })
-    }
-
-    fn apply_checkpoint<'a>(
-        &'a self,
-        target: ConversationReference,
-        checkpoint: ConversationCheckpoint,
-    ) -> BoxFuture<'a, Result<(), ConversationStoreFailure>> {
-        Box::pin(async move {
-            let scope = self.conversation_core_scope(&target)?;
-            let mut connection = self.connection().map_err(start_error)?;
-            let (guard, transaction) = self
-                .journal_transaction(&mut connection)
-                .await
-                .map_err(start_error)?;
-            let result = async {
-                crate::schema::ensure_conversation_core_family(&transaction)
-                    .await
-                    .map_err(|_| unavailable())?;
-                let loaded_head = load_head_on(&transaction, scope).await?.ok_or(
-                    ConversationStoreFailure::Transition(ConversationFailure::ConversationMismatch),
-                )?;
-                let previous_checkpoint = checkpoint_on(&transaction, scope).await?;
-                let stored_prefix_digest = if checkpoint.through.sequence > 0
-                    && checkpoint.through.sequence <= loaded_head.state.head_revision
-                {
-                    entry_on(&transaction, scope, checkpoint.through.sequence)
-                        .await?
-                        .filter(|entry| entry.reference == checkpoint.through)
-                        .map(|entry| entry.prefix_digest)
-                } else {
-                    None
-                };
-                let next_head = floe_conversation_core::apply_checkpoint_transition(
-                    &target,
-                    &checkpoint,
-                    CheckpointFacts {
-                        head: loaded_head.state.clone(),
-                        current_checkpoint_sequence: previous_checkpoint
-                            .as_ref()
-                            .map(|value| value.sequence),
-                        stored_prefix_digest,
-                    },
-                )
-                .map_err(ConversationStoreFailure::Transition)?;
-                update_head_on(&transaction, scope, Some(&loaded_head), &next_head).await?;
-                write_checkpoint_on(
-                    &transaction,
-                    scope,
-                    previous_checkpoint.as_ref(),
-                    &checkpoint,
-                )
-                .await
-            }
-            .await;
-            self.finish_conversation_core_transaction(guard, transaction, result)
-                .await
-        })
+        }
+        Ok(())
     }
 }
 
@@ -2526,41 +2896,39 @@ mod tests {
     use std::{
         collections::HashMap,
         os::unix::fs::PermissionsExt,
-        path::PathBuf,
-        sync::{Arc, Mutex},
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex, atomic::Ordering},
     };
 
     use super::*;
-    use crate::RootKey;
+    use crate::{RootKey, VaultKeyProvider};
+    use floe_agent_contract::{
+        AgentMessage, DependencyCoverage, MessageRole, TaskSnapshot, TaskState,
+    };
+    use floe_conversation::{
+        CanonicalTurnIntent, RunTerminal, SessionStartAdmission, SessionStore, StartSessionRequest,
+        TurnAdmissionRequest, TurnInput, TurnMode,
+    };
     use floe_conversation_contract::{
         AdmissionDisposition, AdmissionTarget, AgentIdentity, AgentInstanceId, AssignmentId,
-        MessageEvidenceReference, MessageOrigin,
+        ConversationMessage, LogicalContributionId, MessageAdmissionRequest, MessageId,
+        MessageOrigin,
     };
-    use floe_kernel::CommandId;
-
-    #[derive(Default)]
-    struct KeyState {
-        values: HashMap<(PersonId, Uuid), [u8; 32]>,
-        unavailable: bool,
-    }
+    use floe_experts::{
+        ExpertAdmissionIdentity, ExpertExecutionSelection, PackageKind, PackageRef,
+        TaskExecutionCommit, TaskRecord,
+    };
+    use floe_kernel::{AgentFailure, CommandId, TaskId};
+    use uuid::Uuid;
 
     #[derive(Clone, Default)]
-    struct TestKeys(Arc<Mutex<KeyState>>);
-
-    impl TestKeys {
-        fn set_unavailable(&self, unavailable: bool) {
-            self.0.lock().expect("test key state").unavailable = unavailable;
-        }
-    }
+    struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
 
     impl VaultKeyProvider for TestKeys {
         fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure> {
-            let state = self.0.lock().map_err(|_| AgentFailure::VaultUnavailable)?;
-            if state.unavailable {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            state
-                .values
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
                 .get(&(person_id, vault_id))
                 .copied()
                 .map(RootKey::from_bytes)
@@ -2573,11 +2941,10 @@ mod tests {
             vault_id: Uuid,
             key: &RootKey,
         ) -> Result<(), AgentFailure> {
-            let mut state = self.0.lock().map_err(|_| AgentFailure::VaultUnavailable)?;
-            if state.unavailable {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            state.values.insert((person_id, vault_id), *key.as_bytes());
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .insert((person_id, vault_id), *key.as_bytes());
             Ok(())
         }
     }
@@ -2586,10 +2953,10 @@ mod tests {
 
     impl TestRoot {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("floe-core-vault-{}", Uuid::new_v4()));
-            std::fs::create_dir(&path).expect("create private test root");
+            let path = std::env::temp_dir().join(format!("floe-core-custody-{}", Uuid::new_v4()));
+            std::fs::create_dir(&path).expect("create isolated Vault test root");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
-                .expect("restrict test root");
+                .expect("restrict isolated Vault test root");
             Self(path)
         }
     }
@@ -2600,857 +2967,1594 @@ mod tests {
         }
     }
 
-    struct Fixture {
+    struct Scenario {
+        // Keep the Vault before the root so its database and lock drop first.
         vault: Option<EncryptedAgentVault<TestKeys>>,
-        root: TestRoot,
         keys: TestKeys,
         person_id: PersonId,
         identity: AgentIdentity,
         conversation_id: ConversationId,
         branch_id: ConversationBranchId,
-        task_id: TaskId,
+        session_id: Uuid,
+        session_revision: u64,
+        executor_generation: u64,
+        last_core_input_request: Option<(MessageAdmissionRequest, TranscriptReference)>,
+        root: TestRoot,
     }
 
-    impl Fixture {
+    impl Scenario {
         async fn new() -> Self {
             let root = TestRoot::new();
             let person_id = PersonId::new();
             let keys = TestKeys::default();
             let vault = EncryptedAgentVault::create(&root.0, person_id, keys.clone())
                 .await
-                .expect("create encrypted test Vault");
+                .expect("create isolated encrypted Vault");
+            let session = match vault
+                .start_conversation_session(StartSessionRequest {
+                    principal: person_id.to_string(),
+                    command_id: CommandId::new(),
+                })
+                .await
+                .expect("start owner Session")
+            {
+                SessionStartAdmission::Started(receipt) => receipt,
+                other => panic!("unexpected Session admission: {other:?}"),
+            };
+            let activation = vault
+                .activate_conversation_executor()
+                .await
+                .expect("activate owner executor fence");
             Self {
                 vault: Some(vault),
-                root,
                 keys,
                 person_id,
                 identity: AgentIdentity {
                     person_id,
                     agent_instance_id: AgentInstanceId::new(),
                     assignment_id: AssignmentId::new(),
-                    definition_id: "fixture-agent".to_owned(),
+                    definition_id: "test.manager".into(),
                     definition_revision: 1,
                 },
                 conversation_id: ConversationId::new(),
                 branch_id: ConversationBranchId::new(),
-                task_id: TaskId::new(),
+                session_id: session.session_id,
+                session_revision: session.session_revision,
+                executor_generation: activation.executor_generation,
+                last_core_input_request: None,
+                root,
             }
         }
 
         fn vault(&self) -> &EncryptedAgentVault<TestKeys> {
-            self.vault.as_ref().expect("test Vault is open")
+            self.vault.as_ref().expect("test Vault remains open")
         }
 
-        fn independent_handle(&self) -> EncryptedAgentVault<TestKeys> {
-            let source = self.vault();
-            EncryptedAgentVault {
-                database: source.database.clone(),
-                key: RootKey::from_bytes(*source.key.as_bytes()),
-                keys: self.keys.clone(),
-                person_id: self.person_id,
-                vault_id: source.vault_id,
-                unavailable: std::sync::atomic::AtomicBool::new(false),
-                journal_writes: tokio::sync::Mutex::new(()),
-                conversation_executor_generation: std::sync::atomic::AtomicU64::new(
-                    source
-                        .conversation_executor_generation
-                        .load(std::sync::atomic::Ordering::Acquire),
-                ),
-                task_executor_generation: std::sync::atomic::AtomicU64::new(
-                    source
-                        .task_executor_generation
-                        .load(std::sync::atomic::Ordering::Acquire),
-                ),
-                conversation_core_ack_loss: std::sync::atomic::AtomicBool::new(false),
-                conversation_core_failure_before_pending: std::sync::atomic::AtomicBool::new(false),
-                _host_lock: source._host_lock.try_clone().expect("clone test host lock"),
+        async fn reopen(&mut self) {
+            drop(self.vault.take());
+            self.vault = Some(
+                EncryptedAgentVault::open(&self.root.0, self.person_id, self.keys.clone())
+                    .await
+                    .expect("reopen isolated encrypted Vault"),
+            );
+        }
+
+        fn owner_request(&self, text: &str) -> TurnAdmissionRequest {
+            self.owner_request_for_session(self.session_id, self.session_revision, text)
+        }
+
+        fn owner_request_for_session(
+            &self,
+            session_id: Uuid,
+            session_revision: u64,
+            text: &str,
+        ) -> TurnAdmissionRequest {
+            let command_id = CommandId::new();
+            let principal = self.person_id.to_string();
+            let intent = CanonicalTurnIntent {
+                session_id,
+                expected_revision: session_revision,
+                text: text.to_owned(),
+                mode: TurnMode::New,
+                retry_of: None,
+            };
+            TurnAdmissionRequest {
+                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
+                    revision: 1,
+                    digest: [41; 32],
+                },
+                run_id: RunId::new(),
+                command_id,
+                session_id,
+                expected_session_revision: session_revision,
+                principal: principal.clone(),
+                device_id: "device-core-custody-test".into(),
+                request_digest: intent.digest(&principal).expect("canonical owner digest"),
+                mode: TurnMode::New,
+                retry_of: None,
+                input: TurnInput::NewMessage(AgentMessage {
+                    message_id: command_id.as_uuid(),
+                    role: MessageRole::User,
+                    text: text.to_owned(),
+                    call_id: None,
+                    coverage: DependencyCoverage::Independent,
+                }),
             }
         }
 
-        async fn reopen(&mut self) -> Result<(), AgentFailure> {
-            drop(self.vault.take());
-            self.vault = Some(
-                EncryptedAgentVault::open(&self.root.0, self.person_id, self.keys.clone()).await?,
-            );
-            Ok(())
-        }
-
-        fn new_request(&self, message: ConversationMessage) -> MessageAdmissionRequest {
+        fn core_input_request(&self, text: &str) -> MessageAdmissionRequest {
             MessageAdmissionRequest {
                 target: AdmissionTarget::New {
                     conversation_id: self.conversation_id,
                     branch_id: self.branch_id,
                     identity: self.identity.clone(),
                 },
-                message,
-            }
-        }
-
-        fn continue_request(
-            &self,
-            head_revision: u64,
-            message: ConversationMessage,
-        ) -> MessageAdmissionRequest {
-            MessageAdmissionRequest {
-                target: AdmissionTarget::Continue {
-                    reference: self.reference(head_revision),
+                // MessageId and CommandId are independent transcript/owner keys.
+                message: ConversationMessage {
+                    message_id: MessageId::new(),
+                    command_id: CommandId::new(),
+                    origin: MessageOrigin::Person {
+                        person_id: self.person_id,
+                    },
+                    text: text.to_owned(),
+                    evidence: None,
+                    task_id: None,
                 },
-                message,
             }
         }
 
-        fn reference(&self, head_revision: u64) -> ConversationReference {
-            ConversationReference {
+        async fn admit_run_and_append_input(&mut self, text: &str) -> (RunRecord, AdmissionResult) {
+            let owner_request = self.owner_request(text);
+            let core_request = self.core_input_request(text);
+            self.admit_run_and_bind_input(owner_request, core_request)
+                .await
+        }
+
+        async fn admit_run_and_bind_input(
+            &mut self,
+            owner_request: TurnAdmissionRequest,
+            core_request: MessageAdmissionRequest,
+        ) -> (RunRecord, AdmissionResult) {
+            let mut connection = self.vault().connection().expect("connect to test Vault");
+            let (mut guard, transaction) = self
+                .vault()
+                .journal_transaction(&mut connection)
+                .await
+                .expect("start composed owner/Core transaction");
+            let mut replay_checked = false;
+            let mut prior_command = false;
+            let (record, input) = self
+                .vault()
+                .admit_conversation_run_with_core_input_on(
+                    &transaction,
+                    owner_request,
+                    core_request.clone(),
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await
+                .expect("admit owner Run and bind Core input in composed transaction");
+            let next_revision = record.session_revision;
+            transaction
+                .commit()
+                .await
+                .expect("commit owner and Core admission together");
+            guard.settled();
+            drop(guard);
+            self.session_revision = next_revision;
+            self.last_core_input_request = Some((core_request, input.receipt.transcript));
+            (record, input)
+        }
+
+        async fn admit_unbound_owner_run(&mut self, request: TurnAdmissionRequest) -> RunRecord {
+            let mut connection = self.vault().connection().expect("connect to test Vault");
+            let (mut guard, transaction) = self
+                .vault()
+                .journal_transaction(&mut connection)
+                .await
+                .expect("start deliberately unbound owner transaction");
+            let mut replay_checked = false;
+            let mut prior_command = false;
+            let admitted = self
+                .vault()
+                .admit_conversation_turn_on(
+                    &transaction,
+                    request,
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await
+                .expect("admit owner Run without a Core binding");
+            let super::super::VaultConversationAdmission::Created { record, .. } = admitted else {
+                panic!("unbound fixture did not create a Run");
+            };
+            transaction
+                .commit()
+                .await
+                .expect("commit deliberately unbound owner Run");
+            guard.settled();
+            drop(guard);
+            self.session_revision = record.session_revision;
+            record
+        }
+
+        async fn admit_owner_run_reusing_input(
+            &mut self,
+            parent: &RunRecord,
+            text: &str,
+        ) -> (RunRecord, AdmissionResult) {
+            let continuation = floe_conversation::project_run_receipt(parent.clone())
+                .expect("project terminal parent receipt")
+                .continuation()
+                .expect("BudgetExceeded parent provides a Continue reference");
+            let command_id = CommandId::new();
+            let mode = TurnMode::Continue(continuation);
+            let request_digest = CanonicalTurnIntent {
+                session_id: parent.session_id,
+                expected_revision: parent.session_revision,
+                text: text.to_owned(),
+                mode: mode.clone(),
+                retry_of: None,
+            }
+            .digest(&self.person_id.to_string())
+            .expect("canonical Continue intent digest");
+            let owner_request = TurnAdmissionRequest {
+                expert_environment: parent.expert_environment,
+                run_id: RunId::new(),
+                command_id,
+                session_id: parent.session_id,
+                expected_session_revision: parent.session_revision,
+                principal: self.person_id.to_string(),
+                device_id: parent.device_id.clone(),
+                request_digest,
+                mode,
+                retry_of: None,
+                input: TurnInput::ExistingMessage {
+                    message_id: parent.user_message_id,
+                },
+            };
+            let (mut core_request, input_reference) = self
+                .last_core_input_request
+                .clone()
+                .expect("a retained Core input was previously admitted");
+            let AdmissionTarget::New {
+                identity,
+                conversation_id,
+                branch_id,
+            } = core_request.target.clone()
+            else {
+                panic!("fixture retains the original input admission target");
+            };
+            let previous = core_request.message.clone();
+            core_request.target = AdmissionTarget::AppendToExisting {
+                reference: ConversationReference {
+                    identity,
+                    conversation_id,
+                    branch_id,
+                    head_revision: input_reference.sequence,
+                },
+            };
+            debug_assert_eq!(core_request.message, previous);
+            self.admit_run_and_bind_input(owner_request, core_request)
+                .await
+        }
+
+        fn start_request(
+            &self,
+            run: &RunRecord,
+            input: TranscriptReference,
+        ) -> RecorderStartRequest {
+            RecorderStartRequest {
+                identity: self.identity.clone(),
                 conversation_id: self.conversation_id,
                 branch_id: self.branch_id,
-                identity: self.identity.clone(),
-                head_revision,
+                run_id: run.run_id,
+                input,
+                executor_domain: ExecutorDomain::HostRun,
+                executor_generation: self.executor_generation,
+                execution_task: None,
             }
         }
 
-        fn message(&self, text: impl Into<String>) -> ConversationMessage {
-            ConversationMessage {
-                message_id: MessageId::new(),
-                command_id: CommandId::new(),
-                origin: MessageOrigin::Person {
-                    person_id: self.person_id,
+        fn recording_request(&self, fence: RecorderFence, text: &str) -> RecordingRequest {
+            RecordingRequest {
+                recorder: fence,
+                message: ConversationMessage {
+                    message_id: MessageId::new(),
+                    command_id: CommandId::new(),
+                    origin: MessageOrigin::Agent {
+                        agent_instance_id: self.identity.agent_instance_id,
+                    },
+                    text: text.to_owned(),
+                    evidence: None,
+                    task_id: None,
                 },
-                text: text.into(),
-                evidence: None,
-                task_id: Some(self.task_id),
+                contribution_id: LogicalContributionId::new(),
+                producing_task: None,
             }
         }
 
-        fn generated_message(
+        async fn append_owner_event(
             &self,
-            identity: &AgentIdentity,
-            message_id: MessageId,
-            command_id: CommandId,
-            text: impl Into<String>,
-        ) -> ConversationMessage {
-            ConversationMessage {
-                message_id,
-                command_id,
-                origin: MessageOrigin::Agent {
-                    agent_instance_id: identity.agent_instance_id,
-                },
-                text: text.into(),
-                evidence: None,
-                task_id: Some(self.task_id),
-            }
-        }
-
-        fn output_request(
-            &self,
-            claim: &WriterClaim,
-            head_revision: u64,
-            message: ConversationMessage,
-        ) -> GeneratedOutputRequest {
-            GeneratedOutputRequest {
-                target: ConversationReference {
-                    conversation_id: claim.message.conversation_id,
-                    branch_id: claim.message.branch_id,
-                    identity: claim.identity.clone(),
-                    head_revision,
-                },
-                claim: claim.clone(),
-                message,
-            }
-        }
-
-        async fn admit_first(&self, message: ConversationMessage) -> AdmissionResult {
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                self.vault(),
-                self.new_request(message),
-            )
-            .await
-            .expect("durably admit first message")
-        }
-    }
-
-    fn failure_is<T: std::fmt::Debug + PartialEq>(
-        result: Result<T, ConversationStoreFailure>,
-        expected: ConversationFailure,
-    ) {
-        assert_eq!(result, Err(ConversationStoreFailure::Transition(expected)));
-    }
-
-    #[tokio::test]
-    async fn encrypted_reopen_preserves_receipt_and_key_unavailability_does_not_infer_absence() {
-        let mut fixture = Fixture::new().await;
-        let request = fixture.new_request(fixture.message("persisted encrypted input"));
-        let first = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            request.clone(),
-        )
-        .await
-        .expect("admission commits");
-        assert_eq!(first.disposition, AdmissionDisposition::Appended);
-
-        fixture.keys.set_unavailable(true);
-        drop(fixture.vault.take());
-        assert_eq!(
-            EncryptedAgentVault::open(&fixture.root.0, fixture.person_id, fixture.keys.clone())
+            run_id: RunId,
+            event: floe_agent_contract::JournalEvent,
+        ) {
+            let kind = super::super::conversations::journal_kind(&event);
+            let payload = serde_json::to_string(&event).expect("encode owner journal fixture");
+            self.vault()
+                .append_conversation_journal(run_id, kind, &payload)
                 .await
-                .err(),
-            Some(AgentFailure::VaultUnavailable)
-        );
-        fixture.keys.set_unavailable(false);
-        fixture
-            .reopen()
-            .await
-            .expect("reopen with exact stored key");
-        let replay = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            request,
-        )
-        .await
-        .expect("read and replay encrypted receipt");
-        assert_eq!(replay.disposition, AdmissionDisposition::Replayed);
-        assert_eq!(replay.receipt, first.receipt);
-    }
+                .expect("append owner journal fixture event");
+        }
 
-    #[tokio::test]
-    async fn owner_command_identity_blocks_retargeting_and_changed_evidence() {
-        let mut fixture = Fixture::new().await;
-        let mut original_message = fixture.message("owner scoped command");
-        original_message.evidence = Some(MessageEvidenceReference::from_digest([0x31; 32]));
-        let original_request = fixture.new_request(original_message.clone());
-        let first = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            original_request.clone(),
-        )
-        .await
-        .expect("first command admission commits");
-        assert_eq!(first.disposition, AdmissionDisposition::Appended);
+        async fn terminal_task_receipts(
+            &self,
+            run: &RunRecord,
+            executor_generation: u64,
+        ) -> Vec<TaskExecutionReceiptRef> {
+            use floe_agent_contract::InvocationKey;
+            use floe_agent_contract::{
+                AgentContext, DelegationExecutionContext, DelegationRequest, JournalEvent,
+                ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+                ModelSelectionCommitment, PinnedAgentRevision, PreparedModelPlan,
+                ProcessingBoundary, ProjectionRef, TaskExecutionEvidence, ValidatedModelBatch,
+            };
+            use floe_kernel::TaskId;
 
-        let exact_replay = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            original_request.clone(),
-        )
-        .await
-        .expect("exact target and delivery replay before mutable revision checks");
-        assert_eq!(exact_replay.disposition, AdmissionDisposition::Replayed);
-        assert_eq!(exact_replay.receipt, first.receipt);
-
-        let mut alias_message = original_message.clone();
-        alias_message.command_id = CommandId::new();
-        let alias_request = fixture.new_request(alias_message);
-        let alias_first = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            alias_request.clone(),
-        )
-        .await
-        .expect("same conversation-local MessageId may carry a fresh CommandId");
-        assert_eq!(alias_first.disposition, AdmissionDisposition::Replayed);
-        assert_eq!(alias_first.receipt, first.receipt);
-        let alias_replay = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            alias_request,
-        )
-        .await
-        .expect("each owner-wide CommandId retains its original message binding");
-        assert_eq!(alias_replay.disposition, AdmissionDisposition::Replayed);
-        assert_eq!(alias_replay.receipt, first.receipt);
-
-        let retarget_conversation = MessageAdmissionRequest {
-            target: AdmissionTarget::New {
-                identity: fixture.identity.clone(),
-                conversation_id: ConversationId::new(),
-                branch_id: ConversationBranchId::new(),
-            },
-            message: original_message.clone(),
-        };
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                retarget_conversation,
+            let agent_context = AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            };
+            let execution_context = DelegationExecutionContext {
+                session_id: run.session_id,
+                device_id: run.device_id.clone(),
+                agent_context,
+                max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                projection_coverage: DependencyCoverage::Independent,
+            };
+            let execution_id = run.run_id.as_uuid();
+            let attempt_id = Uuid::new_v4();
+            let projection_ref = ProjectionRef::new();
+            let batch_id = Uuid::new_v4();
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    parent_task_id: None,
+                    reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                        tokens: 128,
+                        cost_micros: 128,
+                    },
+                    projection_ref,
+                    plan: PreparedModelPlan {
+                        operation_id: Uuid::new_v4(),
+                        principal: self.person_id.to_string(),
+                        device_id: run.device_id.clone(),
+                        purpose: "everyday_assistance".into(),
+                        consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                        capabilities: ModelCapabilities::chat(),
+                        boundary: ProcessingBoundary::Device,
+                        binding_digest: ModelBindingDigest([61; 32]),
+                        selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                        budget_profile: Some(ModelBudgetProfile::unknown()),
+                    },
+                },
             )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-
-        let mut other_agent = fixture.identity.clone();
-        other_agent.agent_instance_id = AgentInstanceId::new();
-        let retarget_agent = MessageAdmissionRequest {
-            target: AdmissionTarget::New {
-                identity: other_agent,
-                conversation_id: fixture.conversation_id,
-                branch_id: fixture.branch_id,
-            },
-            message: original_message.clone(),
-        };
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                retarget_agent,
+            .await;
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: floe_agent_contract::ModelUsage::default(),
+                    accounting: floe_execution::budget::ModelAccounting {
+                        observed_tokens: None,
+                        observed_cost_micros: None,
+                        unknown_tokens: true,
+                        unknown_cost: true,
+                    },
+                },
             )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-
-        let retarget_branch = MessageAdmissionRequest {
-            target: AdmissionTarget::New {
-                identity: fixture.identity.clone(),
-                conversation_id: fixture.conversation_id,
-                branch_id: ConversationBranchId::new(),
-            },
-            message: original_message.clone(),
-        };
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                retarget_branch,
+            .await;
+            let task_messages = ["Task A input", "Task B input"];
+            let batch = ValidatedModelBatch {
+                execution_id,
+                attempt_id,
+                projection_ref,
+                batch_id,
+                steps: task_messages
+                    .iter()
+                    .map(|message| floe_agent_contract::ModelStep::Delegate {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                        message: (*message).into(),
+                        context_refs: vec![],
+                    })
+                    .collect(),
+                catalog_revision: run.expert_environment.revision,
+                tool_revisions: vec![],
+                agent_revisions: vec![PinnedAgentRevision {
+                    agent_id: "fixture.expert".into(),
+                    definition_revision: 1,
+                }],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: Some(execution_context.clone()),
+            };
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ValidatedBatch {
+                    batch: batch.clone(),
+                },
             )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-
-        let mut changed_evidence = original_message.clone();
-        changed_evidence.evidence = Some(MessageEvidenceReference::from_digest([0x32; 32]));
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.new_request(changed_evidence),
+            .await;
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::BatchProgress {
+                    cursor: floe_agent_contract::BatchCursor {
+                        batch_id,
+                        next_step_index: 0,
+                    },
+                },
             )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
+            .await;
 
-        fixture
-            .reopen()
-            .await
-            .expect("owner binding survives reopen");
-        let replay_after_reopen = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            original_request,
-        )
-        .await
-        .expect("reopened Vault reads the same owner command receipt");
-        assert_eq!(
-            replay_after_reopen.disposition,
-            AdmissionDisposition::Replayed
-        );
-        assert_eq!(replay_after_reopen.receipt, first.receipt);
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("retarget conflicts did not append effects");
-        assert_eq!(page.entries.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn concurrent_owner_command_retargeting_has_one_effect_across_connections() {
-        let mut fixture = Fixture::new().await;
-        let second_handle = fixture.independent_handle();
-        let message = fixture.message("competing owner command");
-        let first_request = fixture.new_request(message.clone());
-        let second_request = MessageAdmissionRequest {
-            target: AdmissionTarget::New {
-                identity: fixture.identity.clone(),
-                conversation_id: ConversationId::new(),
-                branch_id: ConversationBranchId::new(),
-            },
-            message: message.clone(),
-        };
-        let (first, second) = tokio::join!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                first_request.clone(),
-            ),
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                &second_handle,
-                second_request.clone(),
-            ),
-        );
-        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-        let (loser, retry_request) = if first.is_err() {
-            (first, first_request)
-        } else {
-            (second, second_request)
-        };
-        assert!(matches!(
-            loser,
-            Err(ConversationStoreFailure::Busy)
-                | Err(ConversationStoreFailure::Transition(
-                    ConversationFailure::CommandIdConflict
+            let mut references = Vec::new();
+            for (ordinal, message) in task_messages.iter().enumerate() {
+                let ordinal = ordinal as u32;
+                let task_id = TaskId::from_uuid(Uuid::new_v5(
+                    &execution_id,
+                    format!("{execution_id}:{batch_id}:{ordinal}:task").as_bytes(),
                 ))
-        ));
-        if loser == Err(ConversationStoreFailure::Busy) {
-            assert_eq!(
-                <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                    fixture.vault(),
-                    retry_request,
+                .expect("derive stable TaskId");
+                let invocation_key = InvocationKey::from_uuid(Uuid::new_v5(
+                    &execution_id,
+                    format!("{execution_id}:{batch_id}:{ordinal}:delegation").as_bytes(),
+                ))
+                .expect("derive stable delegation invocation");
+                let request = DelegationRequest {
+                    task_id,
+                    parent_run_id: Some(run.run_id.as_uuid()),
+                    principal: self.person_id.to_string(),
+                    invocation_key,
+                    selected_agent_id: "fixture.expert".into(),
+                    selected_definition_revision: 1,
+                    message: (*message).into(),
+                    context_refs: vec![],
+                    execution_context: execution_context.clone(),
+                };
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::DelegationIntent {
+                        request: request.clone(),
+                    },
+                )
+                .await;
+                let snapshot = TaskSnapshot {
+                    task_id,
+                    parent_run_id: request.parent_run_id,
+                    principal: request.principal.clone(),
+                    agent_id: request.selected_agent_id.clone(),
+                    definition_revision: request.selected_definition_revision,
+                    state: TaskState::Submitted,
+                    result: None,
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Unknown,
+                    issue: None,
+                    blockage: None,
+                };
+                let empty_journal_digest = Sha256::digest(
+                    serde_json::to_vec(&(
+                        "floe.execution-journal.sha256.v1",
+                        Vec::<floe_agent_contract::JournalEntry>::new(),
+                    ))
+                    .expect("encode empty Task journal"),
+                )
+                .into();
+                let proposed = TaskRecord {
+                    snapshot,
+                    admission: ExpertAdmissionIdentity {
+                        registry_instance_id: Uuid::new_v4(),
+                        assignment_id: Uuid::new_v4(),
+                        installation_id: Uuid::new_v4(),
+                        package: PackageRef {
+                            kind: PackageKind::Expert,
+                            id: "fixture.expert".into(),
+                            version: "1.0.0".into(),
+                        },
+                        definition_revision: 1,
+                    },
+                    selection: ExpertExecutionSelection::without_requirements(1)
+                        .expect("build empty binding fixture"),
+                    invocation_key,
+                    request_digest: floe_agent_contract::delegation_request_digest(&request),
+                    aggregate_revision: 1,
+                    executor_generation,
+                    execution_id: Uuid::new_v4(),
+                    device_id: "device-core-custody-test".into(),
+                    catalog_revision: 1,
+                    model_allowance: floe_execution::budget::ModelReservationCeiling {
+                        tokens: 128,
+                        cost_micros: 128,
+                    },
+                    maximum_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+                    journal_revision: 0,
+                    journal_digest: empty_journal_digest,
+                    receipt: None,
+                };
+                self.vault()
+                    .admit_task(proposed.clone())
+                    .await
+                    .expect("admit Task for evidence fixture");
+                let working = self
+                    .vault()
+                    .compare_and_swap_task(
+                        task_id,
+                        proposed.aggregate_revision,
+                        executor_generation,
+                        TaskSnapshot {
+                            state: TaskState::Working,
+                            ..proposed.snapshot.clone()
+                        },
+                    )
+                    .await
+                    .expect("start Task execution fixture");
+                let receipt = self
+                    .vault()
+                    .settle_task_execution(TaskExecutionCommit {
+                        execution: working.execution(),
+                        expected_task_revision: working.aggregate_revision,
+                        expected_journal_revision: working.journal_revision,
+                        terminal: TaskSnapshot {
+                            state: TaskState::Interrupted,
+                            issue: Some(AgentFailure::Interrupted),
+                            ..working.snapshot
+                        },
+                        settlement: None,
+                    })
+                    .await
+                    .expect("settle exact terminal Task execution receipt");
+                let task_receipt = floe_agent_contract::TaskReceipt {
+                    task_id,
+                    snapshot: receipt.snapshot.clone(),
+                    replay: None,
+                    execution: TaskExecutionEvidence::Admitted(receipt.clone()),
+                };
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::DelegationResult {
+                        receipt: Box::new(task_receipt),
+                    },
+                )
+                .await;
+                references.push(receipt.reference.clone());
+                if ordinal == 0 {
+                    self.append_owner_event(
+                        run.run_id,
+                        JournalEvent::BatchProgress {
+                            cursor: floe_agent_contract::BatchCursor {
+                                batch_id,
+                                next_step_index: 1,
+                            },
+                        },
+                    )
+                    .await;
+                }
+            }
+            references
+        }
+
+        async fn cancel_owner_run(&mut self, run: &RunRecord) -> RunRecord {
+            let next = self
+                .vault()
+                .finish_conversation_run(
+                    run.run_id,
+                    run.aggregate_revision,
+                    RunTerminal::from_failure(AgentFailure::Cancelled),
+                )
+                .await
+                .expect("write normal owner terminal receipt");
+            self.session_revision = next.session_revision;
+            next
+        }
+
+        async fn budget_exceeded_owner_run(&mut self, run: &RunRecord) -> RunRecord {
+            let next = self
+                .vault()
+                .finish_conversation_run(
+                    run.run_id,
+                    run.aggregate_revision,
+                    RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+                )
+                .await
+                .expect("finish owner Run with an eligible Continue failure");
+            self.session_revision = next.session_revision;
+            next
+        }
+    }
+
+    async fn table_count(connection: &turso::Connection, table: &str) -> i64 {
+        let query = format!("SELECT count(*) FROM {table}");
+        connection
+            .query(&query, ())
+            .await
+            .expect("query fixture row count")
+            .next()
+            .await
+            .expect("read fixture row count")
+            .expect("fixture count row")
+            .get::<i64>(0)
+            .expect("integer fixture count")
+    }
+
+    async fn table_count_in_transaction(transaction: &Transaction<'_>, table: &str) -> i64 {
+        let query = format!("SELECT count(*) FROM {table}");
+        transaction
+            .query(&query, ())
+            .await
+            .expect("query transactional fixture row count")
+            .next()
+            .await
+            .expect("read transactional fixture row count")
+            .expect("transactional fixture count row")
+            .get::<i64>(0)
+            .expect("integer transactional fixture count")
+    }
+
+    async fn session_storage_snapshot(
+        connection: &turso::Connection,
+        session_id: Uuid,
+    ) -> (i64, String) {
+        let mut rows = connection
+            .query(
+                "SELECT revision, payload FROM agent_sessions WHERE id = ?",
+                [session_id.to_string()],
+            )
+            .await
+            .expect("read owner Session snapshot");
+        let row = rows
+            .next()
+            .await
+            .expect("read owner Session row")
+            .expect("owner Session exists");
+        (
+            row.get::<i64>(0).expect("Session revision type"),
+            row.get::<String>(1).expect("Session payload type"),
+        )
+    }
+
+    async fn catalog_snapshot(path: &Path, key: &RootKey) -> Vec<(String, String, String)> {
+        let database = super::super::encrypted_database(path, key)
+            .await
+            .expect("open raw encrypted fixture database");
+        let connection = database.connect().expect("connect to raw fixture database");
+        let mut rows = connection
+            .query(
+                "SELECT type, name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
+                (),
+            )
+            .await
+            .expect("read raw schema snapshot");
+        let mut snapshot = Vec::new();
+        while let Some(row) = rows.next().await.expect("read raw schema row") {
+            snapshot.push((
+                row.get::<String>(0).expect("schema type"),
+                row.get::<String>(1).expect("schema name"),
+                row.get::<String>(2).expect("schema DDL"),
+            ));
+        }
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn owner_admission_and_core_input_rollback_as_one_transaction() {
+        let scenario = Scenario::new().await;
+        let initial_revision = scenario.session_revision;
+        let owner_request = scenario.owner_request("atomic admission");
+        let core_request = scenario.core_input_request("atomic admission");
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start composed transaction");
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        scenario
+            .vault()
+            .admit_conversation_run_with_core_input_on(
+                &transaction,
+                owner_request,
+                core_request,
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await
+            .expect("write bound owner Run and Core input before deliberate rollback");
+        transaction
+            .rollback()
+            .await
+            .expect("roll back owner and Core rows together");
+        guard.settled();
+
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect after rollback");
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 0);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_heads").await,
+            0
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            0
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            0
+        );
+        assert_eq!(
+            table_count(&connection, "agent_sessions").await,
+            1,
+            "the initial owner Session remains"
+        );
+        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+            .await
+            .expect("reload Session after rollback");
+        assert_eq!(session.revision, initial_revision);
+        assert!(session.active_turn.is_none());
+    }
+
+    #[tokio::test]
+    async fn resume_composition_is_rejected_before_owner_core_or_slot_writes() {
+        let mut scenario = Scenario::new().await;
+        let (origin, input) = scenario
+            .admit_run_and_append_input("resume retained input")
+            .await;
+        scenario.cancel_owner_run(&origin).await;
+        let (core_request, retained_reference) = scenario
+            .last_core_input_request
+            .clone()
+            .expect("the origin Run retains its Core input request");
+        assert_eq!(retained_reference, input.receipt.transcript);
+        let mode = TurnMode::Resume(floe_conversation::InteractionResumeRef {
+            origin_run_id: origin.run_id,
+            lineage: 1,
+        });
+        let mut owner_request = scenario.owner_request("resume retained input");
+        owner_request.mode = mode.clone();
+        owner_request.input = TurnInput::ExistingMessage {
+            message_id: origin.user_message_id,
+        };
+        owner_request.request_digest = CanonicalTurnIntent {
+            session_id: owner_request.session_id,
+            expected_revision: owner_request.expected_session_revision,
+            text: "resume retained input".to_owned(),
+            mode,
+            retry_of: None,
+        }
+        .digest(&owner_request.principal)
+        .expect("canonical Resume intent digest");
+        owner_request
+            .validate()
+            .expect("synthetic Resume request is structurally valid");
+
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
+        let table_names = [
+            "agent_conversation_runs",
+            "agent_conversation_resume_requests",
+            "agent_conversation_resume_slots",
+            "agent_conversation_core_v3_heads",
+            "agent_conversation_core_v3_entries",
+            "agent_conversation_core_v3_input_receipts",
+            "agent_conversation_core_v3_owner_bindings",
+        ];
+        let mut before_counts = Vec::with_capacity(table_names.len());
+        for table in table_names {
+            before_counts.push(table_count(&connection, table).await);
+        }
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start unsupported Resume composition transaction");
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        assert_eq!(
+            scenario
+                .vault()
+                .admit_conversation_run_with_core_input_on(
+                    &transaction,
+                    owner_request,
+                    core_request.clone(),
+                    &mut replay_checked,
+                    &mut prior_command,
                 )
                 .await,
-                Err(ConversationStoreFailure::Transition(
-                    ConversationFailure::CommandIdConflict
-                ))
+            Err(ConversationStoreFailure::UnsupportedOwnerIntent),
+        );
+        for (table, count) in table_names.iter().zip(before_counts) {
+            assert_eq!(
+                table_count_in_transaction(&transaction, table).await,
+                count,
+                "unsupported Resume did not mutate {table}"
             );
         }
-
-        drop(second_handle);
-        fixture
-            .reopen()
-            .await
-            .expect("validate single winning receipt");
-        let connection = fixture.vault().connection().expect("test connection");
-        let mut rows = connection
-            .query(
-                "SELECT COUNT(*) FROM agent_conversation_core_command_receipts WHERE person_id = ? AND command_id = ?",
-                (
-                    fixture.person_id.to_string(),
-                    message.command_id.as_uuid().to_string(),
-                ),
-            )
-            .await
-            .expect("count the owner-wide receipt");
         assert_eq!(
-            rows.next()
-                .await
-                .expect("read command count")
-                .expect("command count row")
-                .get::<i64>(0)
-                .expect("count column"),
-            1
+            session_storage_snapshot(&transaction, scenario.session_id).await,
+            before_session,
+            "unsupported Resume did not mutate the owner Session"
         );
-    }
-
-    #[tokio::test]
-    async fn legacy_layout_three_opens_unchanged_and_initializes_only_on_core_port_use() {
-        let mut fixture = Fixture::new().await;
-        let connection = fixture.vault().connection().expect("test connection");
-        connection
-            .execute("DROP INDEX agent_conversation_core_output_sequence", ())
+        transaction
+            .rollback()
             .await
-            .expect("remove the additive output index");
-        for table in [
-            "agent_conversation_core_output_receipts",
-            "agent_conversation_core_entry_metadata",
-            "agent_conversation_core_outputs_schema",
-            "agent_conversation_core_checkpoints",
-            "agent_conversation_core_writer_receipts",
-            "agent_conversation_core_active_writers",
-            "agent_conversation_core_pending_inputs",
-            "agent_conversation_core_command_receipts",
-            "agent_conversation_core_message_receipts",
-            "agent_conversation_core_entries",
-            "agent_conversation_core_heads",
-            "agent_conversation_core_schema",
-        ] {
-            connection
-                .execute(&format!("DROP TABLE {table}"), ())
-                .await
-                .expect("remove only the additive Core family");
-        }
+            .expect("roll back rejected Resume composition");
+        guard.settled();
+        drop(guard);
         drop(connection);
-        fixture
-            .reopen()
-            .await
-            .expect("older layout opens without startup Core DDL");
-        assert!(
-            !crate::schema::conversation_core_family_present(
-                &fixture.vault().connection().expect("test connection")
-            )
-            .await
-            .expect("inspect optional family")
-        );
+    }
 
-        let result = fixture
-            .admit_first(fixture.message("explicit Core-port use"))
+    #[tokio::test]
+    async fn exact_new_owner_replay_recovers_its_immutable_core_binding_and_receipt() {
+        let mut scenario = Scenario::new().await;
+        let owner_request = scenario.owner_request("exact New replay");
+        let core_request = scenario.core_input_request("exact New replay");
+        let (first_run, first_input) = scenario
+            .admit_run_and_bind_input(owner_request.clone(), core_request.clone())
             .await;
-        assert_eq!(result.receipt.head_revision, 1);
-        assert!(
-            crate::schema::conversation_core_family_present(
-                &fixture.vault().connection().expect("test connection")
-            )
-            .await
-            .expect("inspect initialized family")
+        assert_eq!(first_input.disposition, AdmissionDisposition::Appended);
+        let before = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let before_session = session_storage_snapshot(&before, scenario.session_id).await;
+        let before_runs = table_count(&before, "agent_conversation_runs").await;
+        let before_entries = table_count(&before, "agent_conversation_core_v3_entries").await;
+        let before_bindings =
+            table_count(&before, "agent_conversation_core_v3_owner_bindings").await;
+        drop(before);
+
+        let (replayed_run, replayed_input) = scenario
+            .admit_run_and_bind_input(owner_request, core_request)
+            .await;
+        assert_eq!(replayed_run, first_run);
+        assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(replayed_input.receipt, first_input.receipt);
+        let after = scenario
+            .vault()
+            .connection()
+            .expect("reconnect to test Vault");
+        assert_eq!(
+            table_count(&after, "agent_conversation_runs").await,
+            before_runs
+        );
+        assert_eq!(
+            table_count(&after, "agent_conversation_core_v3_entries").await,
+            before_entries
+        );
+        assert_eq!(
+            table_count(&after, "agent_conversation_core_v3_owner_bindings").await,
+            before_bindings
+        );
+        assert_eq!(
+            session_storage_snapshot(&after, scenario.session_id).await,
+            before_session
         );
     }
 
     #[tokio::test]
-    async fn reopen_recomputes_the_stored_prefix_chain_without_repairing_tampering() {
-        let mut fixture = Fixture::new().await;
-        let admission = fixture
-            .admit_first(fixture.message("prefix integrity"))
+    async fn distinct_new_commands_cannot_reuse_one_core_message_id() {
+        let mut scenario = Scenario::new().await;
+        let text = "different New commands, one Core MessageId";
+        let first_owner = scenario.owner_request(text);
+        let shared_core_input = scenario.core_input_request(text);
+        let (first_run, first_input) = scenario
+            .admit_run_and_bind_input(first_owner, shared_core_input.clone())
             .await;
-        let connection = fixture.vault().connection().expect("test connection");
-        connection
-            .execute(
-                "UPDATE agent_conversation_core_entries SET prefix_digest = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = 1",
-                (
-                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
-                ),
-            )
+        scenario.cancel_owner_run(&first_run).await;
+        let second_owner = scenario.owner_request(text);
+        assert_ne!(second_owner.command_id, first_run.command_id);
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
+        let before_runs = table_count(&connection, "agent_conversation_runs").await;
+        let before_entries = table_count(&connection, "agent_conversation_core_v3_entries").await;
+        let before_bindings =
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await;
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
             .await
-            .expect("inject a validly shaped but incorrect row commitment");
+            .expect("start duplicate Core MessageId transaction");
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        assert_eq!(
+            scenario
+                .vault()
+                .admit_conversation_run_with_core_input_on(
+                    &transaction,
+                    second_owner,
+                    shared_core_input,
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "a newly admitted owner command requires a fresh Core append"
+        );
+        assert!(replay_checked, "the second owner intent was new");
+        transaction
+            .rollback()
+            .await
+            .expect("roll back owner admission rejected by Core replay");
+        guard.settled();
+        drop(guard);
         drop(connection);
-        drop(fixture.vault.take());
+
+        let after = scenario
+            .vault()
+            .connection()
+            .expect("reconnect to test Vault");
         assert_eq!(
-            EncryptedAgentVault::open(&fixture.root.0, fixture.person_id, fixture.keys.clone())
-                .await
-                .err(),
-            Some(AgentFailure::VaultUnavailable)
+            table_count(&after, "agent_conversation_runs").await,
+            before_runs
         );
-        assert!(
-            fixture
-                .root
-                .0
-                .join(fixture.person_id.to_string())
-                .join("sessions.db")
-                .exists()
+        assert_eq!(
+            table_count(&after, "agent_conversation_core_v3_entries").await,
+            before_entries
         );
-        assert_eq!(admission.receipt.head_revision, 1);
+        assert_eq!(
+            table_count(&after, "agent_conversation_core_v3_owner_bindings").await,
+            before_bindings
+        );
+        assert_eq!(
+            session_storage_snapshot(&after, scenario.session_id).await,
+            before_session,
+            "owner Session append and revision rolled back with the Core conflict"
+        );
+        assert_eq!(first_input.receipt.transcript.sequence, 1);
     }
 
     #[tokio::test]
-    async fn encrypted_store_confines_person_agent_and_replay_evidence() {
-        let fixture = Fixture::new().await;
-        let initial = fixture.message("same bytes, exact delivery");
-        let request = fixture.new_request(initial.clone());
-        let first = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            request.clone(),
-        )
-        .await
-        .expect("initial admission");
+    async fn recorder_open_requires_the_exact_admission_binding() {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input("bound owner input")
+            .await;
+        let start = scenario.start_request(&run, input.receipt.transcript);
+
+        let mut changed_identity = start.clone();
+        changed_identity.identity.agent_instance_id = AgentInstanceId::new();
         assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                request,
-            )
-            .await
-            .expect("exact retry"),
-            AdmissionResult {
-                disposition: AdmissionDisposition::Replayed,
-                receipt: first.receipt.clone(),
-            }
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_identity)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
         );
 
-        let mut changed_evidence = initial.clone();
-        changed_evidence.evidence = Some(MessageEvidenceReference::from_digest([0x11; 32]));
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.new_request(changed_evidence),
-            )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-        let mut changed_origin = initial.clone();
-        changed_origin.origin = MessageOrigin::Host;
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.new_request(changed_origin),
-            )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-        let mut changed_task = initial;
-        changed_task.task_id = Some(TaskId::new());
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.new_request(changed_task),
-            )
-            .await,
-            ConversationFailure::CommandIdConflict,
-        );
-
-        let wrong_person = PersonId::new();
-        let mut wrong_person_identity = fixture.identity.clone();
-        wrong_person_identity.person_id = wrong_person;
-        let wrong_person_request = MessageAdmissionRequest {
-            target: AdmissionTarget::New {
-                conversation_id: ConversationId::new(),
-                branch_id: ConversationBranchId::new(),
-                identity: wrong_person_identity,
-            },
-            message: ConversationMessage {
-                message_id: MessageId::new(),
-                command_id: CommandId::new(),
-                origin: MessageOrigin::Person {
-                    person_id: wrong_person,
-                },
-                text: "wrong person scope".to_owned(),
-                evidence: None,
-                task_id: None,
-            },
-        };
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                wrong_person_request,
-            )
-            .await,
-            ConversationFailure::AgentMismatch,
-        );
-
-        let mut wrong_agent_reference = fixture.reference(first.receipt.head_revision);
-        wrong_agent_reference.identity.agent_instance_id = AgentInstanceId::new();
-        let wrong_agent_request = MessageAdmissionRequest {
-            target: AdmissionTarget::Continue {
-                reference: wrong_agent_reference,
-            },
-            message: fixture.message("wrong agent cannot continue"),
-        };
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                wrong_agent_request,
-            )
-            .await,
-            ConversationFailure::AgentMismatch,
-        );
-
-        let connection = fixture.vault().connection().expect("test connection");
-        let mut rows = connection
-            .query(
-                "SELECT COUNT(*) FROM agent_conversation_core_message_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-                (
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
-                ),
-            )
-            .await
-            .expect("count persisted receipts");
+        let mut changed_input = start.clone();
+        changed_input.input.message_id = MessageId::new();
         assert_eq!(
-            rows.next()
-                .await
-                .expect("read receipt count")
-                .unwrap()
-                .get::<i64>(0)
-                .unwrap(),
-            1
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_input)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+        );
+
+        let mut changed_generation = start.clone();
+        changed_generation.executor_generation += 1;
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_generation)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+        );
+
+        let mut changed_domain = start.clone();
+        changed_domain.executor_domain = ExecutorDomain::TaskExecution;
+        changed_domain.execution_task = Some(TaskId::new());
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_domain)
+                .await,
+            Err(ConversationStoreFailure::UnsupportedOwnerDomain),
+        );
+
+        scenario
+            .vault()
+            .open_conversation_recorder(start)
+            .await
+            .expect("the exact bound owner Run opens");
+    }
+
+    #[tokio::test]
+    async fn same_person_run_without_transactional_core_binding_cannot_open() {
+        let mut scenario = Scenario::new().await;
+        let (first_run, input) = scenario
+            .admit_run_and_append_input("same person is insufficient")
+            .await;
+        scenario.cancel_owner_run(&first_run).await;
+        let unbound_request = scenario.owner_request("same person is insufficient");
+        let unbound = scenario
+            .admit_unbound_owner_run(unbound_request.clone())
+            .await;
+        assert_eq!(unbound.person_id, first_run.person_id);
+
+        let core_request = scenario.core_input_request("same person is insufficient");
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
+        let before_runs = table_count(&connection, "agent_conversation_runs").await;
+        let before_entries = table_count(&connection, "agent_conversation_core_v3_entries").await;
+        let before_bindings =
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await;
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start rejected legacy owner replay transaction");
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        assert_eq!(
+            scenario
+                .vault()
+                .admit_conversation_run_with_core_input_on(
+                    &transaction,
+                    unbound_request,
+                    core_request,
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "an existing owner Run without its immutable binding cannot be retrofitted"
+        );
+        assert_eq!(
+            table_count_in_transaction(&transaction, "agent_conversation_runs").await,
+            before_runs
+        );
+        assert_eq!(
+            table_count_in_transaction(&transaction, "agent_conversation_core_v3_entries").await,
+            before_entries
+        );
+        assert_eq!(
+            table_count_in_transaction(&transaction, "agent_conversation_core_v3_owner_bindings",)
+                .await,
+            before_bindings
+        );
+        assert_eq!(
+            session_storage_snapshot(&transaction, scenario.session_id).await,
+            before_session
+        );
+        transaction
+            .rollback()
+            .await
+            .expect("roll back rejected unbound owner replay");
+        guard.settled();
+        drop(guard);
+        drop(connection);
+
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(
+                    scenario.start_request(&unbound, input.receipt.transcript),
+                )
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
         );
     }
 
     #[tokio::test]
-    async fn encrypted_pages_enforce_count_and_utf8_byte_budgets_without_skipping() {
-        let fixture = Fixture::new().await;
-        let mut revision = fixture.admit_first(fixture.message("π".repeat(2))).await;
-        for index in 1..130 {
-            let result = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.continue_request(
-                    revision.receipt.head_revision,
-                    fixture.message(format!("message-{index}-é")),
-                ),
-            )
-            .await
-            .expect("append independently stored transcript row");
-            revision = result;
-        }
-
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(revision.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 4096,
-                max_bytes: MAX_TRANSCRIPT_PAGE_BYTES,
-            },
-        )
-        .await
-        .expect("first bounded transcript page");
-        assert_eq!(page.entries.len(), MAX_TRANSCRIPT_PAGE_ENTRIES);
-        assert!(page.has_more);
+    async fn lost_open_ack_replays_exact_receipt_after_restart_before_generation_fence() {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario.admit_run_and_append_input("open ack").await;
+        assert_eq!(input.disposition, AdmissionDisposition::Appended);
+        let start = scenario.start_request(&run, input.receipt.transcript);
+        scenario
+            .vault()
+            .conversation_core_ack_loss
+            .store(true, Ordering::Release);
         assert_eq!(
-            page.next_cursor,
-            page.entries.last().map(|entry| entry.reference)
+            scenario
+                .vault()
+                .open_conversation_recorder(start.clone())
+                .await,
+            Err(ConversationStoreFailure::OutcomeUnknown)
         );
-        let second =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                fixture.vault(),
-                fixture.reference(revision.receipt.head_revision),
-                page.next_cursor,
-                TranscriptPageBudget {
-                    max_entries: MAX_TRANSCRIPT_PAGE_ENTRIES,
-                    max_bytes: MAX_TRANSCRIPT_PAGE_BYTES,
-                },
-            )
-            .await
-            .expect("next transcript page");
-        assert_eq!(second.entries.len(), 2);
-        assert!(!second.has_more);
 
-        let boundary = Fixture::new().await;
-        let message = boundary.message("é".to_owned());
-        let serialized_bytes = serde_json::to_vec(&message)
-            .expect("serialize UTF-8 message")
-            .len();
-        let admitted = boundary.admit_first(message).await;
-        let target = boundary.reference(admitted.receipt.head_revision);
-        let exact = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            boundary.vault(),
-            target.clone(),
-            None,
-            TranscriptPageBudget {
-                max_entries: 1,
-                max_bytes: serialized_bytes,
-            },
-        )
-        .await
-        .expect("exact UTF-8 byte budget succeeds");
-        assert_eq!(exact.encoded_bytes, serialized_bytes);
-        assert_eq!(exact.entries.len(), 1);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                boundary.vault(),
-                target.clone(),
-                None,
-                TranscriptPageBudget {
-                    max_entries: 1,
-                    max_bytes: serialized_bytes - 1,
-                },
-            )
-            .await,
-            Err(ConversationStoreFailure::PageItemExceedsBudget)
-        );
-        let retry = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            boundary.vault(),
-            target,
-            None,
-            TranscriptPageBudget {
-                max_entries: 1,
-                max_bytes: serialized_bytes,
-            },
-        )
-        .await
-        .expect("failed item budget did not advance the cursor");
-        assert_eq!(retry.next_cursor, exact.next_cursor);
-    }
-
-    #[tokio::test]
-    async fn generated_output_interleaves_with_queued_input_without_scheduling_or_unsafe_checkpoint()
-     {
-        let mut fixture = Fixture::new().await;
-        let input_a = fixture.message("input A");
-        let first = fixture.admit_first(input_a).await;
-        let generation = fixture
+        scenario.reopen().await;
+        let activation = scenario
             .vault()
             .activate_conversation_executor()
             .await
-            .expect("activate fenced executor")
-            .executor_generation;
-        let run_a = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        let claim_a = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            run_a,
-            generation,
-        )
-        .await
-        .expect("claim input A");
+            .expect("fence old executor after restart");
+        assert!(activation.executor_generation > start.executor_generation);
+        let replay = scenario
+            .vault()
+            .open_conversation_recorder(start.clone())
+            .await
+            .expect("exact lost-open replay survives stale generation");
+        assert_eq!(replay.fence.run_id, run.run_id);
+        assert_eq!(replay.fence.input, input.receipt.transcript);
+        assert_eq!(replay.fence.executor_generation, start.executor_generation);
 
-        let input_b_message = fixture.message("queued input B");
-        let input_b = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(first.receipt.head_revision, input_b_message),
-        )
-        .await
-        .expect("queue input B behind active A");
-        assert_eq!(input_b.disposition, AdmissionDisposition::Queued);
-        assert_eq!(input_b.receipt.transcript.sequence, 2);
+        let mut changed_identity = start.clone();
+        changed_identity.identity.assignment_id = AssignmentId::new();
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_identity)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed
+            ))
+        );
+        let mut changed_domain = start.clone();
+        changed_domain.executor_domain = ExecutorDomain::TaskExecution;
+        changed_domain.execution_task = Some(TaskId::new());
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_domain)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed
+            ))
+        );
+        let mut changed_generation = start;
+        changed_generation.executor_generation += 1;
+        assert_eq!(
+            scenario
+                .vault()
+                .open_conversation_recorder(changed_generation)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed
+            ))
+        );
+    }
 
-        let output_a_message = fixture.generated_message(
-            &fixture.identity,
-            MessageId::new(),
-            CommandId::new(),
-            "generated output A π",
-        );
-        let output_a_request = fixture.output_request(
-            &claim_a,
-            input_b.receipt.head_revision,
-            output_a_message.clone(),
-        );
-        fixture
+    #[tokio::test]
+    async fn lost_output_ack_replays_exact_contribution_after_restart() {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario.admit_run_and_append_input("output ack").await;
+        let start = scenario.start_request(&run, input.receipt.transcript);
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(start)
+            .await
+            .expect("open recorder");
+        let request = scenario.recording_request(open.fence.clone(), "record once");
+        scenario
             .vault()
             .conversation_core_ack_loss
-            .store(true, std::sync::atomic::Ordering::Release);
+            .store(true, Ordering::Release);
         assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                output_a_request.clone(),
-            )
-            .await,
+            scenario
+                .vault()
+                .record_conversation_entry(request.clone())
+                .await,
             Err(ConversationStoreFailure::OutcomeUnknown)
         );
-        fixture
-            .reopen()
-            .await
-            .expect("output and queue validate after reopen");
-        let output_a =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                output_a_request.clone(),
-            )
-            .await
-            .expect("exact receipt readback recovers the lost acknowledgement");
-        assert_eq!(output_a.transcript.sequence, 3);
-        assert_eq!(output_a.producer, claim_a);
 
-        let mut changed_content = output_a_request.clone();
-        changed_content.message.text.push_str(" changed");
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                changed_content,
-            )
-            .await,
-            ConversationFailure::MessageIdConflict,
+        scenario.reopen().await;
+        let replay = scenario
+            .vault()
+            .record_conversation_entry(request.clone())
+            .await
+            .expect("exact output receipt replays after restart");
+        assert_eq!(
+            replay.transcript.sequence,
+            input.receipt.transcript.sequence + 1
         );
-        let mut retargeted_run = output_a_request.clone();
-        retargeted_run.claim.link.run_id = RunId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                retargeted_run,
-            )
-            .await,
-            ConversationFailure::MessageIdConflict,
+        assert_eq!(replay.recorder, open.fence);
+        assert_eq!(replay.contribution_id, request.contribution_id);
+        let mut changed = request;
+        changed.message.text.push_str(" changed");
+        assert_eq!(
+            scenario.vault().record_conversation_entry(changed).await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::MessageIdConflict
+            ))
         );
-        let mut retargeted_scope = output_a_request.clone();
-        retargeted_scope.target.conversation_id = ConversationId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                retargeted_scope,
-            )
-            .await,
-            ConversationFailure::MessageIdConflict,
-        );
-        let mut inbound_collision = fixture.message("human message reuses output ID");
-        inbound_collision.message_id = output_a_message.message_id;
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture.continue_request(output_a.transcript.sequence, inbound_collision),
-            )
-            .await,
-            ConversationFailure::MessageIdConflict,
+    }
+
+    #[tokio::test]
+    async fn lost_close_ack_replays_exact_receipt_and_keeps_unproven_prefix() {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario.admit_run_and_append_input("close ack").await;
+        let start = scenario.start_request(&run, input.receipt.transcript);
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(start)
+            .await
+            .expect("open recorder");
+        let terminal = scenario.cancel_owner_run(&run).await;
+        scenario
+            .vault()
+            .conversation_core_ack_loss
+            .store(true, Ordering::Release);
+        assert_eq!(
+            scenario
+                .vault()
+                .close_conversation_recorder(open.fence.clone())
+                .await,
+            Err(ConversationStoreFailure::OutcomeUnknown)
         );
 
-        let page_before_b =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                fixture.vault(),
-                fixture.reference(output_a.transcript.sequence),
+        scenario.reopen().await;
+        let replay = scenario
+            .vault()
+            .close_conversation_recorder(open.fence.clone())
+            .await
+            .expect("exact close receipt replays after restart");
+        assert_eq!(replay.fence, open.fence);
+        assert_eq!(replay.owner_aggregate_revision, terminal.aggregate_revision);
+        assert_eq!(replay.settled_prefix, 0);
+        assert!(replay.protection_roots.is_empty());
+    }
+
+    #[tokio::test]
+    async fn retained_input_can_bind_two_separate_owner_runs() {
+        let mut scenario = Scenario::new().await;
+        let (first_run, input) = scenario.admit_run_and_append_input("retained input").await;
+        let first_open = scenario
+            .vault()
+            .open_conversation_recorder(
+                scenario.start_request(&first_run, input.receipt.transcript),
+            )
+            .await
+            .expect("open first recorder");
+        let first_terminal = scenario.budget_exceeded_owner_run(&first_run).await;
+        let first_close = scenario
+            .vault()
+            .close_conversation_recorder(first_open.fence.clone())
+            .await
+            .expect("close first recorder");
+        assert_eq!(first_close.settled_prefix, 0);
+
+        let (second_run, reused_input) = scenario
+            .admit_owner_run_reusing_input(&first_terminal, "Continue retained input")
+            .await;
+        assert_eq!(reused_input.disposition, AdmissionDisposition::Replayed);
+        let second_open = scenario
+            .vault()
+            .open_conversation_recorder(
+                scenario.start_request(&second_run, input.receipt.transcript),
+            )
+            .await
+            .expect("reuse exact retained Core input for another owner Run");
+        assert_ne!(first_run.run_id, second_run.run_id);
+        assert!(second_open.fence.recorder_epoch > first_open.fence.recorder_epoch);
+        assert_eq!(second_open.fence.input, first_close.fence.input);
+        assert!(first_terminal.state.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn recorder_can_open_a_fresh_input_beyond_the_unsettled_prefix() {
+        let mut scenario = Scenario::new().await;
+        let (first_run, first_input) = scenario.admit_run_and_append_input("first turn").await;
+        let first_open = scenario
+            .vault()
+            .open_conversation_recorder(
+                scenario.start_request(&first_run, first_input.receipt.transcript),
+            )
+            .await
+            .expect("open first recorder");
+        scenario
+            .vault()
+            .record_conversation_entry(
+                scenario.recording_request(first_open.fence.clone(), "first output"),
+            )
+            .await
+            .expect("append first generated output");
+        scenario.cancel_owner_run(&first_run).await;
+        let first_close = scenario
+            .vault()
+            .close_conversation_recorder(first_open.fence)
+            .await
+            .expect("close first recorder without settlement proof");
+        assert_eq!(first_close.settled_prefix, 0);
+
+        let owner_request = scenario.owner_request("second turn");
+        let mut core_request = scenario.core_input_request("second turn");
+        core_request.target = AdmissionTarget::AppendToExisting {
+            reference: ConversationReference {
+                identity: scenario.identity.clone(),
+                conversation_id: scenario.conversation_id,
+                branch_id: scenario.branch_id,
+                head_revision: 2,
+            },
+        };
+        let (second_run, second_input) = scenario
+            .admit_run_and_bind_input(owner_request, core_request)
+            .await;
+        assert_eq!(second_input.disposition, AdmissionDisposition::Appended);
+        assert_eq!(second_input.receipt.transcript.sequence, 3);
+
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let mut rows = connection
+            .query(
+                "SELECT head_revision, settled_prefix FROM agent_conversation_core_v3_heads WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+                (
+                    scenario.person_id.to_string(),
+                    scenario.conversation_id.as_uuid().to_string(),
+                    scenario.branch_id.as_uuid().to_string(),
+                ),
+            )
+            .await
+            .expect("query transcript head");
+        let head = rows
+            .next()
+            .await
+            .expect("read transcript head")
+            .expect("head exists");
+        assert_eq!(head.get::<i64>(0).expect("head revision"), 3);
+        assert_eq!(head.get::<i64>(1).expect("settled prefix"), 0);
+        drop(rows);
+        drop(connection);
+
+        let second_open = scenario
+            .vault()
+            .open_conversation_recorder(
+                scenario.start_request(&second_run, second_input.receipt.transcript),
+            )
+            .await
+            .expect("open recorder for input beyond the settled prefix");
+        assert_eq!(second_open.fence.input.sequence, 3);
+        assert_eq!(
+            second_open.fence.recorder_epoch,
+            first_close.fence.recorder_epoch + 1
+        );
+    }
+
+    #[tokio::test]
+    async fn continue_reuses_the_exact_owner_bound_input_without_appending() {
+        let mut scenario = Scenario::new().await;
+        let (parent, input) = scenario
+            .admit_run_and_append_input("retained input for Continue")
+            .await;
+        let failed_parent = scenario
+            .vault()
+            .finish_conversation_run(
+                parent.run_id,
+                parent.aggregate_revision,
+                RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+            )
+            .await
+            .expect("finish parent before Continue admission");
+        scenario.session_revision = failed_parent.session_revision;
+        let continuation = floe_conversation::project_run_receipt(failed_parent.clone())
+            .expect("project failed parent receipt")
+            .continuation()
+            .expect("BudgetExceeded parent has a continuation reference");
+        let principal = scenario.person_id.to_string();
+        let mode = TurnMode::Continue(continuation.clone());
+        let intent = CanonicalTurnIntent {
+            session_id: scenario.session_id,
+            expected_revision: scenario.session_revision,
+            text: "Continue the retained input".to_owned(),
+            mode: mode.clone(),
+            retry_of: None,
+        };
+        let owner_request = TurnAdmissionRequest {
+            expert_environment: failed_parent.expert_environment,
+            run_id: RunId::new(),
+            command_id: CommandId::new(),
+            session_id: scenario.session_id,
+            expected_session_revision: scenario.session_revision,
+            principal: principal.clone(),
+            device_id: failed_parent.device_id.clone(),
+            request_digest: intent.digest(&principal).expect("Continue request digest"),
+            mode,
+            retry_of: None,
+            input: TurnInput::ExistingMessage {
+                message_id: failed_parent.user_message_id,
+            },
+        };
+        let (core_request, retained_reference) = scenario
+            .last_core_input_request
+            .clone()
+            .expect("root admission persisted its exact Core request");
+        assert_eq!(retained_reference, input.receipt.transcript);
+
+        let mut wrong_session = owner_request.clone();
+        wrong_session.session_id = Uuid::new_v4();
+        wrong_session.expected_session_revision = scenario.session_revision;
+        wrong_session.request_digest = CanonicalTurnIntent {
+            session_id: wrong_session.session_id,
+            expected_revision: wrong_session.expected_session_revision,
+            text: intent.text.clone(),
+            mode: wrong_session.mode.clone(),
+            retry_of: None,
+        }
+        .digest(&principal)
+        .expect("changed-session Continue digest");
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start wrong-session composition transaction");
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let rejected = scenario
+            .vault()
+            .admit_conversation_run_with_core_input_on(
+                &transaction,
+                wrong_session,
+                core_request.clone(),
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await;
+        assert_eq!(
+            rejected,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            ))
+        );
+        transaction
+            .rollback()
+            .await
+            .expect("roll back rejected changed-session admission");
+        guard.settled();
+        drop(guard);
+        drop(connection);
+
+        let (continued, reused) = scenario
+            .admit_run_and_bind_input(owner_request, core_request)
+            .await;
+        assert_eq!(reused.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(reused.receipt.transcript, retained_reference);
+        assert_ne!(continued.run_id, failed_parent.run_id);
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect to test Vault");
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1,
+            "Continue binds the retained input without appending a duplicate"
+        );
+        let opened = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&continued, retained_reference))
+            .await
+            .expect("open a Continue Run against the retained input");
+        assert_eq!(opened.fence.run_id, continued.run_id);
+        assert_eq!(opened.fence.input, retained_reference);
+    }
+
+    #[tokio::test]
+    async fn one_manager_recorder_stores_two_exact_task_owner_receipts() {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input("manager coordinates two Tasks")
+            .await;
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+            .await
+            .expect("open Manager recorder");
+        let task_generation = scenario
+            .vault()
+            .activate_task_executor()
+            .await
+            .expect("activate Task owner")
+            .executor_generation;
+        let task_receipts = scenario.terminal_task_receipts(&run, task_generation).await;
+        let receipt_a = task_receipts[0].clone();
+        let receipt_b = task_receipts[1].clone();
+        assert_ne!(receipt_a.execution.task_id, receipt_b.execution.task_id);
+        let task_reference_a =
+            task_evidence_reference(&receipt_a).expect("bind exact Task A receipt reference");
+        let task_reference_b =
+            task_evidence_reference(&receipt_b).expect("bind exact Task B receipt reference");
+
+        let mut request_a = scenario.recording_request(open.fence.clone(), "Task A interrupted");
+        request_a.message.task_id = Some(receipt_a.execution.task_id);
+        request_a.producing_task = Some(task_reference_a.clone());
+        let mut request_b = scenario.recording_request(open.fence.clone(), "Task B interrupted");
+        request_b.message.task_id = Some(receipt_b.execution.task_id);
+        request_b.producing_task = Some(task_reference_b.clone());
+        let recorded_a = scenario
+            .vault()
+            .record_conversation_entry(request_a.clone())
+            .await
+            .expect("record Task A contribution after owner verification");
+        let recorded_b = scenario
+            .vault()
+            .record_conversation_entry(request_b)
+            .await
+            .expect("record Task B contribution after owner verification");
+        assert_eq!(recorded_a.producing_task, Some(task_reference_a.clone()));
+        assert_eq!(recorded_b.producing_task, Some(task_reference_b.clone()));
+        assert_eq!(
+            scenario
+                .vault()
+                .record_conversation_entry(request_a.clone())
+                .await
+                .expect("replay exact Task A contribution"),
+            recorded_a,
+        );
+
+        let terminal = scenario.budget_exceeded_owner_run(&run).await;
+        scenario
+            .vault()
+            .close_conversation_recorder(open.fence.clone())
+            .await
+            .expect("close completed owner before admitting another Run");
+        let (other_run, _) = scenario
+            .admit_owner_run_reusing_input(&terminal, "Continue after Task evidence")
+            .await;
+        let other_open = scenario
+            .vault()
+            .open_conversation_recorder(
+                scenario.start_request(&other_run, input.receipt.transcript),
+            )
+            .await
+            .expect("open second owner Run against the retained input");
+        let mut cross_run_task =
+            scenario.recording_request(other_open.fence, "cannot attach another Run Task");
+        cross_run_task.message.task_id = Some(receipt_a.execution.task_id);
+        cross_run_task.producing_task = Some(task_reference_a.clone());
+        assert_eq!(
+            scenario
+                .vault()
+                .record_conversation_entry(cross_run_task)
+                .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "Task receipt must be linked through this recorder's own intent/result"
+        );
+
+        let page = scenario
+            .vault()
+            .read_conversation_page(
+                ConversationReference {
+                    identity: scenario.identity.clone(),
+                    conversation_id: scenario.conversation_id,
+                    branch_id: scenario.branch_id,
+                    head_revision: recorded_b.transcript.sequence,
+                },
                 None,
                 TranscriptPageBudget {
                     max_entries: 8,
@@ -3458,1243 +4562,581 @@ mod tests {
                 },
             )
             .await
-            .expect("read the interleaved input and output entries");
-        assert_eq!(page_before_b.entries.len(), 3);
-        let output_a_entry = page_before_b.entries[2].clone();
-        assert_eq!(output_a_entry.reference, output_a.transcript);
-        assert_eq!(output_a_entry.kind, TranscriptEntryKind::GeneratedOutput);
-        assert_eq!(output_a_entry.producer_run, Some(run_a.run_id));
-        assert_eq!(
-            output_a_entry.commitment_version,
-            PrefixCommitmentVersion::V2
-        );
+            .expect("read exact Task evidence links");
+        assert_eq!(page.entries[1].producing_task, recorded_a.producing_task);
+        assert_eq!(page.entries[2].producing_task, recorded_b.producing_task);
 
-        let connection = fixture.vault().connection().expect("test connection");
-        let mut counts = connection
-            .query(
-                "SELECT (SELECT COUNT(*) FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ?) AS pending, (SELECT COUNT(*) FROM agent_conversation_core_command_receipts WHERE person_id = ?) AS commands",
-                (
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
-                    fixture.person_id.to_string(),
-                ),
-            )
-            .await
-            .expect("count pending and inbound command receipts");
-        let counts = counts
-            .next()
-            .await
-            .expect("read count row")
-            .expect("count row exists");
-        assert_eq!(counts.get::<i64>(0).expect("pending count"), 1);
-        assert_eq!(counts.get::<i64>(1).expect("command count"), 2);
-        drop(counts);
-        drop(connection);
-
-        let run_b = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
+        let mut changed_task = request_a;
+        changed_task.message.task_id = Some(receipt_b.execution.task_id);
+        changed_task.producing_task = Some(task_reference_b);
         assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                fixture.vault(),
-                fixture.reference(output_a.transcript.sequence),
-                run_b,
-                generation,
-            )
-            .await,
+            scenario
+                .vault()
+                .record_conversation_entry(changed_task)
+                .await,
             Err(ConversationStoreFailure::Transition(
-                ConversationFailure::WriterAlreadyActive
-            ))
-        );
-
-        <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-            fixture.vault(),
-            claim_a.clone(),
-        )
-        .await
-        .expect("complete A while B remains queued");
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                output_a_request.clone(),
-            )
-            .await
-            .expect("completed writer exact replay still returns its stored receipt"),
-            output_a
-        );
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::apply_checkpoint(
-                fixture.vault(),
-                fixture.reference(output_a.transcript.sequence),
-                ConversationCheckpoint {
-                    through: output_a_entry.reference,
-                    prefix_digest: output_a_entry.prefix_digest,
-                    summary: "cannot cross queued input B".to_owned(),
-                },
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::CheckpointMismatch
-            ))
-        );
-
-        let claim_b = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(output_a.transcript.sequence),
-            run_b,
-            generation,
-        )
-        .await
-        .expect("claim queued input B only after A completes");
-        assert_eq!(
-            claim_b.message.sequence,
-            input_b.receipt.transcript.sequence
-        );
-        let output_b_message = fixture.generated_message(
-            &fixture.identity,
-            MessageId::new(),
-            CommandId::new(),
-            "generated output B 漢字",
-        );
-        let output_b_bytes = serde_json::to_vec(&output_b_message)
-            .expect("serialize output B")
-            .len();
-        let output_b_request =
-            fixture.output_request(&claim_b, output_a.transcript.sequence, output_b_message);
-        let output_b =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                output_b_request,
-            )
-            .await
-            .expect("append generated output B after input B");
-        assert_eq!(output_b.transcript.sequence, 4);
-
-        let output_a_bytes = serde_json::to_vec(&output_a_message)
-            .expect("serialize UTF-8 output A")
-            .len();
-        let target = fixture.reference(output_b.transcript.sequence);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                fixture.vault(),
-                target.clone(),
-                Some(input_b.receipt.transcript),
-                TranscriptPageBudget {
-                    max_entries: 4,
-                    max_bytes: output_a_bytes - 1,
-                },
-            )
-            .await,
-            Err(ConversationStoreFailure::PageItemExceedsBudget)
-        );
-        let output_page =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                fixture.vault(),
-                target.clone(),
-                Some(input_b.receipt.transcript),
-                TranscriptPageBudget {
-                    max_entries: 4,
-                    max_bytes: output_a_bytes,
-                },
-            )
-            .await
-            .expect("exact UTF-8 output budget does not skip the first output");
-        assert_eq!(output_page.encoded_bytes, output_a_bytes);
-        assert_eq!(output_page.entries.len(), 1);
-        assert_eq!(output_page.entries[0].reference, output_a.transcript);
-        assert!(output_page.has_more);
-        let last_page =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                fixture.vault(),
-                target.clone(),
-                output_page.next_cursor,
-                TranscriptPageBudget {
-                    max_entries: 4,
-                    max_bytes: output_b_bytes,
-                },
-            )
-            .await
-            .expect("read output B from the exact next cursor");
-        assert_eq!(last_page.encoded_bytes, output_b_bytes);
-        assert_eq!(last_page.entries.len(), 1);
-        assert_eq!(last_page.entries[0].reference, output_b.transcript);
-        assert_eq!(
-            last_page.entries[0].kind,
-            TranscriptEntryKind::GeneratedOutput
-        );
-        assert!(!last_page.has_more);
-
-        <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-            fixture.vault(),
-            claim_b,
-        )
-        .await
-        .expect("complete B after output B is durably recorded");
-        <EncryptedAgentVault<TestKeys> as ConversationStorePort>::apply_checkpoint(
-            fixture.vault(),
-            target,
-            ConversationCheckpoint {
-                through: last_page.entries[0].reference,
-                prefix_digest: last_page.entries[0].prefix_digest,
-                summary: "settled through output B".to_owned(),
-            },
-        )
-        .await
-        .expect("checkpoint may include all settled input and output entries");
-        let mut inbound_reuses_output_command = fixture.message("CommandId remains inbound-owned");
-        inbound_reuses_output_command.command_id = output_a_message.command_id;
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                fixture
-                    .continue_request(output_b.transcript.sequence, inbound_reuses_output_command),
-            )
-            .await
-            .expect("output did not reserve a Person-global CommandId")
-            .disposition,
-            AdmissionDisposition::Appended
+                ConversationFailure::MessageIdConflict
+            )),
         );
     }
 
     #[tokio::test]
-    async fn generated_output_receipts_are_fenced_and_isolated_by_agent_instance() {
-        let fixture = Fixture::new().await;
-        let generation = fixture
+    async fn encrypted_transcript_pages_preserve_count_byte_and_cursor_boundaries() {
+        let scenario = Scenario::new().await;
+        let first_request = scenario.core_input_request("λ");
+        let first = scenario
             .vault()
-            .activate_conversation_executor()
+            .append_conversation_input(first_request.clone())
             .await
-            .expect("activate fenced executor")
-            .executor_generation;
-
-        let first_admission = fixture.admit_first(fixture.message("agent A input")).await;
-        let first_run = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
+            .expect("append first retained input");
+        let mut second_request = scenario.core_input_request("second entry is longer 🙂");
+        second_request.target = AdmissionTarget::AppendToExisting {
+            reference: ConversationReference {
+                identity: scenario.identity.clone(),
+                conversation_id: scenario.conversation_id,
+                branch_id: scenario.branch_id,
+                head_revision: first.receipt.transcript.sequence,
+            },
         };
-        let first_claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(first_admission.receipt.head_revision),
-            first_run,
-            generation,
-        )
-        .await
-        .expect("claim agent A input");
-        let shared_message_id = MessageId::new();
-        let first_message = fixture.generated_message(
-            &fixture.identity,
-            shared_message_id,
-            CommandId::new(),
-            "output from agent A",
-        );
-        let first_request = fixture.output_request(
-            &first_claim,
-            first_admission.receipt.head_revision,
-            first_message,
-        );
-        let first_receipt =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                first_request.clone(),
-            )
+        let second = scenario
+            .vault()
+            .append_conversation_input(second_request)
             .await
-            .expect("append agent A output");
-
-        let second_identity = AgentIdentity {
-            person_id: fixture.person_id,
-            agent_instance_id: AgentInstanceId::new(),
-            assignment_id: AssignmentId::new(),
-            definition_id: "second-fixture-agent".to_owned(),
-            definition_revision: 1,
+            .expect("append second retained input");
+        let target = ConversationReference {
+            identity: scenario.identity.clone(),
+            conversation_id: scenario.conversation_id,
+            branch_id: scenario.branch_id,
+            head_revision: second.receipt.transcript.sequence,
         };
-        let second_conversation_id = ConversationId::new();
-        let second_branch_id = ConversationBranchId::new();
-        let second_admission = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            MessageAdmissionRequest {
-                target: AdmissionTarget::New {
-                    conversation_id: second_conversation_id,
-                    branch_id: second_branch_id,
-                    identity: second_identity.clone(),
+
+        let count_limited = scenario
+            .vault()
+            .read_conversation_page(
+                target.clone(),
+                None,
+                TranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 4096,
                 },
-                message: fixture.message("agent B input"),
-            },
-        )
-        .await
-        .expect("create the same Person's separate agent conversation");
-        let second_run = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        let second_claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            ConversationReference {
-                conversation_id: second_conversation_id,
-                branch_id: second_branch_id,
-                identity: second_identity.clone(),
-                head_revision: second_admission.receipt.head_revision,
-            },
-            second_run,
-            generation,
-        )
-        .await
-        .expect("claim agent B input");
-        let second_message = fixture.generated_message(
-            &second_identity,
-            shared_message_id,
-            CommandId::new(),
-            "output from agent B",
-        );
-        let second_request = GeneratedOutputRequest {
-            target: ConversationReference {
-                conversation_id: second_conversation_id,
-                branch_id: second_branch_id,
-                identity: second_identity,
-                head_revision: second_admission.receipt.head_revision,
-            },
-            claim: second_claim,
-            message: second_message,
-        };
-        let second_receipt =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                second_request.clone(),
             )
             .await
-            .expect("same message ID is scoped to a different agent instance");
-        assert_eq!(first_receipt.transcript.message_id, shared_message_id);
-        assert_eq!(second_receipt.transcript.message_id, shared_message_id);
-        assert_ne!(first_receipt.identity, second_receipt.identity);
-        assert_ne!(
-            first_receipt.transcript.conversation_id,
-            second_receipt.transcript.conversation_id
-        );
+            .expect("read one bounded entry");
+        assert_eq!(count_limited.entries.len(), 1);
+        assert_eq!(count_limited.entries[0].reference, first.receipt.transcript);
+        assert_eq!(count_limited.next_cursor, Some(first.receipt.transcript));
+        assert!(count_limited.has_more);
+        let utf8_json_bytes = serde_json::to_string(&first_request.message)
+            .expect("encode UTF-8 message")
+            .len();
+        assert_eq!(count_limited.encoded_bytes, utf8_json_bytes);
+        assert!(utf8_json_bytes > first_request.message.text.chars().count());
 
-        let other_handle = fixture.independent_handle();
-        let next_generation = other_handle
-            .activate_conversation_executor()
-            .await
-            .expect("advance executor fence");
-        assert_eq!(next_generation.executor_generation, generation + 1);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                first_request.clone(),
-            )
-            .await
-            .expect("exact receipt remains readable after generation change"),
-            first_receipt
-        );
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                second_request.clone(),
-            )
-            .await
-            .expect("second agent's exact receipt has its own namespace"),
-            second_receipt
-        );
-        let stale_message = fixture.generated_message(
-            &fixture.identity,
-            MessageId::new(),
-            CommandId::new(),
-            "stale generation output must be rejected",
-        );
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::record_generated_output(
-                fixture.vault(),
-                fixture.output_request(
-                    &first_claim,
-                    first_receipt.transcript.sequence,
-                    stale_message,
-                ),
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::WrongWriter
-            ))
-        );
-
-        for (target, expected) in [
-            (
-                fixture.reference(first_receipt.transcript.sequence),
-                first_receipt.transcript,
-            ),
-            (
-                ConversationReference {
-                    conversation_id: second_conversation_id,
-                    branch_id: second_branch_id,
-                    identity: second_request.claim.identity.clone(),
-                    head_revision: second_receipt.transcript.sequence,
+        let byte_limited = scenario
+            .vault()
+            .read_conversation_page(
+                target.clone(),
+                None,
+                TranscriptPageBudget {
+                    max_entries: 8,
+                    max_bytes: count_limited.encoded_bytes,
                 },
-                second_receipt.transcript,
-            ),
-        ] {
-            let page =
-                <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-                    fixture.vault(),
-                    target,
+            )
+            .await
+            .expect("stop before a next item that exceeds remaining bytes");
+        assert_eq!(byte_limited.entries.len(), 1);
+        assert_eq!(byte_limited.next_cursor, count_limited.next_cursor);
+        assert!(byte_limited.has_more);
+
+        assert_eq!(
+            scenario
+                .vault()
+                .read_conversation_page(
+                    target.clone(),
                     None,
                     TranscriptPageBudget {
                         max_entries: 8,
-                        max_bytes: 4096,
+                        max_bytes: count_limited.encoded_bytes - 1,
                     },
                 )
-                .await
-                .expect("read isolated agent transcript");
-            assert_eq!(page.entries.len(), 2);
-            assert_eq!(page.entries[1].reference, expected);
-            assert_eq!(page.entries[1].kind, TranscriptEntryKind::GeneratedOutput);
-        }
+                .await,
+            Err(ConversationStoreFailure::PageItemExceedsBudget),
+            "an oversized first entry fails without advancing a cursor"
+        );
+        let retried_first = scenario
+            .vault()
+            .read_conversation_page(
+                target.clone(),
+                None,
+                TranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 4096,
+                },
+            )
+            .await
+            .expect("retry from the same first cursor position");
+        assert_eq!(retried_first.entries[0].reference, first.receipt.transcript);
+
+        let second_page = scenario
+            .vault()
+            .read_conversation_page(
+                target,
+                byte_limited.next_cursor,
+                TranscriptPageBudget {
+                    max_entries: 1,
+                    max_bytes: 4096,
+                },
+            )
+            .await
+            .expect("continue from the exact first-item cursor");
+        assert_eq!(second_page.entries.len(), 1);
+        assert_eq!(second_page.entries[0].reference, second.receipt.transcript);
+        assert_eq!(second_page.next_cursor, Some(second.receipt.transcript));
+        assert!(!second_page.has_more);
     }
 
     #[tokio::test]
-    async fn revision_two_extension_upgrade_rolls_back_and_preserves_legacy_commitments() {
-        let mut fixture = Fixture::new().await;
-        let input = fixture.message("legacy revision-two entry");
-        let admission = fixture.admit_first(input.clone()).await;
-        let legacy_digest = floe_conversation_core::advance_prefix_digest(
-            EMPTY_PREFIX_DIGEST,
-            admission.receipt.transcript,
-            &input,
-        )
-        .expect("calculate the original v1 commitment");
-
-        let mut connection = fixture.vault().connection().expect("test connection");
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("start conversion to a legacy Core-v2 fixture");
-        transaction
-            .execute(
-                "UPDATE agent_conversation_core_entries SET prefix_digest = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = 1",
-                (
-                    hex_digest(legacy_digest),
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
-                ),
-            )
-            .await
-            .expect("restore the old commitment scheme");
-        transaction
-            .execute("DROP INDEX agent_conversation_core_output_sequence", ())
-            .await
-            .expect("remove output index from old family");
-        for table in [
-            "agent_conversation_core_output_receipts",
-            "agent_conversation_core_entry_metadata",
-            "agent_conversation_core_outputs_schema",
-        ] {
-            transaction
-                .execute(&format!("DROP TABLE {table}"), ())
-                .await
-                .expect("remove the additive extension from old family");
-        }
-        transaction
-            .commit()
-            .await
-            .expect("commit legacy family fixture");
-
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("begin migration rollback fixture");
-        crate::schema::ensure_conversation_core_family(&transaction)
-            .await
-            .expect("prepare the versioned extension in the transaction");
-        assert!(
-            transaction
-                .execute(
-                    "INSERT INTO floe_conversation_core_migration_fault (id) VALUES (1)",
-                    (),
-                )
-                .await
-                .is_err()
-        );
-        transaction
-            .rollback()
-            .await
-            .expect("rollback failed surrounding Core transaction");
-        let mut extension_rows = connection
-            .query(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'agent_conversation_core_outputs_schema'",
-                (),
-            )
-            .await
-            .expect("inspect rolled-back extension");
-        assert_eq!(
-            extension_rows
-                .next()
-                .await
-                .expect("read extension count")
-                .expect("extension count row")
-                .get::<i64>(0)
-                .expect("extension count"),
-            0
-        );
-        drop(extension_rows);
-        drop(connection);
-
-        fixture
-            .reopen()
-            .await
-            .expect("older family two opens and upgrades atomically");
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(admission.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("read original entry after extension migration");
-        assert_eq!(page.entries.len(), 1);
-        assert_eq!(page.entries[0].reference, admission.receipt.transcript);
-        assert_eq!(page.entries[0].message, input);
-        assert_eq!(page.entries[0].prefix_digest, legacy_digest);
-        assert_eq!(
-            page.entries[0].commitment_version,
-            PrefixCommitmentVersion::V1
-        );
-        assert_eq!(page.entries[0].kind, TranscriptEntryKind::Inbound);
-
-        let connection = fixture.vault().connection().expect("test connection");
-        let mut versions = connection
-            .query(
-                "SELECT (SELECT version FROM agent_conversation_core_schema WHERE id = 1), (SELECT version FROM agent_conversation_core_outputs_schema WHERE id = 1), (SELECT COUNT(*) FROM agent_conversation_core_entry_metadata), (SELECT COUNT(*) FROM agent_conversation_core_command_receipts)",
-                (),
-            )
-            .await
-            .expect("read schema and preserved receipt versions");
-        let versions = versions
-            .next()
-            .await
-            .expect("read version row")
-            .expect("version row exists");
-        assert_eq!(versions.get::<i64>(0).expect("Core schema version"), 2);
-        assert_eq!(versions.get::<i64>(1).expect("extension schema version"), 1);
-        assert_eq!(
-            versions.get::<i64>(2).expect("unrewritten legacy metadata"),
-            0
-        );
-        assert_eq!(
-            versions
-                .get::<i64>(3)
-                .expect("preserved input command receipt"),
-            1
-        );
-        drop(versions);
-        drop(connection);
-
-        let second = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(
-                admission.receipt.head_revision,
-                fixture.message("new v2 entry"),
-            ),
-        )
-        .await
-        .expect("append under the upgraded extension");
-        fixture
-            .reopen()
-            .await
-            .expect("validate mixed v1/v2 prefix chain");
-        let mixed = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(second.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("read mixed-version transcript");
-        assert_eq!(mixed.entries.len(), 2);
-        assert_eq!(mixed.entries[0].prefix_digest, legacy_digest);
-        assert_eq!(
-            mixed.entries[0].commitment_version,
-            PrefixCommitmentVersion::V1
-        );
-        assert_eq!(
-            mixed.entries[1].commitment_version,
-            PrefixCommitmentVersion::V2
-        );
-        assert_eq!(mixed.entries[1].kind, TranscriptEntryKind::Inbound);
-    }
-
-    #[tokio::test]
-    async fn missing_v2_entry_metadata_is_not_downgraded_to_legacy_v1() {
-        let mut fixture = Fixture::new().await;
-        let admission = fixture
-            .admit_first(fixture.message("v2 metadata must be present"))
+    async fn concurrent_recorder_claims_have_one_writer_and_one_revision_winner() {
+        let mut scenario = Scenario::new().await;
+        let (first_run, first_input) = scenario
+            .admit_run_and_append_input("first concurrent recorder")
             .await;
-        fixture
+        let second_session = match scenario
+            .vault()
+            .start_conversation_session(StartSessionRequest {
+                principal: scenario.person_id.to_string(),
+                command_id: CommandId::new(),
+            })
+            .await
+            .expect("start independent owner Session")
+        {
+            SessionStartAdmission::Started(receipt) => receipt,
+            other => panic!("unexpected second Session admission: {other:?}"),
+        };
+        let second_text = "second concurrent recorder";
+        let second_owner = scenario.owner_request_for_session(
+            second_session.session_id,
+            second_session.session_revision,
+            second_text,
+        );
+        let mut second_core = scenario.core_input_request(second_text);
+        second_core.target = AdmissionTarget::AppendToExisting {
+            reference: ConversationReference {
+                identity: scenario.identity.clone(),
+                conversation_id: scenario.conversation_id,
+                branch_id: scenario.branch_id,
+                head_revision: first_input.receipt.transcript.sequence,
+            },
+        };
+        let (second_run, second_input) = scenario
+            .admit_run_and_bind_input(second_owner, second_core)
+            .await;
+        let target = ConversationReference {
+            identity: scenario.identity.clone(),
+            conversation_id: scenario.conversation_id,
+            branch_id: scenario.branch_id,
+            head_revision: second_input.receipt.transcript.sequence,
+        };
+        let before = scenario
+            .vault()
+            .observe_conversation_recorder(target.clone(), first_run.run_id)
+            .await
+            .expect("observe empty recorder claim state");
+        assert_eq!(before.state, RecorderRecoveryState::Absent);
+        assert_eq!(before.active_recorder, None);
+
+        let first_start = scenario.start_request(&first_run, first_input.receipt.transcript);
+        let second_start = scenario.start_request(&second_run, second_input.receipt.transcript);
+        let (first_result, second_result) = tokio::join!(
+            scenario
+                .vault()
+                .open_conversation_recorder(first_start.clone()),
+            scenario
+                .vault()
+                .open_conversation_recorder(second_start.clone()),
+        );
+        let (winner, losing_start, loser_error) = match (first_result, second_result) {
+            (Ok(winner), Err(error)) => (winner, second_start, error),
+            (Err(error), Ok(winner)) => (winner, first_start, error),
+            (Ok(_), Ok(_)) => panic!("both recorder claims won for one transcript"),
+            (Err(first), Err(second)) => {
+                panic!("both recorder claims failed: {first:?}; {second:?}")
+            }
+        };
+        if loser_error == ConversationStoreFailure::Busy {
+            assert_eq!(
+                scenario
+                    .vault()
+                    .open_conversation_recorder(losing_start)
+                    .await,
+                Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::WriterAlreadyActive
+                )),
+                "the serialized loser observes the winning active recorder"
+            );
+        } else {
+            assert_eq!(
+                loser_error,
+                ConversationStoreFailure::Transition(ConversationFailure::WriterAlreadyActive),
+            );
+        }
+        let after = scenario
+            .vault()
+            .observe_conversation_recorder(target, winner.fence.run_id)
+            .await
+            .expect("observe the single winning recorder claim");
+        assert_eq!(after.active_recorder, Some(winner.fence.clone()));
+        assert_eq!(after.head.recorder_epoch, before.head.recorder_epoch + 1);
+        assert_eq!(after.head.state_revision, before.head.state_revision + 1);
+    }
+
+    #[tokio::test]
+    async fn reopen_rejects_a_tampered_prefix_without_repairing_it() {
+        let mut scenario = Scenario::new().await;
+        let request = scenario.core_input_request("tamper prefix commitment");
+        let admitted = scenario
+            .vault()
+            .append_conversation_input(request)
+            .await
+            .expect("append transcript entry before tamper fixture");
+        let connection = scenario
             .vault()
             .connection()
-            .expect("test connection")
-            .execute(
-                "DELETE FROM agent_conversation_core_entry_metadata WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = 1",
-                (
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
-                ),
-            )
-            .await
-            .expect("simulate missing metadata for a v2 entry");
-        drop(fixture.vault.take());
-        assert_eq!(
-            EncryptedAgentVault::open(&fixture.root.0, fixture.person_id, fixture.keys.clone())
-                .await
-                .err(),
-            Some(AgentFailure::VaultUnavailable)
-        );
-        assert_eq!(admission.receipt.head_revision, 1);
-    }
-
-    #[tokio::test]
-    async fn concurrent_admissions_and_claims_keep_one_writer_and_one_revision_winner() {
-        let fixture = Fixture::new().await;
-        let second_handle = fixture.independent_handle();
-        let first = fixture.admit_first(fixture.message("first")).await;
-        let expected = first.receipt.head_revision;
-        let left = fixture.continue_request(expected, fixture.message("left"));
-        let right = fixture.continue_request(expected, fixture.message("right"));
-        let (left_result, right_result) = tokio::join!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                left.clone()
-            ),
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                &second_handle,
-                right.clone()
-            ),
-        );
-        assert_eq!(
-            usize::from(left_result.is_ok()) + usize::from(right_result.is_ok()),
-            1
-        );
-        let loser = if left_result.is_err() { left } else { right };
-        let winner = if left_result.is_ok() {
-            left_result.unwrap()
-        } else {
-            right_result.unwrap()
-        };
-        let retried = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            &second_handle,
-            fixture.continue_request(winner.receipt.head_revision, loser.message),
-        )
-        .await
-        .expect("retry the revision loser against the committed head");
-        assert_eq!(
-            retried.receipt.head_revision,
-            winner.receipt.head_revision + 1
-        );
-
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate fenced executor")
-            .executor_generation;
-        let target = fixture.reference(retried.receipt.head_revision);
-        let run_a = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        let run_b = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        let (claim_a, claim_b) = tokio::join!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                fixture.vault(),
-                target.clone(),
-                run_a,
-                generation,
-            ),
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                &second_handle,
-                target.clone(),
-                run_b,
-                generation,
-            ),
-        );
-        assert_eq!(
-            usize::from(claim_a.is_ok()) + usize::from(claim_b.is_ok()),
-            1
-        );
-        let (rejected_link, rejected) = if claim_a.is_err() {
-            (run_a, claim_a.unwrap_err())
-        } else {
-            (run_b, claim_b.unwrap_err())
-        };
-        assert!(matches!(
-            rejected,
-            ConversationStoreFailure::Busy
-                | ConversationStoreFailure::Transition(ConversationFailure::WriterAlreadyActive)
-        ));
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                &second_handle,
-                target,
-                rejected_link,
-                generation,
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::WriterAlreadyActive
-            ))
-        );
-    }
-
-    #[tokio::test]
-    async fn rollback_and_acknowledgement_loss_are_distinguished_by_encrypted_readback() {
-        let fixture = Fixture::new().await;
-        let request = fixture.new_request(fixture.message("rollback boundary"));
-        fixture
-            .vault()
-            .conversation_core_failure_before_pending
-            .store(true, std::sync::atomic::Ordering::Release);
-        let connection = fixture.vault().connection().expect("test connection");
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                request,
-            )
-            .await,
-            Err(ConversationStoreFailure::NotCommitted)
-        );
+            .expect("connect to test Vault");
         let mut rows = connection
             .query(
-                "SELECT (SELECT COUNT(*) FROM agent_conversation_core_heads) + (SELECT COUNT(*) FROM agent_conversation_core_entries) + (SELECT COUNT(*) FROM agent_conversation_core_message_receipts)",
+                "SELECT prefix_digest FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
+                (
+                    scenario.person_id.to_string(),
+                    scenario.conversation_id.as_uuid().to_string(),
+                    scenario.branch_id.as_uuid().to_string(),
+                    admitted.receipt.transcript.sequence as i64,
+                ),
+            )
+            .await
+            .expect("read original prefix digest");
+        let original = rows
+            .next()
+            .await
+            .expect("read prefix row")
+            .expect("prefix exists")
+            .get::<String>(0)
+            .expect("prefix digest type");
+        let tampered = if original == "0".repeat(64) {
+            "f".repeat(64)
+        } else {
+            "0".repeat(64)
+        };
+        connection
+            .execute(
+                "UPDATE agent_conversation_core_v3_entries SET prefix_digest = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
+                (
+                    tampered.clone(),
+                    scenario.person_id.to_string(),
+                    scenario.conversation_id.as_uuid().to_string(),
+                    scenario.branch_id.as_uuid().to_string(),
+                    admitted.receipt.transcript.sequence as i64,
+                ),
+            )
+            .await
+            .expect("tamper stored prefix commitment");
+        drop(connection);
+
+        let root_path = scenario.root.0.clone();
+        let person_id = scenario.person_id;
+        let keys = scenario.keys.clone();
+        let vault_id = scenario.vault().vault_id;
+        let key = keys.load(person_id, vault_id).expect("read fixture key");
+        let path = root_path.join(person_id.to_string()).join("sessions.db");
+        drop(scenario.vault.take());
+        assert_eq!(
+            EncryptedAgentVault::open(&root_path, person_id, keys)
+                .await
+                .err(),
+            Some(AgentFailure::VaultUnavailable),
+            "reopen verifies the commitment chain and fails closed"
+        );
+
+        let database = super::super::encrypted_database(&path, &key)
+            .await
+            .expect("read raw encrypted test database after failed reopen");
+        let connection = database
+            .connect()
+            .expect("connect to raw encrypted database");
+        let mut rows = connection
+            .query(
+                "SELECT prefix_digest FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ?",
+                (
+                    person_id.to_string(),
+                    scenario.conversation_id.as_uuid().to_string(),
+                    scenario.branch_id.as_uuid().to_string(),
+                    admitted.receipt.transcript.sequence as i64,
+                ),
+            )
+            .await
+            .expect("reread stored prefix after failed reopen");
+        assert_eq!(
+            rows.next()
+                .await
+                .expect("read retained tampered prefix")
+                .expect("tampered entry remains present")
+                .get::<String>(0)
+                .expect("tampered digest type"),
+            tampered,
+            "failed reopen does not repair or rewrite tampered data"
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_fencing_and_terminal_evidence_allow_crash_retirement_then_reopen() {
+        let mut scenario = Scenario::new().await;
+        let (old_run, input) = scenario
+            .admit_run_and_append_input("interrupted owner")
+            .await;
+        let old_open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&old_run, input.receipt.transcript))
+            .await
+            .expect("open old recorder");
+        let terminal = scenario.budget_exceeded_owner_run(&old_run).await;
+        let activation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("persist a newer executor generation");
+        scenario.executor_generation = activation.executor_generation;
+        let retired = scenario
+            .vault()
+            .retire_conversation_recorder(old_open.fence.clone())
+            .await
+            .expect("retire only after generation fencing and terminal evidence");
+        assert_eq!(retired.fence, old_open.fence);
+        assert_eq!(
+            retired.generation_fence.old_generation,
+            old_open.fence.executor_generation
+        );
+        assert_eq!(
+            retired.generation_fence.current_generation,
+            activation.executor_generation
+        );
+        assert_eq!(retired.owner_evidence_digest.len(), 32);
+
+        let (new_run, reused_input) = scenario
+            .admit_owner_run_reusing_input(&terminal, "Continue interrupted owner")
+            .await;
+        assert_eq!(reused_input.disposition, AdmissionDisposition::Replayed);
+        let new_open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&new_run, input.receipt.transcript))
+            .await
+            .expect("open new recorder after stale retirement");
+        assert!(new_open.fence.recorder_epoch > old_open.fence.recorder_epoch);
+        assert_eq!(new_open.fence.input, old_open.fence.input);
+        assert!(terminal.state.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn legacy_core_markers_fail_closed_without_catalog_or_new_api_writes() {
+        let mut scenario = Scenario::new().await;
+        let vault = scenario.vault();
+        let connection = vault.connection().expect("connect to test Vault");
+        connection
+            .execute("DROP TABLE agent_conversation_core_schema", ())
+            .await
+            .expect("remove the fresh-family marker for the legacy fixture");
+        connection
+            .execute(
+                "CREATE TABLE agent_conversation_core_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
                 (),
             )
             .await
-            .expect("read rolled-back facts");
-        assert_eq!(
-            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
-            0
-        );
-
-        let mut fixture = Fixture::new().await;
-        let request = fixture.new_request(fixture.message("commit then lose response"));
-        fixture
-            .vault()
-            .conversation_core_ack_loss
-            .store(true, std::sync::atomic::Ordering::Release);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-                fixture.vault(),
-                request.clone(),
+            .expect("install a legacy stored-meaning marker fixture");
+        connection
+            .execute(
+                "INSERT INTO agent_conversation_core_schema(id, version) VALUES (1, 2)",
+                (),
             )
-            .await,
-            Err(ConversationStoreFailure::OutcomeUnknown)
-        );
-        fixture
-            .reopen()
             .await
-            .expect("read back committed record after response loss");
-        let replay = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            request,
-        )
-        .await
-        .expect("retry discovers receipt rather than appending twice");
-        assert_eq!(replay.disposition, AdmissionDisposition::Replayed);
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(replay.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("single committed entry remains readable");
-        assert_eq!(page.entries.len(), 1);
+            .expect("seed the Core 2 marker");
+        let before_core_heads = table_count(&connection, "agent_conversation_core_v3_heads").await;
+        let before_core_entries =
+            table_count(&connection, "agent_conversation_core_v3_entries").await;
+        let rejected = scenario
+            .vault()
+            .append_conversation_input(scenario.core_input_request("must not append"))
+            .await;
+        assert_eq!(
+            rejected,
+            Err(ConversationStoreFailure::UnsupportedStoredMeaning)
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_schema").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_heads").await,
+            before_core_heads
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            before_core_entries
+        );
+        drop(connection);
+
+        let root_path = scenario.root.0.clone();
+        let person_id = scenario.person_id;
+        let keys = scenario.keys.clone();
+        let vault_id = scenario.vault().vault_id;
+        let key = keys.load(person_id, vault_id).expect("read fixture key");
+        let path = root_path.join(person_id.to_string()).join("sessions.db");
+        scenario
+            .vault()
+            .checkpoint()
+            .await
+            .expect("checkpoint legacy marker fixture");
+        let before_open = catalog_snapshot(&path, &key).await;
+        drop(scenario.vault.take());
+        let opened = EncryptedAgentVault::open(&root_path, person_id, keys.clone()).await;
+        assert_eq!(opened.err(), Some(AgentFailure::UnsupportedVersion));
+        let after_open = catalog_snapshot(&path, &key).await;
+        assert_eq!(
+            after_open, before_open,
+            "open failure performs no schema writes"
+        );
     }
+}
 
-    #[tokio::test]
-    async fn committed_claim_ack_loss_is_observable_after_reopen_without_reclaim() {
-        let mut fixture = Fixture::new().await;
-        let first = fixture.admit_first(fixture.message("claim ACK loss")).await;
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate fenced executor")
-            .executor_generation;
-        let absent_run = RunId::new();
-        let absent = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            absent_run,
+async fn checkpoint_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+) -> Result<Option<ConversationCheckpoint>, ConversationStoreFailure> {
+    let (person, conversation, branch) = scope.sql();
+    let mut rows = transaction
+        .query(
+            "SELECT sequence, prefix_digest, summary FROM agent_conversation_core_v3_checkpoints WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+            (person, conversation, branch),
         )
         .await
-        .expect("successfully distinguish a missing exact receipt");
-        assert_eq!(absent.state, WriterRecoveryState::Absent);
-        assert_eq!(absent.writer, None);
-        assert_eq!(absent.active_writer, None);
-        let link = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        fixture
-            .vault()
-            .conversation_core_ack_loss
-            .store(true, std::sync::atomic::Ordering::Release);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                fixture.vault(),
-                fixture.reference(first.receipt.head_revision),
-                link,
-                generation,
-            )
-            .await,
-            Err(ConversationStoreFailure::OutcomeUnknown)
-        );
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let sequence = positive_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?;
+    let prefix_digest = parse_digest(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let summary = row.get::<String>(2).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    let through = entry_on(transaction, scope, sequence)
+        .await?
+        .map(|entry| entry.reference)
+        .ok_or_else(unavailable)?;
+    let checkpoint = ConversationCheckpoint {
+        through,
+        prefix_digest,
+        summary,
+    };
+    checkpoint.validate().map_err(|_| unavailable())?;
+    Ok(Some(checkpoint))
+}
 
-        fixture
-            .reopen()
-            .await
-            .expect("read back a committed claim after response loss");
-        let target = fixture.reference(first.receipt.head_revision);
-        let observation = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-            fixture.vault(),
-            target.clone(),
-            link.run_id,
-        )
-        .await
-        .expect("observe exact persisted Run receipt");
-        assert_eq!(
-            observation.state,
-            WriterRecoveryState::ActiveCurrentGeneration
-        );
-        assert_eq!(
-            observation.writer.as_ref().map(|claim| claim.link),
-            Some(link)
-        );
-        assert_eq!(observation.active_writer, observation.writer);
-        assert_eq!(observation.head.completed_prefix, 0);
-        assert_eq!(observation.current_executor_generation, generation);
-
-        let mut wrong_agent_target = target.clone();
-        wrong_agent_target.identity.agent_instance_id = AgentInstanceId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-                fixture.vault(),
-                wrong_agent_target,
-                link.run_id,
-            )
-            .await,
-            ConversationFailure::AgentMismatch,
-        );
-        let mut wrong_branch_target = target.clone();
-        wrong_branch_target.branch_id = ConversationBranchId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-                fixture.vault(),
-                wrong_branch_target,
-                link.run_id,
-            )
-            .await,
-            ConversationFailure::ConversationMismatch,
-        );
-        let mut wrong_person_target = target.clone();
-        wrong_person_target.identity.person_id = PersonId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-                fixture.vault(),
-                wrong_person_target,
-                link.run_id,
-            )
-            .await,
-            ConversationFailure::AgentMismatch,
-        );
-
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-                fixture.vault(),
-                target.clone(),
-                RunTaskLink {
-                    run_id: RunId::new(),
-                    task_id: Some(fixture.task_id),
-                },
-                generation,
-            )
-            .await,
-            ConversationFailure::WriterAlreadyActive,
-        );
-        let tail = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(
-                first.receipt.head_revision,
-                fixture.message("queued after readback"),
-            ),
-        )
-        .await
-        .expect("append tail behind the recovered active claim");
-        assert_eq!(tail.disposition, AdmissionDisposition::Queued);
-        fixture
-            .reopen()
-            .await
-            .expect("validate the active claim and persisted queued tail");
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(tail.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("read transcript without replaying either message");
-        assert_eq!(page.entries.len(), 2);
-        let mut pending = fixture
-            .vault()
-            .connection()
-            .expect("test connection")
-            .query(
-                "SELECT sequence FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY sequence",
+async fn save_checkpoint_on(
+    transaction: &Transaction<'_>,
+    scope: Scope,
+    previous: Option<&ConversationCheckpoint>,
+    next: &ConversationCheckpoint,
+) -> Result<(), ConversationStoreFailure> {
+    if let Some(previous) = previous {
+        let changed = transaction
+            .execute(
+                "UPDATE agent_conversation_core_v3_checkpoints SET sequence = ?, prefix_digest = ?, summary = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ? AND prefix_digest = ? AND summary = ?",
                 (
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
+                    integer(next.through.sequence)?,
+                    hex_digest(next.prefix_digest),
+                    next.summary.clone(),
+                    scope.person_id.to_string(),
+                    scope.conversation_id.as_uuid().to_string(),
+                    scope.branch_id.as_uuid().to_string(),
+                    integer(previous.through.sequence)?,
+                    hex_digest(previous.prefix_digest),
+                    previous.summary.clone(),
                 ),
             )
             .await
-            .expect("read persisted queue tail");
-        assert_eq!(
-            pending
-                .next()
-                .await
-                .expect("read queue row")
-                .expect("tail remains queued")
-                .get::<i64>(0)
-                .expect("sequence column"),
-            2
-        );
-        assert!(pending.next().await.expect("end queue").is_none());
-    }
-
-    #[tokio::test]
-    async fn committed_completion_ack_loss_reads_completed_receipt_and_preserves_tail() {
-        let mut fixture = Fixture::new().await;
-        let first = fixture
-            .admit_first(fixture.message("completion ACK loss"))
-            .await;
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate fenced executor")
-            .executor_generation;
-        let run_link = RunTaskLink {
-            run_id: RunId::new(),
-            task_id: Some(fixture.task_id),
-        };
-        let claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            run_link,
-            generation,
-        )
-        .await
-        .expect("claim first input");
-        let tail = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(
-                first.receipt.head_revision,
-                fixture.message("tail survives completed ACK loss"),
-            ),
-        )
-        .await
-        .expect("queue work behind active writer");
-        assert_eq!(tail.disposition, AdmissionDisposition::Queued);
-
-        fixture
-            .vault()
-            .conversation_core_ack_loss
-            .store(true, std::sync::atomic::Ordering::Release);
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-                fixture.vault(),
-                claim.clone(),
-            )
-            .await,
-            Err(ConversationStoreFailure::OutcomeUnknown)
-        );
-        fixture
-            .reopen()
-            .await
-            .expect("completion and remaining input validate after reopen");
-        let target = fixture.reference(tail.receipt.head_revision);
-        let observation = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-            fixture.vault(),
-            target.clone(),
-            run_link.run_id,
-        )
-        .await
-        .expect("read back the exact completed receipt");
-        assert_eq!(observation.state, WriterRecoveryState::Completed);
-        assert_eq!(observation.writer, Some(claim.clone()));
-        assert_eq!(observation.active_writer, None);
-        assert_eq!(observation.head.completed_prefix, 1);
-
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-                fixture.vault(),
-                claim.clone(),
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::WrongWriter
-            ))
-        );
-        let replay_observation =
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-                fixture.vault(),
-                target.clone(),
-                run_link.run_id,
-            )
-            .await
-            .expect("duplicate completion attempt leaves receipt unchanged");
-        assert_eq!(replay_observation.state, WriterRecoveryState::Completed);
-        assert_eq!(replay_observation.head.completed_prefix, 1);
-        let mut pending = fixture
-            .vault()
-            .connection()
-            .expect("test connection")
-            .query(
-                "SELECT sequence FROM agent_conversation_core_pending_inputs WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY sequence",
+            .map_err(database_error)?;
+        if changed != 1 {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RevisionConflict,
+            ));
+        }
+    } else {
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_core_v3_checkpoints (person_id, conversation_id, branch_id, sequence, prefix_digest, summary) VALUES (?, ?, ?, ?, ?, ?)",
                 (
-                    fixture.person_id.to_string(),
-                    fixture.conversation_id.as_uuid().to_string(),
-                    fixture.branch_id.as_uuid().to_string(),
+                    scope.person_id.to_string(),
+                    scope.conversation_id.as_uuid().to_string(),
+                    scope.branch_id.as_uuid().to_string(),
+                    integer(next.through.sequence)?,
+                    hex_digest(next.prefix_digest),
+                    next.summary.clone(),
                 ),
             )
             .await
-            .expect("read persisted queue tail");
-        assert_eq!(
-            pending
-                .next()
-                .await
-                .expect("read queue row")
-                .expect("tail remains queued")
-                .get::<i64>(0)
-                .expect("sequence column"),
-            2
-        );
-        assert!(pending.next().await.expect("end queue").is_none());
-        let next_claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            target,
-            RunTaskLink {
-                run_id: RunId::new(),
-                task_id: Some(fixture.task_id),
-            },
-            generation,
-        )
-        .await
-        .expect("next Run claims the preserved tail exactly once");
-        assert_eq!(next_claim.message.sequence, 2);
+            .map_err(database_error)?;
     }
+    Ok(())
+}
 
-    #[tokio::test]
-    async fn reopen_preserves_active_claim_and_queued_tail_rejects_stale_completion() {
-        let mut fixture = Fixture::new().await;
-        let first = fixture.admit_first(fixture.message("active message")).await;
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate writer")
-            .executor_generation;
-        let old_claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            RunTaskLink {
-                run_id: RunId::new(),
-                task_id: Some(fixture.task_id),
-            },
-            generation,
+async fn v3_orphan_counts_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+) -> Result<(u64, u64), ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT (SELECT COUNT(*) FROM agent_conversation_core_v3_input_receipts r LEFT JOIN agent_conversation_core_v3_entries e ON e.person_id = r.person_id AND e.conversation_id = r.conversation_id AND e.branch_id = r.branch_id AND e.sequence = r.sequence WHERE r.person_id = ?1 AND (e.sequence IS NULL OR e.entry_kind <> 'inbound' OR e.message_id <> r.message_id)) + (SELECT COUNT(*) FROM agent_conversation_core_v3_entries e LEFT JOIN agent_conversation_core_v3_heads h ON h.person_id = e.person_id AND h.conversation_id = e.conversation_id AND h.branch_id = e.branch_id WHERE e.person_id = ?1 AND h.person_id IS NULL), (SELECT COUNT(*) FROM agent_conversation_core_output_receipts_v2 o LEFT JOIN agent_conversation_core_v3_recording_receipts r ON r.person_id = o.person_id AND r.contribution_id = o.contribution_id LEFT JOIN agent_conversation_core_v3_entries e ON e.person_id = r.person_id AND e.conversation_id = r.conversation_id AND e.branch_id = r.branch_id AND e.sequence = r.sequence WHERE o.person_id = ?1 AND (r.contribution_id IS NULL OR e.sequence IS NULL OR e.entry_kind <> 'generated_output'))",
+            [person_id.to_string()],
         )
         .await
-        .expect("claim first queued message");
-        let tail = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(
-                first.receipt.head_revision,
-                fixture.message("durable queued tail"),
-            ),
-        )
+        .map_err(database_error)?;
+    let row = rows
+        .next()
         .await
-        .expect("append tail while a writer is active");
-        assert_eq!(tail.disposition, AdmissionDisposition::Queued);
-        fixture
-            .reopen()
-            .await
-            .expect("validate and reopen persisted claim and tail");
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            fixture.reference(tail.receipt.head_revision),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("reopened transcript includes active and queued messages");
-        assert_eq!(page.entries.len(), 2);
-        let next_generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("advance existing executor fence after reopen")
-            .executor_generation;
-        assert!(next_generation > old_claim.executor_generation);
-        let interrupted = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::observe_writer(
-            fixture.vault(),
-            fixture.reference(tail.receipt.head_revision),
-            old_claim.link.run_id,
-        )
-        .await
-        .expect("observe stale persisted claim without releasing it");
-        assert_eq!(interrupted.state, WriterRecoveryState::Interrupted);
-        assert_eq!(interrupted.writer, Some(old_claim.clone()));
-        assert_eq!(interrupted.active_writer, Some(old_claim.clone()));
-        assert_eq!(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-                fixture.vault(),
-                old_claim.clone(),
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::WrongWriter
-            ))
-        );
-        assert_eq!(page.entries[1].message.text, "durable queued tail");
+        .map_err(database_error)?
+        .ok_or_else(unavailable)?;
+    let inputs = nonnegative_integer(row.get::<i64>(0).map_err(|_| unavailable())?)?;
+    let outputs = nonnegative_integer(row.get::<i64>(1).map_err(|_| unavailable())?)?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
     }
+    Ok((inputs, outputs))
+}
 
-    #[tokio::test]
-    async fn completed_prefix_checkpoint_survives_reopen_and_keeps_tail_queued() {
-        let mut fixture = Fixture::new().await;
-        let first = fixture
-            .admit_first(fixture.message("completed prefix"))
-            .await;
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate executor")
-            .executor_generation;
-        let claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            fixture.reference(first.receipt.head_revision),
-            RunTaskLink {
-                run_id: RunId::new(),
-                task_id: Some(fixture.task_id),
-            },
-            generation,
-        )
-        .await
-        .expect("claim completed prefix");
-        <EncryptedAgentVault<TestKeys> as ConversationStorePort>::complete_writer(
-            fixture.vault(),
-            claim,
-        )
-        .await
-        .expect("complete input before checkpoint");
-        let tail = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::admit(
-            fixture.vault(),
-            fixture.continue_request(
-                first.receipt.head_revision,
-                fixture.message("tail after completed prefix"),
-            ),
-        )
-        .await
-        .expect("append tail beyond completed boundary");
-        assert_eq!(tail.disposition, AdmissionDisposition::Appended);
-        fixture
-            .reopen()
-            .await
-            .expect("reopen and verify stored commitment");
-        let target = fixture.reference(tail.receipt.head_revision);
-        let page = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::read_transcript_page(
-            fixture.vault(),
-            target.clone(),
-            None,
-            TranscriptPageBudget {
-                max_entries: 8,
-                max_bytes: 4096,
-            },
-        )
-        .await
-        .expect("read verified transcript prefix");
-        let prefix = &page.entries[0];
-        let checkpoint = ConversationCheckpoint {
-            through: prefix.reference,
-            prefix_digest: prefix.prefix_digest,
-            summary: "completed prefix checkpoint".to_owned(),
-        };
-        <EncryptedAgentVault<TestKeys> as ConversationStorePort>::apply_checkpoint(
-            fixture.vault(),
-            target.clone(),
-            checkpoint.clone(),
-        )
-        .await
-        .expect("commit checkpoint over completed prefix");
-        let mut wrong_agent_checkpoint = checkpoint.clone();
-        wrong_agent_checkpoint.through.branch_id = ConversationBranchId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::apply_checkpoint(
-                fixture.vault(),
-                target.clone(),
-                wrong_agent_checkpoint,
-            )
-            .await,
-            ConversationFailure::CheckpointMismatch,
-        );
-        let mut wrong_agent_target = target.clone();
-        wrong_agent_target.identity.agent_instance_id = AgentInstanceId::new();
-        failure_is(
-            <EncryptedAgentVault<TestKeys> as ConversationStorePort>::apply_checkpoint(
-                fixture.vault(),
-                wrong_agent_target,
-                checkpoint,
-            )
-            .await,
-            ConversationFailure::AgentMismatch,
-        );
-        fixture
-            .reopen()
-            .await
-            .expect("checkpoint and queued tail survive reopen");
-        let generation = fixture
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("activate next writer");
-        let claim = <EncryptedAgentVault<TestKeys> as ConversationStorePort>::claim_writer(
-            fixture.vault(),
-            target,
-            RunTaskLink {
-                run_id: RunId::new(),
-                task_id: Some(fixture.task_id),
-            },
-            generation.executor_generation,
-        )
-        .await
-        .expect("checkpoint left queued tail claimable");
-        assert_eq!(claim.message.sequence, 2);
+fn owner_generation_fence(
+    domain: ExecutorDomain,
+    run_id: RunId,
+    old_generation: u64,
+    current_generation: u64,
+) -> Result<OwnerGenerationFence, ConversationStoreFailure> {
+    if current_generation <= old_generation {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
     }
+    let bytes = serde_json::to_vec(&(
+        "floe-host-run-generation-fence-v1",
+        domain,
+        run_id,
+        old_generation,
+        current_generation,
+        current_generation,
+    ))
+    .map_err(|_| unavailable())?;
+    Ok(OwnerGenerationFence {
+        domain,
+        old_generation,
+        current_generation,
+        fence_revision: current_generation,
+        evidence_digest: Sha256::digest(bytes).into(),
+    })
 }

@@ -116,11 +116,25 @@ fn mapped_korean_multiline_message_and_json_artifacts_reach_conversation_core() 
     assert_eq!(mapped.artifacts, expected_artifacts);
     assert!(mapped.message.message.evidence.is_some());
 
-    let (core, result) = ConversationCore::open(mapped.message).expect("admit mapped inbound work");
+    let AdmissionTarget::New {
+        identity,
+        conversation_id,
+        branch_id,
+    } = mapped.message.target.clone()
+    else {
+        panic!("fixture starts on a new conversation");
+    };
+    let mut core = ConversationCore::new(identity, conversation_id, branch_id).expect("new Core");
+    let result = core
+        .append_input(mapped.message)
+        .expect("append mapped inbound work");
     assert_eq!(result.disposition, AdmissionDisposition::Appended);
-    let (_, stored) = core.transcript().next().expect("stored transcript message");
-    assert_eq!(stored.text, expected_text);
-    assert!(stored.text.contains('\n') && stored.text.contains('\t'));
+    let stored = core
+        .transcript_entries()
+        .next()
+        .expect("stored transcript message");
+    assert_eq!(stored.message.text, expected_text);
+    assert!(stored.message.text.contains('\n') && stored.message.text.contains('\t'));
 }
 
 #[test]
@@ -133,9 +147,19 @@ fn identical_mapped_evidence_replays_and_changed_artifact_conflicts() {
         &mapping(new_target()),
     )
     .expect("map original payload");
-    let (mut core, admitted) =
-        ConversationCore::open(initial.message.clone()).expect("admit original payload");
-    let mut replay_mapping = mapping(AdmissionTarget::Continue {
+    let AdmissionTarget::New {
+        identity,
+        conversation_id,
+        branch_id,
+    } = initial.message.target.clone()
+    else {
+        panic!("fixture starts on a new conversation");
+    };
+    let mut core = ConversationCore::new(identity, conversation_id, branch_id).expect("new Core");
+    let admitted = core
+        .append_input(initial.message.clone())
+        .expect("admit original payload");
+    let mut replay_mapping = mapping(AdmissionTarget::AppendToExisting {
         reference: core.reference(),
     });
     replay_mapping.local_message_id = initial.message.message.message_id;
@@ -144,7 +168,7 @@ fn identical_mapped_evidence_replays_and_changed_artifact_conflicts() {
     let identical = map_inbound_message(&request, &policy(), &verified_peer(), &replay_mapping)
         .expect("map identical remote payload");
     let replayed = core
-        .continue_with(identical.message)
+        .append_input(identical.message)
         .expect("identical content-addressed evidence replays");
     assert_eq!(replayed.disposition, AdmissionDisposition::Replayed);
     assert_eq!(replayed.receipt, admitted.receipt);
@@ -157,7 +181,7 @@ fn identical_mapped_evidence_replays_and_changed_artifact_conflicts() {
     let changed = map_inbound_message(&changed, &policy(), &verified_peer(), &replay_mapping)
         .expect("map changed evidence with the same peer Message ID and text");
     assert_eq!(
-        core.continue_with(changed.message),
-        Err(ConversationFailure::CommandIdConflict)
+        core.append_input(changed.message),
+        Err(ConversationFailure::MessageIdConflict)
     );
 }

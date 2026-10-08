@@ -88,11 +88,46 @@ impl MessageEvidenceReference {
     }
 }
 
+/// Opaque, role-neutral link to an exact terminal Task owner receipt.
+///
+/// The host computes `evidence_digest` over its owner-specific receipt
+/// reference. Conversation Core stores and replays this immutable link without
+/// importing Task owner types or treating the digest as authority.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskEvidenceReference {
+    task_id: TaskId,
+    evidence_digest: [u8; 32],
+}
+
+impl TaskEvidenceReference {
+    pub fn from_digest(task_id: TaskId, evidence_digest: [u8; 32]) -> Self {
+        Self {
+            task_id,
+            evidence_digest,
+        }
+    }
+
+    pub fn task_id(&self) -> TaskId {
+        self.task_id
+    }
+
+    pub fn evidence_digest(&self) -> [u8; 32] {
+        self.evidence_digest
+    }
+
+    pub fn validate(&self) -> Result<(), ConversationFailure> {
+        if !self.task_id.is_valid() || self.evidence_digest == [0; 32] {
+            return Err(ConversationFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 impl ConversationMessage {
     pub fn validate(&self) -> Result<(), ConversationFailure> {
         if !self.message_id.is_valid()
             || !self.command_id.is_valid()
-            || self.text.trim().is_empty()
             || self.text.len() > MAX_CONVERSATION_MESSAGE_BYTES
             || self
                 .text
@@ -139,7 +174,7 @@ pub enum AdmissionTarget {
         branch_id: ConversationBranchId,
         identity: AgentIdentity,
     },
-    Continue {
+    AppendToExisting {
         reference: ConversationReference,
     },
 }
@@ -157,7 +192,7 @@ impl AdmissionTarget {
                     return Err(ConversationFailure::InvalidInput);
                 }
             }
-            Self::Continue { reference } => reference.validate()?,
+            Self::AppendToExisting { reference } => reference.validate()?,
         }
         Ok(())
     }
@@ -178,7 +213,7 @@ impl AdmissionTarget {
         if let Some(reference) = prior {
             reference.validate()?;
             if reference.identity == identity {
-                return Ok(Self::Continue {
+                return Ok(Self::AppendToExisting {
                     reference: reference.clone(),
                 });
             }
@@ -209,7 +244,6 @@ impl MessageAdmissionRequest {
 #[serde(rename_all = "snake_case")]
 pub enum AdmissionDisposition {
     Appended,
-    Queued,
     Replayed,
 }
 

@@ -830,6 +830,7 @@ dependencies = [
  "floe-conversation-contract",
  "floe-execution",
  "floe-kernel",
+ "serde",
  "serde_json",
  "sha2",
  "uuid",

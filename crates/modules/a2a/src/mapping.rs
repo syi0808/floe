@@ -170,7 +170,7 @@ pub fn map_inbound_message(
 fn target_identity(target: &AdmissionTarget) -> &floe_conversation_contract::AgentIdentity {
     match target {
         AdmissionTarget::New { identity, .. } => identity,
-        AdmissionTarget::Continue { reference } => &reference.identity,
+        AdmissionTarget::AppendToExisting { reference } => &reference.identity,
     }
 }
 

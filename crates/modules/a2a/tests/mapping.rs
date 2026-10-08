@@ -294,8 +294,8 @@ fn mapping_rejects_malformed_deserialized_target_values() {
     );
 
     let mut zero_head = mapping("peer-a", 20, 100);
-    let continue_json = serde_json::json!({
-        "kind": "continue",
+    let append_json = serde_json::json!({
+        "kind": "append_to_existing",
         "reference": {
             "conversation_id": uuid(100).to_string(),
             "branch_id": uuid(101).to_string(),
@@ -304,7 +304,7 @@ fn mapping_rejects_malformed_deserialized_target_values() {
         }
     });
     zero_head.local_target =
-        serde_json::from_value(continue_json).expect("deserialize a zero-head continuation target");
+        serde_json::from_value(append_json).expect("deserialize a zero-head existing target");
     assert_eq!(
         map_inbound_message(&request, &policy, &peer, &zero_head),
         Err(A2aFailure::MappingMismatch)

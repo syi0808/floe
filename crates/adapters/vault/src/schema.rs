@@ -60,8 +60,8 @@ pub(crate) enum Family {
     Bindings,
     Context,
     Conversation,
-    ConversationCore,
-    ConversationCoreOutputs,
+    ConversationCoreV3,
+    ConversationCoreOutputsV2,
     Interactions,
     Tasks,
     Cleanup,
@@ -81,8 +81,8 @@ impl Family {
             Self::Bindings => encrypted::BINDINGS,
             Self::Context => encrypted::CONTEXT,
             Self::Conversation => encrypted::CONVERSATION,
-            Self::ConversationCore => encrypted::CONVERSATION_CORE,
-            Self::ConversationCoreOutputs => encrypted::CONVERSATION_CORE_OUTPUTS,
+            Self::ConversationCoreV3 => encrypted::CONVERSATION_CORE_V3,
+            Self::ConversationCoreOutputsV2 => encrypted::CONVERSATION_CORE_OUTPUTS_V2,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::Cleanup => encrypted::CLEANUP,
@@ -217,8 +217,8 @@ fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
         validate_family_declarations(*family, &mut names)?;
     }
     if matches!(layout, Layout::Encrypted) {
-        validate_family_declarations(Family::ConversationCore, &mut names)?;
-        validate_family_declarations(Family::ConversationCoreOutputs, &mut names)?;
+        validate_family_declarations(Family::ConversationCoreV3, &mut names)?;
+        validate_family_declarations(Family::ConversationCoreOutputsV2, &mut names)?;
     }
     Ok(())
 }
@@ -256,11 +256,10 @@ pub(crate) async fn create(connection: &Connection, layout: Layout) -> Result<()
         create_family(connection, *family).await?;
     }
     if matches!(layout, Layout::Encrypted) {
-        // This additive family is created in new Vaults. Older encrypted
-        // layouts remain openable; the family is initialized on first explicit
-        // use of the Conversation Core storage port.
-        create_family(connection, Family::ConversationCore).await?;
-        create_family(connection, Family::ConversationCoreOutputs).await?;
+        // Recorder custody is initialized only in new Vaults. Existing Core
+        // meaning is never reinterpreted or reset in place.
+        create_family(connection, Family::ConversationCoreV3).await?;
+        create_family(connection, Family::ConversationCoreOutputsV2).await?;
     }
     Ok(())
 }
@@ -290,6 +289,7 @@ async fn create_family(connection: &Connection, family: Family) -> Result<(), Sc
 pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(), SchemaFailure> {
     declarations(layout)?;
     let stored = inventory(connection).await?;
+    validate_conversation_core_marker_versions(connection, &stored).await?;
     let expected = layout
         .families()
         .iter()
@@ -299,25 +299,33 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
     let mut expected = expected;
     if matches!(layout, Layout::Encrypted) {
         expected.extend(
-            Family::ConversationCore
+            Family::ConversationCoreV3
                 .objects()
                 .iter()
                 .map(|object| object.name),
         );
         expected.extend(
-            Family::ConversationCoreOutputs
+            Family::ConversationCoreOutputsV2
                 .objects()
                 .iter()
                 .map(|object| object.name),
         );
-        validate_optional_family_presence(&stored, Family::ConversationCore)?;
-        validate_optional_family_presence(&stored, Family::ConversationCoreOutputs)?;
-        if family_present(&stored, Family::ConversationCoreOutputs)
-            && !family_present(&stored, Family::ConversationCore)
+        validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
+        validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
+        if family_present(&stored, Family::ConversationCoreOutputsV2)
+            && !family_present(&stored, Family::ConversationCoreV3)
         {
             return Err(unsupported(
                 "agent_conversation_core_outputs_schema",
-                "extension_without_core",
+                "extension_without_core_v3",
+            ));
+        }
+        if family_present(&stored, Family::ConversationCoreV3)
+            && !family_present(&stored, Family::ConversationCoreOutputsV2)
+        {
+            return Err(unsupported(
+                "agent_conversation_core_schema",
+                "mixed_or_incomplete_core_family",
             ));
         }
     }
@@ -327,11 +335,9 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
     for family in layout.families() {
         inspect_declared(connection, *family, &stored).await?;
     }
-    if matches!(layout, Layout::Encrypted) && family_present(&stored, Family::ConversationCore) {
-        inspect_declared(connection, Family::ConversationCore, &stored).await?;
-        if family_present(&stored, Family::ConversationCoreOutputs) {
-            inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await?;
-        }
+    if matches!(layout, Layout::Encrypted) && family_present(&stored, Family::ConversationCoreV3) {
+        inspect_declared(connection, Family::ConversationCoreV3, &stored).await?;
+        inspect_declared(connection, Family::ConversationCoreOutputsV2, &stored).await?;
     }
     Ok(())
 }
@@ -341,6 +347,43 @@ fn family_present(stored: &BTreeMap<String, StoredObject>, family: Family) -> bo
         .objects()
         .iter()
         .any(|object| stored.contains_key(object.name))
+}
+
+/// Validate the stored-meaning discriminators before family shape checks.
+/// The marker table names are stable across revisions so older binaries see
+/// the bumped value and fail closed before reading normalized recorder rows.
+async fn validate_conversation_core_marker_versions(
+    connection: &Connection,
+    stored: &BTreeMap<String, StoredObject>,
+) -> Result<(), SchemaFailure> {
+    for (marker, expected) in [
+        ("agent_conversation_core_schema", 3),
+        ("agent_conversation_core_outputs_schema", 2),
+    ] {
+        if !stored.contains_key(marker) {
+            continue;
+        }
+        let found = async {
+            let mut rows = connection
+                .query(&format!("SELECT id,version FROM {marker} LIMIT 2"), ())
+                .await
+                .map_err(|_| ())?;
+            let row = rows.next().await.map_err(|_| ())?.ok_or(())?;
+            let id = row.get::<i64>(0).map_err(|_| ())?;
+            let version = row.get::<i64>(1).map_err(|_| ())?;
+            let duplicate = rows.next().await.map_err(|_| ())?.is_some();
+            if id == 1 && version == expected && !duplicate {
+                Ok(())
+            } else {
+                Err(())
+            }
+        }
+        .await;
+        if found.is_err() {
+            return Err(unsupported(marker, "marker_mismatch"));
+        }
+    }
+    Ok(())
 }
 
 fn validate_optional_family_presence(
@@ -358,64 +401,77 @@ fn validate_optional_family_presence(
     Ok(())
 }
 
-/// Validate the additive family if present without requiring it in an older
-/// encrypted Vault. New storage methods call `ensure_conversation_core_family`
-/// inside their own immediate transaction before using its tables.
-pub(crate) async fn conversation_core_family_present(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConversationCoreFamilyVersion {
+    Absent,
+    RecorderV3,
+}
+
+/// Detect the one supported recorder meaning without creating or rewriting it.
+pub(crate) async fn conversation_core_family_version(
     connection: &Connection,
-) -> Result<bool, SchemaFailure> {
+) -> Result<ConversationCoreFamilyVersion, SchemaFailure> {
     let stored = inventory(connection).await?;
-    validate_optional_family_presence(&stored, Family::ConversationCore)?;
-    validate_optional_family_presence(&stored, Family::ConversationCoreOutputs)?;
-    if family_present(&stored, Family::ConversationCoreOutputs)
-        && !family_present(&stored, Family::ConversationCore)
+    validate_conversation_core_marker_versions(connection, &stored).await?;
+    validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
+    validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
+    if family_present(&stored, Family::ConversationCoreOutputsV2)
+        && !family_present(&stored, Family::ConversationCoreV3)
     {
         return Err(unsupported(
             "agent_conversation_core_outputs_schema",
-            "extension_without_core",
+            "extension_without_core_v3",
         ));
     }
-    if family_present(&stored, Family::ConversationCore) {
-        inspect_declared(connection, Family::ConversationCore, &stored).await?;
-        if family_present(&stored, Family::ConversationCoreOutputs) {
-            inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await?;
-        }
-        Ok(true)
+    let recorder = family_present(&stored, Family::ConversationCoreV3);
+    if recorder && !family_present(&stored, Family::ConversationCoreOutputsV2) {
+        return Err(unsupported(
+            "agent_conversation_core_schema",
+            "mixed_or_incomplete_core_family",
+        ));
+    }
+    if recorder {
+        inspect_declared(connection, Family::ConversationCoreV3, &stored).await?;
+        inspect_declared(connection, Family::ConversationCoreOutputsV2, &stored).await?;
+        Ok(ConversationCoreFamilyVersion::RecorderV3)
     } else {
-        Ok(false)
+        Ok(ConversationCoreFamilyVersion::Absent)
     }
 }
 
-/// Initialize only the new family in the caller's immediate transaction.
-/// Existing Session, journal and receipt rows are never read or rewritten.
-pub(crate) async fn ensure_conversation_core_family(
+pub(crate) async fn conversation_core_family_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    Ok(
+        conversation_core_family_version(connection).await?
+            != ConversationCoreFamilyVersion::Absent,
+    )
+}
+
+/// Create the recorder family only after proving that no historical family is present.
+pub(crate) async fn ensure_conversation_core_v3_family(
     connection: &Connection,
 ) -> Result<(), SchemaFailure> {
-    if conversation_core_family_present(connection).await? {
-        if !family_present(
-            &inventory(connection).await?,
-            Family::ConversationCoreOutputs,
-        ) {
-            // Revision-2 Core rows and prefix commitments are left untouched.
-            // The marker and normalized output tables are created in this same
-            // immediate transaction before the store uses them.
-            create_family(connection, Family::ConversationCoreOutputs).await?;
+    let mut names = BTreeSet::new();
+    validate_family_declarations(Family::ConversationCoreV3, &mut names)?;
+    validate_family_declarations(Family::ConversationCoreOutputsV2, &mut names)?;
+    match conversation_core_family_version(connection).await? {
+        ConversationCoreFamilyVersion::RecorderV3 => Ok(()),
+        ConversationCoreFamilyVersion::Absent => {
+            create_family(connection, Family::ConversationCoreV3).await?;
+            create_family(connection, Family::ConversationCoreOutputsV2).await?;
+            let stored = inventory(connection).await?;
+            inspect_declared(connection, Family::ConversationCoreV3, &stored).await?;
+            inspect_declared(connection, Family::ConversationCoreOutputsV2, &stored).await
         }
-        let stored = inventory(connection).await?;
-        inspect_declared(connection, Family::ConversationCore, &stored).await?;
-        return inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await;
     }
-    create_family(connection, Family::ConversationCore).await?;
-    create_family(connection, Family::ConversationCoreOutputs).await?;
-    let stored = inventory(connection).await?;
-    inspect_declared(connection, Family::ConversationCore, &stored).await?;
-    inspect_declared(connection, Family::ConversationCoreOutputs, &stored).await
 }
 pub(crate) async fn inspect_family(
     connection: &Connection,
     family: Family,
 ) -> Result<(), SchemaFailure> {
     let stored = inventory(connection).await?;
+    validate_conversation_core_marker_versions(connection, &stored).await?;
     let layout = if matches!(family, Family::Product) {
         Layout::Product
     } else {
@@ -430,13 +486,13 @@ pub(crate) async fn inspect_family(
     let mut expected = expected;
     if matches!(layout, Layout::Encrypted) {
         expected.extend(
-            Family::ConversationCore
+            Family::ConversationCoreV3
                 .objects()
                 .iter()
                 .map(|object| object.name),
         );
         expected.extend(
-            Family::ConversationCoreOutputs
+            Family::ConversationCoreOutputsV2
                 .objects()
                 .iter()
                 .map(|object| object.name),

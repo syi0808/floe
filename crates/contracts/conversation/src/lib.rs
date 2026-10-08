@@ -9,12 +9,12 @@ mod message;
 
 pub use identity::{
     AgentIdentity, AgentInstanceId, AssignmentId, ConversationBranchId, ConversationId,
-    ConversationReference, MessageId, RunTaskLink, TranscriptReference,
+    ConversationReference, LogicalContributionId, MessageId, TranscriptReference,
 };
 pub use message::{
     AdmissionDisposition, AdmissionReceipt, AdmissionResult, AdmissionTarget,
     ConversationCheckpoint, ConversationMessage, MessageAdmissionRequest, MessageEvidenceReference,
-    MessageOrigin,
+    MessageOrigin, TaskEvidenceReference,
 };
 
 /// A semantic failure for the role-neutral conversation contract.
@@ -27,11 +27,11 @@ pub enum ConversationFailure {
     TaskMismatch,
     RevisionConflict,
     MessageIdConflict,
-    CommandIdConflict,
     WriterAlreadyActive,
-    NoPendingMessage,
     RunAlreadyUsed,
     WrongWriter,
+    OwnerEvidenceMismatch,
+    UnresolvedEffect,
     CheckpointMismatch,
     StorageUnavailable,
 }

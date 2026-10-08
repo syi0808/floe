@@ -1,4 +1,4 @@
-use floe_kernel::{PersonId, RunId, TaskId};
+use floe_kernel::PersonId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -43,6 +43,7 @@ uuid_identity!(AssignmentId);
 uuid_identity!(ConversationId);
 uuid_identity!(ConversationBranchId);
 uuid_identity!(MessageId);
+uuid_identity!(LogicalContributionId);
 
 /// Stable owner and assignment identity, separate from a role name or model
 /// role. The definition revision is pinned separately from the instance ID.
@@ -110,23 +111,6 @@ impl TranscriptReference {
             || !self.message_id.is_valid()
             || self.sequence == 0
         {
-            return Err(ConversationFailure::InvalidInput);
-        }
-        Ok(())
-    }
-}
-
-/// One execution segment's distinct Run and optional host-owned Task link.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunTaskLink {
-    pub run_id: RunId,
-    pub task_id: Option<TaskId>,
-}
-
-impl RunTaskLink {
-    pub fn validate(self) -> Result<(), ConversationFailure> {
-        if !self.run_id.is_valid() || self.task_id.is_some_and(|id| !id.is_valid()) {
             return Err(ConversationFailure::InvalidInput);
         }
         Ok(())

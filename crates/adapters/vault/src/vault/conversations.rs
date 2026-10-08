@@ -150,7 +150,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    async fn admit_conversation_turn_on(
+    pub(super) async fn admit_conversation_turn_on(
         &self,
         transaction: &Transaction<'_>,
         request: TurnAdmissionRequest,
@@ -1486,7 +1486,7 @@ pub(super) fn state_name(state: RunState) -> &'static str {
     }
 }
 
-fn journal_kind(event: &JournalEvent) -> &'static str {
+pub(super) fn journal_kind(event: &JournalEvent) -> &'static str {
     match event {
         JournalEvent::ModelIntent { .. }
         | JournalEvent::ToolIntent { .. }
@@ -1540,7 +1540,7 @@ pub(super) fn terminal_digest(
         .map(|byte| format!("{byte:02x}"))
         .collect())
 }
-async fn terminal_receipt_on(
+pub(super) async fn terminal_receipt_on(
     connection: &turso::Connection,
     run_id: RunId,
 ) -> Result<Option<String>, AgentFailure> {

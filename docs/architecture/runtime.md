@@ -68,45 +68,52 @@ Conversation owns the durable Session/root-Run lifecycle and projects the state 
 ### Conversation Core custody (not connected to production callers)
 
 `floe-conversation-contract` defines role-neutral Person/agent-assignment,
-Conversation/branch, Message, transcript, Run/Task-link and checkpoint values.
-`floe-conversation-core` supplies deterministic New/Continue, replay/conflict,
-FIFO inbox, single-writer, generated-output and checkpoint transitions behind
-a Core-owned store port. Replay identity includes a content-addressed host
-evidence reference, so changed attachments conflict with a reused Message ID.
-Inbound work receives FIFO scheduling; generated assistant, Tool or host output
-is attached to the exact active `WriterClaim`, gets a stable ID and its own
-receipt, and never creates another inbox item or Person-global CommandId
-binding. Inputs and outputs share one monotonic transcript sequence. Exact
-output receipt readback precedes mutable writer checks after a lost ACK, but a
-new output requires the matching active Run and executor fence.
+Conversation/branch, Message, transcript, recorder and checkpoint values.
+`floe-conversation-core` supplies deterministic append, recorder open/output/
+close/retirement, replay/conflict and checkpoint transitions. The Host owns
+scheduling, command occupancy and dispatch authority. Core has no pending-input
+FIFO or queued-work selection: a recorder opens a fresh Run against an exact
+retained inbound reference, agent identity, recorder epoch and executor
+domain/generation. A fresh New Run appends one input; an exact owner replay
+returns its original binding and receipt. Continue may reuse the retained
+input without appending it again. The Core-composed admission path rejects
+linked Resume before writes; the existing owner-only Resume state machine is
+unchanged until one shared transactional primitive is extracted and qualified.
+Inputs and generated outputs share a
+monotonic transcript sequence, but each output contribution is independently
+identified and may carry an owner-verified Task execution receipt. That receipt
+is separate from the recorder Run's execution-Task binding. Exact stored
+receipts replay before mutable owner-generation checks and do not rebind or
+redispatch. A reused Message ID with changed content, evidence or Task link
+conflicts.
 
-Checkpoint eligibility is the contiguous settled prefix, not the number of
-settled input messages. The active input and every queued input remain
-unfinished; generated output is already settled. A checkpoint cannot cross an
-active or queued input, though it may cover settled output before the next
-queued input, and it cannot regress. Fixtures exercise Manager and Expert
-identities through the same transitions while keeping provenance and
-conversation IDs isolated. A changed pinned agent definition selects a new
-Conversation.
+The Core close transition can advance only from verified owner settlement and
+protection evidence. Current Vault owner records do not yet expose settlement
+through the neutral transcript sequence, so the Vault adapter keeps the
+settled prefix unchanged. Stale retirement requires durable owner generation
+fencing plus terminal or pending-terminal evidence; unresolved effects remain
+uncertain and block retirement. `TaskExecution` recorder ownership remains
+unsupported until its executor-generation adapter exists. These transitions do
+not claim pending-batch takeover, dispatch authority or production cutover.
 
-The encrypted Vault port stores bounded normalized rows and applies the same
-Core transitions transactionally. Its output metadata/receipt extension is
-versioned separately from the existing revision-2 Core family. Legacy rows
-without extension metadata remain inbound/v1 and their original prefix hashes
-are verified without rewriting; new entries bind kind and producer Run into a
-v2 commitment. Both the extension and its marker are created in the immediate
-write transaction, so rollback leaves the old family intact. Encrypted layout
-3 Vaults without Core remain openable and initialize Core only when its port is
-used. Transcript pages have stable sequence cursors and independent entry and
-UTF-8 byte budgets; an oversized next entry is reported without advancing the
-cursor.
+Vault stores Core revision 3 plus output-extension revision 2. The recorder
+tables are created only for a new family or explicit Core use in a supported
+Vault without Core, and owner/Core writes can compose in one Vault transaction
+through internal primitives. Owner revisions and transcript revisions remain
+separate. It reuses the recognized Core and output-extension marker names with
+values 3 and 2, so older binaries reject the changed meaning before reading
+normalized rows. A Core revision-2 or output-extension revision-1 marker is
+rejected before writes; the previous bytes remain untouched, with no silent reinterpretation,
+historical import or reset. Startup validates stored recorder receipts and
+transcript commitments. Transcript pages use stable sequence cursors and
+bounded entry and UTF-8 byte budgets. Session history import and typed history
+compaction remain later work.
 
-This slice implements generic Core custody only. The current
-Conversation/Manager and Expert execution paths, Run journal, V1 Task receipts,
-and stored Session records are unchanged; their production callers and legacy
-Session migration remain separate work. `MessageOrigin` is supplied only by a
-host-verified boundary; a model role or an agent identity is not authentication
-or an authority grant.
+This slice implements generic recorder custody only. The current
+Conversation/Manager and Expert production execution paths, Run journal
+integration, and stored Session history are not cut over. `MessageOrigin` is
+supplied only by a host-verified boundary; a model role or an agent identity is
+not authentication or an authority grant.
 
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
