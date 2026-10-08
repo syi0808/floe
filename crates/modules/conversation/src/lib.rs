@@ -58,7 +58,11 @@ pub use ports::{
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,
-    AgentSession, AgentSessionScope, AgentUsage, SessionRecoveryPointer, SessionStore,
+    AgentSession, AgentSessionScope, AgentUsage, MAX_SESSION_BYTES,
+    MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES, MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    SessionRecoveryPointer, SessionStore, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
+    TYPED_AGENT_MESSAGE_SCHEMA_ID, TYPED_AGENT_MESSAGE_SCHEMA_VERSION, TypedAgentMessageEvidence,
+    TypedAgentMessageProvenance, TypedAgentMessageReference,
 };
 
 pub use domain::{

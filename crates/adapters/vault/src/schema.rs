@@ -62,6 +62,7 @@ pub(crate) enum Family {
     Conversation,
     ConversationCoreV3,
     ConversationCoreOutputsV2,
+    TypedHistoryV1,
     Interactions,
     Tasks,
     Cleanup,
@@ -83,6 +84,7 @@ impl Family {
             Self::Conversation => encrypted::CONVERSATION,
             Self::ConversationCoreV3 => encrypted::CONVERSATION_CORE_V3,
             Self::ConversationCoreOutputsV2 => encrypted::CONVERSATION_CORE_OUTPUTS_V2,
+            Self::TypedHistoryV1 => encrypted::TYPED_HISTORY_V1,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::Cleanup => encrypted::CLEANUP,
@@ -310,8 +312,15 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::TypedHistoryV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
         validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
+        validate_optional_family_presence(&stored, Family::TypedHistoryV1)?;
         if family_present(&stored, Family::ConversationCoreOutputsV2)
             && !family_present(&stored, Family::ConversationCoreV3)
         {
@@ -327,6 +336,9 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 "agent_conversation_core_schema",
                 "mixed_or_incomplete_core_family",
             ));
+        }
+        if family_present(&stored, Family::TypedHistoryV1) {
+            inspect_declared(connection, Family::TypedHistoryV1, &stored).await?;
         }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
@@ -466,6 +478,35 @@ pub(crate) async fn ensure_conversation_core_v3_family(
         }
     }
 }
+
+/// Inspect the optional typed-history family without creating or repairing it.
+pub(crate) async fn typed_history_family_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    let stored = inventory(connection).await?;
+    validate_optional_family_presence(&stored, Family::TypedHistoryV1)?;
+    if family_present(&stored, Family::TypedHistoryV1) {
+        inspect_declared(connection, Family::TypedHistoryV1, &stored).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Initialize typed-history DDL only on its explicit owner write path.
+pub(crate) async fn ensure_typed_history_family(
+    connection: &Connection,
+) -> Result<(), SchemaFailure> {
+    let mut names = BTreeSet::new();
+    validate_family_declarations(Family::TypedHistoryV1, &mut names)?;
+    if typed_history_family_present(connection).await? {
+        return Ok(());
+    }
+    create_family(connection, Family::TypedHistoryV1).await?;
+    let stored = inventory(connection).await?;
+    inspect_declared(connection, Family::TypedHistoryV1, &stored).await
+}
+
 pub(crate) async fn inspect_family(
     connection: &Connection,
     family: Family,
@@ -497,6 +538,16 @@ pub(crate) async fn inspect_family(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::TypedHistoryV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
+        validate_optional_family_presence(&stored, Family::TypedHistoryV1)?;
+        if family_present(&stored, Family::TypedHistoryV1) {
+            inspect_declared(connection, Family::TypedHistoryV1, &stored).await?;
+        }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
         return Err(unsupported("catalog", "unexpected_object"));

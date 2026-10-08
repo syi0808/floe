@@ -8,6 +8,10 @@ use floe_agent_contract::{
     AGENT_VERSION, AgentFailure, ModelStep, ProcessingBoundary, SessionProtection,
 };
 
+/// Existing Session serialization ceiling, reused as the conservative
+/// per-record upper bound for normalized typed history.
+pub const MAX_SESSION_BYTES: usize = 2_097_152;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSession {
@@ -264,7 +268,7 @@ impl Default for AgentBudget {
             max_cost_micros: 50_000,
             max_output_bytes: 16_384,
             max_context_bytes: 1_048_576,
-            max_session_bytes: 2_097_152,
+            max_session_bytes: MAX_SESSION_BYTES,
             deadline_ms: 300_000,
         }
     }

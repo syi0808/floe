@@ -2,5 +2,7 @@
 //! and model attempt records it keeps.
 
 mod session;
+mod typed_history;
 
 pub use session::*;
+pub use typed_history::*;

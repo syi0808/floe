@@ -325,6 +325,29 @@ pub(super) const CONVERSATION_CORE_OUTPUTS_V2: &[SchemaObject] = &[
     ),
 ];
 
+/// Optional owner-defined typed Session evidence. This family is created only
+/// by an explicit typed-history write transaction, never by Vault creation or
+/// open/read inspection.
+pub(super) const TYPED_HISTORY_V1: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_conversation_typed_history_schema",
+        1,
+        "CREATE TABLE agent_conversation_typed_history_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_typed_history_entries",
+        "CREATE TABLE agent_conversation_typed_history_entries (person_id TEXT NOT NULL, owner_namespace TEXT NOT NULL CHECK (owner_namespace = 'floe.conversation.session'), session_id TEXT NOT NULL, entry_id TEXT NOT NULL, turn_id TEXT NOT NULL, provenance TEXT NOT NULL CHECK (provenance IN ('owner_recorded', 'imported_legacy_unproven')), schema_id TEXT NOT NULL CHECK (length(schema_id) BETWEEN 1 AND 128), schema_version INTEGER NOT NULL CHECK (schema_version > 0), payload_byte_length INTEGER NOT NULL, digest TEXT NOT NULL CHECK (length(digest) = 64), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 2097152), PRIMARY KEY (person_id, owner_namespace, session_id, entry_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_typed_history_session_turn",
+        "CREATE INDEX agent_conversation_typed_history_session_turn ON agent_conversation_typed_history_entries(person_id, session_id, turn_id, entry_id)",
+    ),
+    SchemaObject::index(
+        "agent_conversation_typed_history_session_digest",
+        "CREATE UNIQUE INDEX agent_conversation_typed_history_session_digest ON agent_conversation_typed_history_entries(person_id, owner_namespace, session_id, digest)",
+    ),
+];
+
 pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_interaction_schema",
