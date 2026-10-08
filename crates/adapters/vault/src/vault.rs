@@ -6,7 +6,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
     pin::Pin,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
 use crate::RootKey;
@@ -34,6 +34,7 @@ mod conversation_interactions;
 mod conversations;
 mod expert_actions;
 pub(crate) mod expert_binding_reviews;
+mod owner_custody;
 mod typed_history;
 pub use expert_actions::VaultExpertProposalReader;
 #[cfg(feature = "development-storage")]
@@ -104,6 +105,10 @@ pub struct EncryptedAgentVault<Keys> {
     conversation_core_failure_before_pending: AtomicBool,
     #[cfg(test)]
     conversation_core_resume_fault_after_owner_claim: AtomicBool,
+    #[cfg(test)]
+    conversation_core_fault_after_input_mapping: AtomicBool,
+    #[cfg(test)]
+    conversation_core_typed_write_fault: AtomicU8,
     #[cfg(test)]
     typed_history_payload_hydrations: AtomicU64,
     _host_lock: File,
@@ -228,6 +233,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             #[cfg(test)]
             conversation_core_resume_fault_after_owner_claim: AtomicBool::new(false),
             #[cfg(test)]
+            conversation_core_fault_after_input_mapping: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_typed_write_fault: AtomicU8::new(0),
+            #[cfg(test)]
             typed_history_payload_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,
         };
@@ -290,6 +299,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_failure_before_pending: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_resume_fault_after_owner_claim: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_fault_after_input_mapping: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_typed_write_fault: AtomicU8::new(0),
             #[cfg(test)]
             typed_history_payload_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,

@@ -63,6 +63,7 @@ pub(crate) enum Family {
     ConversationCoreV3,
     ConversationCoreOutputsV2,
     TypedHistoryV1,
+    ConversationOwnerCustodyV1,
     Interactions,
     Tasks,
     Cleanup,
@@ -85,6 +86,7 @@ impl Family {
             Self::ConversationCoreV3 => encrypted::CONVERSATION_CORE_V3,
             Self::ConversationCoreOutputsV2 => encrypted::CONVERSATION_CORE_OUTPUTS_V2,
             Self::TypedHistoryV1 => encrypted::TYPED_HISTORY_V1,
+            Self::ConversationOwnerCustodyV1 => encrypted::CONVERSATION_OWNER_CUSTODY_V1,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::Cleanup => encrypted::CLEANUP,
@@ -221,6 +223,7 @@ fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
     if matches!(layout, Layout::Encrypted) {
         validate_family_declarations(Family::ConversationCoreV3, &mut names)?;
         validate_family_declarations(Family::ConversationCoreOutputsV2, &mut names)?;
+        validate_family_declarations(Family::ConversationOwnerCustodyV1, &mut names)?;
     }
     Ok(())
 }
@@ -318,9 +321,16 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ConversationOwnerCustodyV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
         validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
         validate_optional_family_presence(&stored, Family::TypedHistoryV1)?;
+        validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV1)?;
         if family_present(&stored, Family::ConversationCoreOutputsV2)
             && !family_present(&stored, Family::ConversationCoreV3)
         {
@@ -339,6 +349,9 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
         }
         if family_present(&stored, Family::TypedHistoryV1) {
             inspect_declared(connection, Family::TypedHistoryV1, &stored).await?;
+        }
+        if family_present(&stored, Family::ConversationOwnerCustodyV1) {
+            inspect_declared(connection, Family::ConversationOwnerCustodyV1, &stored).await?;
         }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
@@ -371,6 +384,7 @@ async fn validate_conversation_core_marker_versions(
     for (marker, expected) in [
         ("agent_conversation_core_schema", 3),
         ("agent_conversation_core_outputs_schema", 2),
+        ("agent_conversation_owner_custody_schema", 1),
     ] {
         if !stored.contains_key(marker) {
             continue;
@@ -507,6 +521,38 @@ pub(crate) async fn ensure_typed_history_family(
     inspect_declared(connection, Family::TypedHistoryV1, &stored).await
 }
 
+/// Inspect the optional owner-to-transcript proof family without creating or
+/// repairing it. Core readers can therefore distinguish absent proofs from
+/// corrupt or unsupported stored meaning without changing the catalog.
+pub(crate) async fn conversation_owner_custody_family_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    let stored = inventory(connection).await?;
+    validate_conversation_core_marker_versions(connection, &stored).await?;
+    validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV1)?;
+    if family_present(&stored, Family::ConversationOwnerCustodyV1) {
+        inspect_declared(connection, Family::ConversationOwnerCustodyV1, &stored).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Create owner custody tables only from an explicit composed owner/Core
+/// write. Open, read, and ordinary schema inspection never call this helper.
+pub(crate) async fn ensure_conversation_owner_custody_family(
+    connection: &Connection,
+) -> Result<(), SchemaFailure> {
+    let mut names = BTreeSet::new();
+    validate_family_declarations(Family::ConversationOwnerCustodyV1, &mut names)?;
+    if conversation_owner_custody_family_present(connection).await? {
+        return Ok(());
+    }
+    create_family(connection, Family::ConversationOwnerCustodyV1).await?;
+    let stored = inventory(connection).await?;
+    inspect_declared(connection, Family::ConversationOwnerCustodyV1, &stored).await
+}
+
 pub(crate) async fn inspect_family(
     connection: &Connection,
     family: Family,
@@ -544,9 +590,19 @@ pub(crate) async fn inspect_family(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ConversationOwnerCustodyV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::TypedHistoryV1)?;
+        validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV1)?;
         if family_present(&stored, Family::TypedHistoryV1) {
             inspect_declared(connection, Family::TypedHistoryV1, &stored).await?;
+        }
+        if family_present(&stored, Family::ConversationOwnerCustodyV1) {
+            inspect_declared(connection, Family::ConversationOwnerCustodyV1, &stored).await?;
         }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {

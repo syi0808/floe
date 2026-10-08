@@ -7,9 +7,23 @@
 
 use std::collections::HashSet;
 
+use super::owner_custody::{
+    OwnerInputBinding, OwnerTranscriptInputMapping, ensure_owner_custody_v1_on,
+    insert_owner_input_binding_on, insert_owner_transcript_input_mapping_on,
+    insert_owner_transcript_run_input_on, owner_input_binding_on,
+    owner_transcript_input_for_owner_message_on, owner_transcript_input_for_reference_on,
+    owner_transcript_input_for_run_on,
+};
+#[cfg(test)]
+use super::owner_custody::{
+    TypedConversationRecordingRequest, TypedTranscriptEvidenceLink,
+    typed_transcript_link_for_contribution_on, typed_transcript_link_for_entry_on,
+};
 use super::{EncryptedAgentVault, VaultKeyProvider, database_failure};
 use crate::write_fence::JournalWriteGuard;
 use floe_agent_contract::TaskExecutionReceiptRef;
+#[cfg(test)]
+use floe_conversation::TypedAgentMessageProvenance;
 use floe_conversation::{
     CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState, TurnAdmissionRequest,
     TurnInput, TurnMode,
@@ -34,7 +48,7 @@ use floe_conversation_core::{
     replay_recording_entry, retire_stale_recording_transition, validate_reference_target,
 };
 use floe_kernel::{AgentFailure, PersonId, RunId};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
@@ -64,47 +78,6 @@ pub(super) enum CoreComposedRunAdmission {
 pub(super) struct LoadedHead {
     pub(super) state: ConversationHead,
     pub(super) identity_json: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct OwnerInputBinding {
-    run_id: RunId,
-    session_id: Uuid,
-    owner_user_message_id: Uuid,
-    identity: AgentIdentity,
-    conversation_id: ConversationId,
-    branch_id: ConversationBranchId,
-    input: TranscriptReference,
-    executor_domain: ExecutorDomain,
-    executor_generation: u64,
-}
-
-impl OwnerInputBinding {
-    fn validate(&self, person_id: PersonId) -> Result<(), ConversationStoreFailure> {
-        self.identity
-            .validate()
-            .map_err(ConversationStoreFailure::Transition)?;
-        self.input
-            .validate()
-            .map_err(ConversationStoreFailure::Transition)?;
-        if !self.run_id.is_valid()
-            || self.session_id.is_nil()
-            || self.owner_user_message_id.is_nil()
-            || self.identity.person_id != person_id
-            || !self.conversation_id.is_valid()
-            || !self.branch_id.is_valid()
-            || self.input.conversation_id != self.conversation_id
-            || self.input.branch_id != self.branch_id
-            || self.executor_domain != ExecutorDomain::HostRun
-            || self.executor_generation == 0
-        {
-            return Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,7 +119,7 @@ impl Scope {
     }
 }
 
-fn unavailable() -> ConversationStoreFailure {
+pub(super) fn unavailable() -> ConversationStoreFailure {
     ConversationStoreFailure::Unavailable
 }
 
@@ -166,7 +139,7 @@ pub(super) fn start_error(error: AgentFailure) -> ConversationStoreFailure {
     }
 }
 
-fn schema_error(error: crate::schema::SchemaFailure) -> ConversationStoreFailure {
+pub(super) fn schema_error(error: crate::schema::SchemaFailure) -> ConversationStoreFailure {
     match error {
         crate::schema::SchemaFailure::Unsupported { .. } => {
             ConversationStoreFailure::UnsupportedStoredMeaning
@@ -176,7 +149,7 @@ fn schema_error(error: crate::schema::SchemaFailure) -> ConversationStoreFailure
     }
 }
 
-fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
+pub(super) fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
     match error {
         AgentFailure::StorageBusy => ConversationStoreFailure::Busy,
         AgentFailure::UnsupportedVersion => ConversationStoreFailure::UnsupportedStoredMeaning,
@@ -187,11 +160,11 @@ fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
     }
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<String, ConversationStoreFailure> {
+pub(super) fn encode<T: Serialize>(value: &T) -> Result<String, ConversationStoreFailure> {
     serde_json::to_string(value).map_err(|_| unavailable())
 }
 
-fn decode<T: DeserializeOwned>(value: &str) -> Result<T, ConversationStoreFailure> {
+pub(super) fn decode<T: DeserializeOwned>(value: &str) -> Result<T, ConversationStoreFailure> {
     serde_json::from_str(value).map_err(|_| unavailable())
 }
 
@@ -209,27 +182,31 @@ pub(super) fn positive_integer(value: i64) -> Result<u64, ConversationStoreFailu
     (value > 0).then_some(value).ok_or_else(unavailable)
 }
 
-fn parse_uuid(value: &str) -> Result<Uuid, ConversationStoreFailure> {
+pub(super) fn parse_uuid(value: &str) -> Result<Uuid, ConversationStoreFailure> {
     Uuid::parse_str(value).map_err(|_| unavailable())
 }
 
-fn parse_message_id(value: &str) -> Result<MessageId, ConversationStoreFailure> {
+pub(super) fn parse_message_id(value: &str) -> Result<MessageId, ConversationStoreFailure> {
     MessageId::from_uuid(parse_uuid(value)?).ok_or_else(unavailable)
 }
 
-fn parse_run_id(value: &str) -> Result<RunId, ConversationStoreFailure> {
+pub(super) fn parse_run_id(value: &str) -> Result<RunId, ConversationStoreFailure> {
     RunId::from_uuid(parse_uuid(value)?).ok_or_else(unavailable)
 }
 
-fn parse_conversation_id(value: &str) -> Result<ConversationId, ConversationStoreFailure> {
+pub(super) fn parse_conversation_id(
+    value: &str,
+) -> Result<ConversationId, ConversationStoreFailure> {
     ConversationId::from_uuid(parse_uuid(value)?).ok_or_else(unavailable)
 }
 
-fn parse_branch_id(value: &str) -> Result<ConversationBranchId, ConversationStoreFailure> {
+pub(super) fn parse_branch_id(
+    value: &str,
+) -> Result<ConversationBranchId, ConversationStoreFailure> {
     ConversationBranchId::from_uuid(parse_uuid(value)?).ok_or_else(unavailable)
 }
 
-fn hex_digest(value: [u8; 32]) -> String {
+pub(super) fn hex_digest(value: [u8; 32]) -> String {
     let mut encoded = String::with_capacity(64);
     for byte in value {
         use std::fmt::Write as _;
@@ -238,7 +215,7 @@ fn hex_digest(value: [u8; 32]) -> String {
     encoded
 }
 
-fn parse_digest(value: &str) -> Result<[u8; 32], ConversationStoreFailure> {
+pub(super) fn parse_digest(value: &str) -> Result<[u8; 32], ConversationStoreFailure> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(unavailable());
     }
@@ -251,7 +228,7 @@ fn parse_digest(value: &str) -> Result<[u8; 32], ConversationStoreFailure> {
     Ok(digest)
 }
 
-fn task_evidence_reference(
+pub(super) fn task_evidence_reference(
     reference: &TaskExecutionReceiptRef,
 ) -> Result<TaskEvidenceReference, ConversationStoreFailure> {
     reference.validate().map_err(|_| {
@@ -679,129 +656,6 @@ async fn input_receipt_on(
     Ok(Some((receipt, entry.message)))
 }
 
-async fn owner_input_binding_on(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-    run_id: RunId,
-) -> Result<Option<OwnerInputBinding>, ConversationStoreFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT session_id, owner_user_message_id, conversation_id, branch_id, input_sequence, input_message_id, binding_json FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? AND run_id = ?",
-            (person_id.to_string(), run_id.as_uuid().to_string()),
-        )
-        .await
-        .map_err(database_error)?;
-    let Some(row) = rows.next().await.map_err(database_error)? else {
-        return Ok(None);
-    };
-    let session_id = parse_uuid(&row.get::<String>(0).map_err(|_| unavailable())?)?;
-    let owner_user_message_id = parse_uuid(&row.get::<String>(1).map_err(|_| unavailable())?)?;
-    let conversation_id = parse_conversation_id(&row.get::<String>(2).map_err(|_| unavailable())?)?;
-    let branch_id = parse_branch_id(&row.get::<String>(3).map_err(|_| unavailable())?)?;
-    let sequence = positive_integer(row.get::<i64>(4).map_err(|_| unavailable())?)?;
-    let message_id = parse_message_id(&row.get::<String>(5).map_err(|_| unavailable())?)?;
-    let binding_json = row.get::<String>(6).map_err(|_| unavailable())?;
-    if rows.next().await.map_err(database_error)?.is_some() {
-        return Err(unavailable());
-    }
-    drop(rows);
-    let binding: OwnerInputBinding = decode(&binding_json)?;
-    binding.validate(person_id)?;
-    if encode(&binding)? != binding_json
-        || binding.run_id != run_id
-        || binding.session_id != session_id
-        || binding.owner_user_message_id != owner_user_message_id
-        || binding.conversation_id != conversation_id
-        || binding.branch_id != branch_id
-        || binding.input.sequence != sequence
-        || binding.input.message_id != message_id
-    {
-        return Err(unavailable());
-    }
-    Ok(Some(binding))
-}
-
-async fn owner_input_binding_for_message_on(
-    transaction: &Transaction<'_>,
-    person_id: PersonId,
-    session_id: Uuid,
-    owner_user_message_id: Uuid,
-) -> Result<Option<OwnerInputBinding>, ConversationStoreFailure> {
-    let mut rows = transaction
-        .query(
-            "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? AND session_id = ? AND owner_user_message_id = ? ORDER BY run_id LIMIT 4097",
-            (
-                person_id.to_string(),
-                session_id.to_string(),
-                owner_user_message_id.to_string(),
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    let mut run_ids = Vec::new();
-    while let Some(row) = rows.next().await.map_err(database_error)? {
-        if run_ids.len() == 4096 {
-            return Err(unavailable());
-        }
-        run_ids.push(parse_run_id(
-            &row.get::<String>(0).map_err(|_| unavailable())?,
-        )?);
-    }
-    drop(rows);
-
-    let mut selected: Option<OwnerInputBinding> = None;
-    for run_id in run_ids {
-        let binding = owner_input_binding_on(transaction, person_id, run_id)
-            .await?
-            .ok_or_else(unavailable)?;
-        if binding.session_id != session_id
-            || binding.owner_user_message_id != owner_user_message_id
-        {
-            return Err(unavailable());
-        }
-        if let Some(previous) = &selected {
-            if previous.identity != binding.identity
-                || previous.conversation_id != binding.conversation_id
-                || previous.branch_id != binding.branch_id
-                || previous.input != binding.input
-            {
-                return Err(ConversationStoreFailure::Transition(
-                    ConversationFailure::OwnerEvidenceMismatch,
-                ));
-            }
-        } else {
-            selected = Some(binding);
-        }
-    }
-    Ok(selected)
-}
-
-async fn insert_owner_input_binding_on(
-    transaction: &Transaction<'_>,
-    binding: &OwnerInputBinding,
-) -> Result<(), ConversationStoreFailure> {
-    binding.validate(binding.identity.person_id)?;
-    let binding_json = encode(binding)?;
-    transaction
-        .execute(
-            "INSERT INTO agent_conversation_core_v3_owner_bindings (person_id, run_id, session_id, owner_user_message_id, conversation_id, branch_id, input_sequence, input_message_id, binding_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                binding.identity.person_id.to_string(),
-                binding.run_id.as_uuid().to_string(),
-                binding.session_id.to_string(),
-                binding.owner_user_message_id.to_string(),
-                binding.conversation_id.as_uuid().to_string(),
-                binding.branch_id.as_uuid().to_string(),
-                integer(binding.input.sequence)?,
-                binding.input.message_id.as_uuid().to_string(),
-                binding_json,
-            ),
-        )
-        .await
-        .map_err(database_error)?;
-    Ok(())
-}
-
 async fn transcript_has_message_id_on(
     transaction: &Transaction<'_>,
     scope: Scope,
@@ -898,7 +752,7 @@ async fn insert_input_receipt_on(
     Ok(())
 }
 
-async fn open_receipt_on(
+pub(super) async fn open_receipt_on(
     transaction: &Transaction<'_>,
     person_id: PersonId,
     run_id: RunId,
@@ -933,7 +787,7 @@ async fn open_receipt_on(
     Ok(Some(receipt))
 }
 
-async fn active_recorder_on(
+pub(super) async fn active_recorder_on(
     transaction: &Transaction<'_>,
     scope: Scope,
 ) -> Result<Option<RecorderFence>, ConversationStoreFailure> {
@@ -1040,7 +894,7 @@ async fn retirement_receipt_on(
     Ok(Some(receipt))
 }
 
-async fn recording_receipt_on(
+pub(super) async fn recording_receipt_on(
     transaction: &Transaction<'_>,
     person_id: PersonId,
     contribution_id: floe_conversation_contract::LogicalContributionId,
@@ -1296,7 +1150,7 @@ async fn delete_active_recorder_on(
     Ok(())
 }
 
-fn parse_logical_contribution_id(
+pub(super) fn parse_logical_contribution_id(
     value: &str,
 ) -> Result<floe_conversation_contract::LogicalContributionId, ConversationStoreFailure> {
     floe_conversation_contract::LogicalContributionId::from_uuid(parse_uuid(value)?)
@@ -1426,16 +1280,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::OwnerEvidenceMismatch,
             ));
         }
-        let source_binding = match resume_claim.as_ref() {
+        let source_mapping = match resume_claim.as_ref() {
             Some(request) => Some(
-                owner_input_binding_on(transaction, self.person_id, request.request.origin_run_id)
-                    .await?
-                    .ok_or(ConversationStoreFailure::Transition(
-                        ConversationFailure::OwnerEvidenceMismatch,
-                    ))?,
+                owner_transcript_input_for_run_on(
+                    transaction,
+                    self.person_id,
+                    request.request.origin_run_id,
+                )
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?,
             ),
             None if owner_message_text.is_none() => Some(
-                owner_input_binding_for_message_on(
+                owner_transcript_input_for_owner_message_on(
                     transaction,
                     self.person_id,
                     owner_request.session_id,
@@ -1448,6 +1306,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ),
             None => None,
         };
+        let source_binding = source_mapping
+            .as_ref()
+            .map(|mapping| mapping.original_binding.clone());
         let (identity, conversation_id, branch_id) = match &core_request.target {
             AdmissionTarget::New {
                 identity,
@@ -1676,6 +1537,73 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationFailure::OwnerEvidenceMismatch,
                 ));
             }
+        }
+        let mapping = if let Some(mapping) = source_mapping {
+            if mapping.input != binding.input
+                || mapping.session_id != binding.session_id
+                || mapping.owner_user_message_id != binding.owner_user_message_id
+                || mapping.original_binding.identity != binding.identity
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            mapping
+        } else {
+            let mapping = OwnerTranscriptInputMapping {
+                person_id: self.person_id,
+                input: binding.input,
+                session_id: binding.session_id,
+                owner_user_message_id: binding.owner_user_message_id,
+                original_owner_run_id: binding.run_id,
+                original_binding: binding.clone(),
+            };
+            mapping.validate(self.person_id)?;
+            if newly_created {
+                // This optional family is created only by the explicit
+                // composed owner/Core admission write.
+                ensure_owner_custody_v1_on(transaction).await?;
+                insert_owner_transcript_input_mapping_on(transaction, &mapping).await?;
+            } else if owner_transcript_input_for_reference_on(
+                transaction,
+                self.person_id,
+                binding.input,
+            )
+            .await?
+            .as_ref()
+                != Some(&mapping)
+            {
+                // A legacy owner/Core row with no proof mapping stays
+                // unbound. Replays never retrofit it.
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            mapping
+        };
+        if newly_created {
+            insert_owner_transcript_run_input_on(
+                transaction,
+                self.person_id,
+                binding.run_id,
+                &mapping,
+            )
+            .await?;
+            #[cfg(test)]
+            if self
+                .conversation_core_fault_after_input_mapping
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                return Err(ConversationStoreFailure::NotCommitted);
+            }
+        } else if owner_transcript_input_for_run_on(transaction, self.person_id, binding.run_id)
+            .await?
+            .as_ref()
+            != Some(&mapping)
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
         }
         let recorder = if is_resume_composition {
             Some(
@@ -2348,7 +2276,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         save_checkpoint_on(transaction, scope, current_checkpoint.as_ref(), &checkpoint).await
     }
 
-    async fn verified_owner_evidence_on(
+    pub(super) async fn verified_owner_evidence_on(
         &self,
         transaction: &Transaction<'_>,
         run_id: RunId,
@@ -2529,7 +2457,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(actual)
     }
 
-    async fn verified_task_reference_on(
+    pub(super) async fn verified_task_reference_on(
         &self,
         transaction: &Transaction<'_>,
         run_id: RunId,
@@ -3015,7 +2943,8 @@ mod tests {
     use super::*;
     use crate::{RootKey, VaultKeyProvider};
     use floe_agent_contract::{
-        AgentMessage, DependencyCoverage, MessageRole, TaskSnapshot, TaskState,
+        AgentMessage, DependencyCoverage, MessageRole, TaskExecutionReceiptRef, TaskSnapshot,
+        TaskState,
     };
     use floe_conversation::{
         CanonicalTurnIntent, ResumeChildAdmission, ResumeRequired, RunTerminal,
@@ -3033,6 +2962,9 @@ mod tests {
     };
     use floe_kernel::{AgentFailure, CommandId, TaskId};
     use uuid::Uuid;
+
+    #[path = "conversation_core_owner_custody_tests.rs"]
+    mod owner_custody;
 
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
@@ -3204,6 +3136,83 @@ mod tests {
         vault
             .finish_conversation_core_transaction(guard, transaction, result)
             .await
+    }
+
+    async fn compose_typed_recording(
+        vault: &EncryptedAgentVault<TestKeys>,
+        request: TypedConversationRecordingRequest,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        let mut connection = vault.connection().map_err(start_error)?;
+        let (guard, transaction) = vault
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = vault
+            .record_typed_conversation_entry_on(&transaction, request)
+            .await;
+        vault
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    fn typed_assistant_request(
+        recorder: RecorderFence,
+        text: &str,
+    ) -> TypedConversationRecordingRequest {
+        TypedConversationRecordingRequest {
+            recorder: recorder.clone(),
+            message_id: MessageId::new(),
+            command_id: CommandId::new(),
+            contribution_id: LogicalContributionId::new(),
+            typed_entry_id: Uuid::new_v4(),
+            typed_message: floe_conversation::AgentMessage::Assistant {
+                turn_id: recorder.run_id.as_uuid(),
+                text: text.to_owned(),
+            },
+        }
+    }
+
+    async fn stored_typed_link(
+        vault: &EncryptedAgentVault<TestKeys>,
+        person_id: PersonId,
+        contribution_id: LogicalContributionId,
+    ) -> Option<TypedTranscriptEvidenceLink> {
+        let mut connection = vault.connection().expect("connect to typed link fixture");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .expect("start typed link read transaction");
+        let result =
+            typed_transcript_link_for_contribution_on(&transaction, person_id, contribution_id)
+                .await
+                .expect("resolve exact immutable typed link");
+        transaction
+            .commit()
+            .await
+            .expect("commit typed link read transaction");
+        result
+    }
+
+    async fn stored_run_input_mapping(
+        vault: &EncryptedAgentVault<TestKeys>,
+        person_id: PersonId,
+        run_id: RunId,
+    ) -> Option<OwnerTranscriptInputMapping> {
+        let mut connection = vault
+            .connection()
+            .expect("connect to owner input mapping fixture");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .expect("start owner input mapping read transaction");
+        let result = owner_transcript_input_for_run_on(&transaction, person_id, run_id)
+            .await
+            .expect("resolve exact Run-to-input mapping");
+        transaction
+            .commit()
+            .await
+            .expect("commit owner input mapping read transaction");
+        result
     }
 
     struct Scenario {
@@ -4053,6 +4062,16 @@ mod tests {
                     .await;
                 }
             }
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::BatchProgress {
+                    cursor: floe_agent_contract::BatchCursor {
+                        batch_id,
+                        next_step_index: task_messages.len() as u32,
+                    },
+                },
+            )
+            .await;
             references
         }
 
@@ -4111,6 +4130,27 @@ mod tests {
             .expect("transactional fixture count row")
             .get::<i64>(0)
             .expect("integer transactional fixture count")
+    }
+
+    async fn live_catalog_snapshot(
+        connection: &turso::Connection,
+    ) -> Vec<(String, String, String)> {
+        let mut rows = connection
+            .query(
+                "SELECT type, name, sql FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY name",
+                (),
+            )
+            .await
+            .expect("read live schema catalog");
+        let mut snapshot = Vec::new();
+        while let Some(row) = rows.next().await.expect("read live schema row") {
+            snapshot.push((
+                row.get::<String>(0).expect("schema type"),
+                row.get::<String>(1).expect("schema name"),
+                row.get::<String>(2).expect("schema DDL"),
+            ));
+        }
+        snapshot
     }
 
     async fn session_storage_snapshot(
@@ -4176,69 +4216,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_admission_and_core_input_rollback_as_one_transaction() {
-        let scenario = Scenario::new().await;
-        let initial_revision = scenario.session_revision;
-        let owner_request = scenario.owner_request("atomic admission");
-        let core_request = scenario.core_input_request("atomic admission");
-        let mut connection = scenario
-            .vault()
-            .connection()
-            .expect("connect to test Vault");
-        let (mut guard, transaction) = scenario
-            .vault()
-            .journal_transaction(&mut connection)
-            .await
-            .expect("start composed transaction");
-        let mut replay_checked = false;
-        let mut prior_command = false;
-        scenario
-            .vault()
-            .admit_conversation_run_with_core_input_on(
-                &transaction,
-                CoreComposedOwnerIntent::Turn(owner_request),
-                core_request,
-                &mut replay_checked,
-                &mut prior_command,
-            )
-            .await
-            .expect("write bound owner Run and Core input before deliberate rollback");
-        transaction
-            .rollback()
-            .await
-            .expect("roll back owner and Core rows together");
-        guard.settled();
-
-        let connection = scenario
-            .vault()
-            .connection()
-            .expect("reconnect after rollback");
-        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 0);
-        assert_eq!(
-            table_count(&connection, "agent_conversation_core_v3_heads").await,
-            0
-        );
-        assert_eq!(
-            table_count(&connection, "agent_conversation_core_v3_entries").await,
-            0
-        );
-        assert_eq!(
-            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
-            0
-        );
-        assert_eq!(
-            table_count(&connection, "agent_sessions").await,
-            1,
-            "the initial owner Session remains"
-        );
-        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
-            .await
-            .expect("reload Session after rollback");
-        assert_eq!(session.revision, initial_revision);
-        assert!(session.active_turn.is_none());
-    }
-
-    #[tokio::test]
     async fn resolved_interaction_resume_admits_one_child_input_and_recorder_and_replays_after_reopen()
      {
         let mut scenario = Scenario::new().await;
@@ -4294,6 +4271,15 @@ mod tests {
             first_recorder.fence.executor_generation,
             child.executor_generation
         );
+        let original_mapping =
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, origin.run_id)
+                .await
+                .expect("origin Run keeps its immutable Core input mapping");
+        assert_eq!(
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, child.run_id).await,
+            Some(original_mapping),
+            "Resume child points to the origin's retained input mapping"
+        );
 
         let connection = scenario
             .vault()
@@ -4321,6 +4307,20 @@ mod tests {
             table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
             1,
             "the Resume child has one immutable recorder receipt"
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
+            1,
+            "Resume keeps the original owner-to-input mapping"
+        );
+        assert_eq!(
+            table_count(
+                &connection,
+                "agent_conversation_owner_transcript_run_inputs_v1"
+            )
+            .await,
+            2,
+            "origin and Resume child both point to that mapping"
         );
         drop(connection);
         let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
@@ -5163,6 +5163,12 @@ mod tests {
             .admit_run_and_bind_input(owner_request.clone(), core_request.clone())
             .await;
         assert_eq!(first_input.disposition, AdmissionDisposition::Appended);
+        let first_mapping =
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, first_run.run_id)
+                .await
+                .expect("first New write stores the owner-to-Core mapping");
+        assert_eq!(first_mapping.input, first_input.receipt.transcript);
+        assert_eq!(first_mapping.original_owner_run_id, first_run.run_id);
         let before = scenario
             .vault()
             .connection()
@@ -5180,6 +5186,11 @@ mod tests {
         assert_eq!(replayed_run, first_run);
         assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
         assert_eq!(replayed_input.receipt, first_input.receipt);
+        assert_eq!(
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, first_run.run_id).await,
+            Some(first_mapping),
+            "exact New replay validates and preserves the original mapping"
+        );
         let after = scenario
             .vault()
             .connection()
@@ -5795,6 +5806,15 @@ mod tests {
         assert_eq!(reused.disposition, AdmissionDisposition::Replayed);
         assert_eq!(reused.receipt.transcript, retained_reference);
         assert_ne!(continued.run_id, failed_parent.run_id);
+        let original_mapping =
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, failed_parent.run_id)
+                .await
+                .expect("New Run keeps its immutable Core input mapping");
+        assert_eq!(
+            stored_run_input_mapping(scenario.vault(), scenario.person_id, continued.run_id).await,
+            Some(original_mapping.clone()),
+            "Continue Run points to the original New input mapping"
+        );
         let connection = scenario
             .vault()
             .connection()
@@ -5803,6 +5823,20 @@ mod tests {
             table_count(&connection, "agent_conversation_core_v3_entries").await,
             1,
             "Continue binds the retained input without appending a duplicate"
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
+            1,
+            "Continue does not make a replacement owner-to-input mapping"
+        );
+        assert_eq!(
+            table_count(
+                &connection,
+                "agent_conversation_owner_transcript_run_inputs_v1"
+            )
+            .await,
+            2,
+            "both New and Continue Runs point to that one mapping"
         );
         let opened = scenario
             .vault()

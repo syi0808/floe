@@ -348,6 +348,37 @@ pub(super) const TYPED_HISTORY_V1: &[SchemaObject] = &[
     ),
 ];
 
+/// Optional immutable proofs joining owner Session evidence and exact Core
+/// transcript entries. The family has one stored meaning and is initialized
+/// only by an explicit composed owner/Core write.
+pub(super) const CONVERSATION_OWNER_CUSTODY_V1: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_conversation_owner_custody_schema",
+        1,
+        "CREATE TABLE agent_conversation_owner_custody_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_owner_transcript_inputs_v1",
+        "CREATE TABLE agent_conversation_owner_transcript_inputs_v1 (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, input_sequence INTEGER NOT NULL CHECK (input_sequence > 0), input_message_id TEXT NOT NULL, session_id TEXT NOT NULL, owner_user_message_id TEXT NOT NULL, original_owner_run_id TEXT NOT NULL, mapping_json TEXT NOT NULL CHECK (length(CAST(mapping_json AS BLOB)) BETWEEN 1 AND 8192), UNIQUE (person_id, original_owner_run_id), FOREIGN KEY (person_id, conversation_id, branch_id, input_sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, input_message_id) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, message_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_owner_transcript_inputs_owner_key_v1",
+        "CREATE UNIQUE INDEX agent_conversation_owner_transcript_inputs_owner_key_v1 ON agent_conversation_owner_transcript_inputs_v1(person_id, session_id, owner_user_message_id)",
+    ),
+    SchemaObject::index(
+        "agent_conversation_owner_transcript_inputs_core_key_v1",
+        "CREATE UNIQUE INDEX agent_conversation_owner_transcript_inputs_core_key_v1 ON agent_conversation_owner_transcript_inputs_v1(person_id, conversation_id, branch_id, input_sequence, input_message_id)",
+    ),
+    SchemaObject::table(
+        "agent_conversation_owner_transcript_run_inputs_v1",
+        "CREATE TABLE agent_conversation_owner_transcript_run_inputs_v1 (person_id TEXT NOT NULL, run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, input_sequence INTEGER NOT NULL CHECK (input_sequence > 0), input_message_id TEXT NOT NULL, PRIMARY KEY (person_id, run_id), FOREIGN KEY (person_id, conversation_id, branch_id, input_sequence, input_message_id) REFERENCES agent_conversation_owner_transcript_inputs_v1(person_id, conversation_id, branch_id, input_sequence, input_message_id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_owner_transcript_evidence_v1",
+        "CREATE TABLE agent_conversation_owner_transcript_evidence_v1 (person_id TEXT NOT NULL, contribution_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, owner_input_conversation_id TEXT NOT NULL, owner_input_branch_id TEXT NOT NULL, owner_input_sequence INTEGER NOT NULL CHECK (owner_input_sequence > 0), owner_input_message_id TEXT NOT NULL, session_id TEXT NOT NULL, typed_digest TEXT NOT NULL CHECK (length(typed_digest) = 64), typed_reference_json TEXT NOT NULL CHECK (length(CAST(typed_reference_json AS BLOB)) BETWEEN 1 AND 4096), transcript_entry_json TEXT NOT NULL CHECK (length(CAST(transcript_entry_json AS BLOB)) BETWEEN 1 AND 196608), first_recording_run_id TEXT NOT NULL, original_task_receipt_json TEXT CHECK (original_task_receipt_json IS NULL OR length(CAST(original_task_receipt_json AS BLOB)) BETWEEN 1 AND 4096), PRIMARY KEY (person_id, contribution_id), UNIQUE (person_id, session_id, typed_digest), UNIQUE (person_id, conversation_id, branch_id, sequence, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, message_id) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, message_id), FOREIGN KEY (person_id, owner_input_conversation_id, owner_input_branch_id, owner_input_sequence, owner_input_message_id) REFERENCES agent_conversation_owner_transcript_inputs_v1(person_id, conversation_id, branch_id, input_sequence, input_message_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
+];
+
 pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_interaction_schema",

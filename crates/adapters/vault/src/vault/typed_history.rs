@@ -151,6 +151,44 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(reference)
     }
 
+    /// Bounded existence proof used before the typed transcript composer
+    /// creates a new contribution. Existing but unlinked owner rows are not
+    /// silently adopted as live transcript evidence.
+    pub(super) async fn typed_agent_message_exists_on(
+        &self,
+        transaction: &Transaction<'_>,
+        session_id: Uuid,
+        entry_id: Uuid,
+    ) -> Result<bool, AgentFailure> {
+        if session_id.is_nil() || entry_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.check_access()?;
+        if !crate::schema::typed_history_family_present(transaction)
+            .await
+            .map_err(crate::schema::SchemaFailure::into_agent)?
+        {
+            return Ok(false);
+        }
+        let mut rows = transaction
+            .query(
+                "SELECT 1 FROM agent_conversation_typed_history_entries WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND entry_id = ? LIMIT 2",
+                (
+                    self.person_id.to_string(),
+                    TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
+                    session_id.to_string(),
+                    entry_id.to_string(),
+                ),
+            )
+            .await
+            .map_err(database_failure)?;
+        let exists = rows.next().await.map_err(database_failure)?.is_some();
+        if rows.next().await.map_err(database_failure)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        Ok(exists)
+    }
+
     /// Resolve one entry without scanning or hydrating the rest of its Session.
     /// Optional-family absence and coverage absence both remain explicit.
     pub(super) async fn resolve_typed_agent_message_on(

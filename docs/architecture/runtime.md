@@ -117,6 +117,28 @@ historical import or reset. Startup validates stored recorder receipts and
 transcript commitments. Transcript pages use stable sequence cursors and
 bounded entry and UTF-8 byte budgets.
 
+The optional owner-custody-v1 family is a separate stored meaning, initialized
+only by explicit composed owner/Core writes. Its named unique Core-input key
+maps a Person/conversation/branch/sequence/MessageId inbound record to the
+owner Session, retained User message and original New Run; later Continue and
+Resume Runs link to that same mapping. A distinct immutable output link binds
+the complete typed-message reference and digest to the exact generated Core
+entry, owner Session/turn, logical contribution, first recording Run, and
+original Task execution receipt when one exists. The owner writer derives the
+opaque Core digest and Task evidence from the typed payload plus the exact
+stored Task receipt and parent journal. Bounded reverse-input and transcript-
+link reads use explicit keys and never create or repair schema. Existing
+unbound rows are not backfilled, and inbound mapping alone does not fabricate
+typed evidence. The current live composer accepts Assistant, Capability and
+Delegation messages only. It rejects User, Preamble, Compaction and Interaction;
+the codec retains all variants, but this composer has no textless Interaction
+write path. A review harness built from the exact c025 source rejected the new
+family as `catalog/unexpected_object` and returned UnsupportedVersion from
+Vault open. It ran against a disposable fixture after the writer and host lock
+were released; database bytes and the complete catalog were identical before
+and after. This is still an internal prerequisite: no Manager or Expert
+production caller uses the composer.
+
 Conversation also exposes an explicit pure preparation step for one bounded
 legacy `AgentSession` snapshot. It checks the exact source-byte SHA-256,
 expected Person/Session/revision, and the same owner-shell admission rules used
