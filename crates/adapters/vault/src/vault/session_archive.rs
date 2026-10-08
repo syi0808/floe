@@ -161,6 +161,112 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 // transaction before compaction may proceed.
                 return Err(AgentFailure::Conflict);
             }
+
+            if let Some(marker) = source.continuation.as_ref() {
+                let run_id = floe_kernel::RunId::from_uuid(marker.turn_id)
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                let run = self
+                    .conversation_run_on(&transaction, run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if run.person_id != self.person_id || run.session_id != session_id {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                if run.session_revision != source.revision
+                    || run.continuation_level != marker.level
+                {
+                    // Session snapshots reject stale run revisions, while a
+                    // malformed marker/run linkage is corrupt owner evidence.
+                    // Do not advance the revision and leave that inconsistency
+                    // looking like a valid compacted Session.
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let receipt = floe_conversation::project_run_receipt(run)?;
+                if receipt.continuation().is_none() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                // Session snapshots issue Continue only from this exact
+                // current Run receipt. Compaction would stale that capability
+                // by advancing the Session revision.
+                return Err(AgentFailure::Conflict);
+            }
+
+            let mut open_interaction_origins = transaction
+                .query(
+                    "SELECT DISTINCT origin_run_id FROM agent_conversation_interactions WHERE person_id = ? AND session_id = ? AND state IN ('pending', 'resolving') LIMIT ?",
+                    (
+                        self.person_id.to_string(),
+                        session_id.to_string(),
+                        super::conversations::MAX_RUN_ROWS + 1,
+                    ),
+                )
+                .await
+                .map_err(database_failure)?;
+            let mut origin_ids = Vec::new();
+            while let Some(row) = open_interaction_origins
+                .next()
+                .await
+                .map_err(database_failure)?
+            {
+                let value = row.get::<String>(0).map_err(storage)?;
+                let uuid = Uuid::parse_str(&value).map_err(unavailable)?;
+                origin_ids.push(
+                    floe_kernel::RunId::from_uuid(uuid).ok_or(AgentFailure::VaultUnavailable)?,
+                );
+            }
+            drop(open_interaction_origins);
+            if i64::try_from(origin_ids.len()).map_err(|_| AgentFailure::VaultUnavailable)?
+                > super::conversations::MAX_RUN_ROWS
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            for origin_id in origin_ids {
+                let origin = self
+                    .conversation_run_on(&transaction, origin_id)
+                    .await?
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                if origin.person_id != self.person_id || origin.session_id != session_id {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                let group = super::conversation_interactions::read_group_on(
+                    &transaction,
+                    self.person_id,
+                    origin_id,
+                )
+                .await?;
+                if group.iter().any(|interaction| {
+                    interaction.person_id != self.person_id
+                        || interaction.session_id != session_id
+                        || interaction.origin_run_id != origin.run_id
+                        || interaction.origin_turn_id != origin.run_id.as_uuid()
+                }) {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                if !group.iter().any(|interaction| {
+                    matches!(
+                        interaction.state,
+                        floe_conversation::InteractionState::Pending
+                            | floe_conversation::InteractionState::Resolving { .. }
+                    )
+                }) {
+                    return Err(AgentFailure::VaultUnavailable);
+                }
+                if origin.session_revision != source.revision
+                    || !matches!(origin.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked)
+                    || floe_conversation::project_run_receipt(origin)?.resume().is_none()
+                {
+                    // New admission advances the Session revision, making
+                    // any later interaction-triggered child superseded. Keep
+                    // stale nonterminal history without holding compaction.
+                    continue;
+                }
+
+                // Pending and Resolving can still settle to a group containing
+                // a Resolved member. That is sufficient for a future linked
+                // child while this exact origin revision remains current.
+                return Err(AgentFailure::Conflict);
+            }
+
             let split = source
                 .messages
                 .iter()
