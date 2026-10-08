@@ -100,6 +100,8 @@ pub struct EncryptedAgentVault<Keys> {
     conversation_core_ack_loss: AtomicBool,
     #[cfg(test)]
     conversation_core_failure_before_pending: AtomicBool,
+    #[cfg(test)]
+    conversation_core_resume_fault_after_owner_claim: AtomicBool,
     _host_lock: File,
 }
 
@@ -219,6 +221,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_failure_before_pending: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_resume_fault_after_owner_claim: AtomicBool::new(false),
             _host_lock: host_lock,
         };
         vault.create_schema().await?;
@@ -278,6 +282,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_failure_before_pending: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_resume_fault_after_owner_claim: AtomicBool::new(false),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;

@@ -34,6 +34,15 @@ pub enum VaultConversationAdmission {
     Resumed(RunRecord),
 }
 
+/// Result of the one transaction-scoped linked-Resume owner transition.
+/// `Superseded` must be committed by the transaction owner and reported as a
+/// conflict after commit; rolling it back would resurrect a request already
+/// made stale by a real New admission.
+pub(super) enum ResumeClaimOutcome {
+    Admitted(VaultConversationAdmission),
+    Superseded,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VaultConversationCancelRequest {
     pub command_id: CommandId,
@@ -1740,49 +1749,128 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result: Result<Option<VaultConversationAdmission>, AgentFailure> = async {
-            validate_schema(&transaction).await?;
-            let (persisted, state, child_id) = resume_request_on(&transaction, self.person_id, request.request.origin_run_id).await?.ok_or(AgentFailure::Conflict)?;
-            if persisted != request.request { return Err(AgentFailure::Conflict); }
-            if state == "claimed" {
-                let child = self.conversation_run_on(&transaction, child_id.ok_or(AgentFailure::StorageUnavailable)?).await?.ok_or(AgentFailure::StorageUnavailable)?;
-                if child.resume_of != Some(persisted.origin_run_id) || child.session_id != persisted.session_id || child.person_id != persisted.person_id
-                    || child.device_id != persisted.device_id || child.user_message_id != persisted.user_message_id || child.resume_lineage != persisted.lineage
-                    || self.resume_slot_on(&transaction, persisted.origin_run_id).await? != Some(child.run_id) { return Err(AgentFailure::StorageUnavailable); }
-                return Ok(Some(VaultConversationAdmission::Resumed(child)));
-            }
-            if state != "pending" { return Err(AgentFailure::Conflict); }
-            let origin = self.conversation_run_on(&transaction, persisted.origin_run_id).await?.ok_or(AgentFailure::StorageUnavailable)?;
-            let receipt = floe_conversation::project_run_receipt(origin)?;
-            let group = super::conversation_interactions::read_group_on(&transaction, self.person_id, persisted.origin_run_id).await?;
-            if floe_conversation::build_resume_required(&receipt, &group)?.as_ref() != Some(&persisted) { return Err(AgentFailure::Conflict); }
-            let session = self.session_on(&transaction, persisted.session_id).await?;
-            if session.revision != persisted.expected_session_revision || session.active_turn.is_some() {
-                let changed = transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE origin_run_id = ? AND state = 'pending'", [persisted.origin_run_id.as_uuid().to_string()]).await.map_err(database_failure)?;
-                if changed != 1 { return Err(AgentFailure::Conflict); }
-                self.check_access()?;
-                return Ok(None);
-            }
-            let mut replay_checked = false;
-            let mut prior_command = false;
-            let admission = self
-                .admit_conversation_turn_on(
-                    &transaction,
-                    request.child,
-                    &mut replay_checked,
-                    &mut prior_command,
-                )
-                .await?;
-            let child = match &admission { VaultConversationAdmission::Created { record, .. } | VaultConversationAdmission::Existing(record) | VaultConversationAdmission::Resumed(record) => record };
-            let changed = transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'claimed', child_run_id = ? WHERE origin_run_id = ? AND state = 'pending'",
-                (child.run_id.as_uuid().to_string(), persisted.origin_run_id.as_uuid().to_string())).await.map_err(database_failure)?;
-            if changed != 1 { return Err(AgentFailure::Conflict); }
-            self.check_access()?;
-            Ok(Some(admission))
-        }.await;
+        let result = self
+            .claim_conversation_resume_on(&transaction, request)
+            .await
+            .map(|outcome| match outcome {
+                ResumeClaimOutcome::Admitted(admission) => Some(admission),
+                ResumeClaimOutcome::Superseded => None,
+            });
         self.finish_registry_transaction_checked(transaction, result)
             .await?
             .ok_or(AgentFailure::Conflict)
+    }
+
+    /// The single linked-Resume owner implementation, shared by the public
+    /// owner-only wrapper and the internal owner/Core composer. The caller
+    /// owns the Immediate transaction and must commit `Superseded` before
+    /// returning its public conflict.
+    pub(super) async fn claim_conversation_resume_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: ResumeChildAdmission,
+    ) -> Result<ResumeClaimOutcome, AgentFailure> {
+        request.validate()?;
+        if request.request.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        validate_schema(transaction).await?;
+        let (persisted, state, child_id) =
+            resume_request_on(transaction, self.person_id, request.request.origin_run_id)
+                .await?
+                .ok_or(AgentFailure::Conflict)?;
+        if persisted != request.request {
+            return Err(AgentFailure::Conflict);
+        }
+        if state == "claimed" {
+            let child = self
+                .conversation_run_on(
+                    transaction,
+                    child_id.ok_or(AgentFailure::StorageUnavailable)?,
+                )
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if child.resume_of != Some(persisted.origin_run_id)
+                || child.session_id != persisted.session_id
+                || child.person_id != persisted.person_id
+                || child.device_id != persisted.device_id
+                || child.user_message_id != persisted.user_message_id
+                || child.resume_lineage != persisted.lineage
+                || self
+                    .resume_slot_on(transaction, persisted.origin_run_id)
+                    .await?
+                    != Some(child.run_id)
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            return Ok(ResumeClaimOutcome::Admitted(
+                VaultConversationAdmission::Resumed(child),
+            ));
+        }
+        if state != "pending" {
+            return Err(AgentFailure::Conflict);
+        }
+        let origin = self
+            .conversation_run_on(transaction, persisted.origin_run_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let receipt = floe_conversation::project_run_receipt(origin)?;
+        let group = super::conversation_interactions::read_group_on(
+            transaction,
+            self.person_id,
+            persisted.origin_run_id,
+        )
+        .await?;
+        if floe_conversation::build_resume_required(&receipt, &group)?.as_ref() != Some(&persisted)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let session = self.session_on(transaction, persisted.session_id).await?;
+        if session.revision != persisted.expected_session_revision || session.active_turn.is_some()
+        {
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE origin_run_id = ? AND state = 'pending'",
+                    [persisted.origin_run_id.as_uuid().to_string()],
+                )
+                .await
+                .map_err(database_failure)?;
+            if changed != 1 {
+                return Err(AgentFailure::Conflict);
+            }
+            self.check_access()?;
+            return Ok(ResumeClaimOutcome::Superseded);
+        }
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let admission = self
+            .admit_conversation_turn_on(
+                transaction,
+                request.child,
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await?;
+        let child = match &admission {
+            VaultConversationAdmission::Created { record, .. }
+            | VaultConversationAdmission::Existing(record)
+            | VaultConversationAdmission::Resumed(record) => record,
+        };
+        let changed = transaction
+            .execute(
+                "UPDATE agent_conversation_resume_requests SET state = 'claimed', child_run_id = ? WHERE origin_run_id = ? AND state = 'pending'",
+                (
+                    child.run_id.as_uuid().to_string(),
+                    persisted.origin_run_id.as_uuid().to_string(),
+                ),
+            )
+            .await
+            .map_err(database_failure)?;
+        if changed != 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        self.check_access()?;
+        Ok(ResumeClaimOutcome::Admitted(admission))
     }
 }
 async fn resume_request_on(

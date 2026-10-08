@@ -11,7 +11,8 @@ use super::{EncryptedAgentVault, VaultKeyProvider, database_failure};
 use crate::write_fence::JournalWriteGuard;
 use floe_agent_contract::TaskExecutionReceiptRef;
 use floe_conversation::{
-    CanonicalTurnIntent, RunRecord, RunState, TurnAdmissionRequest, TurnInput, TurnMode,
+    CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState, TurnAdmissionRequest,
+    TurnInput, TurnMode,
 };
 use floe_conversation_contract::{
     AdmissionDisposition, AdmissionResult, AdmissionTarget, AgentIdentity, ConversationBranchId,
@@ -40,6 +41,25 @@ use uuid::Uuid;
 
 const MAX_TRANSCRIPT_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STORED_MESSAGE_BYTES: usize = 132_096;
+
+#[derive(Clone, Debug)]
+pub(super) enum CoreComposedOwnerIntent {
+    Turn(TurnAdmissionRequest),
+    Resume(ResumeChildAdmission),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CoreComposedRunAdmission {
+    Admitted {
+        record: RunRecord,
+        input: AdmissionResult,
+        recorder: Option<RecorderOpenReceipt>,
+    },
+    /// The shared owner transition committed a stale request as superseded.
+    /// The enclosing transaction must commit this outcome; report Conflict
+    /// only after that commit succeeds.
+    ResumeSuperseded,
+}
 
 #[derive(Clone, Debug)]
 struct LoadedHead {
@@ -1337,26 +1357,41 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     /// Admit a Host Run and bind its exact retained Core input in the same
-    /// Vault transaction. New turns append one Person input. Continue turns
-    /// resolve the owner user-message ID through an earlier immutable binding
-    /// and replay that exact Core input. Linked Resume remains on the existing
-    /// owner-only path until one shared transactional resume primitive is
-    /// qualified.
+    /// Vault transaction. New turns append one Person input. Continue and
+    /// linked Resume resolve an earlier immutable owner binding and replay
+    /// that exact Core input. Resume additionally claims the persisted group
+    /// through the same transaction-scoped owner primitive as the public
+    /// owner-only API and opens its fresh recorder before commit.
     pub(super) async fn admit_conversation_run_with_core_input_on(
         &self,
         transaction: &Transaction<'_>,
-        owner_request: TurnAdmissionRequest,
+        intent: CoreComposedOwnerIntent,
         core_request: MessageAdmissionRequest,
         replay_checked: &mut bool,
         prior_command: &mut bool,
-    ) -> Result<(RunRecord, AdmissionResult), ConversationStoreFailure> {
-        if matches!(&owner_request.mode, TurnMode::Resume(_)) {
-            return Err(ConversationStoreFailure::UnsupportedOwnerIntent);
-        }
+    ) -> Result<CoreComposedRunAdmission, ConversationStoreFailure> {
+        let is_resume_composition = matches!(&intent, CoreComposedOwnerIntent::Resume(_));
+        let (owner_request, resume_claim) = match intent {
+            CoreComposedOwnerIntent::Turn(request) => {
+                if matches!(&request.mode, TurnMode::Resume(_)) {
+                    return Err(ConversationStoreFailure::UnsupportedOwnerIntent);
+                }
+                (request, None)
+            }
+            CoreComposedOwnerIntent::Resume(request) => {
+                let child = request.child.clone();
+                (child, Some(request))
+            }
+        };
         ensure_core_v3_on(transaction).await?;
         owner_request.validate().map_err(|_| {
             ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
         })?;
+        if let Some(request) = resume_claim.as_ref() {
+            request.validate().map_err(|_| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
+        }
         core_request
             .validate()
             .map_err(ConversationStoreFailure::Transition)?;
@@ -1365,9 +1400,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (TurnMode::New, TurnInput::NewMessage(message)) => {
                     (message.message_id, Some(message.text.as_str()))
                 }
-                (TurnMode::Continue(_), TurnInput::ExistingMessage { message_id }) => {
-                    (*message_id, None)
-                }
+                (
+                    TurnMode::Continue(_) | TurnMode::Resume(_),
+                    TurnInput::ExistingMessage { message_id },
+                ) => (*message_id, None),
                 _ => {
                     return Err(ConversationStoreFailure::Transition(
                         ConversationFailure::OwnerEvidenceMismatch,
@@ -1387,8 +1423,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::OwnerEvidenceMismatch,
             ));
         }
-        let source_binding = if owner_message_text.is_none() {
-            Some(
+        let source_binding = match resume_claim.as_ref() {
+            Some(request) => Some(
+                owner_input_binding_on(transaction, self.person_id, request.request.origin_run_id)
+                    .await?
+                    .ok_or(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ))?,
+            ),
+            None if owner_message_text.is_none() => Some(
                 owner_input_binding_for_message_on(
                     transaction,
                     self.person_id,
@@ -1399,9 +1442,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(ConversationStoreFailure::Transition(
                     ConversationFailure::OwnerEvidenceMismatch,
                 ))?,
-            )
-        } else {
-            None
+            ),
+            None => None,
         };
         let (identity, conversation_id, branch_id) = match &core_request.target {
             AdmissionTarget::New {
@@ -1424,7 +1466,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             && (binding.identity != identity
                 || binding.conversation_id != conversation_id
                 || binding.branch_id != branch_id
-                || binding.input.message_id != core_request.message.message_id)
+                || binding.input.message_id != core_request.message.message_id
+                || binding.session_id != owner_request.session_id
+                || binding.owner_user_message_id != owner_user_message_id)
         {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::OwnerEvidenceMismatch,
@@ -1442,25 +1486,66 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 binding.executor_generation,
             )
             .await?;
-        }
-        let scope = Scope::from_identity(self.person_id, &identity, conversation_id, branch_id);
-        let admission = self
-            .admit_conversation_turn_on(
+            let (stored_receipt, stored_message) = input_receipt_on(
                 transaction,
-                owner_request.clone(),
-                replay_checked,
-                prior_command,
+                Scope::from_identity(
+                    self.person_id,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                ),
+                binding.input.message_id,
             )
-            .await
-            .map_err(owner_error)?;
-        let (record, newly_created) = match admission {
-            super::VaultConversationAdmission::Created { record, .. } => (record, true),
-            super::VaultConversationAdmission::Existing(record) => (record, false),
-            super::VaultConversationAdmission::Resumed(_) => {
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+            if stored_receipt.receipt.transcript != binding.input
+                || stored_receipt.receipt.task_id.is_some()
+                || stored_message != core_request.message
+            {
                 return Err(ConversationStoreFailure::Transition(
                     ConversationFailure::OwnerEvidenceMismatch,
                 ));
             }
+        }
+        let scope = Scope::from_identity(self.person_id, &identity, conversation_id, branch_id);
+        let admission = match resume_claim {
+            Some(request) => match self
+                .claim_conversation_resume_on(transaction, request)
+                .await
+                .map_err(owner_error)?
+            {
+                super::conversations::ResumeClaimOutcome::Admitted(admission) => admission,
+                super::conversations::ResumeClaimOutcome::Superseded => {
+                    return Ok(CoreComposedRunAdmission::ResumeSuperseded);
+                }
+            },
+            None => self
+                .admit_conversation_turn_on(
+                    transaction,
+                    owner_request.clone(),
+                    replay_checked,
+                    prior_command,
+                )
+                .await
+                .map_err(owner_error)?,
+        };
+        #[cfg(test)]
+        if matches!(
+            &admission,
+            super::VaultConversationAdmission::Created { .. }
+        ) && matches!(&owner_request.mode, TurnMode::Resume(_))
+            && self
+                .conversation_core_resume_fault_after_owner_claim
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(ConversationStoreFailure::NotCommitted);
+        }
+        let (record, newly_created) = match admission {
+            super::VaultConversationAdmission::Created { record, .. } => (record, true),
+            super::VaultConversationAdmission::Existing(record) => (record, false),
+            super::VaultConversationAdmission::Resumed(record) => (record, false),
         };
         if record.run_id != owner_request.run_id
             || record.expert_environment != owner_request.expert_environment
@@ -1567,7 +1652,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             run_id: record.run_id,
             session_id: record.session_id,
             owner_user_message_id: record.user_message_id,
-            identity,
+            identity: identity.clone(),
             conversation_id,
             branch_id,
             input: core_admission.receipt.transcript,
@@ -1589,7 +1674,31 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ));
             }
         }
-        Ok((record, core_admission))
+        let recorder = if is_resume_composition {
+            Some(
+                self.open_conversation_recorder_on(
+                    transaction,
+                    RecorderStartRequest {
+                        identity,
+                        conversation_id,
+                        branch_id,
+                        run_id: record.run_id,
+                        input: core_admission.receipt.transcript,
+                        executor_domain: ExecutorDomain::HostRun,
+                        executor_generation: record.executor_generation,
+                        execution_task: None,
+                    },
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        Ok(CoreComposedRunAdmission::Admitted {
+            record,
+            input: core_admission,
+            recorder,
+        })
     }
 
     pub(super) async fn append_conversation_input(
@@ -2906,8 +3015,9 @@ mod tests {
         AgentMessage, DependencyCoverage, MessageRole, TaskSnapshot, TaskState,
     };
     use floe_conversation::{
-        CanonicalTurnIntent, RunTerminal, SessionStartAdmission, SessionStore, StartSessionRequest,
-        TurnAdmissionRequest, TurnInput, TurnMode,
+        CanonicalTurnIntent, ResumeChildAdmission, ResumeRequired, RunTerminal,
+        SessionStartAdmission, SessionStore, StartSessionRequest, TurnAdmissionRequest, TurnInput,
+        TurnMode,
     };
     use floe_conversation_contract::{
         AdmissionDisposition, AdmissionTarget, AgentIdentity, AgentInstanceId, AssignmentId,
@@ -2967,6 +3077,132 @@ mod tests {
         }
     }
 
+    fn resolved_binding_interaction(
+        record: &RunRecord,
+    ) -> floe_conversation::ConversationInteraction {
+        use floe_conversation::{
+            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
+            InteractionRequirement, InteractionRequirementKind, InteractionResolutionCause,
+            InteractionResolutionReceipt, InteractionState, OwnerResolutionReceipt,
+            ReviewAuditRecord, ReviewedTarget, canonical_requirement_digest,
+            canonical_target_digest, interaction_publication_id,
+        };
+
+        let review_ref = floe_experts::BindingReviewRef {
+            id: Uuid::new_v4(),
+            digest: [81; 32],
+        };
+        let execution = floe_agent_contract::TaskExecutionReceiptRef {
+            execution: floe_agent_contract::TaskExecutionKey {
+                task_id: TaskId::new(),
+                execution_id: Uuid::new_v4(),
+                executor_generation: 1,
+            },
+            task_revision: 2,
+            journal_revision: 0,
+            digest: [82; 32],
+        };
+        let origin = InteractionOrigin::Task {
+            execution: execution.clone(),
+            capability_call_id: None,
+        };
+        let target = ReviewedTarget::ExpertBinding(review_ref.clone());
+        let requirement = InteractionRequirement {
+            kind: InteractionRequirementKind::ConfigureExpertBinding,
+            source_id: "floe.expert.binding".into(),
+            connection_id: None,
+            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+            purpose: "configuration".into(),
+            inline: false,
+        };
+        let owner_receipt = OwnerResolutionReceipt::ExpertBinding {
+            receipt: floe_experts::BindingMutationReceipt {
+                command_id: CommandId::new(),
+                review_ref: review_ref.clone(),
+                assignment_ref: Uuid::new_v4(),
+                binding_revision: 1,
+                registry_revision: 1,
+                committed_at_unix_ms: 1,
+            },
+        };
+        let receipt = InteractionResolutionReceipt {
+            cause: InteractionResolutionCause::Refresh {
+                command_id: Uuid::new_v4(),
+            },
+            owner_command_id: owner_receipt.command_id(),
+            owner_operation_id: owner_receipt.operation_id(),
+            owner_receipt,
+            resolved_at_unix_ms: 1,
+        };
+        let audit = ReviewAuditRecord {
+            person_id: record.person_id,
+            device_id: record.device_id.clone(),
+            session_id: record.session_id,
+            run_id: record.run_id,
+            executor_generation: record.executor_generation,
+            operation_id: Uuid::new_v4(),
+            evidence: BlockedReviewEvidence::ExpertBinding {
+                execution,
+                requirement_key: "calendar".into(),
+                review: review_ref,
+            },
+        };
+        let requirement_digest =
+            canonical_requirement_digest(&requirement).expect("valid fixture requirement");
+        let target_digest = canonical_target_digest(&target).expect("valid fixture target");
+        let id =
+            interaction_publication_id(record.run_id, &origin, &requirement_digest, &target_digest)
+                .expect("valid fixture publication identity");
+        let interaction = ConversationInteraction {
+            id,
+            person_id: record.person_id,
+            session_id: record.session_id,
+            origin_run_id: record.run_id,
+            origin_turn_id: record.run_id.as_uuid(),
+            origin,
+            audit,
+            kind: floe_agent_contract::UserInteractionKind::ExpertBinding,
+            requirement,
+            requirement_digest,
+            target,
+            target_digest,
+            state: InteractionState::Resolved { receipt },
+            revision: 2,
+            created_at_unix_ms: 1,
+            expires_at_unix_ms: 1 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
+        };
+        interaction
+            .validate()
+            .expect("minimal resolved interaction fixture is valid");
+        interaction
+    }
+
+    async fn compose_owner_core_run(
+        vault: &EncryptedAgentVault<TestKeys>,
+        intent: CoreComposedOwnerIntent,
+        core_request: MessageAdmissionRequest,
+    ) -> Result<CoreComposedRunAdmission, ConversationStoreFailure> {
+        let mut connection = vault.connection().map_err(start_error)?;
+        let (guard, transaction) = vault
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let result = vault
+            .admit_conversation_run_with_core_input_on(
+                &transaction,
+                intent,
+                core_request,
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await;
+        vault
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
     struct Scenario {
         // Keep the Vault before the root so its database and lock drop first.
         vault: Option<EncryptedAgentVault<TestKeys>>,
@@ -2979,6 +3215,7 @@ mod tests {
         session_revision: u64,
         executor_generation: u64,
         last_core_input_request: Option<(MessageAdmissionRequest, TranscriptReference)>,
+        last_core_recorder: Option<RecorderOpenReceipt>,
         root: TestRoot,
     }
 
@@ -3022,6 +3259,7 @@ mod tests {
                 session_revision: session.session_revision,
                 executor_generation: activation.executor_generation,
                 last_core_input_request: None,
+                last_core_recorder: None,
                 root,
             }
         }
@@ -3123,17 +3361,29 @@ mod tests {
                 .expect("start composed owner/Core transaction");
             let mut replay_checked = false;
             let mut prior_command = false;
-            let (record, input) = self
+            let admitted = self
                 .vault()
                 .admit_conversation_run_with_core_input_on(
                     &transaction,
-                    owner_request,
+                    CoreComposedOwnerIntent::Turn(owner_request),
                     core_request.clone(),
                     &mut replay_checked,
                     &mut prior_command,
                 )
                 .await
-                .expect("admit owner Run and bind Core input in composed transaction");
+                .expect("admit owner Run and bind its Core input atomically");
+            let CoreComposedRunAdmission::Admitted {
+                record,
+                input,
+                recorder,
+            } = admitted
+            else {
+                panic!("unexpected superseded result for ordinary Run admission");
+            };
+            assert!(
+                recorder.is_none(),
+                "only composed Resume opens a recorder here"
+            );
             let next_revision = record.session_revision;
             transaction
                 .commit()
@@ -3143,6 +3393,7 @@ mod tests {
             drop(guard);
             self.session_revision = next_revision;
             self.last_core_input_request = Some((core_request, input.receipt.transcript));
+            self.last_core_recorder = recorder;
             (record, input)
         }
 
@@ -3285,6 +3536,263 @@ mod tests {
                 .append_conversation_journal(run_id, kind, &payload)
                 .await
                 .expect("append owner journal fixture event");
+        }
+
+        async fn complete_owner_run(&mut self, run: &RunRecord) -> RunRecord {
+            use floe_agent_contract::{
+                BatchCursor, EngineStep, JournalEvent, ModelBindingDigest, ModelBudgetProfile,
+                ModelCapabilities, ModelSelectionCommitment, ModelStep, ModelUsage,
+                PreparedModelPlan, ProcessingBoundary, ValidatedModelBatch,
+            };
+
+            let text = "Synthetic completed Run for Resume custody.".to_owned();
+            let attempt_id = Uuid::new_v4();
+            let projection_ref = floe_agent_contract::ProjectionRef::new();
+            let batch_id = Uuid::new_v4();
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ModelIntent {
+                    attempt_id,
+                    parent_task_id: None,
+                    reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                        tokens: 128,
+                        cost_micros: 128,
+                    },
+                    projection_ref,
+                    plan: PreparedModelPlan {
+                        operation_id: Uuid::new_v4(),
+                        principal: self.person_id.to_string(),
+                        device_id: run.device_id.clone(),
+                        purpose: "everyday_assistance".into(),
+                        consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                        capabilities: ModelCapabilities::chat(),
+                        boundary: ProcessingBoundary::Device,
+                        binding_digest: ModelBindingDigest([71; 32]),
+                        selection_commitment: Some(ModelSelectionCommitment([72; 32])),
+                        budget_profile: Some(ModelBudgetProfile::unknown()),
+                    },
+                },
+            )
+            .await;
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage::default(),
+                    accounting: floe_execution::budget::ModelAccounting {
+                        observed_tokens: None,
+                        observed_cost_micros: None,
+                        unknown_tokens: true,
+                        unknown_cost: true,
+                    },
+                },
+            )
+            .await;
+            let batch = ValidatedModelBatch {
+                execution_id: run.run_id.as_uuid(),
+                attempt_id,
+                projection_ref,
+                batch_id,
+                steps: vec![ModelStep::Answer {
+                    text: text.clone(),
+                    artifacts: Vec::new(),
+                }],
+                catalog_revision: run.expert_environment.revision,
+                tool_revisions: vec![],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
+            };
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::ValidatedBatch {
+                    batch: batch.clone(),
+                },
+            )
+            .await;
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::BatchProgress {
+                    cursor: BatchCursor {
+                        batch_id,
+                        next_step_index: 0,
+                    },
+                },
+            )
+            .await;
+            self.append_owner_event(
+                run.run_id,
+                JournalEvent::Output {
+                    text: text.clone(),
+                    artifacts: Vec::new(),
+                },
+            )
+            .await;
+            let completed = self
+                .vault()
+                .finish_conversation_run(
+                    run.run_id,
+                    run.aggregate_revision,
+                    RunTerminal {
+                        state: RunState::Completed,
+                        output: Some(text.clone()),
+                        steps: vec![EngineStep::Answer {
+                            text,
+                            artifacts: Vec::new(),
+                        }],
+                        coverage: DependencyCoverage::Independent,
+                        issue: None,
+                        blocked: None,
+                        interactions: vec![],
+                    },
+                )
+                .await
+                .expect("finish synthetic owner Run through the Vault API");
+            if let Some(recorder) = self
+                .last_core_recorder
+                .as_ref()
+                .filter(|recorder| recorder.fence.run_id == run.run_id)
+            {
+                self.vault()
+                    .close_conversation_recorder(recorder.fence.clone())
+                    .await
+                    .expect("close the completed origin recorder through Vault");
+            }
+            self.session_revision = completed.session_revision;
+            completed
+        }
+
+        async fn create_pending_resume(&mut self, origin: &RunRecord) -> ResumeRequired {
+            let interaction = resolved_binding_interaction(origin);
+            let mut connection = self.vault().connection().expect("connect to test Vault");
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .expect("begin resolved interaction fixture transaction");
+            super::super::conversation_interactions::insert_interaction(&transaction, &interaction)
+                .await
+                .expect("store minimal resolved interaction fixture");
+            transaction
+                .commit()
+                .await
+                .expect("commit resolved interaction fixture");
+            drop(connection);
+            let completed = self.complete_owner_run(origin).await;
+            let actor = floe_kernel::OwnerActor {
+                person_id: self.person_id,
+                device_id: origin.device_id.clone(),
+                runtime_epoch: 1,
+            };
+            self.vault()
+                .pending_conversation_resume_request(&actor, completed.run_id)
+                .await
+                .expect("read pending Resume request through Vault")
+                .expect("resolved interaction queues one pending Resume")
+        }
+
+        fn resume_child_admission(
+            &self,
+            pending: ResumeRequired,
+            origin: &RunRecord,
+            text: &str,
+        ) -> ResumeChildAdmission {
+            let mode = TurnMode::Resume(floe_conversation::InteractionResumeRef {
+                origin_run_id: pending.origin_run_id,
+                lineage: pending.lineage,
+            });
+            let principal = self.person_id.to_string();
+            let child = TurnAdmissionRequest {
+                expert_environment: origin.expert_environment,
+                run_id: RunId::new(),
+                command_id: CommandId::new(),
+                session_id: pending.session_id,
+                expected_session_revision: pending.expected_session_revision,
+                principal: principal.clone(),
+                device_id: pending.device_id.clone(),
+                request_digest: CanonicalTurnIntent {
+                    session_id: pending.session_id,
+                    expected_revision: pending.expected_session_revision,
+                    text: text.to_owned(),
+                    mode: mode.clone(),
+                    retry_of: None,
+                }
+                .digest(&principal)
+                .expect("canonical Resume digest"),
+                mode,
+                retry_of: None,
+                input: TurnInput::ExistingMessage {
+                    message_id: pending.user_message_id,
+                },
+            };
+            ResumeChildAdmission {
+                request: pending,
+                child,
+            }
+        }
+
+        fn resume_core_request(&self) -> (MessageAdmissionRequest, TranscriptReference) {
+            let (mut request, input) = self
+                .last_core_input_request
+                .clone()
+                .expect("composed origin has a retained Core input binding");
+            let (identity, conversation_id, branch_id) = match &request.target {
+                AdmissionTarget::New {
+                    identity,
+                    conversation_id,
+                    branch_id,
+                } => (identity.clone(), *conversation_id, *branch_id),
+                _ => panic!("origin input was admitted as a fresh New entry"),
+            };
+            request.target = AdmissionTarget::AppendToExisting {
+                reference: ConversationReference {
+                    identity,
+                    conversation_id,
+                    branch_id,
+                    head_revision: input.sequence,
+                },
+            };
+            (request, input)
+        }
+
+        async fn admit_resume_and_bind_input(
+            &mut self,
+            request: ResumeChildAdmission,
+            core_request: MessageAdmissionRequest,
+        ) -> CoreComposedRunAdmission {
+            let mut connection = self.vault().connection().expect("connect to test Vault");
+            let (mut guard, transaction) = self
+                .vault()
+                .journal_transaction(&mut connection)
+                .await
+                .expect("start composed Resume transaction");
+            let mut replay_checked = false;
+            let mut prior_command = false;
+            let result = self
+                .vault()
+                .admit_conversation_run_with_core_input_on(
+                    &transaction,
+                    CoreComposedOwnerIntent::Resume(request),
+                    core_request.clone(),
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await;
+            let admitted = self
+                .vault()
+                .finish_conversation_core_transaction(guard, transaction, result)
+                .await
+                .expect("compose and commit owner Resume, Core binding and recorder together");
+            if let CoreComposedRunAdmission::Admitted {
+                record,
+                input,
+                recorder,
+            } = &admitted
+            {
+                self.session_revision = record.session_revision;
+                self.last_core_input_request = Some((core_request, input.receipt.transcript));
+                self.last_core_recorder = recorder.clone();
+            }
+            admitted
         }
 
         async fn terminal_task_receipts(
@@ -3624,6 +4132,23 @@ mod tests {
         )
     }
 
+    async fn stored_resume_state(
+        connection: &turso::Connection,
+        origin_run_id: RunId,
+    ) -> Option<String> {
+        let mut rows = connection
+            .query(
+                "SELECT state FROM agent_conversation_resume_requests WHERE origin_run_id = ?",
+                [origin_run_id.as_uuid().to_string()],
+            )
+            .await
+            .expect("read persisted Resume request state");
+        rows.next()
+            .await
+            .expect("read Resume state row")
+            .map(|row| row.get::<String>(0).expect("Resume state text"))
+    }
+
     async fn catalog_snapshot(path: &Path, key: &RootKey) -> Vec<(String, String, String)> {
         let database = super::super::encrypted_database(path, key)
             .await
@@ -3668,7 +4193,7 @@ mod tests {
             .vault()
             .admit_conversation_run_with_core_input_on(
                 &transaction,
-                owner_request,
+                CoreComposedOwnerIntent::Turn(owner_request),
                 core_request,
                 &mut replay_checked,
                 &mut prior_command,
@@ -3711,96 +4236,919 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_composition_is_rejected_before_owner_core_or_slot_writes() {
+    async fn resolved_interaction_resume_admits_one_child_input_and_recorder_and_replays_after_reopen()
+     {
         let mut scenario = Scenario::new().await;
         let (origin, input) = scenario
             .admit_run_and_append_input("resume retained input")
             .await;
-        scenario.cancel_owner_run(&origin).await;
-        let (core_request, retained_reference) = scenario
-            .last_core_input_request
-            .clone()
-            .expect("the origin Run retains its Core input request");
+        let pending = scenario.create_pending_resume(&origin).await;
+        assert_eq!(pending.origin_run_id, origin.run_id);
+        assert_eq!(pending.user_message_id, origin.user_message_id);
+        let next_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance current owner generation before explicit Resume")
+            .executor_generation;
+        let request = scenario.resume_child_admission(pending, &origin, "resume retained input");
+        let (core_request, retained_reference) = scenario.resume_core_request();
         assert_eq!(retained_reference, input.receipt.transcript);
-        let mode = TurnMode::Resume(floe_conversation::InteractionResumeRef {
-            origin_run_id: origin.run_id,
-            lineage: 1,
-        });
-        let mut owner_request = scenario.owner_request("resume retained input");
-        owner_request.mode = mode.clone();
-        owner_request.input = TurnInput::ExistingMessage {
-            message_id: origin.user_message_id,
-        };
-        owner_request.request_digest = CanonicalTurnIntent {
-            session_id: owner_request.session_id,
-            expected_revision: owner_request.expected_session_revision,
-            text: "resume retained input".to_owned(),
-            mode,
-            retry_of: None,
-        }
-        .digest(&owner_request.principal)
-        .expect("canonical Resume intent digest");
-        owner_request
-            .validate()
-            .expect("synthetic Resume request is structurally valid");
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Turn(request.child.clone()),
+                core_request.clone(),
+            )
+            .await,
+            Err(ConversationStoreFailure::UnsupportedOwnerIntent),
+            "an unqualified Turn Resume intent still fails before owner writes"
+        );
 
-        let mut connection = scenario
+        let first = scenario
+            .admit_resume_and_bind_input(request.clone(), core_request.clone())
+            .await;
+        let CoreComposedRunAdmission::Admitted {
+            record: child,
+            input: first_input,
+            recorder: first_recorder,
+        } = first
+        else {
+            panic!("fresh Resume was unexpectedly superseded");
+        };
+        let first_recorder = first_recorder.expect("Resume composition opens its recorder");
+        assert_eq!(child.resume_of, Some(origin.run_id));
+        assert_eq!(child.resume_lineage, 1);
+        assert_eq!(child.executor_generation, next_generation);
+        assert_eq!(child.continuation_of, None);
+        assert_eq!(child.continuation_level, 0);
+        assert_eq!(child.retry_of, None);
+        assert_eq!(first_input.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(first_input.receipt.transcript, retained_reference);
+        assert_eq!(first_recorder.fence.run_id, child.run_id);
+        assert_eq!(first_recorder.fence.input, retained_reference);
+        assert_eq!(
+            first_recorder.fence.executor_generation,
+            child.executor_generation
+        );
+
+        let connection = scenario
             .vault()
             .connection()
             .expect("connect to test Vault");
-        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
-        let table_names = [
-            "agent_conversation_runs",
-            "agent_conversation_resume_requests",
-            "agent_conversation_resume_slots",
-            "agent_conversation_core_v3_heads",
-            "agent_conversation_core_v3_entries",
-            "agent_conversation_core_v3_input_receipts",
-            "agent_conversation_core_v3_owner_bindings",
-        ];
-        let mut before_counts = Vec::with_capacity(table_names.len());
-        for table in table_names {
-            before_counts.push(table_count(&connection, table).await);
-        }
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1,
+            "Resume references the retained source input without appending a duplicate"
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_input_receipts").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            2
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+            1,
+            "the Resume child has one immutable recorder receipt"
+        );
+        drop(connection);
+        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+            .await
+            .expect("reload Session after Resume");
+        let user_messages = session
+            .messages
+            .iter()
+            .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
+            .count();
+        assert_eq!(user_messages, 1, "Resume never adds a duplicate User entry");
+        assert!(
+            scenario
+                .vault()
+                .conversation_journal(child.run_id)
+                .await
+                .expect("read newly admitted Resume journal")
+                .is_empty(),
+            "custody admission performs no model or effect dispatch"
+        );
+
+        let mut changed_identity = core_request.clone();
+        let AdmissionTarget::AppendToExisting { reference } = &mut changed_identity.target else {
+            panic!("Resume input points at the retained Core conversation");
+        };
+        reference.identity.definition_revision += 1;
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request.clone()),
+                changed_identity,
+            )
+            .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "a claimed child cannot be retargeted to another Core identity"
+        );
+        let mut changed_group = request.clone();
+        changed_group.request.group_digest[0] ^= 0x80;
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(changed_group),
+                core_request.clone(),
+            )
+            .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "a claimed slot rejects a conflicting persisted group digest"
+        );
+
+        scenario.reopen().await;
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to advance mutable Session after claim");
         let (mut guard, transaction) = scenario
             .vault()
             .journal_transaction(&mut connection)
             .await
-            .expect("start unsupported Resume composition transaction");
-        let mut replay_checked = false;
-        let mut prior_command = false;
-        assert_eq!(
-            scenario
-                .vault()
-                .admit_conversation_run_with_core_input_on(
-                    &transaction,
-                    owner_request,
-                    core_request.clone(),
-                    &mut replay_checked,
-                    &mut prior_command,
-                )
-                .await,
-            Err(ConversationStoreFailure::UnsupportedOwnerIntent),
-        );
-        for (table, count) in table_names.iter().zip(before_counts) {
-            assert_eq!(
-                table_count_in_transaction(&transaction, table).await,
-                count,
-                "unsupported Resume did not mutate {table}"
-            );
-        }
-        assert_eq!(
-            session_storage_snapshot(&transaction, scenario.session_id).await,
-            before_session,
-            "unsupported Resume did not mutate the owner Session"
-        );
-        transaction
-            .rollback()
+            .expect("start controlled post-claim Session change");
+        let mut session = scenario
+            .vault()
+            .session_on(&transaction, scenario.session_id)
             .await
-            .expect("roll back rejected Resume composition");
+            .expect("load claimed child Session");
+        let prior_revision = session.revision;
+        session.revision += 1;
+        let changed = transaction
+            .execute(
+                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                (
+                    integer(session.revision).expect("encode next Session revision"),
+                    scenario
+                        .vault()
+                        .payload(&session)
+                        .expect("encode changed Session"),
+                    session.id.to_string(),
+                    integer(prior_revision).expect("encode prior Session revision"),
+                ),
+            )
+            .await
+            .expect("persist post-claim Session change");
+        assert_eq!(changed, 1);
+        transaction
+            .commit()
+            .await
+            .expect("commit post-claim Session change");
         guard.settled();
         drop(guard);
         drop(connection);
+        let later_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance current generation after Session and child recorder changed")
+            .executor_generation;
+        assert!(later_generation > child.executor_generation);
+        let replay = compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Resume(request),
+            core_request,
+        )
+        .await
+        .expect("exact Resume replay recovers after reopen and generation change");
+        let CoreComposedRunAdmission::Admitted {
+            record: replayed_child,
+            input: replayed_input,
+            recorder: replayed_recorder,
+        } = replay
+        else {
+            panic!("claimed Resume replay was unexpectedly superseded");
+        };
+        let replayed_recorder = replayed_recorder.expect("Resume replay returns its recorder");
+        assert_eq!(replayed_child, child);
+        assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(replayed_input.receipt, first_input.receipt);
+        assert_eq!(replayed_recorder, first_recorder);
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect after replay");
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn composed_resume_commit_ack_loss_replays_one_committed_child_slot_and_recorder() {
+        let mut scenario = Scenario::new().await;
+        let (origin, input) = scenario
+            .admit_run_and_append_input("Resume commit acknowledgement loss")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance current generation before explicit Resume")
+            .executor_generation;
+        let request =
+            scenario.resume_child_admission(pending, &origin, "Resume commit acknowledgement loss");
+        let (core_request, retained_reference) = scenario.resume_core_request();
+        assert_eq!(retained_reference, input.receipt.transcript);
+        let child_run_id = request.child.run_id;
+
+        scenario
+            .vault()
+            .conversation_core_ack_loss
+            .store(true, Ordering::Release);
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request.clone()),
+                core_request.clone(),
+            )
+            .await,
+            Err(ConversationStoreFailure::OutcomeUnknown),
+            "the composed Resume committed, then lost its acknowledgement"
+        );
+
+        scenario.reopen().await;
+        let child = scenario
+            .vault()
+            .conversation_run(child_run_id)
+            .await
+            .expect("read child after lost acknowledgement")
+            .expect("the child committed with the Resume slot");
+        assert_eq!(child.resume_of, Some(origin.run_id));
+        assert_eq!(child.resume_lineage, 1);
+        assert_eq!(child.executor_generation, generation);
+        assert_eq!(child.continuation_of, None);
+        assert_eq!(child.retry_of, None);
+
+        let tables = [
+            "agent_conversation_runs",
+            "agent_conversation_resume_slots",
+            "agent_conversation_core_v3_entries",
+            "agent_conversation_core_v3_input_receipts",
+            "agent_conversation_core_v3_owner_bindings",
+            "agent_conversation_core_v3_open_receipts",
+            "agent_conversation_core_v3_active_recorders",
+        ];
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after lost Resume acknowledgement");
+        let mut committed_counts = Vec::new();
+        for table in tables {
+            committed_counts.push(table_count(&connection, table).await);
+        }
+        assert_eq!(committed_counts, [2, 1, 1, 1, 2, 1, 1]);
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("claimed")
+        );
+        let mut slots = connection
+            .query(
+                "SELECT child_run_id FROM agent_conversation_resume_slots WHERE origin_run_id = ?",
+                [origin.run_id.as_uuid().to_string()],
+            )
+            .await
+            .expect("read committed Resume slot");
+        let slot_child = slots
+            .next()
+            .await
+            .expect("read Resume slot row")
+            .expect("one Resume slot exists")
+            .get::<String>(0)
+            .expect("Resume slot child ID is text");
+        assert_eq!(slot_child, child_run_id.as_uuid().to_string());
+        assert!(
+            slots
+                .next()
+                .await
+                .expect("check for duplicate Resume slots")
+                .is_none()
+        );
+        drop(slots);
+
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .expect("begin read-only receipt verification transaction");
+        let scope = Scope::from_identity(
+            scenario.person_id,
+            &scenario.identity,
+            scenario.conversation_id,
+            scenario.branch_id,
+        );
+        let (stored_input, stored_message) =
+            input_receipt_on(&transaction, scope, core_request.message.message_id)
+                .await
+                .expect("read committed retained Core input")
+                .expect("the source input receipt remains stored");
+        assert_eq!(stored_input.receipt.transcript, retained_reference);
+        assert_eq!(stored_message, core_request.message);
+        let original_recorder = open_receipt_on(&transaction, scenario.person_id, child_run_id)
+            .await
+            .expect("read committed immutable recorder receipt")
+            .expect("Resume recorder receipt committed with the child");
+        assert_eq!(original_recorder.fence.run_id, child_run_id);
+        assert_eq!(original_recorder.fence.input, retained_reference);
+        assert_eq!(original_recorder.fence.executor_generation, generation);
+        transaction
+            .commit()
+            .await
+            .expect("finish receipt verification transaction");
+        drop(connection);
+
+        assert!(
+            scenario
+                .vault()
+                .conversation_journal(child_run_id)
+                .await
+                .expect("read child journal after lost acknowledgement")
+                .is_empty(),
+            "ACK recovery does not create model or dispatch journal entries"
+        );
+        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+            .await
+            .expect("reload Session after committed Resume");
+        assert_eq!(
+            session
+                .messages
+                .iter()
+                .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
+                .count(),
+            1,
+            "Resume ACK recovery never appends a duplicate User entry"
+        );
+
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to change Session after committed Resume");
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start controlled post-claim Session change");
+        let mut session = scenario
+            .vault()
+            .session_on(&transaction, scenario.session_id)
+            .await
+            .expect("load committed child Session");
+        let prior_revision = session.revision;
+        session.revision += 1;
+        let changed = transaction
+            .execute(
+                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                (
+                    integer(session.revision).expect("encode next Session revision"),
+                    scenario
+                        .vault()
+                        .payload(&session)
+                        .expect("encode changed Session"),
+                    session.id.to_string(),
+                    integer(prior_revision).expect("encode prior Session revision"),
+                ),
+            )
+            .await
+            .expect("persist post-claim Session revision");
+        assert_eq!(changed, 1);
+        transaction
+            .commit()
+            .await
+            .expect("commit controlled Session revision change");
+        guard.settled();
+        drop(guard);
+        drop(connection);
+        let later_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance generation after Resume commit and reopen")
+            .executor_generation;
+        assert!(later_generation > generation);
+
+        let replay = compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Resume(request),
+            core_request,
+        )
+        .await
+        .expect("exact Resume retry recovers after ACK loss, reopen and mutable changes");
+        let CoreComposedRunAdmission::Admitted {
+            record: replayed_child,
+            input: replayed_input,
+            recorder: replayed_recorder,
+        } = replay
+        else {
+            panic!("claimed Resume replay was unexpectedly superseded");
+        };
+        assert_eq!(replayed_child, child);
+        assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(replayed_input.receipt, stored_input.receipt);
+        assert_eq!(
+            replayed_recorder.expect("exact replay returns the original recorder receipt"),
+            original_recorder
+        );
+
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after exact Resume ACK replay");
+        for (table, count) in tables.iter().zip(committed_counts) {
+            assert_eq!(
+                table_count(&connection, table).await,
+                count,
+                "exact replay does not add rows to {table}"
+            );
+        }
+        assert_eq!(
+            scenario
+                .vault()
+                .conversation_journal(child_run_id)
+                .await
+                .expect("check journal after exact ACK replay")
+                .len(),
+            0,
+            "exact replay still performs no dispatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_resume_composition_replays_one_child_slot_and_recorder() {
+        let mut scenario = Scenario::new().await;
+        let (origin, _) = scenario
+            .admit_run_and_append_input("concurrent Resume claim")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request = scenario.resume_child_admission(pending, &origin, "concurrent Resume claim");
+        let (core_request, _) = scenario.resume_core_request();
+
+        let (first, second) = tokio::join!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request.clone()),
+                core_request.clone(),
+            ),
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request),
+                core_request,
+            ),
+        );
+        let (first, second) = (
+            first.expect("first concurrent Resume transaction succeeds"),
+            second.expect("second concurrent Resume transaction replays"),
+        );
+        let (
+            CoreComposedRunAdmission::Admitted {
+                record: first,
+                recorder: first_recorder,
+                ..
+            },
+            CoreComposedRunAdmission::Admitted {
+                record: second,
+                recorder: second_recorder,
+                ..
+            },
+        ) = (first, second)
+        else {
+            panic!("exact concurrent Resume calls return the one committed child");
+        };
+        let first_recorder = first_recorder.expect("first Resume returned its recorder");
+        let second_recorder = second_recorder.expect("replayed Resume returned its recorder");
+        assert_eq!(first, second);
+        assert_eq!(first_recorder, second_recorder);
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after concurrent claims");
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            2
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_owner_slot_fault_before_core_binding_rolls_back_every_write() {
+        let mut scenario = Scenario::new().await;
+        let (origin, _) = scenario
+            .admit_run_and_append_input("faulted Resume transaction")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request =
+            scenario.resume_child_admission(pending, &origin, "faulted Resume transaction");
+        let (core_request, _) = scenario.resume_core_request();
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect before injected fault");
+        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
+        let tables = [
+            "agent_conversation_runs",
+            "agent_conversation_resume_slots",
+            "agent_conversation_core_v3_entries",
+            "agent_conversation_core_v3_input_receipts",
+            "agent_conversation_core_v3_owner_bindings",
+            "agent_conversation_core_v3_open_receipts",
+            "agent_conversation_core_v3_active_recorders",
+        ];
+        let mut before = Vec::new();
+        for table in tables {
+            before.push(table_count(&connection, table).await);
+        }
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("pending")
+        );
+        drop(connection);
+
+        scenario
+            .vault()
+            .conversation_core_resume_fault_after_owner_claim
+            .store(true, Ordering::Release);
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request),
+                core_request,
+            )
+            .await,
+            Err(ConversationStoreFailure::NotCommitted),
+            "the injected post-slot failure is reported only after rollback"
+        );
+
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect after rollback");
+        for (table, count) in tables.iter().zip(before) {
+            assert_eq!(
+                table_count(&connection, table).await,
+                count,
+                "rollback restores {table}"
+            );
+        }
+        assert_eq!(
+            session_storage_snapshot(&connection, scenario.session_id).await,
+            before_session,
+            "owner Session CAS rolls back with the claimed slot"
+        );
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("pending")
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_composition_denies_wrong_session_device_group_and_core_binding() {
+        let mut scenario = Scenario::new().await;
+        let (origin, _) = scenario
+            .admit_run_and_append_input("Resume admission checks")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request = scenario.resume_child_admission(pending, &origin, "Resume admission checks");
+        let (core_request, _) = scenario.resume_core_request();
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect before denials");
+        let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
+        let tables = [
+            "agent_conversation_runs",
+            "agent_conversation_resume_slots",
+            "agent_conversation_core_v3_entries",
+            "agent_conversation_core_v3_input_receipts",
+            "agent_conversation_core_v3_owner_bindings",
+            "agent_conversation_core_v3_open_receipts",
+        ];
+        let mut before = Vec::new();
+        for table in tables {
+            before.push(table_count(&connection, table).await);
+        }
+        drop(connection);
+
+        let mut wrong_session = request.clone();
+        let other_session = Uuid::new_v4();
+        wrong_session.request.session_id = other_session;
+        wrong_session.child.session_id = other_session;
+
+        let mut wrong_device = request.clone();
+        wrong_device.request.device_id = "other-device".into();
+        wrong_device.child.device_id = "other-device".into();
+
+        let mut wrong_group = request.clone();
+        wrong_group.request.group_digest[0] ^= 1;
+
+        let mut wrong_identity = core_request.clone();
+        let AdmissionTarget::AppendToExisting { reference } = &mut wrong_identity.target else {
+            panic!("Resume source must target the retained conversation");
+        };
+        reference.identity.assignment_id = AssignmentId::new();
+
+        let mut wrong_binding = core_request.clone();
+        wrong_binding.message.message_id = MessageId::new();
+
+        for (request, binding) in [
+            (wrong_session, core_request.clone()),
+            (wrong_device, core_request.clone()),
+            (wrong_group, core_request.clone()),
+            (request.clone(), wrong_identity),
+            (request, wrong_binding),
+        ] {
+            assert_eq!(
+                compose_owner_core_run(
+                    scenario.vault(),
+                    CoreComposedOwnerIntent::Resume(request),
+                    binding,
+                )
+                .await,
+                Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch
+                )),
+                "foreign Session/device/group/Core binding is denied"
+            );
+        }
+
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect after denials");
+        for (table, count) in tables.iter().zip(before) {
+            assert_eq!(
+                table_count(&connection, table).await,
+                count,
+                "denial leaves {table} unchanged"
+            );
+        }
+        assert_eq!(
+            session_storage_snapshot(&connection, scenario.session_id).await,
+            before_session
+        );
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("pending")
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_only_resume_still_works_without_retrofitting_a_core_binding() {
+        let mut scenario = Scenario::new().await;
+        let origin_request = scenario.owner_request("owner-only Resume source");
+        let origin = scenario.admit_unbound_owner_run(origin_request).await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance generation before legacy owner-only Resume")
+            .executor_generation;
+        let request = scenario.resume_child_admission(pending, &origin, "owner-only Resume source");
+        let missing_source = scenario.core_input_request("owner-only Resume source");
+        let before = scenario
+            .vault()
+            .connection()
+            .expect("connect before fail-closed composed attempt");
+        let before_session = session_storage_snapshot(&before, scenario.session_id).await;
+        drop(before);
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request.clone()),
+                missing_source,
+            )
+            .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "the composed path requires the source's actual Core binding"
+        );
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after fail-closed attempt");
+        assert_eq!(
+            session_storage_snapshot(&connection, scenario.session_id).await,
+            before_session
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            0
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            0,
+            "a missing source binding is not silently imported"
+        );
+        drop(connection);
+
+        let admission = scenario
+            .vault()
+            .claim_conversation_resume(request)
+            .await
+            .expect("public legacy owner-only Resume remains supported");
+        let super::super::VaultConversationAdmission::Created { record: child, .. } = admission
+        else {
+            panic!("first owner-only Resume claim creates its child");
+        };
+        assert_eq!(child.resume_of, Some(origin.run_id));
+        assert!(generation > origin.executor_generation);
+        assert_eq!(child.executor_generation, generation);
+        assert_eq!(child.continuation_of, None);
+        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+            .await
+            .expect("reload legacy owner-only Session");
+        assert_eq!(
+            session
+                .messages
+                .iter()
+                .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
+                .count(),
+            1,
+            "owner-only Resume preserves the original user message"
+        );
+        assert!(matches!(
+            session.messages.first(),
+            Some(floe_conversation::AgentMessage::User { message_id, .. })
+                if *message_id == origin.user_message_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_real_new_supersedes_pending_resume_without_composer_revival() {
+        let mut scenario = Scenario::new().await;
+        let (origin, _) = scenario
+            .admit_run_and_append_input("New supersedes Resume")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request = scenario.resume_child_admission(pending, &origin, "New supersedes Resume");
+        let (core_request, _) = scenario.resume_core_request();
+        let new_request = scenario.owner_request("real New input");
+        let super::super::VaultConversationAdmission::Created {
+            record: new_run, ..
+        } = scenario
+            .vault()
+            .admit_conversation_turn(new_request)
+            .await
+            .expect("real New admits through the Conversation owner")
+        else {
+            panic!("real New creates its owner Run");
+        };
+        assert_ne!(new_run.run_id, origin.run_id);
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request),
+                core_request,
+            )
+            .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "a superseded request remains a conflict, never a successful child"
+        );
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after New supersession");
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("superseded")
+        );
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            0
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn composed_stale_resume_commits_supersession_before_returning_conflict() {
+        let mut scenario = Scenario::new().await;
+        let (origin, _) = scenario
+            .admit_run_and_append_input("stale Session Resume")
+            .await;
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request = scenario.resume_child_admission(pending, &origin, "stale Session Resume");
+        let (core_request, _) = scenario.resume_core_request();
+
+        let mut connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to advance Session");
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .expect("start controlled Session revision change");
+        let mut session = scenario
+            .vault()
+            .session_on(&transaction, scenario.session_id)
+            .await
+            .expect("load current owner Session");
+        let prior_revision = session.revision;
+        session.revision += 1;
+        let changed = transaction
+            .execute(
+                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                (
+                    integer(session.revision).expect("encode next Session revision"),
+                    scenario
+                        .vault()
+                        .payload(&session)
+                        .expect("encode changed Session"),
+                    session.id.to_string(),
+                    integer(prior_revision).expect("encode prior Session revision"),
+                ),
+            )
+            .await
+            .expect("persist changed Session revision");
+        assert_eq!(changed, 1);
+        transaction
+            .commit()
+            .await
+            .expect("commit controlled Session revision change");
+        guard.settled();
+        drop(guard);
+        drop(connection);
+
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Resume(request),
+                core_request,
+            )
+            .await
+            .expect("superseded outcome commits through the Core transaction"),
+            CoreComposedRunAdmission::ResumeSuperseded
+        );
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after committed supersession");
+        assert_eq!(
+            stored_resume_state(&connection, origin.run_id)
+                .await
+                .as_deref(),
+            Some("superseded")
+        );
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 1);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_resume_slots").await,
+            0
+        );
     }
 
     #[tokio::test]
@@ -3884,7 +5232,7 @@ mod tests {
                 .vault()
                 .admit_conversation_run_with_core_input_on(
                     &transaction,
-                    second_owner,
+                    CoreComposedOwnerIntent::Turn(second_owner),
                     shared_core_input,
                     &mut replay_checked,
                     &mut prior_command,
@@ -4025,7 +5373,7 @@ mod tests {
                 .vault()
                 .admit_conversation_run_with_core_input_on(
                     &transaction,
-                    unbound_request,
+                    CoreComposedOwnerIntent::Turn(unbound_request),
                     core_request,
                     &mut replay_checked,
                     &mut prior_command,
@@ -4418,7 +5766,7 @@ mod tests {
             .vault()
             .admit_conversation_run_with_core_input_on(
                 &transaction,
-                wrong_session,
+                CoreComposedOwnerIntent::Turn(wrong_session),
                 core_request.clone(),
                 &mut replay_checked,
                 &mut prior_command,

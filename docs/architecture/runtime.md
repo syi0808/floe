@@ -76,9 +76,18 @@ FIFO or queued-work selection: a recorder opens a fresh Run against an exact
 retained inbound reference, agent identity, recorder epoch and executor
 domain/generation. A fresh New Run appends one input; an exact owner replay
 returns its original binding and receipt. Continue may reuse the retained
-input without appending it again. The Core-composed admission path rejects
-linked Resume before writes; the existing owner-only Resume state machine is
-unchanged until one shared transactional primitive is extracted and qualified.
+input without appending it again. Internal Core-composed linked Resume now
+calls the same transaction-scoped owner primitive as the public owner-only
+Resume wrapper. It requires the source Run's persisted Core binding and exact
+retained input receipt; it does not create a binding from caller-supplied
+digests. The child Run, resume-slot claim, child owner binding and fresh
+recorder receipt commit in the same Immediate Vault transaction, with no new
+transcript input. Exact claimed-child replay returns its stored Core and
+recorder receipts before mutable Session and executor-generation fences.
+Conflicting group, identity or binding evidence fails closed. The standalone
+owner-only API keeps its existing behavior and does not retrofit Core rows.
+This is an internal capability checkpoint only: Manager and Expert production
+callers remain on their existing paths until a later cutover.
 Inputs and generated outputs share a
 monotonic transcript sequence, but each output contribution is independently
 identified and may carry an owner-verified Task execution receipt. That receipt
