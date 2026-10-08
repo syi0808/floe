@@ -313,6 +313,117 @@ func TestRestartUsesValidPreviousWhenCurrentIsMalformed(t *testing.T) {
 	}
 }
 
+func TestDirectReplacementReloadPersistsLastGoodForCorruptCurrentRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := catalogBytes(t, 2, "direct-v2", "accepted-direct-model")
+	writeCatalog(t, path, accepted)
+	if err := store.Reload(); err != nil {
+		t.Fatalf("accept direct replacement: %v", err)
+	}
+	if got := readCatalog(t, LastGoodPath(path)); !bytes.Equal(got, accepted) {
+		t.Fatalf("accepted direct replacement was not persisted as last-good: %s", got)
+	}
+	lastGoodInfo, err := os.Stat(LastGoodPath(path))
+	if err != nil || lastGoodInfo.Mode().Perm() != 0600 {
+		t.Fatalf("last-good snapshot did not retain private-file mode: %#v, %v", lastGoodInfo, err)
+	}
+
+	writeCatalog(t, path, []byte(`{"schema_version":1,"revision":3`))
+	restarted, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := restarted.Projection()
+	if projection.Catalog.Revision != 2 || projection.Catalog.Providers[0].Models[0].ModelID != "accepted-direct-model" {
+		t.Fatalf("restart did not load the durable last-good snapshot: %#v", projection.Catalog)
+	}
+	if projection.Status.Source != "last_good" || projection.Status.LastError != RefreshErrorInvalid || projection.Status.LastErrorAt == nil {
+		t.Fatalf("restart did not report degraded last-good fallback: %#v", projection.Status)
+	}
+}
+
+func TestRestartPrefersNewerLastGoodOverStaleValidCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := catalogBytes(t, 4, "accepted-v4", "newer-last-good-model")
+	writeCatalog(t, path, newer)
+	if err := store.Reload(); err != nil {
+		t.Fatalf("accept newer direct replacement: %v", err)
+	}
+	writeCatalog(t, path, catalogBytes(t, 3, "stale-v3", "stale-current-model"))
+
+	restarted, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := restarted.Projection()
+	if projection.Catalog.Revision != 4 || projection.Catalog.Providers[0].Models[0].ModelID != "newer-last-good-model" {
+		t.Fatalf("stale current revision displaced last-good: %#v", projection.Catalog)
+	}
+	if projection.Status.Source != "last_good" || projection.Status.LastError != RefreshErrorStale || projection.Status.LastErrorAt == nil {
+		t.Fatalf("stale current revision was not reported: %#v", projection.Status)
+	}
+}
+
+func TestRestartChoosesHigherPreviousSnapshotOverLowerCurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	writeCatalog(t, path, catalogBytes(t, 2, "current-v2", "lower-current-model"))
+	writeCatalog(t, PreviousPath(path), catalogBytes(t, 3, "previous-v3", "higher-previous-model"))
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := store.Projection()
+	if projection.Catalog.Revision != 3 || projection.Catalog.Providers[0].Models[0].ModelID != "higher-previous-model" {
+		t.Fatalf("lower current revision displaced higher previous snapshot: %#v", projection.Catalog)
+	}
+	if projection.Status.Source != "previous" || projection.Status.LastError != RefreshErrorStale || projection.Status.LastErrorAt == nil {
+		t.Fatalf("startup did not report stale current revision: %#v", projection.Status)
+	}
+}
+
+func TestRollbackRevisionExceedsDurableLastGoodWhenCurrentIsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Install(path, catalogBytes(t, 2, "v2", "rollback-target")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(path, catalogBytes(t, 3, "v3", "current-model")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCatalog(t, path, catalogBytes(t, 5, "accepted-v5", "newer-last-good"))
+	if err := store.Reload(); err != nil {
+		t.Fatalf("accept newer direct replacement: %v", err)
+	}
+	writeCatalog(t, path, catalogBytes(t, 3, "stale-v3", "stale-current"))
+
+	if err := Rollback(path); err != nil {
+		t.Fatalf("rollback from stale current: %v", err)
+	}
+	rolledBack, err := Parse(readCatalog(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack.Revision != 6 || rolledBack.Providers[0].Models[0].ModelID != "rollback-target" {
+		t.Fatalf("explicit rollback did not advance beyond last-good: %#v", rolledBack)
+	}
+	lastGood, err := Parse(readCatalog(t, LastGoodPath(path)))
+	if err != nil || lastGood.Revision != 6 {
+		t.Fatalf("explicit rollback was not persisted as last-good: %#v, %v", lastGood, err)
+	}
+}
+
 func TestStartupLockFailureUsesSafeStatusCategory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing-profile", FileName)
 	store, err := Open(path)
@@ -353,6 +464,10 @@ func TestRollbackRestoresPriorModelsWithFreshRevision(t *testing.T) {
 	}
 	if current.Revision != 4 || current.Providers[0].Models[0].ModelID != "prior-model" {
 		t.Fatalf("rollback did not restore prior model set at a fresh revision: %#v", current)
+	}
+	lastGood, err := Parse(readCatalog(t, LastGoodPath(path)))
+	if err != nil || lastGood.Revision != 4 {
+		t.Fatalf("rollback was not durably retained as last-good: %#v, %v", lastGood, err)
 	}
 	if previous.Revision != 3 || previous.Providers[0].Models[0].ModelID != "current-model" {
 		t.Fatalf("rollback did not retain pre-rollback current catalog: %#v", previous)

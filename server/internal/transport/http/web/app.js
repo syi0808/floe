@@ -81,13 +81,15 @@ function renderModelCatalogSuggestions() {
     return;
   }
   const source = ({
-    file: 'Local catalog', previous: 'Last known good catalog', bootstrap: 'Built-in suggestions',
+    file: 'Local catalog', last_good: 'Durable last known good catalog',
+    previous: 'Previous rollback snapshot', bootstrap: 'Built-in suggestions',
   })[status.source] || 'Catalog';
   const errors = ({
     missing: 'The local catalog file is missing.',
     invalid_catalog: 'The local catalog file failed validation.',
     stale_revision: 'The local catalog revision is stale.',
     read_failed: 'The local catalog could not be read.',
+    persist_failed: 'The accepted catalog could not be saved as the durable last-good snapshot.',
     writer_lock_unavailable: 'The catalog writer lock is unavailable.',
     rollback_recovery_failed: 'A prior catalog rollback needs recovery.',
   })[status.last_error];

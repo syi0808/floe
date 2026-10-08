@@ -133,6 +133,8 @@ func catalogError(err error) string {
 		return "revision is stale"
 	case errors.Is(err, modelcatalog.ErrCatalogLockUnavailable):
 		return "catalog writer lock is unavailable"
+	case errors.Is(err, modelcatalog.ErrCatalogPersistence):
+		return "last-good snapshot could not be saved; inspect current, previous, last-good, and pending rollback files before retrying"
 	case errors.Is(err, modelcatalog.ErrUnsupportedCatalogPlatform):
 		return "catalog file commands are unsupported on this platform"
 	case errors.Is(err, modelcatalog.ErrPendingRollback):
@@ -140,7 +142,7 @@ func catalogError(err error) string {
 	case errors.Is(err, os.ErrNotExist):
 		return "required local file is missing"
 	case storage.IsIndeterminate(err):
-		return "durability is uncertain; inspect current, previous, and pending rollback files before retrying"
+		return "durability is uncertain; inspect current, previous, last-good, and pending rollback files before retrying"
 	default:
 		return "local file operation unavailable"
 	}

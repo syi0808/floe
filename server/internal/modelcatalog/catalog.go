@@ -25,6 +25,7 @@ import (
 
 const (
 	FileName               = "model-catalog.json"
+	LastGoodSuffix         = ".last-good"
 	MaxCatalogBytes        = 1 << 20
 	MaxProviders           = 32
 	MaxModelsPerProvider   = 1000
@@ -37,6 +38,7 @@ const (
 	RefreshErrorInvalid    = "invalid_catalog"
 	RefreshErrorStale      = "stale_revision"
 	RefreshErrorRead       = "read_failed"
+	RefreshErrorPersist    = "persist_failed"
 	RefreshErrorLock       = "writer_lock_unavailable"
 	RefreshErrorRecovery   = "rollback_recovery_failed"
 )
@@ -44,6 +46,7 @@ const (
 var (
 	ErrStaleCatalog               = errors.New("model catalog revision is not newer")
 	ErrInvalidCatalog             = errors.New("invalid model catalog")
+	ErrCatalogPersistence         = errors.New("model catalog last-good snapshot could not be persisted")
 	ErrCatalogLockUnavailable     = errors.New("model catalog writer lock unavailable")
 	ErrPendingRollback            = errors.New("pending model catalog rollback could not be recovered")
 	ErrUnsupportedCatalogPlatform = errors.New("catalog file operations are unsupported on this platform")
@@ -143,54 +146,108 @@ func Open(path string) (*Store, error) {
 	unlock, lockErr := lockCatalogFile(path)
 	if lockErr != nil {
 		startupErr = fmt.Errorf("%w: %v", ErrCatalogLockUnavailable, lockErr)
-		store.loadStartupFallback(bootstrap, startupErr)
+		store.loadStartupFallback(bootstrap, bootstrapBytes, startupErr, false)
 		return store, nil
 	} else {
 		startupErr = recoverRollbackLocked(path)
 	}
-	store.loadStartupFallback(bootstrap, startupErr)
+	store.loadStartupFallback(bootstrap, bootstrapBytes, startupErr, startupErr == nil)
 	unlock()
 	return store, nil
 }
 
-func (s *Store) loadStartupFallback(bootstrap Catalog, startupErr error) {
+type catalogSnapshot struct {
+	catalog Catalog
+	data    []byte
+	source  string
+}
+
+func (s *Store) loadStartupFallback(bootstrap Catalog, bootstrapData []byte, startupErr error, canPersist bool) {
 	now := time.Now().UTC()
-	current, currentErr := readCatalogFile(s.path)
-	if currentErr == nil {
-		candidate, parseErr := Parse(current)
-		if parseErr == nil && acceptableOver(candidate, bootstrap) {
-			s.publishLoaded(candidate, "file", now, startupErr)
-			return
-		}
-		if parseErr != nil {
-			currentErr = parseErr
-		} else {
-			currentErr = ErrStaleCatalog
+	selected := &catalogSnapshot{catalog: bootstrap, data: bootstrapData, source: "bootstrap"}
+	var currentSnapshot, lastGoodSnapshot *catalogSnapshot
+	currentSnapshot, currentErr := loadCatalogSnapshot(s.path, "file", bootstrap)
+	lastGoodSnapshot, lastGoodErr := loadCatalogSnapshot(LastGoodPath(s.path), "last_good", bootstrap)
+	previousSnapshot, _ := loadCatalogSnapshot(PreviousPath(s.path), "previous", bootstrap)
+	for _, candidate := range []*catalogSnapshot{lastGoodSnapshot, previousSnapshot, currentSnapshot} {
+		if candidate != nil && betterSnapshot(candidate, selected) {
+			selected = candidate
 		}
 	}
-	prior, priorErr := readCatalogFile(PreviousPath(s.path))
-	if priorErr == nil {
-		candidate, parseErr := Parse(prior)
-		if parseErr == nil && acceptableOver(candidate, bootstrap) {
-			if startupErr == nil {
-				startupErr = currentErr
+	if currentSnapshot != nil && (selected.catalog.Revision > currentSnapshot.catalog.Revision ||
+		selected.catalog.Revision == currentSnapshot.catalog.Revision && !reflect.DeepEqual(selected.catalog, currentSnapshot.catalog)) {
+		currentErr = ErrStaleCatalog
+	}
+
+	if startupErr == nil && canPersist {
+		if err := persistLastGoodLocked(s.path, selected.data, selected.catalog); err != nil {
+			startupErr = err
+			if lastGoodSnapshot != nil {
+				selected = lastGoodSnapshot
+			} else {
+				selected = &catalogSnapshot{catalog: bootstrap, data: bootstrapData, source: "bootstrap"}
 			}
-			s.publishLoaded(candidate, "previous", now, startupErr)
-			return
-		}
-		if parseErr != nil {
-			priorErr = parseErr
-		} else {
-			priorErr = ErrStaleCatalog
 		}
 	}
-	if startupErr == nil {
-		startupErr = currentErr
+	degradedErr := startupErr
+	if degradedErr == nil {
+		degradedErr = currentErr
 	}
-	if startupErr == nil {
-		startupErr = priorErr
+	if degradedErr == nil && selected.source == "bootstrap" && lastGoodErr != nil && !errors.Is(lastGoodErr, os.ErrNotExist) {
+		degradedErr = lastGoodErr
 	}
-	s.recordStartupFailure(refreshErrorCode(startupErr), now)
+	s.publishLoaded(selected.catalog, selected.source, now, degradedErr)
+}
+
+func loadCatalogSnapshot(path, source string, bootstrap Catalog) (*catalogSnapshot, error) {
+	data, err := readCatalogFile(path)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	if !acceptableOver(catalog, bootstrap) {
+		return nil, ErrStaleCatalog
+	}
+	return &catalogSnapshot{catalog: catalog, data: data, source: source}, nil
+}
+
+func betterSnapshot(candidate, current *catalogSnapshot) bool {
+	if candidate.catalog.Revision != current.catalog.Revision {
+		return candidate.catalog.Revision > current.catalog.Revision
+	}
+	if reflect.DeepEqual(candidate.catalog, current.catalog) {
+		return equalRevisionPriority(candidate.source) > equalRevisionPriority(current.source)
+	}
+	return conflictingRevisionPriority(candidate.source) > conflictingRevisionPriority(current.source)
+}
+
+func equalRevisionPriority(source string) int {
+	switch source {
+	case "file":
+		return 4
+	case "last_good":
+		return 3
+	case "previous":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func conflictingRevisionPriority(source string) int {
+	switch source {
+	case "last_good":
+		return 4
+	case "previous":
+		return 3
+	case "file":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func acceptableOver(candidate, bootstrap Catalog) bool {
@@ -337,8 +394,8 @@ func (s *Store) Projection() Projection {
 
 func (s *Store) Snapshot() Catalog { return s.Projection().Catalog }
 
-// Reload validates and publishes under one mutex so an older, slower read can
-// never replace a newer revision that another concurrent reload published.
+// Reload validates and durably records a candidate before publishing it under
+// one mutex so a slower read cannot replace a newer accepted revision.
 func (s *Store) Reload() error {
 	if s == nil || s.path == "" {
 		return errors.New("model catalog path unavailable")
@@ -368,11 +425,19 @@ func (s *Store) Reload() error {
 			current := s.current.Load()
 			if current != nil && candidate.Revision <= current.catalog.Revision {
 				if candidate.Revision == current.catalog.Revision && reflect.DeepEqual(candidate, current.catalog) {
+					if err = persistLastGoodLocked(s.path, data, candidate); err != nil {
+						s.recordReloadFailure(refreshErrorCode(err), now)
+						return err
+					}
 					s.publishLoaded(candidate, "file", now, nil)
 					return nil
 				}
 				err = ErrStaleCatalog
 			} else {
+				if err = persistLastGoodLocked(s.path, data, candidate); err != nil {
+					s.recordReloadFailure(refreshErrorCode(err), now)
+					return err
+				}
 				s.publishLoaded(candidate, "file", now, nil)
 				return nil
 			}
@@ -472,6 +537,16 @@ func installLocked(path string, data []byte) error {
 	} else if !errors.Is(currentErr, os.ErrNotExist) && !errors.Is(currentErr, ErrInvalidCatalog) && !errors.Is(currentErr, storage.ErrIntegrity) {
 		return currentErr
 	}
+	lastGoodData, lastGoodErr := readCatalogFile(LastGoodPath(path))
+	var lastGood *Catalog
+	if lastGoodErr == nil {
+		parsed, parseErr := Parse(lastGoodData)
+		if parseErr == nil {
+			lastGood = &parsed
+		}
+	} else if !errors.Is(lastGoodErr, os.ErrNotExist) && !errors.Is(lastGoodErr, ErrInvalidCatalog) && !errors.Is(lastGoodErr, storage.ErrIntegrity) {
+		return lastGoodErr
+	}
 	previousData, previousErr := readCatalogFile(PreviousPath(path))
 	var previous *Catalog
 	if previousErr == nil {
@@ -485,6 +560,9 @@ func installLocked(path string, data []byte) error {
 	minimumRevision := bootstrap.Revision
 	if current != nil && current.Revision > minimumRevision {
 		minimumRevision = current.Revision
+	}
+	if lastGood != nil && lastGood.Revision > minimumRevision {
+		minimumRevision = lastGood.Revision
 	}
 	if previous != nil && previous.Revision > minimumRevision {
 		minimumRevision = previous.Revision
@@ -506,6 +584,35 @@ func installLocked(path string, data []byte) error {
 		}
 	}
 	return storage.WritePrivate(path, data)
+}
+
+// persistLastGoodLocked advances the durable acceptance point without ever
+// replacing it with a lower or conflicting revision. Callers hold the OS lock.
+func persistLastGoodLocked(path string, data []byte, candidate Catalog) error {
+	if len(data) == 0 {
+		return ErrInvalidCatalog
+	}
+	lastGoodPath := LastGoodPath(path)
+	lastGoodData, err := readCatalogFile(lastGoodPath)
+	if err == nil {
+		lastGood, parseErr := Parse(lastGoodData)
+		if parseErr == nil {
+			switch {
+			case candidate.Revision < lastGood.Revision:
+				return ErrStaleCatalog
+			case candidate.Revision == lastGood.Revision && !reflect.DeepEqual(candidate, lastGood):
+				return ErrStaleCatalog
+			case candidate.Revision == lastGood.Revision:
+				return nil
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, ErrInvalidCatalog) && !errors.Is(err, storage.ErrIntegrity) {
+		return fmt.Errorf("%w: %v", ErrCatalogPersistence, err)
+	}
+	if err := storage.WritePrivate(lastGoodPath, data); err != nil {
+		return fmt.Errorf("%w: %v", ErrCatalogPersistence, err)
+	}
+	return nil
 }
 
 // Rollback installs the prior model set with a fresh revision. A durable
@@ -538,9 +645,36 @@ func Rollback(path string) error {
 	if err != nil {
 		return ErrInvalidCatalog
 	}
-	rollbackData, err := bumpRollbackRevision(previousData, previous, current.Revision+1)
+	maximumRevision := current.Revision
+	if previous.Revision > maximumRevision {
+		maximumRevision = previous.Revision
+	}
+	bootstrap, err := readBootstrap()
 	if err != nil {
 		return err
+	}
+	if bootstrap.Revision > maximumRevision {
+		maximumRevision = bootstrap.Revision
+	}
+	lastGoodData, lastGoodErr := readCatalogFile(LastGoodPath(path))
+	if lastGoodErr == nil {
+		lastGood, parseErr := Parse(lastGoodData)
+		if parseErr == nil && lastGood.Revision > maximumRevision {
+			maximumRevision = lastGood.Revision
+		}
+	} else if !errors.Is(lastGoodErr, os.ErrNotExist) && !errors.Is(lastGoodErr, ErrInvalidCatalog) && !errors.Is(lastGoodErr, storage.ErrIntegrity) {
+		return lastGoodErr
+	}
+	if maximumRevision == ^uint64(0) {
+		return ErrInvalidCatalog
+	}
+	rollbackData, err := bumpRollbackRevision(previousData, previous, maximumRevision+1)
+	if err != nil {
+		return err
+	}
+	rollback, err := Parse(rollbackData)
+	if err != nil {
+		return ErrInvalidCatalog
 	}
 	pendingPath := rollbackPendingPath(path)
 	if err := storage.WritePrivate(pendingPath, rollbackData); err != nil {
@@ -550,6 +684,9 @@ func Rollback(path string) error {
 		return err
 	}
 	if err := storage.WritePrivate(path, rollbackData); err != nil {
+		return err
+	}
+	if err := persistLastGoodLocked(path, rollbackData, rollback); err != nil {
 		return err
 	}
 	return removePrivateFile(pendingPath)
@@ -599,18 +736,33 @@ func recoverRollbackLocked(path string) error {
 		return ErrPendingRollback
 	}
 	if current.Revision == pending.Revision && reflect.DeepEqual(current, pending) {
-		return removePrivateFile(pendingPath)
+		if err := removePrivateFile(pendingPath); err != nil {
+			return fmt.Errorf("%w: %v", ErrPendingRollback, err)
+		}
+		return nil
 	}
-	if current.Revision == ^uint64(0) || pending.Revision != current.Revision+1 {
+	if pending.Revision <= current.Revision {
 		return ErrPendingRollback
 	}
+	lastGoodData, lastGoodErr := readCatalogFile(LastGoodPath(path))
+	if lastGoodErr == nil {
+		lastGood, parseErr := Parse(lastGoodData)
+		if parseErr == nil && pending.Revision <= lastGood.Revision {
+			return ErrPendingRollback
+		}
+	} else if !errors.Is(lastGoodErr, os.ErrNotExist) && !errors.Is(lastGoodErr, ErrInvalidCatalog) && !errors.Is(lastGoodErr, storage.ErrIntegrity) {
+		return fmt.Errorf("%w: %v", ErrPendingRollback, lastGoodErr)
+	}
 	if err := storage.WritePrivate(PreviousPath(path), currentData); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrPendingRollback, err)
 	}
 	if err := storage.WritePrivate(path, pendingData); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrPendingRollback, err)
 	}
-	return removePrivateFile(pendingPath)
+	if err := removePrivateFile(pendingPath); err != nil {
+		return fmt.Errorf("%w: %v", ErrPendingRollback, err)
+	}
+	return nil
 }
 
 func readBootstrap() (Catalog, error) {
@@ -651,12 +803,16 @@ func removePrivateFile(path string) error {
 
 func PreviousPath(path string) string { return path + ".previous" }
 
+func LastGoodPath(path string) string { return path + LastGoodSuffix }
+
 func refreshErrorCode(err error) string {
 	switch {
 	case err == nil:
 		return ""
 	case errors.Is(err, ErrInvalidCatalog):
 		return RefreshErrorInvalid
+	case errors.Is(err, ErrCatalogPersistence):
+		return RefreshErrorPersist
 	case errors.Is(err, ErrStaleCatalog):
 		return RefreshErrorStale
 	case errors.Is(err, ErrUnsupportedCatalogPlatform):
