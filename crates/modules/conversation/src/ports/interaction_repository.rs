@@ -1,5 +1,5 @@
 use floe_agent_contract::BoxFuture;
-use floe_kernel::{AgentFailure, OwnerActor, PersonId, RunId};
+use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, PersonId, RunId};
 use uuid::Uuid;
 
 use crate::{
@@ -38,7 +38,7 @@ pub trait InteractionRepository: Send + Sync {
     fn admit_refresh<'a>(
         &'a self,
         request: crate::InteractionRefresh,
-    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ConversationInteraction, CommandFailure<AgentFailure>>>;
     fn resolve_and_request_resume<'a>(
         &'a self,
         commit: crate::InteractionResolutionCommit,
@@ -87,7 +87,7 @@ pub trait InteractionRepository: Send + Sync {
     fn record_decision<'a>(
         &'a self,
         decision: InteractionDecision,
-    ) -> BoxFuture<'a, Result<DecisionAdmission, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<DecisionAdmission, CommandFailure<AgentFailure>>>;
 
     /// Replace a Pending or Resolving interaction with newer review.
     fn mark_superseded<'a>(

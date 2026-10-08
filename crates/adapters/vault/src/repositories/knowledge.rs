@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionScope, OwnerActor};
+use floe_kernel::CommandFailure;
 use floe_knowledge::{
     KnowledgeRepository, LearnerBudget, LearnerClaimRef, LearnerEvidenceRepository,
     LearnerJobRepository, LearnerJobSettlement, LearnerReviewInput, LearnerReviewJob,
@@ -112,14 +113,25 @@ impl<Keys: VaultKeyProvider + 'static> KnowledgeRepository for VaultKnowledgeRep
         actor: &'a OwnerActor,
         request: MemoryDecisionRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<floe_knowledge::KnowledgeDecisionResult, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<floe_knowledge::KnowledgeDecisionResult, CommandFailure<AgentFailure>>>
+    {
         Box::pin(async move {
-            self.authorize(actor)?;
-            check_scope(scope)?;
+            self.authorize(actor).map_err(CommandFailure::NotAdmitted)?;
+            check_scope(scope).map_err(CommandFailure::NotAdmitted)?;
             let result = scope
-                .run(self.vault.knowledge_decide(actor, request, scope))
+                .run(async { Ok(self.vault.knowledge_decide(actor, request, scope).await) })
                 .await;
-            self.after_scoped(result, scope)
+            match result {
+                Err(failure) => Err(CommandFailure::Indeterminate(failure)),
+                Ok(Err(failure)) => Err(failure),
+                Ok(Ok(value)) => {
+                    self.vault
+                        .check_access()
+                        .map_err(CommandFailure::Admitted)?;
+                    check_scope(scope).map_err(CommandFailure::Admitted)?;
+                    Ok(value)
+                }
+            }
         })
     }
 

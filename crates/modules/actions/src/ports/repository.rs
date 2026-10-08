@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use floe_execution::BoxFuture;
-use floe_kernel::PersonId;
+use floe_kernel::{CommandFailure, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -211,15 +211,15 @@ pub trait ActionsRepository: Send + Sync {
     fn admit<'a>(
         &'a self,
         admission: ActionAdmission,
-    ) -> BoxFuture<'a, Result<AdmittedAction, ActionStoreError>>;
+    ) -> BoxFuture<'a, Result<AdmittedAction, CommandFailure<ActionStoreError>>>;
     fn record_decision<'a>(
         &'a self,
         decision: ActionDecision,
-    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>>;
+    ) -> BoxFuture<'a, Result<ActionRecord, CommandFailure<ActionStoreError>>>;
     fn admit_reconciliation<'a>(
         &'a self,
         command: ActionReconciliation,
-    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>>;
+    ) -> BoxFuture<'a, Result<ActionRecord, CommandFailure<ActionStoreError>>>;
     fn stop_before_dispatch<'a>(
         &'a self,
         stop: PreDispatchStop,
@@ -254,5 +254,5 @@ pub trait ActionsRepository: Send + Sync {
     fn compare_and_set_authority<'a>(
         &'a self,
         change: AuthorityChange,
-    ) -> BoxFuture<'a, Result<ActionsAuthority, ActionStoreError>>;
+    ) -> BoxFuture<'a, Result<ActionsAuthority, CommandFailure<ActionStoreError>>>;
 }

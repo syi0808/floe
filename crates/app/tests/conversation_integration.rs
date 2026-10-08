@@ -3,10 +3,11 @@ mod support;
 use std::time::{Duration, Instant};
 
 use floe_app::{
-    ActionsQuery, ActionsQueryResult, AppComposition, AppHost, ConnectionsCommand,
-    ConversationCommand, ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome,
-    DayCommand, DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertQuery,
-    ExpertQueryResult, MemoryQuery, MemoryQueryResult, ProductCommand, ProductCommandDisposition,
+    ActionAuthorityMode, ActionsCommand, ActionsCommandResult, ActionsQuery, ActionsQueryResult,
+    AppComposition, AppHost, ConnectionsCommand, ConversationCommand, ConversationCommandOutcome,
+    ConversationQuery, ConversationQueryOutcome, DayCommand, DayCommandOutcome, DayProductQuery,
+    DayQueryOutcome, ExpertCommand, ExpertCommandResult, ExpertQuery, ExpertQueryResult,
+    MemoryCommand, MemoryQuery, MemoryQueryResult, ProductCommand, ProductCommandDisposition,
     ProductCommandOutcome, ProductCommandRequest, ProductFailure, ProductObservation, ProductQuery,
     ProductQueryOutcome, RuntimeReadinessState,
 };
@@ -200,6 +201,133 @@ fn typed_product_router_keeps_command_identity_and_observer_drop_does_not_cancel
 }
 
 #[test]
+fn conversation_retry_replays_receipt_before_session_validation_and_preserves_uncertainty() {
+    let (barrier, entered, _release) = GenerateBarrier::new();
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::WaitForCancellation(barrier),
+    );
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let before = read_session(&host, session_id);
+    let command_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+
+    let send_turn = |command_id, expected_revision, text: &str| {
+        host.request(Uuid::new_v4())
+            .expect("admit Conversation product request")
+            .product_command(ProductCommandRequest {
+                command_id,
+                command: ProductCommand::Conversation(ConversationCommand::StartTurn {
+                    session_id,
+                    expected_revision,
+                    text: text.into(),
+                    continuation_id: None,
+                    retry_of: None,
+                }),
+            })
+    };
+
+    // Ignore the first response to model an ACK lost after durable admission.
+    drop(
+        send_turn(command_id, before.revision, USER_TEXT)
+            .expect("durably admit the first turn submission"),
+    );
+    entered
+        .recv_timeout(WAIT_TIMEOUT)
+        .expect("the admitted run reached its in-flight model barrier");
+
+    let replay = send_turn(command_id, before.revision, USER_TEXT)
+        .expect("replay the exact durable turn after its ACK was lost");
+    let ConversationCommandOutcome::Turn(receipt) = (match replay {
+        ProductCommandOutcome::Conversation(value) => value,
+        _ => panic!("turn retry returned another product outcome"),
+    }) else {
+        panic!("turn retry returned another Conversation result")
+    };
+    assert_eq!(receipt.command_id, command_id);
+
+    let invalid_reuse = send_turn(command_id, before.revision, "")
+        .expect_err("later validation cannot make an occupied id disposable");
+    assert_eq!(
+        invalid_reuse.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let mismatch = send_turn(command_id, before.revision, "A changed request body")
+        .expect_err("an occupied command id cannot be assigned a new body");
+    assert_eq!(
+        mismatch.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let stale = send_turn(
+        floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+        before.revision,
+        USER_TEXT,
+    )
+    .expect_err("a different command with a stale session revision is rejected");
+    assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
+
+    cancel_run(&host, receipt.run_id);
+    assert_eq!(
+        wait_terminal_run(&host, receipt.run_id).state,
+        RunState::Cancelled
+    );
+}
+
+#[test]
+fn definitive_conversation_conflict_allows_a_corrected_new_command_id() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let before = read_session(&host, session_id);
+    let stale_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let stale = host
+        .request(Uuid::new_v4())
+        .expect("admit stale Conversation request")
+        .product_command(ProductCommandRequest {
+            command_id: stale_id,
+            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
+                session_id,
+                expected_revision: before.revision + 1,
+                text: USER_TEXT.into(),
+                continuation_id: None,
+                retry_of: None,
+            }),
+        })
+        .expect_err("stale revision is a definitive pre-admission conflict");
+    assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
+
+    let corrected_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let corrected = host
+        .request(Uuid::new_v4())
+        .expect("admit corrected Conversation request")
+        .product_command(ProductCommandRequest {
+            command_id: corrected_id,
+            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
+                session_id,
+                expected_revision: before.revision,
+                text: USER_TEXT.into(),
+                continuation_id: None,
+                retry_of: None,
+            }),
+        })
+        .expect("a new id can carry the corrected intent after NotApplied");
+    let ConversationCommandOutcome::Turn(receipt) = (match corrected {
+        ProductCommandOutcome::Conversation(value) => value,
+        _ => panic!("corrected turn returned another product outcome"),
+    }) else {
+        panic!("corrected command returned another Conversation result")
+    };
+    assert_eq!(receipt.command_id, corrected_id);
+    assert_eq!(
+        wait_terminal_run(&host, receipt.run_id).state,
+        RunState::Completed
+    );
+}
+
+#[test]
 fn typed_day_query_remains_available_before_runtime_readiness() {
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let profile = IsolatedProfile::new();
@@ -256,6 +384,193 @@ fn typed_product_router_keeps_actions_experts_and_memory_on_the_same_path() {
         memory,
         ProductQueryOutcome::Memory(MemoryQueryResult::Review(_))
     ));
+}
+
+#[test]
+fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let directory = host
+        .request(Uuid::new_v4())
+        .expect("admit Experts directory query")
+        .product_query(ProductQuery::Experts(ExpertQuery::Directory))
+        .expect("read Experts directory");
+    let ProductQueryOutcome::Experts(ExpertQueryResult::Directory(directory)) = directory else {
+        panic!("Experts directory query returned another result")
+    };
+    let installation_ref = directory
+        .installations
+        .first()
+        .expect("built-in Experts installation exists")
+        .installation_ref;
+
+    let send = |command_id, expected_revision, enabled| {
+        host.request(Uuid::new_v4())
+            .expect("admit Experts product request")
+            .product_command(ProductCommandRequest {
+                command_id,
+                command: ProductCommand::Experts(ExpertCommand::SetInstallationEnabled {
+                    installation_ref,
+                    expected_revision,
+                    enabled,
+                }),
+            })
+    };
+
+    let rejected_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let rejected = send(rejected_id, directory.revision + 1, false)
+        .expect_err("a stale registry revision is rejected before admission");
+    assert_eq!(rejected.disposition, ProductCommandDisposition::NotApplied);
+
+    let command_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
+    let admitted =
+        send(command_id, directory.revision, false).expect("admit Expert installation change");
+    let ProductCommandOutcome::Experts(ExpertCommandResult::Directory(updated)) = admitted else {
+        panic!("Experts command returned another outcome")
+    };
+
+    let replay = send(command_id, directory.revision, false)
+        .expect("recover the exact Expert command receipt after registry revision advanced");
+    assert!(matches!(
+        replay,
+        ProductCommandOutcome::Experts(ExpertCommandResult::Directory(ref value))
+            if value.revision == updated.revision
+    ));
+
+    let changed_body = send(command_id, directory.revision, true)
+        .expect_err("an Expert receipt cannot be rebound to a changed body");
+    assert_eq!(
+        changed_body.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+}
+
+#[test]
+fn actions_authority_replay_checks_receipt_before_revision_validation() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let authority = host
+        .request(Uuid::new_v4())
+        .expect("admit Actions authority query")
+        .product_query(ProductQuery::Actions(ActionsQuery::Authority))
+        .expect("read Actions authority");
+    let ProductQueryOutcome::Actions(ActionsQueryResult::Authority(authority)) = authority else {
+        panic!("Actions authority query returned another result")
+    };
+    let send = |command_id, expected_revision| {
+        host.request(Uuid::new_v4())
+            .expect("admit Actions product request")
+            .product_command(ProductCommandRequest {
+                command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+                command: ProductCommand::Actions(ActionsCommand::SetAuthority {
+                    mode: ActionAuthorityMode::Deny,
+                    expected_revision,
+                }),
+            })
+    };
+
+    let stale = send(Uuid::new_v4(), authority.revision + 1)
+        .expect_err("stale authority revision is a precommit conflict");
+    assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
+
+    let command_id = Uuid::new_v4();
+    let admitted = send(command_id, authority.revision).expect("admit authority change");
+    let ProductCommandOutcome::Actions(ActionsCommandResult::Authority(updated)) = admitted else {
+        panic!("Actions authority command returned another outcome")
+    };
+
+    let replay = send(command_id, authority.revision)
+        .expect("replay the exact authority command after its revision advanced");
+    assert!(matches!(
+        replay,
+        ProductCommandOutcome::Actions(ActionsCommandResult::Authority(ref value))
+            if value.revision == updated.revision
+    ));
+
+    let invalid_reuse = send(command_id, 0)
+        .expect_err("revision validation cannot release a previously used command id");
+    assert_eq!(
+        invalid_reuse.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+}
+
+#[test]
+fn day_mutation_replays_receipts_before_body_validation_and_releases_only_not_applied_ids() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let day = floe_day::DayQuery {
+        date: chrono::NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(),
+        timezone_offset_seconds: 0,
+        end_timezone_offset_seconds: None,
+        now: chrono::DateTime::parse_from_rfc3339("2026-10-07T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
+    };
+    let send = |command_id, content: &str| {
+        host.request(Uuid::new_v4())
+            .expect("admit Day product request")
+            .product_command(ProductCommandRequest {
+                command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+                command: ProductCommand::Day(DayCommand::Mutate {
+                    day: day.clone(),
+                    mutation: floe_day::DayMutation::CreateNote {
+                        content: content.into(),
+                        occurred_at: day.now,
+                    },
+                }),
+            })
+    };
+
+    let command_id = Uuid::new_v4();
+    let admitted = send(command_id, "Keep this note.").expect("admit Day note mutation");
+    let ProductCommandOutcome::Day(DayCommandOutcome::Mutation(receipt)) = admitted else {
+        panic!("Day mutation returned another outcome")
+    };
+    assert_eq!(receipt.command_id, command_id);
+
+    let replay = send(command_id, "Keep this note.")
+        .expect("recover the exact Day receipt after the snapshot changed");
+    assert!(matches!(
+        replay,
+        ProductCommandOutcome::Day(DayCommandOutcome::Mutation(ref result))
+            if result.command_id == command_id
+    ));
+    let invalid_reuse = send(command_id, "")
+        .expect_err("a validation failure cannot free a previously used Day id");
+    assert_eq!(
+        invalid_reuse.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let rejected =
+        send(Uuid::new_v4(), "").expect_err("an invalid first Day request is proven not applied");
+    assert_eq!(rejected.disposition, ProductCommandDisposition::NotApplied);
+
+    let corrected = send(Uuid::new_v4(), "Corrected note.")
+        .expect("a corrected Day request can use a new id after NotApplied");
+    assert!(matches!(
+        corrected,
+        ProductCommandOutcome::Day(DayCommandOutcome::Mutation(_))
+    ));
+}
+
+#[test]
+fn memory_decision_validation_is_classified_by_knowledge_owner() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let failure = host
+        .request(Uuid::new_v4())
+        .expect("admit Memory product request")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::new(),
+            command: ProductCommand::Memory(MemoryCommand::Decide {
+                candidate_id: Uuid::nil(),
+                decision: floe_knowledge::KnowledgeDecisionKind::Reject,
+            }),
+        })
+        .expect_err("fresh invalid candidate is proved not applied by Knowledge");
+    assert_eq!(failure.disposition, ProductCommandDisposition::NotApplied);
 }
 
 #[test]

@@ -7,6 +7,42 @@
 mod actor;
 pub use actor::OwnerActor;
 
+/// A command failure classified by the owner that knows its admission and
+/// commit boundary. Transport layers may forward this disposition, but must
+/// not infer it from the error value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandFailure<E> {
+    /// This delivery could not begin admission. A client may discard the ID
+    /// only when it knows this was the first submission.
+    NotAdmitted(E),
+    /// The owner proved that this exact command has no committed effect.
+    NotApplied(E),
+    /// The owner has a durable receipt for this command; replay its same ID.
+    Admitted(E),
+    /// The owner cannot prove whether a prior attempt committed or applied.
+    Indeterminate(E),
+}
+
+impl<E> CommandFailure<E> {
+    pub fn map_failure<T>(self, map: impl FnOnce(E) -> T) -> CommandFailure<T> {
+        match self {
+            Self::NotAdmitted(failure) => CommandFailure::NotAdmitted(map(failure)),
+            Self::NotApplied(failure) => CommandFailure::NotApplied(map(failure)),
+            Self::Admitted(failure) => CommandFailure::Admitted(map(failure)),
+            Self::Indeterminate(failure) => CommandFailure::Indeterminate(map(failure)),
+        }
+    }
+
+    pub fn into_failure(self) -> E {
+        match self {
+            Self::NotAdmitted(failure)
+            | Self::NotApplied(failure)
+            | Self::Admitted(failure)
+            | Self::Indeterminate(failure) => failure,
+        }
+    }
+}
+
 /// The schema version every agent-facing contract in this workspace speaks.
 pub const AGENT_VERSION: u32 = 1;
 

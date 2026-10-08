@@ -477,7 +477,6 @@ pub struct RefreshAdmission {
     pub person_id: PersonId,
     pub device_id: String,
     pub command_id: Uuid,
-    pub intent_digest: [u8; 32],
     pub query: DayQuery,
     pub executor_generation: Uuid,
     pub admitted_at: DateTime<Utc>,
@@ -485,6 +484,7 @@ pub struct RefreshAdmission {
 impl RefreshAdmission {
     pub fn record(
         &self,
+        intent_digest: [u8; 32],
         expected_mirror_revision: MirrorExpectation,
     ) -> Result<RefreshRecord, DayError> {
         let record = RefreshRecord {
@@ -492,7 +492,7 @@ impl RefreshAdmission {
             person_id: self.person_id,
             device_id: self.device_id.clone(),
             command_id: self.command_id,
-            intent_digest: self.intent_digest,
+            intent_digest,
             query: self.query.clone(),
             expected_mirror_revision,
             executor_generation: self.executor_generation,

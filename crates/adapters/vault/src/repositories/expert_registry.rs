@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionScope, OwnerActor};
-use floe_experts::{AgentRegistry, RegistryCommit, RegistryCommitReceipt, RegistryRepository};
+use floe_experts::{
+    AgentRegistry, ExpertCommandLookup, RegistryCommit, RegistryCommitReceipt, RegistryRepository,
+};
+use floe_kernel::CommandFailure;
 use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
@@ -49,16 +52,20 @@ impl<Keys: VaultKeyProvider> VaultExpertRegistryRepository<Keys> {
         result
     }
 
-    async fn finish_transaction<T>(
+    async fn finish_command_transaction<T>(
         &self,
         transaction: turso::transaction::Transaction<'_>,
-        result: Result<T, AgentFailure>,
-    ) -> Result<T, AgentFailure> {
+        result: Result<T, CommandFailure<AgentFailure>>,
+    ) -> Result<T, CommandFailure<AgentFailure>> {
         let result = self
             .vault
-            .finish_registry_transaction_checked(transaction, result)
+            .finish_registry_command_transaction(transaction, result)
             .await;
-        self.after_access(result)
+        match (self.vault.check_access(), result) {
+            (Ok(()), result) => result,
+            (Err(failure), Ok(_)) => Err(CommandFailure::Admitted(failure)),
+            (Err(_), Err(failure)) => Err(failure),
+        }
     }
 }
 
@@ -96,7 +103,7 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
         actor: &'a OwnerActor,
         command_id: floe_agent_contract::CommandId,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<RegistryCommitReceipt>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertCommandLookup<RegistryCommitReceipt>, AgentFailure>> {
         Box::pin(async move {
             self.authorize(actor)?;
             if !command_id.is_valid() {
@@ -107,10 +114,10 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                 let Some(admission) =
                     read_expert_command_admission_on(&connection, command_id).await?
                 else {
-                    return Ok(None);
+                    return Ok(ExpertCommandLookup::Absent);
                 };
                 if admission.family != EXPERT_COMMAND_REGISTRY {
-                    return Err(AgentFailure::Conflict);
+                    return Ok(ExpertCommandLookup::Occupied);
                 }
                 if admission.person_id != actor.person_id || admission.device_id != actor.device_id
                 {
@@ -125,7 +132,7 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                 )
                 .await?
                 .ok_or(AgentFailure::VaultUnavailable)?;
-                Ok(Some(receipt))
+                Ok(ExpertCommandLookup::Existing(receipt))
             }
             .await;
             self.after_access(result)
@@ -136,23 +143,33 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
         &'a self,
         commit: RegistryCommit,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<RegistryCommitReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<RegistryCommitReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            self.authorize(&commit.actor)?;
+            self.authorize(&commit.actor)
+                .map_err(CommandFailure::NotAdmitted)?;
+            if !commit.command_id.is_valid() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+            }
+            let mut connection = self
+                .vault
+                .connection()
+                .map_err(CommandFailure::Indeterminate)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(|error| {
+                    CommandFailure::Indeterminate(
+                        self.vault.registry_transaction_start_error(error),
+                    )
+                })?;
+            let mut prior_command = false;
+            let mut replay_checked = false;
             let result = async {
-                if !commit.command_id.is_valid() || commit.request_digest == [0; 32] {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                let mut connection = self.vault.connection()?;
-                let transaction = connection
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .await
-                    .map_err(|error| self.vault.registry_transaction_start_error(error))?;
-                let result = async {
                     ensure_expert_binding_tables_on(&transaction).await?;
-                    if let Some(admission) =
-                        read_expert_command_admission_on(&transaction, commit.command_id).await?
-                    {
+                    let occupant =
+                        read_expert_command_admission_on(&transaction, commit.command_id).await?;
+                    if let Some(admission) = occupant {
+                        prior_command = true;
                         if admission.family != EXPERT_COMMAND_REGISTRY
                             || admission.person_id != commit.actor.person_id
                             || admission.device_id != commit.actor.device_id
@@ -169,6 +186,10 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                         )
                         .await?
                         .ok_or(AgentFailure::VaultUnavailable);
+                    }
+                    replay_checked = true;
+                    if commit.request_digest == [0; 32] {
+                        return Err(AgentFailure::InvalidInput);
                     }
 
                     if count_expert_command_admissions_on(&transaction).await?
@@ -276,10 +297,16 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                     Ok(receipt)
                 }
                 .await;
-                self.finish_transaction(transaction, result).await
-            }
-            .await;
-            self.after_access(result)
+            let result = result.map_err(|failure| {
+                if prior_command {
+                    CommandFailure::Indeterminate(failure)
+                } else if replay_checked {
+                    CommandFailure::NotApplied(failure)
+                } else {
+                    CommandFailure::Indeterminate(failure)
+                }
+            });
+            self.finish_command_transaction(transaction, result).await
         })
     }
 }

@@ -22,7 +22,7 @@ use floe_conversation::{
     MAX_STORED_INTERACTIONS_PER_RUN, ReviewAuditRecord, RunRecord, RunState, SupersedeInteraction,
     next_state_after_decision, state_after_resolution,
 };
-use floe_kernel::{PersonId, RunId};
+use floe_kernel::{CommandFailure, PersonId, RunId};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
@@ -58,21 +58,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn record_conversation_interaction_decision(
         &self,
         decision: InteractionDecision,
-    ) -> Result<DecisionAdmission, AgentFailure> {
-        decision
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)?;
-        if decision.principal != self.person_id.to_string() {
-            return Err(AgentFailure::CapabilityDenied);
+    ) -> Result<DecisionAdmission, CommandFailure<AgentFailure>> {
+        if decision.command_id.is_nil() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
         }
-        let mut connection = self.connection()?;
+        if decision.principal != self.person_id.to_string() {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::CapabilityDenied));
+        }
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
+            .map_err(|error| {
+                CommandFailure::Indeterminate(self.registry_transaction_start_error(error))
+            })?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             validate_schema(&transaction).await?;
             if let Some(recorded) = read_decision(&transaction, decision.command_id).await? {
+                prior_command = true;
                 if !decision.matches_recorded(&recorded) {
                     return Err(AgentFailure::Conflict);
                 }
@@ -83,10 +88,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Ok(DecisionAdmission::Rejoined(current));
             }
             if super::conversations::command_occupant(&transaction, decision.command_id)
-                .await?.is_some()
+                .await?
+                .is_some()
             {
+                prior_command = true;
                 return Err(AgentFailure::Conflict);
             }
+            replay_checked = true;
+            decision
+                .validate()
+                .map_err(|_| AgentFailure::InvalidInput)?;
             let current = read_interaction(&transaction, self.person_id, decision.interaction_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
@@ -118,7 +129,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(DecisionAdmission::Applied(updated))
         }
         .await;
-        self.finish_registry_transaction_checked(transaction, result)
+        let result = result.map_err(|failure| {
+            if prior_command {
+                CommandFailure::Indeterminate(failure)
+            } else if replay_checked {
+                CommandFailure::NotApplied(failure)
+            } else {
+                CommandFailure::Indeterminate(failure)
+            }
+        });
+        self.finish_registry_command_transaction(transaction, result)
             .await
     }
 
@@ -960,27 +980,36 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub async fn admit_conversation_interaction_refresh(
         &self,
         request: floe_conversation::InteractionRefresh,
-    ) -> Result<ConversationInteraction, AgentFailure> {
-        request.validate()?;
-        if request.person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
+    ) -> Result<ConversationInteraction, CommandFailure<AgentFailure>> {
+        if request.command_id.is_nil() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
         }
-        let mut connection = self.connection()?;
+        if request.person_id != self.person_id {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::CapabilityDenied));
+        }
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
+            .map_err(|error| {
+                CommandFailure::Indeterminate(self.registry_transaction_start_error(error))
+            })?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             validate_schema(&transaction).await?;
             let mut rows = transaction.query("SELECT person_id, session_id, interaction_id, expected_revision FROM agent_conversation_interaction_refreshes WHERE command_id = ?", [request.command_id.to_string()]).await.map_err(database_failure)?;
             let replay = if let Some(row) = rows.next().await.map_err(database_failure)? {
+                prior_command = true;
                 if row.get::<String>(0).map_err(storage)? != self.person_id.to_string() || row.get::<String>(1).map_err(storage)? != request.session_id.to_string()
                     || row.get::<String>(2).map_err(storage)? != request.interaction_id.to_string() || row.get::<i64>(3).map_err(storage)? != integer(request.expected_revision)?
                     || rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::Conflict); }
                 true
             } else { false };
             drop(rows);
-            if !replay && super::conversations::command_occupant(&transaction, request.command_id).await?.is_some() { return Err(AgentFailure::Conflict); }
+            if !replay && super::conversations::command_occupant(&transaction, request.command_id).await?.is_some() { prior_command = true; return Err(AgentFailure::Conflict); }
+            replay_checked = true;
+            request.validate()?;
             let current = read_interaction(&transaction, self.person_id, request.interaction_id).await?.ok_or(AgentFailure::NotFound)?;
             let session = self.session_on(&transaction, request.session_id).await?;
             if current.session_id != request.session_id || session.person_id != self.person_id || session.scope.is_some()
@@ -995,7 +1024,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_access()?;
             Ok(current)
         }.await;
-        self.finish_registry_transaction_checked(transaction, result)
+        let result = result.map_err(|failure| {
+            if prior_command {
+                CommandFailure::Indeterminate(failure)
+            } else if replay_checked {
+                CommandFailure::NotApplied(failure)
+            } else {
+                CommandFailure::Indeterminate(failure)
+            }
+        });
+        self.finish_registry_command_transaction(transaction, result)
             .await
     }
 }

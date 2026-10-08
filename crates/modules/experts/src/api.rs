@@ -1,6 +1,7 @@
 use floe_agent_contract::{
     AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor, TaskExecutionReceiptRef,
 };
+use floe_kernel::CommandFailure;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -139,7 +140,7 @@ pub trait ExpertsOwner: Send + Sync {
         expected_revision: u64,
         enabled: bool,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>>;
     fn inspect_binding<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -155,7 +156,7 @@ pub trait ExpertsOwner: Send + Sync {
         requirement_key: String,
         expected_binding_revision: u64,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReview, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<BindingReview, CommandFailure<AgentFailure>>>;
     fn prepare_task_binding_review<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -178,7 +179,7 @@ pub trait ExpertsOwner: Send + Sync {
         expected_binding_revision: u64,
         candidate_ids: Vec<Uuid>,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>>;
     fn binding_operation_receipt<'a>(
         &'a self,
         actor: &'a OwnerActor,

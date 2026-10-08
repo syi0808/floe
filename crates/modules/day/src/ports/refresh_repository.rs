@@ -3,6 +3,7 @@ use crate::{
     RefreshLookup, RefreshRecord, RefreshTransition,
 };
 use floe_execution::BoxFuture;
+use floe_kernel::CommandFailure;
 
 /// Every method is a short local transaction. No source/provider/native I/O.
 pub trait DayRefreshRepository: Send + Sync {
@@ -11,7 +12,7 @@ pub trait DayRefreshRepository: Send + Sync {
     fn admit_refresh<'a>(
         &'a self,
         admission: RefreshAdmission,
-    ) -> BoxFuture<'a, Result<RefreshAdmissionResult, DayError>>;
+    ) -> BoxFuture<'a, Result<RefreshAdmissionResult, CommandFailure<DayError>>>;
     fn read_refresh<'a>(
         &'a self,
         lookup: RefreshLookup,

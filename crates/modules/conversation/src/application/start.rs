@@ -1,6 +1,6 @@
 //! Owner-issued continuation references and canonical product turn preparation.
 use floe_execution::ExecutionScope;
-use floe_kernel::{AgentFailure, OwnerActor, RunId};
+use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, RunId};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -12,7 +12,7 @@ use crate::{
 use super::session_projection::{SessionSnapshot, project_session_snapshot};
 
 pub struct PreparedStartTurn {
-    pub session: AgentSession,
+    pub session: Option<AgentSession>,
     pub intent: CanonicalTurnIntent,
     pub existing: Option<RunReceipt>,
 }
@@ -23,47 +23,105 @@ pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionSt
     actor: &OwnerActor,
     request: &StartTurn,
     scope: &ExecutionScope,
-) -> Result<PreparedStartTurn, AgentFailure> {
-    actor.validate()?;
-    request.validate()?;
-    let session = scope
-        .run(sessions.load(actor.person_id, request.session_id))
-        .await?;
-    validate_session(actor, &session, request.session_id)?;
+) -> Result<PreparedStartTurn, CommandFailure<AgentFailure>> {
+    actor.validate().map_err(CommandFailure::NotAdmitted)?;
+    if !request.command_id.is_valid() {
+        return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+    }
+
+    // The command receipt is the replay boundary. Read it before loading or
+    // validating mutable Session state so a lost-ACK retry can recover after
+    // the Session has advanced.
     let existing = scope
         .run(repository.find_command(CommandQuery {
             principal: actor.person_id.to_string(),
             command_id: request.command_id,
         }))
-        .await?;
-    if existing.as_ref().is_some_and(|receipt| {
-        receipt.principal != actor.person_id.to_string()
-            || receipt.device_id != actor.device_id
-            || receipt.session_id != request.session_id
-    }) {
-        return Err(AgentFailure::PolicyDenied);
+        .await
+        .map_err(CommandFailure::Indeterminate)?;
+    if let Some(receipt) = existing {
+        let intent = async {
+            if receipt.principal != actor.person_id.to_string()
+                || receipt.device_id != actor.device_id
+                || receipt.session_id != request.session_id
+                || receipt.resume_of.is_some()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            receipt.validate()?;
+            let text = crate::normalize_turn_text(&request.text)?;
+            let mode = match (&request.continuation_ref, receipt.continuation_of) {
+                (Some(token), Some(source_run_id)) => {
+                    let source = scope
+                        .run(repository.load_receipt(source_run_id))
+                        .await?
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    if source.session_id != request.session_id
+                        || issue_continuation(actor, &source)? != Some(token.clone())
+                    {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    TurnMode::Continue(
+                        source
+                            .continuation()
+                            .ok_or(AgentFailure::StorageUnavailable)?,
+                    )
+                }
+                (None, None) => TurnMode::New,
+                _ => return Err(AgentFailure::Conflict),
+            };
+            let intent = CanonicalTurnIntent {
+                session_id: request.session_id,
+                expected_revision: request.expected_revision,
+                text,
+                mode,
+                retry_of: request.retry_of,
+            };
+            if receipt.request_digest != intent.digest(&actor.person_id.to_string())? {
+                return Err(AgentFailure::Conflict);
+            }
+            Ok(intent)
+        }
+        .await
+        .map_err(CommandFailure::Indeterminate)?;
+        return Ok(PreparedStartTurn {
+            session: None,
+            intent,
+            existing: Some(receipt),
+        });
     }
-    if existing.is_none() && session.revision != request.expected_revision {
-        return Err(AgentFailure::Conflict);
+
+    let occupant = scope
+        .run(repository.command_occupant(request.command_id))
+        .await
+        .map_err(CommandFailure::Indeterminate)?;
+    if occupant.is_some() {
+        return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
     }
-    let text = crate::normalize_turn_text(&request.text)?;
-    let mode = if let Some(reference) = &request.continuation_ref {
-        let run_id = match &existing {
-            Some(receipt) => receipt.continuation_of.ok_or(AgentFailure::Conflict)?,
-            None => current_continuation_run(&session).ok_or(AgentFailure::Conflict)?,
-        };
-        let source = scope
-            .run(repository.load_receipt(run_id))
-            .await?
-            .ok_or(AgentFailure::NotFound)?;
-        let expected = issue_continuation(actor, &source)?.ok_or(AgentFailure::Conflict)?;
-        if expected != *reference
-            || source.session_id != request.session_id
-            || existing.is_none() && source.session_revision != session.revision
-        {
+
+    request.validate().map_err(CommandFailure::NotApplied)?;
+    let prepared = async {
+        let session = scope
+            .run(sessions.load(actor.person_id, request.session_id))
+            .await?;
+        validate_session(actor, &session, request.session_id)?;
+        if session.revision != request.expected_revision {
             return Err(AgentFailure::Conflict);
         }
-        if existing.is_none() {
+        let text = crate::normalize_turn_text(&request.text)?;
+        let mode = if let Some(reference) = &request.continuation_ref {
+            let run_id = current_continuation_run(&session).ok_or(AgentFailure::Conflict)?;
+            let source = scope
+                .run(repository.load_receipt(run_id))
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            let expected = issue_continuation(actor, &source)?.ok_or(AgentFailure::Conflict)?;
+            if expected != *reference
+                || source.session_id != request.session_id
+                || source.session_revision != session.revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
             let original = session
                 .messages
                 .iter()
@@ -77,35 +135,26 @@ pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionSt
             if *original != text {
                 return Err(AgentFailure::Conflict);
             }
-        }
-        TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?)
-    } else {
-        if existing
-            .as_ref()
-            .is_some_and(|receipt| receipt.continuation_of.is_some() || receipt.resume_of.is_some())
-        {
-            return Err(AgentFailure::Conflict);
-        }
-        TurnMode::New
-    };
-    let intent = CanonicalTurnIntent {
-        session_id: request.session_id,
-        expected_revision: request.expected_revision,
-        text,
-        mode,
-        retry_of: request.retry_of,
-    };
-    if let Some(receipt) = &existing {
-        receipt.validate()?;
-        if receipt.request_digest != intent.digest(&actor.person_id.to_string())? {
-            return Err(AgentFailure::Conflict);
-        }
+            TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?)
+        } else {
+            TurnMode::New
+        };
+        let intent = CanonicalTurnIntent {
+            session_id: request.session_id,
+            expected_revision: request.expected_revision,
+            text,
+            mode,
+            retry_of: request.retry_of,
+        };
+        Ok::<_, AgentFailure>(PreparedStartTurn {
+            session: Some(session),
+            intent,
+            existing: None,
+        })
     }
-    Ok(PreparedStartTurn {
-        session,
-        intent,
-        existing,
-    })
+    .await
+    .map_err(CommandFailure::NotApplied)?;
+    Ok(prepared)
 }
 
 pub async fn read_session_snapshot<R: ConversationRepository + ?Sized, S: SessionStore>(

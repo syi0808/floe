@@ -2,6 +2,7 @@ use floe_agent_contract::{
     AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor, PackageRef, PersonId,
     TaskExecutionReceiptRef,
 };
+use floe_kernel::CommandFailure;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -80,12 +81,12 @@ pub trait BindingReviewRepository: Send + Sync {
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<BindingReviewDescriptor>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ExpertCommandLookup<BindingReviewDescriptor>, AgentFailure>>;
     fn prepare<'a>(
         &'a self,
         descriptor: BindingReviewDescriptor,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, CommandFailure<AgentFailure>>>;
     fn get<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -97,7 +98,7 @@ pub trait BindingReviewRepository: Send + Sync {
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ExpertCommandLookup<BindingReplacementReceipt>, AgentFailure>>;
     fn find_review_replacement<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -108,5 +109,5 @@ pub trait BindingReviewRepository: Send + Sync {
         &'a self,
         replacement: ReviewedBindingReplacement,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReplacementReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<BindingReplacementReceipt, CommandFailure<AgentFailure>>>;
 }

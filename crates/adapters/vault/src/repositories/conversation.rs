@@ -252,29 +252,42 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,
-    ) -> BoxFuture<'a, Result<TurnAdmission, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<TurnAdmission, floe_kernel::CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            request.validate()?;
             if request.principal != self.vault.person_id().to_string() {
-                return Err(AgentFailure::CapabilityDenied);
+                return Err(floe_kernel::CommandFailure::NotAdmitted(
+                    AgentFailure::CapabilityDenied,
+                ));
             }
             match self.vault.admit_conversation_turn(request).await? {
                 VaultConversationAdmission::Created { record, session } => {
-                    let receipt = floe_conversation::project_run_receipt(record)?;
-                    let transcript = floe_conversation::project_transcript(&session.messages)?;
+                    let receipt = floe_conversation::project_run_receipt(record)
+                        .map_err(floe_kernel::CommandFailure::Admitted)?;
+                    let transcript = floe_conversation::project_transcript(&session.messages)
+                        .map_err(floe_kernel::CommandFailure::Admitted)?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
                         receipt,
                         transcript,
                     }))
                 }
-                VaultConversationAdmission::Existing(record) => Ok(TurnAdmission::Existing(
-                    self.attach_run_references(floe_conversation::project_run_receipt(record)?)
-                        .await?,
-                )),
-                VaultConversationAdmission::Resumed(record) => Ok(TurnAdmission::Resumed(
-                    self.attach_run_references(floe_conversation::project_run_receipt(record)?)
-                        .await?,
-                )),
+                VaultConversationAdmission::Existing(record) => {
+                    let receipt = floe_conversation::project_run_receipt(record)
+                        .map_err(floe_kernel::CommandFailure::Admitted)?;
+                    Ok(TurnAdmission::Existing(
+                        self.attach_run_references(receipt)
+                            .await
+                            .map_err(floe_kernel::CommandFailure::Admitted)?,
+                    ))
+                }
+                VaultConversationAdmission::Resumed(record) => {
+                    let receipt = floe_conversation::project_run_receipt(record)
+                        .map_err(floe_kernel::CommandFailure::Admitted)?;
+                    Ok(TurnAdmission::Resumed(
+                        self.attach_run_references(receipt)
+                            .await
+                            .map_err(floe_kernel::CommandFailure::Admitted)?,
+                    ))
+                }
             }
         })
     }
@@ -300,14 +313,28 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         })
     }
 
+    fn command_occupant<'a>(
+        &'a self,
+        command_id: floe_kernel::CommandId,
+    ) -> BoxFuture<'a, Result<Option<floe_conversation::ConversationCommandKind>, AgentFailure>>
+    {
+        Box::pin(async move {
+            if !command_id.is_valid() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            self.vault.conversation_command_occupant(command_id).await
+        })
+    }
+
     fn admit_cancel<'a>(
         &'a self,
         request: CancelRunCommand,
-    ) -> BoxFuture<'a, Result<CancelRunAdmission, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<CancelRunAdmission, floe_kernel::CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            request.validate()?;
             if request.principal != self.vault.person_id().to_string() {
-                return Err(AgentFailure::CapabilityDenied);
+                return Err(floe_kernel::CommandFailure::NotAdmitted(
+                    AgentFailure::CapabilityDenied,
+                ));
             }
             let admission = self
                 .vault
@@ -467,11 +494,12 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
     fn record_decision<'a>(
         &'a self,
         decision: InteractionDecision,
-    ) -> BoxFuture<'a, Result<DecisionAdmission, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<DecisionAdmission, floe_kernel::CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            decision.validate()?;
             if decision.principal != self.vault.person_id().to_string() {
-                return Err(AgentFailure::CapabilityDenied);
+                return Err(floe_kernel::CommandFailure::NotAdmitted(
+                    AgentFailure::CapabilityDenied,
+                ));
             }
             self.vault
                 .record_conversation_interaction_decision(decision)
@@ -482,7 +510,8 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
     fn admit_refresh<'a>(
         &'a self,
         request: floe_conversation::InteractionRefresh,
-    ) -> BoxFuture<'a, Result<ConversationInteraction, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ConversationInteraction, floe_kernel::CommandFailure<AgentFailure>>>
+    {
         Box::pin(async move {
             self.vault
                 .admit_conversation_interaction_refresh(request)

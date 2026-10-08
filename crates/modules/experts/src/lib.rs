@@ -31,6 +31,7 @@ mod task_repository;
 pub mod ports {
     pub mod binding_review;
     pub mod candidate_catalog;
+    pub mod command_lookup;
     pub mod registry_repository;
     pub mod source;
 }
@@ -48,6 +49,7 @@ pub use ports::candidate_catalog::{
     Candidate, CandidateAvailability, CandidateCatalog, CandidateQuery, CandidateSnapshot,
     CandidateSourceExpectation,
 };
+pub use ports::command_lookup::ExpertCommandLookup;
 pub use ports::registry_repository::{RegistryCommit, RegistryCommitReceipt, RegistryRepository};
 pub use ports::source::{
     ExpertProjectionPort, ExpertProjectionRequest, ExpertSourcePort, ExpertSourceRead,

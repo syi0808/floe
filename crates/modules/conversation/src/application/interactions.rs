@@ -11,7 +11,7 @@ use crate::{
     InteractionDecision, InteractionDecisionKind, InteractionRepository, SupersedeInteraction,
 };
 use floe_agent_contract::AgentFailure;
-use floe_kernel::{PersonId, RunId};
+use floe_kernel::{CommandFailure, PersonId, RunId};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,30 +50,12 @@ pub async fn decide_interaction<Interactions>(
     interactions: &Interactions,
     command: DecideInteractionCommand,
     now_unix_ms: i64,
-) -> Result<DecisionAdmission, AgentFailure>
+) -> Result<DecisionAdmission, CommandFailure<AgentFailure>>
 where
     Interactions: InteractionRepository + ?Sized,
 {
-    command.validate()?;
-    if now_unix_ms < 0 {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let person_id = parse_principal(&command.principal)?;
-    let current = interactions
-        .get_interaction(person_id, command.interaction_id)
-        .await?
-        .ok_or(AgentFailure::NotFound)?;
-    if current.projects_expired_at(now_unix_ms) {
-        let expire = ExpireInteraction {
-            interaction_id: command.interaction_id,
-            person_id,
-            now_unix_ms,
-        };
-        expire.validate()?;
-        match interactions.mark_expired(expire).await {
-            Ok(_) | Err(AgentFailure::Conflict) => return Err(AgentFailure::Conflict),
-            Err(failure) => return Err(failure),
-        }
+    if command.command_id.is_nil() {
+        return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
     }
     let decision = InteractionDecision {
         command_id: command.command_id,
@@ -81,11 +63,33 @@ where
         interaction_revision: command.expected_revision,
         kind: command.kind,
         target_digest: command.target_digest,
-        principal: command.principal,
+        principal: command.principal.clone(),
         decided_at_unix_ms: now_unix_ms,
     };
-    decision.validate()?;
-    interactions.record_decision(decision).await
+    match interactions.record_decision(decision).await {
+        Ok(admission) => Ok(admission),
+        Err(CommandFailure::NotApplied(AgentFailure::Conflict)) => {
+            // Expiry is a domain transition independent of the command receipt.
+            // Only check it after receipt lookup and the owner's rollback proof.
+            if let Some(person_id) = parse_principal(&command.principal).ok()
+                && let Some(current) = interactions
+                    .get_interaction(person_id, command.interaction_id)
+                    .await
+                    .ok()
+                    .flatten()
+                && current.projects_expired_at(now_unix_ms)
+            {
+                let expire = ExpireInteraction {
+                    interaction_id: command.interaction_id,
+                    person_id,
+                    now_unix_ms,
+                };
+                let _ = interactions.mark_expired(expire).await;
+            }
+            Err(CommandFailure::NotApplied(AgentFailure::Conflict))
+        }
+        Err(failure) => Err(failure),
+    }
 }
 
 pub async fn resolve_interaction<Interactions: InteractionRepository + ?Sized>(

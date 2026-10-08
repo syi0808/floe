@@ -147,10 +147,13 @@ impl ActionsService {
         mode: ActionAuthorityMode,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ActionsAuthority, AgentFailure> {
-        self.admit_actor(actor, scope)?;
-        if command_id.is_nil() || expected_revision == 0 {
-            return Err(AgentFailure::InvalidInput);
+    ) -> Result<ActionsAuthority, floe_kernel::CommandFailure<AgentFailure>> {
+        self.admit_actor(actor, scope)
+            .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
+        if command_id.is_nil() {
+            return Err(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::InvalidInput,
+            ));
         }
         Ok(self
             .repository
@@ -160,7 +163,8 @@ impl ActionsService {
                 expected_revision,
                 mode,
             })
-            .await?)
+            .await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))?)
     }
     pub async fn decide(
         &self,
@@ -171,8 +175,9 @@ impl ActionsService {
         decision: ActionDecisionKind,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ActionSnapshot, AgentFailure> {
-        self.admit_actor(actor, scope)?;
+    ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
+        self.admit_actor(actor, scope)
+            .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
         let record = self
             .repository
             .record_decision(ActionDecision {
@@ -185,12 +190,16 @@ impl ActionsService {
                 decision,
                 now: self.clock.now(),
             })
-            .await?;
-        self.validate_record_actor(actor, &record)?;
+            .await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))?;
+        self.validate_record_actor(actor, &record)
+            .map_err(floe_kernel::CommandFailure::Admitted)?;
         if record.state == ActionState::Approved {
-            self.spawn(record.id, false, scope)?;
+            self.spawn(record.id, false, scope)
+                .map_err(floe_kernel::CommandFailure::Admitted)?;
         }
         self.project(&record)
+            .map_err(floe_kernel::CommandFailure::Admitted)
     }
     pub async fn reconcile(
         &self,
@@ -199,8 +208,9 @@ impl ActionsService {
         action_ref: Uuid,
         expected_revision: u64,
         scope: &ExecutionScope,
-    ) -> Result<ActionSnapshot, AgentFailure> {
-        self.admit_actor(actor, scope)?;
+    ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
+        self.admit_actor(actor, scope)
+            .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
         let record = self
             .repository
             .admit_reconciliation(ActionReconciliation {
@@ -210,12 +220,16 @@ impl ActionsService {
                 action_id: action_ref,
                 expected_revision,
             })
-            .await?;
-        self.validate_record_actor(actor, &record)?;
+            .await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))?;
+        self.validate_record_actor(actor, &record)
+            .map_err(floe_kernel::CommandFailure::Admitted)?;
         if record.pending_recovery() {
-            self.spawn(record.id, true, scope)?;
+            self.spawn(record.id, true, scope)
+                .map_err(floe_kernel::CommandFailure::Admitted)?;
         }
         self.project(&record)
+            .map_err(floe_kernel::CommandFailure::Admitted)
     }
     /// A lost host acknowledgement is uncertainty. Activation records that fact
     /// without a native call and never dispatches PendingReview/Approved work.

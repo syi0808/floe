@@ -3,7 +3,7 @@ use crate::{
     RunTerminal, TurnAdmission, TurnAdmissionRequest,
 };
 use floe_agent_contract::{BoxFuture, ExecutionJournal};
-use floe_kernel::{AgentFailure, OwnerActor, RunId};
+use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, RunId};
 use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
@@ -36,15 +36,23 @@ pub trait ConversationRepository: Send + Sync {
         query: CommandQuery,
     ) -> BoxFuture<'a, Result<Option<RunReceipt>, AgentFailure>>;
 
+    /// Read the immutable owner-wide command-ID occupant set. Admission
+    /// rechecks this inside its transaction; fresh preflight must not report
+    /// NotApplied when another Conversation command kind already used the ID.
+    fn command_occupant<'a>(
+        &'a self,
+        command_id: floe_kernel::CommandId,
+    ) -> BoxFuture<'a, Result<Option<crate::ConversationCommandKind>, AgentFailure>>;
+
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,
-    ) -> BoxFuture<'a, Result<TurnAdmission, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<TurnAdmission, CommandFailure<AgentFailure>>>;
 
     fn admit_cancel<'a>(
         &'a self,
         request: CancelRunCommand,
-    ) -> BoxFuture<'a, Result<CancelRunAdmission, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<CancelRunAdmission, CommandFailure<AgentFailure>>>;
 
     fn journal(&self, run_id: RunId) -> Result<Arc<dyn ExecutionJournal>, AgentFailure>;
 

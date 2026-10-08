@@ -4,8 +4,9 @@ use crate::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor};
 use floe_experts::{
     BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef, BindingReviewRepository,
-    ReviewedBindingReplacement,
+    ExpertCommandLookup, ReviewedBindingReplacement,
 };
+use floe_kernel::CommandFailure;
 use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
@@ -64,16 +65,20 @@ impl<Keys: VaultKeyProvider> VaultExpertBindingReviewRepository<Keys> {
         result
     }
 
-    async fn finish_transaction<T>(
+    async fn finish_command_transaction<T>(
         &self,
         transaction: turso::transaction::Transaction<'_>,
-        result: Result<T, AgentFailure>,
-    ) -> Result<T, AgentFailure> {
+        result: Result<T, CommandFailure<AgentFailure>>,
+    ) -> Result<T, CommandFailure<AgentFailure>> {
         let result = self
             .vault
-            .finish_registry_transaction_checked(transaction, result)
+            .finish_registry_command_transaction(transaction, result)
             .await;
-        self.after_access(result)
+        match (self.vault.check_access(), result) {
+            (Ok(()), result) => result,
+            (Err(failure), Ok(_)) => Err(CommandFailure::Admitted(failure)),
+            (Err(_), Err(failure)) => Err(failure),
+        }
     }
 
     async fn read_review(
@@ -113,7 +118,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
         actor: &'a OwnerActor,
         command_id: CommandId,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<BindingReviewDescriptor>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertCommandLookup<BindingReviewDescriptor>, AgentFailure>> {
         Box::pin(async move {
             self.authorize(actor)?;
             if !command_id.is_valid() {
@@ -124,10 +129,10 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                 let Some(admission) =
                     read_expert_command_admission_on(&connection, command_id).await?
                 else {
-                    return Ok(None);
+                    return Ok(ExpertCommandLookup::Absent);
                 };
                 if admission.family != EXPERT_COMMAND_PREPARE {
-                    return Err(AgentFailure::Conflict);
+                    return Ok(ExpertCommandLookup::Occupied);
                 }
                 if admission.person_id != actor.person_id || admission.device_id != actor.device_id
                 {
@@ -142,7 +147,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                 if descriptor.identity.command_id != command_id {
                     return Err(AgentFailure::VaultUnavailable);
                 }
-                Ok(Some(descriptor))
+                Ok(ExpertCommandLookup::Existing(descriptor))
             }
             .await;
             self.after_access(result)
@@ -153,27 +158,36 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
         &'a self,
         descriptor: BindingReviewDescriptor,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<BindingReviewDescriptor, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            self.authorize_pinned_actor()?;
-            verify_prepare_identity(
-                &descriptor,
-                self.vault.person_id(),
-                &self.actor,
-                self.vault.registry_instance_id(),
-            )?;
+            self.authorize_pinned_actor()
+                .map_err(CommandFailure::NotAdmitted)?;
+            if !descriptor.identity.command_id.is_valid() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+            }
+            let mut connection = self
+                .vault
+                .connection()
+                .map_err(CommandFailure::Indeterminate)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(|error| {
+                    CommandFailure::Indeterminate(
+                        self.vault.registry_transaction_start_error(error),
+                    )
+                })?;
+            let mut prior_command = false;
+            let mut replay_checked = false;
             let result = async {
-                let mut connection = self.vault.connection()?;
-                let transaction = connection
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .await
-                    .map_err(|error| self.vault.registry_transaction_start_error(error))?;
-                let result = async {
                     ensure_expert_binding_tables_on(&transaction).await?;
-                    if let Some(admission) =
-                        read_expert_command_admission_on(&transaction, descriptor.identity.command_id)
-                            .await?
+                    if let Some(admission) = read_expert_command_admission_on(
+                        &transaction,
+                        descriptor.identity.command_id,
+                    )
+                    .await?
                     {
+                        prior_command = true;
                         if admission.family != EXPERT_COMMAND_PREPARE
                             || admission.person_id != descriptor.identity.person_id
                             || admission.device_id != descriptor.identity.device_id
@@ -192,8 +206,14 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                         }
                         return Ok(stored);
                     }
+                    replay_checked = true;
 
-                    ensure_expert_binding_tables_on(&transaction).await?;
+                    verify_prepare_identity(
+                        &descriptor,
+                        self.vault.person_id(),
+                        &self.actor,
+                        self.vault.registry_instance_id(),
+                    )?;
                     floe_experts::validate_binding_review_descriptor(&descriptor)?;
                     let payload = serde_json::to_string(&descriptor)
                         .map_err(|_| AgentFailure::InvalidInput)?;
@@ -235,10 +255,16 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                     Ok(descriptor)
                 }
                 .await;
-                self.finish_transaction(transaction, result).await
-            }
-            .await;
-            self.after_access(result)
+            let result = result.map_err(|failure| {
+                if prior_command {
+                    CommandFailure::Indeterminate(failure)
+                } else if replay_checked {
+                    CommandFailure::NotApplied(failure)
+                } else {
+                    CommandFailure::Indeterminate(failure)
+                }
+            });
+            self.finish_command_transaction(transaction, result).await
         })
     }
 
@@ -265,7 +291,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
         actor: &'a OwnerActor,
         command_id: CommandId,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<BindingReplacementReceipt>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertCommandLookup<BindingReplacementReceipt>, AgentFailure>> {
         Box::pin(async move {
             self.authorize(actor)?;
             if !command_id.is_valid() {
@@ -273,8 +299,23 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
             }
             let result = async {
                 let connection = self.vault.connection()?;
-                self.read_replacement_by_command(&connection, command_id)
-                    .await
+                let Some(admission) =
+                    read_expert_command_admission_on(&connection, command_id).await?
+                else {
+                    return Ok(ExpertCommandLookup::Absent);
+                };
+                if admission.family != EXPERT_COMMAND_REPLACEMENT {
+                    return Ok(ExpertCommandLookup::Occupied);
+                }
+                if admission.person_id != actor.person_id || admission.device_id != actor.device_id
+                {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                let receipt = self
+                    .read_replacement_by_command(&connection, command_id)
+                    .await?
+                    .ok_or(AgentFailure::VaultUnavailable)?;
+                Ok(ExpertCommandLookup::Existing(receipt))
             }
             .await;
             self.after_access(result)
@@ -312,24 +353,34 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
         &'a self,
         replacement: ReviewedBindingReplacement,
         _scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReplacementReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<BindingReplacementReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            self.authorize(&replacement.registry.actor)?;
+            self.authorize(&replacement.registry.actor)
+                .map_err(CommandFailure::NotAdmitted)?;
+            let command_id = replacement.registry.command_id;
+            if !command_id.is_valid() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+            }
+            let mut connection = self
+                .vault
+                .connection()
+                .map_err(CommandFailure::Indeterminate)?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .await
+                .map_err(|error| {
+                    CommandFailure::Indeterminate(
+                        self.vault.registry_transaction_start_error(error),
+                    )
+                })?;
+            let mut prior_command = false;
+            let mut replay_checked = false;
             let result = async {
-                let command_id = replacement.registry.command_id;
-                if !command_id.is_valid() || replacement.registry.request_digest == [0; 32] {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                let mut connection = self.vault.connection()?;
-                let transaction = connection
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .await
-                    .map_err(|error| self.vault.registry_transaction_start_error(error))?;
-                let result = async {
                     ensure_expert_binding_tables_on(&transaction).await?;
                     if let Some(admission) =
                         read_expert_command_admission_on(&transaction, command_id).await?
                     {
+                        prior_command = true;
                         if admission.family != EXPERT_COMMAND_REPLACEMENT
                             || admission.person_id != replacement.registry.actor.person_id
                             || admission.device_id != replacement.registry.actor.device_id
@@ -357,6 +408,10 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                             &receipt.registry.snapshot,
                         )?;
                         return Ok(receipt);
+                    }
+                    replay_checked = true;
+                    if replacement.registry.request_digest == [0; 32] {
+                        return Err(AgentFailure::InvalidInput);
                     }
 
                     if count_expert_command_admissions_on(&transaction).await?
@@ -494,10 +549,16 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                     Ok(receipt)
                 }
                 .await;
-                self.finish_transaction(transaction, result).await
-            }
-            .await;
-            self.after_access(result)
+            let result = result.map_err(|failure| {
+                if prior_command {
+                    CommandFailure::Indeterminate(failure)
+                } else if replay_checked {
+                    CommandFailure::NotApplied(failure)
+                } else {
+                    CommandFailure::Indeterminate(failure)
+                }
+            });
+            self.finish_command_transaction(transaction, result).await
         })
     }
 }

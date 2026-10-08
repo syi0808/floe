@@ -2,7 +2,7 @@
 
 use crate::{StoreError, StoreErrorCode, TursoStore};
 use floe_day::{CalendarMirror, Event, Note, Task, TimelineItem};
-use floe_kernel::PersonId;
+use floe_kernel::{CommandFailure, PersonId};
 use turso::Connection;
 
 impl TursoStore {
@@ -22,8 +22,10 @@ impl floe_day::DayRepository for TursoStore {
         &'a self,
         command: floe_day::DayMutationCommand,
         fence: &'a floe_day::DayWriteFence,
-    ) -> floe_execution::BoxFuture<'a, Result<floe_day::DayMutationResult, floe_day::DayError>>
-    {
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_day::DayMutationResult, CommandFailure<floe_day::DayError>>,
+    > {
         Box::pin(async move { super::day_mutation::mutate(self, command, fence).await })
     }
     fn collect_action<'a>(

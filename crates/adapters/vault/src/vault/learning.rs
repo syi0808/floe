@@ -9,6 +9,7 @@ use floe_agent_contract::{
     RunId,
 };
 use floe_conversation::{AgentOutcome, AgentSession};
+use floe_kernel::CommandFailure;
 use floe_knowledge::{
     EvidenceReader, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
     KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeOperation,
@@ -314,29 +315,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         actor: &OwnerActor,
         request: MemoryDecisionRequest,
         scope: &ExecutionScope,
-    ) -> Result<KnowledgeDecisionResult, AgentFailure> {
-        self.validate_learning_actor(actor)?;
-        self.check_learning_scope(scope)?;
-        if !request.command_id.is_valid() || request.candidate_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
+    ) -> Result<KnowledgeDecisionResult, CommandFailure<AgentFailure>> {
+        self.validate_learning_actor(actor)
+            .map_err(CommandFailure::NotAdmitted)?;
+        self.check_learning_scope(scope)
+            .map_err(CommandFailure::NotAdmitted)?;
+        if !request.command_id.is_valid() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
         }
-        let mut connection = self.connection()?;
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(database_failure)?;
+            .map_err(|error| CommandFailure::Indeterminate(database_failure(error)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
-            if let Some(receipt) = knowledge_decision_receipt(
+            let stored = match knowledge_decision_receipt(
                 &transaction,
                 request.command_id,
                 self.person_id,
                 &actor.device_id,
-            ).await? {
+            )
+            .await
+            {
+                Ok(stored) => {
+                    replay_checked = true;
+                    stored
+                }
+                Err(failure) => return Err(failure),
+            };
+            if let Some(receipt) = stored {
+                prior_command = true;
                 if receipt.candidate_id != request.candidate_id || receipt.kind != request.kind {
                     return Err(AgentFailure::Conflict);
                 }
                 self.check_learning_scope(scope)?;
                 return Ok(receipt.result);
+            }
+            if request.candidate_id.is_nil() {
+                return Err(AgentFailure::InvalidInput);
             }
             let mut rows = transaction.query(
                 "SELECT id, person_id, idempotency_key, kind, state, target_id, created_at, payload FROM knowledge_candidates WHERE id = ? AND person_id = ?",
@@ -419,7 +437,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.check_learning_scope(scope)?;
             Ok(decision_result)
         }.await;
-        finish_transaction(self, transaction, result).await
+        finish_command_transaction(self, transaction, result, replay_checked, prior_command).await
     }
 
     pub(crate) async fn learner_discovery_sessions(
@@ -1147,6 +1165,66 @@ async fn finish_transaction<Keys: VaultKeyProvider, T>(
                 vault.unavailable.store(true, Ordering::Release);
             }
             Err(failure)
+        }
+    }
+}
+
+async fn finish_command_transaction<Keys: VaultKeyProvider, T>(
+    vault: &EncryptedAgentVault<Keys>,
+    transaction: turso::transaction::Transaction<'_>,
+    result: Result<T, AgentFailure>,
+    replay_checked: bool,
+    prior_command: bool,
+) -> Result<T, CommandFailure<AgentFailure>> {
+    match result {
+        Ok(value) => {
+            if let Err(failure) = vault.check_access() {
+                if transaction.rollback().await.is_err() {
+                    vault.unavailable.store(true, Ordering::Release);
+                    return Err(CommandFailure::Indeterminate(
+                        AgentFailure::VaultUnavailable,
+                    ));
+                }
+                return Err(if prior_command {
+                    CommandFailure::Admitted(failure)
+                } else {
+                    CommandFailure::NotApplied(failure)
+                });
+            }
+            if transaction.commit().await.is_err() {
+                vault.unavailable.store(true, Ordering::Release);
+                return Err(if prior_command {
+                    CommandFailure::Admitted(AgentFailure::StorageUnavailable)
+                } else {
+                    CommandFailure::Indeterminate(AgentFailure::StorageUnavailable)
+                });
+            }
+            if let Err(failure) = vault.check_access() {
+                vault.unavailable.store(true, Ordering::Release);
+                return Err(CommandFailure::Admitted(failure));
+            }
+            Ok(value)
+        }
+        Err(failure) => {
+            if transaction.rollback().await.is_err() {
+                vault.unavailable.store(true, Ordering::Release);
+                return Err(CommandFailure::Indeterminate(
+                    AgentFailure::VaultUnavailable,
+                ));
+            }
+            if matches!(
+                failure,
+                AgentFailure::StorageUnavailable
+                    | AgentFailure::VaultUnavailable
+                    | AgentFailure::UnsupportedVersion
+            ) {
+                vault.unavailable.store(true, Ordering::Release);
+            }
+            Err(if prior_command || !replay_checked {
+                CommandFailure::Indeterminate(failure)
+            } else {
+                CommandFailure::NotApplied(failure)
+            })
         }
     }
 }

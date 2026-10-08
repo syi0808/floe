@@ -6,6 +6,7 @@ use crate::{
 };
 use floe_execution::budget::{BudgetConfig, BudgetLedger, ModelUsage};
 use floe_execution::{CancelReason, Cancellation, ExecutionScope};
+use floe_kernel::CommandFailure;
 use floe_kernel::{OwnerActor, PersonId};
 use std::{
     collections::HashMap,
@@ -122,16 +123,18 @@ impl DayService {
         command_id: Uuid,
         query: DayQuery,
         scope: &ExecutionScope,
-    ) -> Result<DayRefreshSnapshot, DayError> {
-        self.admit_actor(actor)?;
-        check_scope(scope)?;
+    ) -> Result<DayRefreshSnapshot, CommandFailure<DayError>> {
+        self.admit_actor(actor)
+            .map_err(CommandFailure::NotAdmitted)?;
+        check_scope(scope).map_err(CommandFailure::NotAdmitted)?;
         if command_id.is_nil() {
-            return Err(DayError::validation("invalid refresh command"));
+            return Err(CommandFailure::NotApplied(DayError::validation(
+                "invalid refresh command",
+            )));
         }
-        let intent_digest =
-            query.refresh_intent_digest(actor.person_id, &actor.device_id, command_id)?;
         let _admission = self.lifecycle.admission.lock().await;
-        self.admit_actor(actor)?;
+        self.admit_actor(actor)
+            .map_err(CommandFailure::NotAdmitted)?;
         let admitted = self
             .repository
             .admit_refresh(RefreshAdmission {
@@ -139,7 +142,6 @@ impl DayService {
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
                 command_id,
-                intent_digest,
                 query,
                 executor_generation: self.lifecycle.generation,
                 admitted_at: self.clock.now(),
@@ -147,16 +149,19 @@ impl DayService {
             .await?;
         let record = match admitted {
             RefreshAdmissionResult::Existing(record) => {
-                record.validate()?;
+                record.validate().map_err(CommandFailure::Admitted)?;
                 return Ok(record.snapshot());
             }
             RefreshAdmissionResult::New(record) => record,
         };
-        record.validate()?;
+        record.validate().map_err(CommandFailure::Admitted)?;
         if self.admit_actor(actor).is_err() {
             self.finish_failure(&record, DayRefreshFailure::HostInterrupted, true)
-                .await?;
-            return Err(DayError::storage("Day host closed during admission"));
+                .await
+                .map_err(CommandFailure::Admitted)?;
+            return Err(CommandFailure::Admitted(DayError::storage(
+                "Day host closed during admission",
+            )));
         }
         let owned_scope = ExecutionScope::root(
             self.lifecycle.cancellation.child_scope(),
@@ -182,11 +187,9 @@ impl DayService {
                     .await;
             }
         });
-        let mut tasks = self
-            .lifecycle
-            .tasks
-            .lock()
-            .map_err(|_| DayError::storage("Day task registry unavailable"))?;
+        let mut tasks = self.lifecycle.tasks.lock().map_err(|_| {
+            CommandFailure::Admitted(DayError::storage("Day task registry unavailable"))
+        })?;
         tasks.retain(|_, task| !task.is_finished());
         tasks.insert(record.operation_id, handle);
         Ok(record.snapshot())

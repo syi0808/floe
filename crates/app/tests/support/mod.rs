@@ -951,7 +951,8 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
                         assignment.binding_revision,
                         &scope(),
                     )
-                    .await?;
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
                 let candidate = review
                     .candidate_refs_and_labels
                     .iter()
@@ -971,7 +972,8 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
                         vec![candidate.candidate_ref],
                         &scope(),
                     )
-                    .await?;
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
                 Ok::<(), AgentFailure>(())
             })
             .expect("bind Schedule Expert through the real Experts owner")

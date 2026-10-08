@@ -134,252 +134,281 @@ impl ActionsService {
         command_id: Uuid,
         intent: ActionIntent,
         scope: &ExecutionScope,
-    ) -> Result<ActionSnapshot, AgentFailure> {
-        self.admit_actor(actor, scope)?;
+    ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
+        self.admit_actor(actor, scope)
+            .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
         if command_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
+            return Err(floe_kernel::CommandFailure::NotApplied(
+                AgentFailure::InvalidInput,
+            ));
         }
         let request_digest = action_digest(
             b"floe.actions.submit.v1\0",
             &(actor.person_id, &actor.device_id, command_id, &intent),
-        )?;
+        )
+        .map_err(floe_kernel::CommandFailure::NotApplied)?;
         if let Some(record) = self
             .repository
             .find_admission(actor.person_id, command_id, request_digest)
-            .await?
+            .await
+            .map_err(|error| {
+                floe_kernel::CommandFailure::Indeterminate(AgentFailure::from(error))
+            })?
         {
-            self.validate_record_actor(actor, &record)?;
+            self.validate_record_actor(actor, &record)
+                .map_err(floe_kernel::CommandFailure::Admitted)?;
             if record.state == ActionState::Approved {
-                self.spawn(record.id, false, scope)?;
+                self.spawn(record.id, false, scope)
+                    .map_err(floe_kernel::CommandFailure::Admitted)?;
             }
-            return self.project(&record);
+            return self
+                .project(&record)
+                .map_err(floe_kernel::CommandFailure::Admitted);
         }
-        intent.validate()?;
-        let now = self.clock.now();
-        let authority = self.repository.read_authority(actor.person_id).await?;
-        let (effect, origin, dependency, expires_at) = match intent {
-            ActionIntent::DirectCreate {
-                destination_ref,
-                title,
-                schedule,
-            } => {
-                let destination = self
-                    .resolve_destination(actor, destination_ref, scope)
-                    .await?;
-                let effect = CalendarEffect::Create {
-                    destination,
+        let admission = async {
+            intent.validate()?;
+            let now = self.clock.now();
+            let authority = self.repository.read_authority(actor.person_id).await?;
+            let (effect, origin, dependency, expires_at) = match intent {
+                ActionIntent::DirectCreate {
+                    destination_ref,
                     title,
                     schedule,
-                };
-                effect.validate(actor.person_id)?;
-                (
-                    effect,
-                    ActionOrigin::Direct {
-                        command_id,
-                        actor_device_id: actor.device_id.clone(),
-                    },
-                    None,
-                    now + chrono::Duration::minutes(15),
-                )
-            }
-            ActionIntent::DirectUpdate {
-                event_ref,
-                expected_revision,
-                title,
-                schedule,
-            } => {
-                let original = self
-                    .day
-                    .calendar_event(actor, event_ref, scope)
-                    .await
-                    .map_err(super::owner::day_failure)?
-                    .ok_or(AgentFailure::NotFound)?;
-                if original.revision != expected_revision {
-                    return Err(AgentFailure::Conflict);
+                } => {
+                    let destination = self
+                        .resolve_destination(actor, destination_ref, scope)
+                        .await?;
+                    let effect = CalendarEffect::Create {
+                        destination,
+                        title,
+                        schedule,
+                    };
+                    effect.validate(actor.person_id)?;
+                    (
+                        effect,
+                        ActionOrigin::Direct {
+                            command_id,
+                            actor_device_id: actor.device_id.clone(),
+                        },
+                        None,
+                        now + chrono::Duration::minutes(15),
+                    )
                 }
-                let target = CalendarTarget { original };
-                let source = target.source()?;
-                let destination = self
-                    .target_destination(actor, &source.connection_id, &source.calendar_id, scope)
-                    .await?;
-                let effect = CalendarEffect::Update {
-                    destination,
-                    target,
+                ActionIntent::DirectUpdate {
+                    event_ref,
+                    expected_revision,
                     title,
                     schedule,
-                };
-                effect.validate(actor.person_id)?;
-                (
-                    effect,
-                    ActionOrigin::Direct {
-                        command_id,
-                        actor_device_id: actor.device_id.clone(),
-                    },
-                    None,
-                    now + chrono::Duration::minutes(15),
-                )
-            }
-            ActionIntent::DirectDelete {
-                event_ref,
-                expected_revision,
-            } => {
-                let original = self
-                    .day
-                    .calendar_event(actor, event_ref, scope)
-                    .await
-                    .map_err(super::owner::day_failure)?
-                    .ok_or(AgentFailure::NotFound)?;
-                if original.revision != expected_revision {
-                    return Err(AgentFailure::Conflict);
+                } => {
+                    let original = self
+                        .day
+                        .calendar_event(actor, event_ref, scope)
+                        .await
+                        .map_err(super::owner::day_failure)?
+                        .ok_or(AgentFailure::NotFound)?;
+                    if original.revision != expected_revision {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    let target = CalendarTarget { original };
+                    let source = target.source()?;
+                    let destination = self
+                        .target_destination(
+                            actor,
+                            &source.connection_id,
+                            &source.calendar_id,
+                            scope,
+                        )
+                        .await?;
+                    let effect = CalendarEffect::Update {
+                        destination,
+                        target,
+                        title,
+                        schedule,
+                    };
+                    effect.validate(actor.person_id)?;
+                    (
+                        effect,
+                        ActionOrigin::Direct {
+                            command_id,
+                            actor_device_id: actor.device_id.clone(),
+                        },
+                        None,
+                        now + chrono::Duration::minutes(15),
+                    )
                 }
-                let target = CalendarTarget { original };
-                let source = target.source()?;
-                let destination = self
-                    .target_destination(actor, &source.connection_id, &source.calendar_id, scope)
-                    .await?;
-                let effect = CalendarEffect::Delete {
-                    destination,
-                    target,
-                };
-                effect.validate(actor.person_id)?;
-                (
-                    effect,
-                    ActionOrigin::Direct {
-                        command_id,
-                        actor_device_id: actor.device_id.clone(),
-                    },
-                    None,
-                    now + chrono::Duration::minutes(15),
-                )
-            }
-            ActionIntent::ExpertProposal {
-                receipt,
-                artifact_id,
-                destination_ref,
-            } => {
-                let evidence = self
-                    .proposal_evidence(actor, &receipt, artifact_id, scope)
-                    .await?;
-                let destination = self
-                    .resolve_destination(actor, destination_ref, scope)
-                    .await?;
-                if !Self::proposal_matches_destination(&evidence, &destination) {
-                    return Err(AgentFailure::PolicyDenied);
+                ActionIntent::DirectDelete {
+                    event_ref,
+                    expected_revision,
+                } => {
+                    let original = self
+                        .day
+                        .calendar_event(actor, event_ref, scope)
+                        .await
+                        .map_err(super::owner::day_failure)?
+                        .ok_or(AgentFailure::NotFound)?;
+                    if original.revision != expected_revision {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    let target = CalendarTarget { original };
+                    let source = target.source()?;
+                    let destination = self
+                        .target_destination(
+                            actor,
+                            &source.connection_id,
+                            &source.calendar_id,
+                            scope,
+                        )
+                        .await?;
+                    let effect = CalendarEffect::Delete {
+                        destination,
+                        target,
+                    };
+                    effect.validate(actor.person_id)?;
+                    (
+                        effect,
+                        ActionOrigin::Direct {
+                            command_id,
+                            actor_device_id: actor.device_id.clone(),
+                        },
+                        None,
+                        now + chrono::Duration::minutes(15),
+                    )
                 }
-                let proposal = &evidence.proposal;
-                let (schedule, expiry) = Self::proposal_schedule(actor, &evidence, now)?;
-                let effect = CalendarEffect::Create {
-                    destination,
-                    title: super::EXPERT_PROPOSAL_TITLE.to_owned(),
-                    // The verified proposal carries absolute instants, not a local
-                    // wall-time recurrence. UTC preserves those instants without
-                    // asking Flutter to invent a timezone for hidden evidence.
-                    schedule,
-                };
-                let origin = ActionOrigin::Expert {
-                    task_id: proposal.task_id,
-                    invocation_id: evidence.invocation_id,
-                    package: proposal.package.clone(),
-                    installation_id: evidence.installation_id,
-                    assignment_id: evidence.assignment_id,
-                    definition_revision: evidence.definition_revision,
-                    evidence_ref: receipt,
+                ActionIntent::ExpertProposal {
+                    receipt,
                     artifact_id,
-                };
-                (effect, origin, Some(evidence.dependency), expiry)
-            }
-        };
-        if expires_at <= now {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        effect.validate(actor.person_id)?;
-        let source = self.observe_source(actor, &effect).await?;
-        self.current_events(actor, &effect, scope).await?;
-        if let Some(dependency) = &dependency {
-            if !Self::dependency_matches_fence(dependency, &source) {
+                    destination_ref,
+                } => {
+                    let evidence = self
+                        .proposal_evidence(actor, &receipt, artifact_id, scope)
+                        .await?;
+                    let destination = self
+                        .resolve_destination(actor, destination_ref, scope)
+                        .await?;
+                    if !Self::proposal_matches_destination(&evidence, &destination) {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    let proposal = &evidence.proposal;
+                    let (schedule, expiry) = Self::proposal_schedule(actor, &evidence, now)?;
+                    let effect = CalendarEffect::Create {
+                        destination,
+                        title: super::EXPERT_PROPOSAL_TITLE.to_owned(),
+                        // The verified proposal carries absolute instants, not a local
+                        // wall-time recurrence. UTC preserves those instants without
+                        // asking Flutter to invent a timezone for hidden evidence.
+                        schedule,
+                    };
+                    let origin = ActionOrigin::Expert {
+                        task_id: proposal.task_id,
+                        invocation_id: evidence.invocation_id,
+                        package: proposal.package.clone(),
+                        installation_id: evidence.installation_id,
+                        assignment_id: evidence.assignment_id,
+                        definition_revision: evidence.definition_revision,
+                        evidence_ref: receipt,
+                        artifact_id,
+                    };
+                    (effect, origin, Some(evidence.dependency), expiry)
+                }
+            };
+            if expires_at <= now {
                 return Err(AgentFailure::PolicyDenied);
             }
-        }
-        // One admitted Expert artifact can name only one external execution.
-        // A new product command cannot turn a retained proposal into a retry.
-        let identity_seed = origin.identity_seed(actor.person_id)?;
-        let id = action_uuid(b"floe.actions.action.v1\0", actor.person_id, identity_seed);
-        let execution_id = action_uuid(
-            b"floe.actions.execution.v1\0",
-            actor.person_id,
-            identity_seed,
-        );
-        let effect_digest = effect.digest()?;
-        let review = ActionReviewRef {
-            id: action_uuid(b"floe.actions.review.v1\0", actor.person_id, identity_seed),
-            action_id: id,
-            effect_digest,
-            source_digest: source.digest()?,
-            authority_revision: authority.revision,
-            expires_at,
-        };
-        let (state, authorization) = match &origin {
-            ActionOrigin::Direct { .. } => (
-                ActionState::Approved,
-                Some(ActionAuthorization::DirectInstruction {
-                    command_id,
-                    person_id: actor.person_id,
-                    device_id: actor.device_id.clone(),
-                    effect_digest,
-                    authority_revision: authority.revision,
-                    expires_at,
-                }),
-            ),
-            ActionOrigin::Expert { .. } => match authority.calendar_create {
-                ActionAuthorityMode::Allow => (
+            effect.validate(actor.person_id)?;
+            let source = self.observe_source(actor, &effect).await?;
+            self.current_events(actor, &effect, scope).await?;
+            if let Some(dependency) = &dependency {
+                if !Self::dependency_matches_fence(dependency, &source) {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
+            // One admitted Expert artifact can name only one external execution.
+            // A new product command cannot turn a retained proposal into a retry.
+            let identity_seed = origin.identity_seed(actor.person_id)?;
+            let id = action_uuid(b"floe.actions.action.v1\0", actor.person_id, identity_seed);
+            let execution_id = action_uuid(
+                b"floe.actions.execution.v1\0",
+                actor.person_id,
+                identity_seed,
+            );
+            let effect_digest = effect.digest()?;
+            let review = ActionReviewRef {
+                id: action_uuid(b"floe.actions.review.v1\0", actor.person_id, identity_seed),
+                action_id: id,
+                effect_digest,
+                source_digest: source.digest()?,
+                authority_revision: authority.revision,
+                expires_at,
+            };
+            let (state, authorization) = match &origin {
+                ActionOrigin::Direct { .. } => (
                     ActionState::Approved,
-                    Some(ActionAuthorization::StandingPolicy {
+                    Some(ActionAuthorization::DirectInstruction {
+                        command_id,
                         person_id: actor.person_id,
+                        device_id: actor.device_id.clone(),
                         effect_digest,
                         authority_revision: authority.revision,
                         expires_at,
                     }),
                 ),
-                ActionAuthorityMode::Ask => (ActionState::PendingReview, None),
-                ActionAuthorityMode::Deny => (
-                    ActionState::Blocked {
-                        reason: ActionBlockedReason::PolicyDenied,
-                    },
-                    None,
-                ),
-            },
-        };
-        let record = ActionRecord {
-            id,
-            person_id: actor.person_id,
-            device_id: actor.device_id.clone(),
-            revision: 1,
-            origin,
-            effect,
-            effect_digest,
-            execution_id,
-            source,
-            dependency,
-            review,
-            authorization,
-            created_at: now,
-            expires_at,
-            state,
-            execution: None,
-            collection: None,
-        };
-        let record = self
-            .repository
-            .admit(ActionAdmission {
+                ActionOrigin::Expert { .. } => match authority.calendar_create {
+                    ActionAuthorityMode::Allow => (
+                        ActionState::Approved,
+                        Some(ActionAuthorization::StandingPolicy {
+                            person_id: actor.person_id,
+                            effect_digest,
+                            authority_revision: authority.revision,
+                            expires_at,
+                        }),
+                    ),
+                    ActionAuthorityMode::Ask => (ActionState::PendingReview, None),
+                    ActionAuthorityMode::Deny => (
+                        ActionState::Blocked {
+                            reason: ActionBlockedReason::PolicyDenied,
+                        },
+                        None,
+                    ),
+                },
+            };
+            let record = ActionRecord {
+                id,
+                person_id: actor.person_id,
+                device_id: actor.device_id.clone(),
+                revision: 1,
+                origin,
+                effect,
+                effect_digest,
+                execution_id,
+                source,
+                dependency,
+                review,
+                authorization,
+                created_at: now,
+                expires_at,
+                state,
+                execution: None,
+                collection: None,
+            };
+            Ok::<_, AgentFailure>(ActionAdmission {
                 command_id,
                 request_digest,
                 record,
             })
-            .await?
+        }
+        .await
+        .map_err(floe_kernel::CommandFailure::NotApplied)?;
+        let record = self
+            .repository
+            .admit(admission)
+            .await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))?
             .record;
         if record.state == ActionState::Approved {
-            self.spawn(record.id, false, scope)?;
+            self.spawn(record.id, false, scope)
+                .map_err(floe_kernel::CommandFailure::Admitted)?;
         }
         self.project(&record)
+            .map_err(floe_kernel::CommandFailure::Admitted)
     }
 }

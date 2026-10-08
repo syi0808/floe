@@ -1,4 +1,5 @@
 use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor};
+use floe_kernel::CommandFailure;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -30,10 +31,10 @@ pub trait RegistryRepository: Send + Sync {
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Option<RegistryCommitReceipt>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::ExpertCommandLookup<RegistryCommitReceipt>, AgentFailure>>;
     fn commit<'a>(
         &'a self,
         commit: RegistryCommit,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<RegistryCommitReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<RegistryCommitReceipt, CommandFailure<AgentFailure>>>;
 }

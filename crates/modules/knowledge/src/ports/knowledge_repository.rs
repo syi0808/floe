@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use floe_agent_contract::{AgentFailure, BoxFuture, CommandId, ExecutionScope, OwnerActor};
+use floe_kernel::CommandFailure;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -54,7 +55,7 @@ pub trait KnowledgeRepository: Send + Sync {
         actor: &'a OwnerActor,
         request: MemoryDecisionRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<crate::KnowledgeDecisionResult, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::KnowledgeDecisionResult, CommandFailure<AgentFailure>>>;
     fn stage<'a>(
         &'a self,
         request: MemoryStageRequest,

@@ -358,22 +358,18 @@ where
             mode: prepared.mode,
             retry_of: None,
         };
+        let child_command_id = resume_command_id(origin)?;
+        let _command = self.lock_command(child_command_id).await?;
         match self
-            .submit(
-                actor,
-                resume_command_id(origin)?,
-                intent,
-                prepared.session,
-                scope,
-            )
+            .submit(actor, child_command_id, intent, prepared.session, scope)
             .await
         {
             Ok(_) => Ok(false),
-            Err(AgentFailure::Conflict) => Ok(repository
+            Err(floe_kernel::CommandFailure::NotApplied(AgentFailure::Conflict)) => Ok(repository
                 .reconcile_resume_request(actor, origin)
                 .await?
                 .is_some()),
-            Err(failure) => Err(failure),
+            Err(failure) => Err(failure.into_failure()),
         }
     }
 }

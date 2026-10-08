@@ -1,5 +1,6 @@
 use super::database_failure;
 use floe_experts::{AgentRegistry, RegistrySnapshot};
+use floe_kernel::CommandFailure;
 
 use super::*;
 
@@ -68,6 +69,51 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     AgentFailure::StorageUnavailable
                         | AgentFailure::VaultUnavailable
                         | AgentFailure::UnsupportedVersion
+                ) {
+                    self.unavailable.store(true, Ordering::Release);
+                }
+                Err(failure)
+            }
+        }
+    }
+
+    /// Finish a durable product command while preserving its owner's
+    /// transaction classification. A failed commit is always uncertain; a
+    /// successfully committed receipt remains admitted even if the final
+    /// access fence fails.
+    pub(crate) async fn finish_registry_command_transaction<T>(
+        &self,
+        transaction: turso::transaction::Transaction<'_>,
+        result: Result<T, CommandFailure<AgentFailure>>,
+    ) -> Result<T, CommandFailure<AgentFailure>> {
+        match result {
+            Ok(value) => {
+                if transaction.commit().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    Err(CommandFailure::Indeterminate(
+                        AgentFailure::StorageUnavailable,
+                    ))
+                } else if let Err(failure) = self.check_access() {
+                    self.unavailable.store(true, Ordering::Release);
+                    Err(CommandFailure::Admitted(failure))
+                } else {
+                    Ok(value)
+                }
+            }
+            Err(failure) => {
+                if transaction.rollback().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    return Err(CommandFailure::Indeterminate(
+                        AgentFailure::VaultUnavailable,
+                    ));
+                }
+                if matches!(
+                    failure,
+                    CommandFailure::NotApplied(
+                        AgentFailure::StorageUnavailable
+                            | AgentFailure::VaultUnavailable
+                            | AgentFailure::UnsupportedVersion
+                    ) | CommandFailure::Indeterminate(_)
                 ) {
                     self.unavailable.store(true, Ordering::Release);
                 }

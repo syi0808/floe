@@ -135,11 +135,8 @@ fn route_command(
                             service
                                 .start_turn(&actor, turn, &scope)
                                 .await
-                                .map_err(|reason| {
-                                    command_failure(
-                                        ProductCommandDisposition::Indeterminate,
-                                        ProductFailure::Conversation(reason),
-                                    )
+                                .map_err(|failure| {
+                                    owner_command_failure(failure, ProductFailure::Conversation)
                                 })?;
                         ConversationCommandOutcome::Turn(receipt)
                     }
@@ -147,11 +144,8 @@ fn route_command(
                         let receipt = service
                             .cancel_run(&actor, command_id, run_id, &scope)
                             .await
-                            .map_err(|reason| {
-                                command_failure(
-                                    ProductCommandDisposition::Indeterminate,
-                                    ProductFailure::Conversation(reason),
-                                )
+                            .map_err(|failure| {
+                                owner_command_failure(failure, ProductFailure::Conversation)
                             })?;
                         ConversationCommandOutcome::CancelRun(receipt)
                     }
@@ -176,11 +170,8 @@ fn route_command(
                                 &scope,
                             )
                             .await
-                            .map_err(|reason| {
-                                command_failure(
-                                    ProductCommandDisposition::Indeterminate,
-                                    ProductFailure::Conversation(reason),
-                                )
+                            .map_err(|failure| {
+                                owner_command_failure(failure, ProductFailure::Conversation)
                             })?;
                         ConversationCommandOutcome::Interaction(result)
                     }
@@ -201,11 +192,8 @@ fn route_command(
                                 &scope,
                             )
                             .await
-                            .map_err(|reason| {
-                                command_failure(
-                                    ProductCommandDisposition::Indeterminate,
-                                    ProductFailure::Conversation(reason),
-                                )
+                            .map_err(|failure| {
+                                owner_command_failure(failure, ProductFailure::Conversation)
                             })?;
                         ConversationCommandOutcome::InteractionRefresh(result)
                     }
@@ -443,10 +431,9 @@ fn route_command(
                         .map(DayCommandOutcome::Mutation),
                 };
                 result.map(ProductCommandOutcome::Day).map_err(|failure| {
-                    command_failure(
-                        ProductCommandDisposition::Indeterminate,
-                        ProductFailure::Day(crate::core::day_error(failure)),
-                    )
+                    owner_command_failure(failure, |failure| {
+                        ProductFailure::Day(crate::core::day_error(failure))
+                    })
                 })
             })
         }
@@ -515,12 +502,7 @@ fn route_command(
                 };
                 outcome
                     .map(|value| ProductCommandOutcome::Actions(value))
-                    .map_err(|reason| {
-                        command_failure(
-                            ProductCommandDisposition::Indeterminate,
-                            ProductFailure::Actions(reason),
-                        )
-                    })
+                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Actions))
             })
         }
         ProductCommand::Experts(command) => {
@@ -586,12 +568,7 @@ fn route_command(
                 };
                 outcome
                     .map(ProductCommandOutcome::Experts)
-                    .map_err(|reason| {
-                        command_failure(
-                            ProductCommandDisposition::Indeterminate,
-                            ProductFailure::Experts(reason),
-                        )
-                    })
+                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Experts))
             })
         }
         ProductCommand::Memory(command) => {
@@ -617,12 +594,7 @@ fn route_command(
                 };
                 outcome
                     .map(ProductCommandOutcome::Memory)
-                    .map_err(|reason| {
-                        command_failure(
-                            ProductCommandDisposition::Indeterminate,
-                            ProductFailure::Memory(reason),
-                        )
-                    })
+                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Memory))
             })
         }
     }
@@ -881,6 +853,27 @@ fn command_failure(
         disposition,
         failure,
     }
+}
+
+fn owner_command_failure<E>(
+    failure: floe_kernel::CommandFailure<E>,
+    map: impl FnOnce(E) -> ProductFailure,
+) -> ProductCommandFailure {
+    let (disposition, reason) = match failure {
+        floe_kernel::CommandFailure::NotAdmitted(reason) => {
+            (ProductCommandDisposition::NotAdmitted, reason)
+        }
+        floe_kernel::CommandFailure::NotApplied(reason) => {
+            (ProductCommandDisposition::NotApplied, reason)
+        }
+        floe_kernel::CommandFailure::Admitted(reason) => {
+            (ProductCommandDisposition::Admitted, reason)
+        }
+        floe_kernel::CommandFailure::Indeterminate(reason) => {
+            (ProductCommandDisposition::Indeterminate, reason)
+        }
+    };
+    command_failure(disposition, map(reason))
 }
 
 #[cfg(test)]

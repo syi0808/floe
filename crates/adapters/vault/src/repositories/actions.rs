@@ -9,6 +9,7 @@ use floe_actions::{
     PreDispatchStop, RecoveryPage,
 };
 use floe_execution::BoxFuture;
+use floe_kernel::CommandFailure;
 use floe_kernel::PersonId;
 use uuid::Uuid;
 
@@ -130,21 +131,21 @@ impl<Keys: VaultKeyProvider> ActionsRepository for VaultActionsRepository<Keys> 
     fn admit<'a>(
         &'a self,
         admission: ActionAdmission,
-    ) -> BoxFuture<'a, Result<AdmittedAction, ActionStoreError>> {
+    ) -> BoxFuture<'a, Result<AdmittedAction, CommandFailure<ActionStoreError>>> {
         Box::pin(async move { self.vault.actions_admit(admission).await })
     }
 
     fn record_decision<'a>(
         &'a self,
         decision: ActionDecision,
-    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+    ) -> BoxFuture<'a, Result<ActionRecord, CommandFailure<ActionStoreError>>> {
         Box::pin(async move { self.vault.actions_record_decision(decision).await })
     }
 
     fn admit_reconciliation<'a>(
         &'a self,
         command: ActionReconciliation,
-    ) -> BoxFuture<'a, Result<ActionRecord, ActionStoreError>> {
+    ) -> BoxFuture<'a, Result<ActionRecord, CommandFailure<ActionStoreError>>> {
         Box::pin(async move { self.vault.actions_admit_reconciliation(command).await })
     }
 
@@ -211,7 +212,7 @@ impl<Keys: VaultKeyProvider> ActionsRepository for VaultActionsRepository<Keys> 
     fn compare_and_set_authority<'a>(
         &'a self,
         change: AuthorityChange,
-    ) -> BoxFuture<'a, Result<ActionsAuthority, ActionStoreError>> {
+    ) -> BoxFuture<'a, Result<ActionsAuthority, CommandFailure<ActionStoreError>>> {
         Box::pin(async move { self.vault.actions_compare_and_set_authority(change).await })
     }
 }

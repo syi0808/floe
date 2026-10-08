@@ -1,10 +1,11 @@
 //! One physical transaction for a Day-owned manual transition and exact replay.
-use super::day_refresh::{finish_transaction, mirror_on, require_executor};
+use super::day_refresh::{finish_command_transaction, mirror_on, require_executor};
 use crate::TursoStore;
 use floe_day::{
     Capture, DayError, DayMutationCommand, DayMutationPrior, DayMutationResult, DayMutationTarget,
     DomainRef, Event, Note, Task, TimelineItem,
 };
+use floe_kernel::CommandFailure;
 use serde::{Deserialize, Serialize};
 use turso::Connection;
 
@@ -26,29 +27,44 @@ pub(super) async fn mutate(
     store: &TursoStore,
     command: DayMutationCommand,
     fence: &floe_day::DayWriteFence,
-) -> Result<DayMutationResult, DayError> {
-    let intent_digest = command.intent_digest()?;
-    let connection = store.connection().await.map_err(storage)?;
+) -> Result<DayMutationResult, CommandFailure<DayError>> {
+    if command.request.command_id.is_nil() {
+        return Err(CommandFailure::NotApplied(DayError::validation(
+            "invalid Day command identity",
+        )));
+    }
+    let connection = store
+        .connection()
+        .await
+        .map_err(|error| CommandFailure::Indeterminate(storage(error)))?;
     connection
         .execute("BEGIN IMMEDIATE", ())
         .await
-        .map_err(storage)?;
+        .map_err(|error| CommandFailure::Indeterminate(storage(error)))?;
+    let mut prior_command = false;
+    let mut replay_checked = false;
     let result = async {
         let person = command.person_id.to_string(); let command_id = command.request.command_id.to_string();
         let mut rows = connection.query("SELECT person_id,command_id,device_id,intent_digest,payload FROM day_mutation_receipts WHERE person_id=? AND command_id=?", (person.clone(), command_id.clone())).await.map_err(storage)?;
         if let Some(row) = rows.next().await.map_err(storage)? {
+            // Any row occupying this command id is prior durable evidence, even
+            // if the receipt payload itself is corrupt or does not match.
+            prior_command = true;
             let payload: String = row.get(4).map_err(storage)?;
             if payload.len() > floe_day::MAX_DAY_MUTATION_RECEIPT_BYTES { return Err(storage("Day receipt byte budget")); }
             let receipt: Receipt = serde_json::from_str(&payload).map_err(storage)?;
             receipt.command.validate_result(&receipt.result)?;
             if receipt.command.intent_digest()? != receipt.intent_digest || row.get::<String>(0).map_err(storage)? != receipt.command.person_id.to_string() || row.get::<String>(1).map_err(storage)? != receipt.command.request.command_id.to_string() || row.get::<String>(2).map_err(storage)? != receipt.command.device_id || row.get::<String>(3).map_err(storage)? != hex(&receipt.intent_digest) || rows.next().await.map_err(storage)?.is_some() { return Err(storage("invalid Day receipt identity")); }
-            if receipt.command.person_id != command.person_id || receipt.command.device_id != command.device_id || receipt.command.request.command_id != command.request.command_id || receipt.intent_digest != intent_digest { return Err(DayError::conflict("Day command replay changed device or intent")); }
+            let incoming_digest = command.intent_digest()?;
+            if receipt.command.person_id != command.person_id || receipt.command.device_id != command.device_id || receipt.command.request.command_id != command.request.command_id || receipt.intent_digest != incoming_digest { return Err(DayError::conflict("Day command replay changed device or intent")); }
             return Ok(receipt.result);
         }
         drop(rows);
         let mut other = connection.query("SELECT 1 FROM day_refreshes WHERE person_id=? AND command_id=?", (person.clone(),command_id.clone())).await.map_err(storage)?;
-        if other.next().await.map_err(storage)?.is_some() { return Err(DayError::conflict("Day command kind changed")); }
+        if other.next().await.map_err(storage)?.is_some() { prior_command = true; return Err(DayError::conflict("Day command kind changed")); }
         drop(other);
+        replay_checked = true;
+        let intent_digest = command.intent_digest()?;
         fence.check(command.person_id, &command.device_id, command.executor_generation)?;
         require_executor(&connection, command.person_id, &command.device_id, command.executor_generation).await?;
         let mut counts = connection.query("SELECT (SELECT COUNT(*) FROM day_mutation_receipts WHERE person_id=?1)+(SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1)", (person.clone(),)).await.map_err(storage)?;
@@ -97,7 +113,16 @@ pub(super) async fn mutate(
         )?;
         Ok(result)
     });
-    finish_transaction(&connection, result).await
+    let result = result.map_err(|error| {
+        if prior_command {
+            CommandFailure::Indeterminate(error)
+        } else if replay_checked {
+            CommandFailure::NotApplied(error)
+        } else {
+            CommandFailure::Indeterminate(error)
+        }
+    });
+    finish_command_transaction(&connection, result).await
 }
 async fn exact_payload(
     connection: &Connection,

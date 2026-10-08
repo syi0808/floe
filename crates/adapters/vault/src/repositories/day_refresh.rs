@@ -10,7 +10,7 @@ use floe_day::{
     RefreshExecutorReplacement, RefreshLookup, RefreshRecord, RefreshTransition,
 };
 use floe_execution::BoxFuture;
-use floe_kernel::PersonId;
+use floe_kernel::{CommandFailure, PersonId};
 use sha2::{Digest, Sha256};
 use turso::{Connection, Row};
 
@@ -67,6 +67,31 @@ pub(super) async fn finish_transaction<T>(
                 .await
                 .map_err(storage_error)?;
             Err(error)
+        }
+    }
+}
+
+/// Finish a command transaction without losing whether its exact receipt was
+/// committed. Rejection is definitive only after rollback succeeds; any COMMIT
+/// failure remains uncertain even when a best-effort rollback is attempted.
+pub(super) async fn finish_command_transaction<T>(
+    connection: &Connection,
+    result: Result<T, CommandFailure<DayError>>,
+) -> Result<T, CommandFailure<DayError>> {
+    match result {
+        Ok(value) => match connection.execute("COMMIT", ()).await {
+            Ok(_) => Ok(value),
+            Err(error) => {
+                let _ = connection.execute("ROLLBACK", ()).await;
+                Err(CommandFailure::Indeterminate(storage_error(error)))
+            }
+        },
+        Err(failure) => {
+            connection
+                .execute("ROLLBACK", ())
+                .await
+                .map_err(|error| CommandFailure::Indeterminate(storage_error(error)))?;
+            Err(failure)
         }
     }
 }
@@ -415,21 +440,23 @@ impl floe_day::DayRefreshRepository for TursoStore {
     fn admit_refresh<'a>(
         &'a self,
         admission: RefreshAdmission,
-    ) -> BoxFuture<'a, Result<RefreshAdmissionResult, DayError>> {
+    ) -> BoxFuture<'a, Result<RefreshAdmissionResult, CommandFailure<DayError>>> {
         Box::pin(async move {
-            let computed_digest = admission.query.refresh_intent_digest(
-                admission.person_id,
-                &admission.device_id,
-                admission.command_id,
-            )?;
-            if computed_digest != admission.intent_digest {
-                return Err(DayError::validation("refresh intent digest does not match"));
+            if admission.command_id.is_nil() {
+                return Err(CommandFailure::NotApplied(DayError::validation(
+                    "invalid refresh command identity",
+                )));
             }
-            let connection = self.connection().await.map_err(storage_error)?;
+            let connection = self
+                .connection()
+                .await
+                .map_err(|error| CommandFailure::Indeterminate(storage_error(error)))?;
             connection
                 .execute("BEGIN IMMEDIATE", ())
                 .await
-                .map_err(storage_error)?;
+                .map_err(|error| CommandFailure::Indeterminate(storage_error(error)))?;
+            let mut prior_command = false;
+            let mut replay_checked = false;
             let result = async {
                 let mut replay_rows = connection
                     .query(
@@ -443,11 +470,15 @@ impl floe_day::DayRefreshRepository for TursoStore {
                     )
                     .await
                     .map_err(storage_error)?;
-                let replay = replay_rows
-                    .next()
-                    .await
-                    .map_err(storage_error)?
-                    .map(|row| decode_refresh_row(&row))
+                let replay_row = replay_rows.next().await.map_err(storage_error)?;
+                if replay_row.is_some() {
+                    // A corrupt or mismatched receipt is still evidence that
+                    // this command id may already have been consumed.
+                    prior_command = true;
+                }
+                let replay = replay_row
+                    .as_ref()
+                    .map(|row| decode_refresh_row(row))
                     .transpose()?;
                 if replay_rows.next().await.map_err(storage_error)?.is_some() {
                     return Err(storage_error(
@@ -456,8 +487,13 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 }
                 drop(replay_rows);
                 if let Some((existing, _)) = replay {
+                    let computed_digest = admission.query.refresh_intent_digest(
+                        admission.person_id,
+                        &admission.device_id,
+                        admission.command_id,
+                    )?;
                     if existing.device_id == admission.device_id
-                        && existing.intent_digest == admission.intent_digest
+                        && existing.intent_digest == computed_digest
                     {
                         return Ok(RefreshAdmissionResult::Existing(existing));
                     }
@@ -467,14 +503,20 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 }
 
                 let mut other = connection.query("SELECT 1 FROM day_mutation_receipts WHERE person_id=? AND command_id=?", (admission.person_id.to_string(),admission.command_id.to_string())).await.map_err(storage_error)?;
-                if other.next().await.map_err(storage_error)?.is_some() { return Err(conflict("Day command kind changed")); }
+                if other.next().await.map_err(storage_error)?.is_some() { prior_command = true; return Err(conflict("Day command kind changed")); }
                 drop(other);
+                replay_checked = true;
+                let intent_digest = admission.query.refresh_intent_digest(
+                    admission.person_id,
+                    &admission.device_id,
+                    admission.command_id,
+                )?;
                 let mut counts = connection.query("SELECT (SELECT COUNT(*) FROM day_mutation_receipts WHERE person_id=?1)+(SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1)", (admission.person_id.to_string(),)).await.map_err(storage_error)?;
                 let count: i64 = counts.next().await.map_err(storage_error)?.ok_or_else(|| storage_error("missing Day command count"))?.get(0).map_err(storage_error)?;
                 if count < 0 { return Err(storage_error("invalid Day command count")); }
                 if count as usize >= floe_day::MAX_DAY_COMMAND_RECEIPTS { return Err(DayError::budget("Day command receipt capacity reached")); }
                 drop(counts);
-                let _ = admission.record(MirrorExpectation::Absent)?;
+                let _ = admission.record(intent_digest, MirrorExpectation::Absent)?;
                 require_executor(&connection, admission.person_id, &admission.device_id, admission.executor_generation).await?;
                 if refresh_by_id(&connection, admission.operation_id)
                     .await?
@@ -486,7 +528,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 let expectation = MirrorExpectation::of(
                     current.as_ref().map(|(mirror, _)| mirror),
                 )?;
-                let record = admission.record(expectation)?;
+                let record = admission.record(intent_digest, expectation)?;
                 let payload = serde_json::to_string(&record).map_err(storage_error)?;
                 let changed = connection
                     .execute(
@@ -511,7 +553,16 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 Ok(RefreshAdmissionResult::New(record))
             }
             .await;
-            finish_transaction(&connection, result).await
+            let result = result.map_err(|error| {
+                if prior_command {
+                    CommandFailure::Indeterminate(error)
+                } else if replay_checked {
+                    CommandFailure::NotApplied(error)
+                } else {
+                    CommandFailure::Indeterminate(error)
+                }
+            });
+            finish_command_transaction(&connection, result).await
         })
     }
 

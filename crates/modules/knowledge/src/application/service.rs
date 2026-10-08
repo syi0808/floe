@@ -3,6 +3,7 @@ use floe_agent_contract::{
     AgentFailure, BoxFuture, CommandId, ExecutionScope, ModelPort, OwnerActor,
 };
 use floe_execution::Cancellation;
+use floe_kernel::CommandFailure;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -51,7 +52,7 @@ pub trait KnowledgeOwner: KnowledgeRead {
         candidate_id: Uuid,
         kind: crate::KnowledgeDecisionKind,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, CommandFailure<AgentFailure>>>;
     fn run_next<'a>(
         &'a self,
         cancellation: Cancellation,
@@ -224,11 +225,15 @@ impl KnowledgeOwner for KnowledgeService {
         candidate_id: Uuid,
         kind: crate::KnowledgeDecisionKind,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<crate::MemoryDecisionAcknowledgement, CommandFailure<AgentFailure>>>
+    {
         Box::pin(async move {
-            let _operation = self.begin_operation(actor, scope).await?;
-            if candidate_id.is_nil() || command_id.as_uuid().is_nil() {
-                return Err(AgentFailure::InvalidInput);
+            let _operation = self
+                .begin_operation(actor, scope)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            if command_id.as_uuid().is_nil() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
             }
             let result = self
                 .repository
@@ -243,7 +248,7 @@ impl KnowledgeOwner for KnowledgeService {
                     scope,
                 )
                 .await?;
-            crate::project_memory_decision(command_id, &result)
+            crate::project_memory_decision(command_id, &result).map_err(CommandFailure::Admitted)
         })
     }
     fn run_next<'a>(

@@ -5,9 +5,9 @@ use crate::*;
 use floe_agent_contract::{AgentContext, BoxFuture, ModelPort};
 use floe_context::{DependencyResolver, EvidenceReader};
 use floe_execution::{Cancellation, ExecutionScope, budget::BudgetLedger};
-use floe_kernel::{AgentFailure, CommandId, OwnerActor, RunId, TraceContext};
+use floe_kernel::{AgentFailure, CommandFailure, CommandId, OwnerActor, RunId, TraceContext};
 use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{Mutex, Notify, RwLock};
@@ -93,14 +93,14 @@ pub trait ConversationOwner: Send + Sync {
         actor: &'a OwnerActor,
         request: StartTurn,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<CommandReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<CommandReceipt, CommandFailure<AgentFailure>>>;
     fn cancel_run<'a>(
         &'a self,
         actor: &'a OwnerActor,
         command_id: CommandId,
         run_id: RunId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<CancelRunReceipt, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<CancelRunReceipt, CommandFailure<AgentFailure>>>;
     fn read_command<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -136,13 +136,13 @@ pub trait ConversationOwner: Send + Sync {
         actor: &'a OwnerActor,
         request: ResolveInteraction,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<InteractionResult, CommandFailure<AgentFailure>>>;
     fn refresh_interaction<'a>(
         &'a self,
         actor: &'a OwnerActor,
         request: RefreshInteraction,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<InteractionResult, CommandFailure<AgentFailure>>>;
     fn read_events<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -191,6 +191,7 @@ struct ServiceState<R, S, T> {
     shutdown: Cancellation,
     closing: AtomicBool,
     admission: RwLock<()>,
+    command_locks: Mutex<std::collections::HashMap<Uuid, Weak<Mutex<()>>>>,
     tasks: Mutex<JoinSet<()>>,
     recovery_started: AtomicBool,
     recovery_wake: Notify,
@@ -225,6 +226,7 @@ where
                 shutdown: Cancellation::new(),
                 closing: AtomicBool::new(false),
                 admission: RwLock::new(()),
+                command_locks: Mutex::new(std::collections::HashMap::new()),
                 tasks: Mutex::new(JoinSet::new()),
                 recovery_started: AtomicBool::new(false),
                 recovery_wake: Notify::new(),
@@ -249,6 +251,29 @@ where
         Ok(())
     }
 
+    async fn lock_command(
+        &self,
+        command_id: CommandId,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, AgentFailure> {
+        if !command_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let lock = {
+            let mut locks = self.command_locks.lock().await;
+            if locks.len() >= 64 {
+                locks.retain(|_, lock| lock.strong_count() > 0);
+            }
+            if let Some(lock) = locks.get(&command_id.as_uuid()).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(command_id.as_uuid(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        Ok(lock.lock_owned().await)
+    }
+
     async fn submit(
         self: &Arc<Self>,
         actor: &OwnerActor,
@@ -256,13 +281,14 @@ where
         intent: CanonicalTurnIntent,
         session: AgentSession,
         scope: &ExecutionScope,
-    ) -> Result<CommandReceipt, AgentFailure> {
+    ) -> Result<CommandReceipt, CommandFailure<AgentFailure>> {
         let _admission = self.admission.read().await;
-        self.check(actor)?;
+        self.check(actor).map_err(CommandFailure::NotAdmitted)?;
         let environment = Arc::new(
             self.dependencies
                 .experts
-                .environment(&actor.person_id.to_string())?,
+                .environment(&actor.person_id.to_string())
+                .map_err(CommandFailure::NotApplied)?,
         );
         let request = TurnRequest {
             command_id,
@@ -282,8 +308,10 @@ where
             now_unix_ms: chrono::Utc::now().timestamp_millis(),
         };
         let prepared = match scope
-            .run(self.coordinator.prepare_run(actor, &request, scope))
-            .await?
+            .run(async { Ok(self.coordinator.prepare_run(actor, &request, scope).await) })
+            .await
+            .map_err(CommandFailure::Indeterminate)?
+            .map_err(|failure| failure)?
         {
             RunAdmission::Existing(receipt) => return Ok(CommandReceipt::from(&receipt)),
             RunAdmission::Created(prepared) => prepared,
@@ -297,27 +325,29 @@ where
         ) {
             Ok(guard) => guard,
             Err(failure) => {
-                self.dependencies
+                let _ = self
+                    .dependencies
                     .repository
                     .finish_run(
                         receipt.run_id,
                         receipt.aggregate_revision,
                         RunTerminal::from_failure(failure),
                     )
-                    .await?;
-                return Err(failure);
+                    .await;
+                return Err(CommandFailure::Admitted(failure));
             }
         };
         if let Err(failure) = self.events.publish_command(&receipt) {
-            self.dependencies
+            let _ = self
+                .dependencies
                 .repository
                 .finish_run(
                     receipt.run_id,
                     receipt.aggregate_revision,
                     RunTerminal::from_failure(failure),
                 )
-                .await?;
-            return Err(failure);
+                .await;
+            return Err(CommandFailure::Admitted(failure));
         }
         let state = Arc::clone(self);
         let actor = actor.clone();
@@ -480,6 +510,11 @@ where
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>> {
         Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(command_id)
+                .await
+                .map_err(crate::SessionStartFailure::NotAdmitted)?;
             let _admission = self.inner.admission.read().await;
             self.inner
                 .check(actor)
@@ -549,9 +584,16 @@ where
         actor: &'a OwnerActor,
         request: StartTurn,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<CommandReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<CommandReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            self.inner.check(actor)?;
+            let _command = self
+                .inner
+                .lock_command(request.command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let prepared = prepare_start_turn(
                 self.inner.dependencies.repository.as_ref(),
                 self.inner.dependencies.sessions.as_ref(),
@@ -563,14 +605,11 @@ where
             if let Some(existing) = prepared.existing {
                 return Ok(CommandReceipt::from(&existing));
             }
+            let session = prepared.session.ok_or(CommandFailure::Indeterminate(
+                AgentFailure::StorageUnavailable,
+            ))?;
             self.inner
-                .submit(
-                    actor,
-                    request.command_id,
-                    prepared.intent,
-                    prepared.session,
-                    scope,
-                )
+                .submit(actor, request.command_id, prepared.intent, session, scope)
                 .await
         })
     }
@@ -580,24 +619,32 @@ where
         command_id: CommandId,
         run_id: RunId,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<CancelRunReceipt, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<CancelRunReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
             let _admission = self.inner.admission.read().await;
-            self.inner.check(actor)?;
-            if self.read_run(actor, run_id, scope).await?.is_none() {
-                return Err(AgentFailure::NotFound);
-            }
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             scope
-                .run(cancel_run_command(
-                    self.inner.dependencies.repository.as_ref(),
-                    &self.inner.cancellations,
-                    CancelRunCommand {
-                        command_id,
-                        run_id,
-                        principal: actor.person_id.to_string(),
-                    },
-                ))
-                .await?;
+                .run(async {
+                    Ok(cancel_run_command(
+                        self.inner.dependencies.repository.as_ref(),
+                        &self.inner.cancellations,
+                        CancelRunCommand {
+                            command_id,
+                            run_id,
+                            principal: actor.person_id.to_string(),
+                        },
+                    )
+                    .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
             Ok(CancelRunReceipt {
                 command_id,
                 run_id,
@@ -792,40 +839,52 @@ where
         actor: &'a OwnerActor,
         request: ResolveInteraction,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<InteractionResult, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
+            let command_id = CommandId::from_uuid(request.command_id)
+                .ok_or(CommandFailure::NotApplied(AgentFailure::InvalidInput))?;
+            let _command = self
+                .inner
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
             let admission = self.inner.admission.read().await;
-            self.inner
-                .interaction(
-                    actor,
-                    request.interaction_id,
-                    Some(request.session_id),
-                    scope,
-                )
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let interaction = apply_source_interaction(
-                self.inner.dependencies.repository.as_ref(),
-                self.inner.dependencies.connections.as_ref(),
-                actor,
-                DecideInteractionCommand {
-                    command_id: request.command_id,
-                    interaction_id: request.interaction_id,
-                    principal: actor.person_id.to_string(),
-                    expected_revision: request.expected_revision,
-                    kind: request.decision,
-                    target_digest: request.target_digest,
-                },
-                chrono::Utc::now().timestamp_millis(),
-                scope,
-            )
-            .await?;
+            let interaction = scope
+                .run(async {
+                    Ok(apply_source_interaction(
+                        self.inner.dependencies.repository.as_ref(),
+                        self.inner.dependencies.connections.as_ref(),
+                        actor,
+                        DecideInteractionCommand {
+                            command_id: request.command_id,
+                            interaction_id: request.interaction_id,
+                            principal: actor.person_id.to_string(),
+                            expected_revision: request.expected_revision,
+                            kind: request.decision,
+                            target_digest: request.target_digest,
+                        },
+                        chrono::Utc::now().timestamp_millis(),
+                        scope,
+                    )
+                    .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
             drop(admission);
             self.inner.recovery_wake.notify_one();
             let linked = self
-                .read_command(actor, resume_command_id(interaction.origin_run_id)?, scope)
-                .await?
+                .read_command(
+                    actor,
+                    resume_command_id(interaction.origin_run_id)
+                        .map_err(CommandFailure::Admitted)?,
+                    scope,
+                )
+                .await
+                .map_err(CommandFailure::Admitted)?
                 .as_ref()
                 .map(CommandReceipt::from);
             let interaction = super::interaction_projection::project_interaction(
@@ -836,7 +895,8 @@ where
                 chrono::Utc::now().timestamp_millis(),
                 scope,
             )
-            .await?;
+            .await
+            .map_err(CommandFailure::Admitted)?;
             Ok(InteractionResult {
                 interaction,
                 linked,
@@ -848,22 +908,24 @@ where
         actor: &'a OwnerActor,
         request: RefreshInteraction,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<InteractionResult, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<InteractionResult, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
+            let command_id = CommandId::from_uuid(request.command_id)
+                .ok_or(CommandFailure::NotApplied(AgentFailure::InvalidInput))?;
+            let _command = self
+                .inner
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
             let admission = self.inner.admission.read().await;
-            self.inner
-                .interaction(
-                    actor,
-                    request.interaction_id,
-                    Some(request.session_id),
-                    scope,
-                )
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            scope
-                .run(
-                    self.inner
+            let stored = scope
+                .run(async {
+                    Ok(self
+                        .inner
                         .dependencies
                         .repository
                         .admit_refresh(InteractionRefresh {
@@ -872,60 +934,57 @@ where
                             session_id: request.session_id,
                             interaction_id: request.interaction_id,
                             expected_revision: request.expected_revision,
-                        }),
-                )
-                .await?;
-            let stored = self
-                .inner
-                .interaction(
-                    actor,
-                    request.interaction_id,
-                    Some(request.session_id),
-                    scope,
-                )
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let interaction = if matches!(stored.target, ReviewedTarget::ExpertBinding(_)) {
-                super::interaction_resolution::recover_binding_interaction(
-                    self.inner.dependencies.repository.as_ref(),
+                        })
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
+            let result = async {
+                let interaction = if matches!(stored.target, ReviewedTarget::ExpertBinding(_)) {
+                    super::interaction_resolution::recover_binding_interaction(
+                        self.inner.dependencies.repository.as_ref(),
+                        self.inner.dependencies.experts_owner.as_ref(),
+                        actor,
+                        &request,
+                        chrono::Utc::now().timestamp_millis(),
+                        scope,
+                    )
+                    .await?
+                } else {
+                    recover_source_interaction(
+                        self.inner.dependencies.repository.as_ref(),
+                        self.inner.dependencies.connections.as_ref(),
+                        actor,
+                        request.interaction_id,
+                        chrono::Utc::now().timestamp_millis(),
+                        scope,
+                    )
+                    .await?
+                };
+                drop(admission);
+                self.inner.recovery_wake.notify_one();
+                let linked = self
+                    .read_command(actor, resume_command_id(interaction.origin_run_id)?, scope)
+                    .await?
+                    .as_ref()
+                    .map(CommandReceipt::from);
+                let interaction = super::interaction_projection::project_interaction(
+                    self.inner.dependencies.connections.as_ref(),
                     self.inner.dependencies.experts_owner.as_ref(),
                     actor,
-                    &request,
+                    &interaction,
                     chrono::Utc::now().timestamp_millis(),
                     scope,
                 )
-                .await?
-            } else {
-                recover_source_interaction(
-                    self.inner.dependencies.repository.as_ref(),
-                    self.inner.dependencies.connections.as_ref(),
-                    actor,
-                    request.interaction_id,
-                    chrono::Utc::now().timestamp_millis(),
-                    scope,
-                )
-                .await?
-            };
-            drop(admission);
-            self.inner.recovery_wake.notify_one();
-            let linked = self
-                .read_command(actor, resume_command_id(interaction.origin_run_id)?, scope)
-                .await?
-                .as_ref()
-                .map(CommandReceipt::from);
-            let interaction = super::interaction_projection::project_interaction(
-                self.inner.dependencies.connections.as_ref(),
-                self.inner.dependencies.experts_owner.as_ref(),
-                actor,
-                &interaction,
-                chrono::Utc::now().timestamp_millis(),
-                scope,
-            )
-            .await?;
-            Ok(InteractionResult {
-                interaction,
-                linked,
-            })
+                .await?;
+                Ok::<_, AgentFailure>(InteractionResult {
+                    interaction,
+                    linked,
+                })
+            }
+            .await
+            .map_err(CommandFailure::Admitted)?;
+            Ok(result)
         })
     }
     fn read_events<'a>(

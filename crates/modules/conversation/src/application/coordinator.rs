@@ -6,7 +6,7 @@ use floe_agent_contract::{
 };
 use floe_agent_runtime::{Engine, EngineOutcome, EnginePorts, EngineReport};
 use floe_execution::{ExecutionScope, budget::BudgetLedger};
-use floe_kernel::{AgentFailure, OwnerActor, RunId, TraceContext};
+use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, RunId, TraceContext};
 
 use crate::{
     CONVERSATION_CONSUMER, CommandQuery, ContinuationSnapshot, ConversationInteraction,
@@ -60,136 +60,172 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         actor: &OwnerActor,
         request: &TurnRequest,
         scope: &ExecutionScope,
-    ) -> Result<RunAdmission, AgentFailure> {
-        actor.validate()?;
-        request.validate()?;
+    ) -> Result<RunAdmission, CommandFailure<AgentFailure>> {
+        actor.validate().map_err(CommandFailure::NotAdmitted)?;
+        if !request.command_id.is_valid() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+        }
         if actor.person_id.to_string() != request.principal || actor.device_id != request.device_id
         {
-            return Err(AgentFailure::PolicyDenied);
+            return Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied));
         }
-        let intent = request.canonical_intent()?;
-        let request_digest = intent.digest(&request.principal)?;
         let command_query = CommandQuery {
             principal: request.principal.clone(),
             command_id: request.command_id,
         };
-        if let Some(receipt) = self.repository.find_command(command_query).await? {
-            verify_existing(&request, request_digest, &receipt)?;
+        if let Some(receipt) = self
+            .repository
+            .find_command(command_query)
+            .await
+            .map_err(CommandFailure::Indeterminate)?
+        {
+            let request_digest = request
+                .canonical_intent()
+                .and_then(|intent| intent.digest(&request.principal))
+                .map_err(CommandFailure::Indeterminate)?;
+            verify_existing(&request, request_digest, &receipt)
+                .map_err(CommandFailure::Indeterminate)?;
             return Ok(RunAdmission::Existing(receipt));
         }
-        let continuation = match &request.mode {
-            TurnMode::New | TurnMode::Resume(_) => None,
-            TurnMode::Continue(reference) => {
-                let snapshot = continuation(
-                    self.repository.as_ref(),
-                    reference.run_id,
-                    &request.principal,
-                    self.experts.as_ref(),
-                    actor,
-                    scope,
-                )
-                .await?;
-                if snapshot.reference != *reference
-                    || snapshot.session_id != request.session_id
-                    || snapshot.session_revision != request.expected_session_revision
-                {
-                    return Err(AgentFailure::Conflict);
-                }
-                if let Some(batch) = &snapshot.pending_batch {
-                    if snapshot.expert_environment != request.expert_environment
-                        || batch.catalog_revision != request.expert_environment.revision
+        let occupant = self
+            .repository
+            .command_occupant(request.command_id)
+            .await
+            .map_err(CommandFailure::Indeterminate)?;
+        if occupant.is_some() {
+            return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+        }
+        request.validate().map_err(CommandFailure::NotApplied)?;
+        let intent = request
+            .canonical_intent()
+            .map_err(CommandFailure::NotApplied)?;
+        let request_digest = intent
+            .digest(&request.principal)
+            .map_err(CommandFailure::NotApplied)?;
+        let (continuation, resume_origin, run_id, admission_request) = async {
+            let continuation = match &request.mode {
+                TurnMode::New | TurnMode::Resume(_) => None,
+                TurnMode::Continue(reference) => {
+                    let snapshot = continuation(
+                        self.repository.as_ref(),
+                        reference.run_id,
+                        &request.principal,
+                        self.experts.as_ref(),
+                        actor,
+                        scope,
+                    )
+                    .await?;
+                    if snapshot.reference != *reference
+                        || snapshot.session_id != request.session_id
+                        || snapshot.session_revision != request.expected_session_revision
                     {
                         return Err(AgentFailure::Conflict);
                     }
+                    if let Some(batch) = &snapshot.pending_batch {
+                        if snapshot.expert_environment != request.expert_environment
+                            || batch.catalog_revision != request.expert_environment.revision
+                        {
+                            return Err(AgentFailure::Conflict);
+                        }
+                    }
+                    Some(snapshot)
                 }
-                Some(snapshot)
+            };
+            let resume_origin = match &request.mode {
+                TurnMode::Resume(reference) => Some(self.resume_origin(reference, request).await?),
+                TurnMode::New | TurnMode::Continue(_) => None,
+            };
+            if let Some(retry_of) = request.retry_of {
+                let source = self
+                    .repository
+                    .load_receipt(retry_of)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                source.validate()?;
+                if source.principal != request.principal
+                    || source.session_id != request.session_id
+                    || !source.state.is_terminal()
+                    || source.session_revision != request.expected_session_revision
+                {
+                    return Err(AgentFailure::Conflict);
+                }
             }
-        };
-        let resume_origin = match &request.mode {
-            TurnMode::Resume(reference) => Some(self.resume_origin(reference, &request).await?),
-            TurnMode::New | TurnMode::Continue(_) => None,
-        };
-        if let Some(retry_of) = request.retry_of {
-            let source = self
-                .repository
-                .load_receipt(retry_of)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            source.validate()?;
-            if source.principal != request.principal
-                || source.session_id != request.session_id
-                || !source.state.is_terminal()
-                || source.session_revision != request.expected_session_revision
-            {
-                return Err(AgentFailure::Conflict);
-            }
+            let run_id = RunId::new();
+            let input = match &request.mode {
+                TurnMode::New => crate::TurnInput::NewMessage(AgentMessage {
+                    message_id: request.command_id.as_uuid(),
+                    role: MessageRole::User,
+                    text: intent.text.clone(),
+                    call_id: None,
+                    coverage: DependencyCoverage::Independent,
+                }),
+                TurnMode::Continue(_) => crate::TurnInput::ExistingMessage {
+                    message_id: continuation
+                        .as_ref()
+                        .ok_or(AgentFailure::Conflict)?
+                        .user_message_id,
+                },
+                TurnMode::Resume(_) => crate::TurnInput::ExistingMessage {
+                    message_id: resume_origin
+                        .as_ref()
+                        .ok_or(AgentFailure::Conflict)?
+                        .user_message_id,
+                },
+            };
+            let admission_request = TurnAdmissionRequest {
+                expert_environment: request.expert_environment,
+                run_id,
+                command_id: request.command_id,
+                session_id: request.session_id,
+                expected_session_revision: request.expected_session_revision,
+                principal: request.principal.clone(),
+                device_id: request.device_id.clone(),
+                request_digest,
+                mode: request.mode.clone(),
+                retry_of: request.retry_of,
+                input,
+            };
+            Ok::<_, AgentFailure>((continuation, resume_origin, run_id, admission_request))
         }
-        let run_id = RunId::new();
-        let input = match &request.mode {
-            TurnMode::New => crate::TurnInput::NewMessage(AgentMessage {
-                message_id: request.command_id.as_uuid(),
-                role: MessageRole::User,
-                text: intent.text.clone(),
-                call_id: None,
-                coverage: DependencyCoverage::Independent,
-            }),
-            TurnMode::Continue(_) => crate::TurnInput::ExistingMessage {
-                message_id: continuation
-                    .as_ref()
-                    .ok_or(AgentFailure::Conflict)?
-                    .user_message_id,
-            },
-            TurnMode::Resume(_) => crate::TurnInput::ExistingMessage {
-                message_id: resume_origin
-                    .as_ref()
-                    .ok_or(AgentFailure::Conflict)?
-                    .user_message_id,
-            },
-        };
-        let admission_request = TurnAdmissionRequest {
-            expert_environment: request.expert_environment,
-            run_id,
-            command_id: request.command_id,
-            session_id: request.session_id,
-            expected_session_revision: request.expected_session_revision,
-            principal: request.principal.clone(),
-            device_id: request.device_id.clone(),
-            request_digest,
-            mode: request.mode.clone(),
-            retry_of: request.retry_of,
-            input,
-        };
+        .await
+        .map_err(CommandFailure::NotApplied)?;
         let admission = match &request.mode {
             TurnMode::Resume(reference) => {
                 let pending = self
                     .repository
                     .pending_resume_request(actor, reference.origin_run_id)
-                    .await?
-                    .ok_or(AgentFailure::Conflict)?;
+                    .await
+                    .map_err(CommandFailure::NotApplied)?
+                    .ok_or(CommandFailure::NotApplied(AgentFailure::Conflict))?;
                 self.repository
                     .claim_resume(crate::ResumeChildAdmission {
                         request: pending,
                         child: admission_request,
                     })
-                    .await?
+                    .await
+                    .map_err(CommandFailure::Indeterminate)?
             }
             _ => self.repository.admit_turn(admission_request).await?,
         };
         let admitted = match admission {
             TurnAdmission::Created(admitted) => admitted,
             TurnAdmission::Existing(receipt) => {
-                verify_existing(&request, request_digest, &receipt)?;
+                verify_existing(&request, request_digest, &receipt)
+                    .map_err(CommandFailure::Indeterminate)?;
                 return Ok(RunAdmission::Existing(receipt));
             }
             TurnAdmission::Resumed(receipt) => {
                 let TurnMode::Resume(reference) = &request.mode else {
-                    return Err(AgentFailure::StorageUnavailable);
+                    return Err(CommandFailure::Indeterminate(
+                        AgentFailure::StorageUnavailable,
+                    ));
                 };
-                verify_resumed(&request, reference, &receipt)?;
+                verify_resumed(&request, reference, &receipt)
+                    .map_err(CommandFailure::Indeterminate)?;
                 return Ok(RunAdmission::Existing(receipt));
             }
         };
-        admitted.validate()?;
+        admitted.validate().map_err(CommandFailure::Admitted)?;
         if admitted.receipt.run_id != run_id
             || admitted.receipt.expert_environment != request.expert_environment
             || admitted.receipt.command_id != request.command_id
@@ -231,7 +267,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                 }
             }
         {
-            return Err(AgentFailure::StorageUnavailable);
+            return Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable));
         }
         Ok(RunAdmission::Created(PreparedRun {
             admitted,

@@ -11,7 +11,7 @@ use floe_actions::{
     validate_action_admission,
 };
 use floe_agent_contract::AgentFailure;
-use floe_kernel::PersonId;
+use floe_kernel::{CommandFailure, PersonId};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
@@ -327,6 +327,52 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(ActionStoreError::Unavailable);
                 }
                 Err(error)
+            }
+        }
+    }
+
+    async fn finish_actions_command_transaction<T>(
+        &self,
+        transaction: Transaction<'_>,
+        result: Result<T, ActionStoreError>,
+        replay_checked: bool,
+        prior_command: bool,
+    ) -> Result<T, CommandFailure<ActionStoreError>> {
+        match result {
+            Ok(value) => {
+                if let Err(error) = self.check_access() {
+                    if transaction.rollback().await.is_err() {
+                        self.unavailable.store(true, Ordering::Release);
+                        return Err(CommandFailure::Indeterminate(ActionStoreError::Unavailable));
+                    }
+                    return Err(if prior_command {
+                        CommandFailure::Admitted(access_error(error))
+                    } else {
+                        CommandFailure::NotApplied(access_error(error))
+                    });
+                }
+                if transaction.commit().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    return Err(if prior_command {
+                        CommandFailure::Admitted(ActionStoreError::Unavailable)
+                    } else {
+                        CommandFailure::Indeterminate(ActionStoreError::Unavailable)
+                    });
+                }
+                self.check_access()
+                    .map_err(|error| CommandFailure::Admitted(access_error(error)))?;
+                Ok(value)
+            }
+            Err(error) => {
+                if transaction.rollback().await.is_err() {
+                    self.unavailable.store(true, Ordering::Release);
+                    return Err(CommandFailure::Indeterminate(ActionStoreError::Unavailable));
+                }
+                Err(if prior_command || !replay_checked {
+                    CommandFailure::Indeterminate(error)
+                } else {
+                    CommandFailure::NotApplied(error)
+                })
             }
         }
     }
@@ -1168,13 +1214,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         command_id: Uuid,
         kind: &'static str,
         digest: &ActionDigest,
+        replay_checked: &mut bool,
+        prior_command: &mut bool,
     ) -> Result<Option<ActionRecord>, ActionStoreError> {
-        let Some(receipt) = self
+        let receipt = self
             .command_receipt(transaction, person_id, command_id)
-            .await?
-        else {
+            .await?;
+        *replay_checked = true;
+        let Some(receipt) = receipt else {
             return Ok(None);
         };
+        *prior_command = true;
         if receipt.kind != kind || receipt.intent_digest != digest_hex(digest) {
             return Err(ActionStoreError::Conflict);
         }
@@ -1300,12 +1350,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if command_id.is_nil() {
                 return Err(ActionStoreError::InvalidRecord);
             }
+            let mut replay_checked = false;
+            let mut prior_command = false;
             self.replay_command_action(
                 &transaction,
                 person_id,
                 command_id,
                 "submit",
                 &request_digest,
+                &mut replay_checked,
+                &mut prior_command,
             )
             .await
         }
@@ -1316,12 +1370,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn actions_admit(
         &self,
         admission: ActionAdmission,
-    ) -> Result<AdmittedAction, ActionStoreError> {
-        let mut connection = self.connection().map_err(access_error)?;
+    ) -> Result<AdmittedAction, CommandFailure<ActionStoreError>> {
+        let mut connection = self
+            .connection()
+            .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(sql_error)?;
+            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             self.ensure_actions_schema(&transaction).await?;
             if admission.command_id.is_nil() || admission.record.person_id != self.person_id {
@@ -1334,6 +1392,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     admission.command_id,
                     "submit",
                     &admission.request_digest,
+                    &mut replay_checked,
+                    &mut prior_command,
                 )
                 .await?
             {
@@ -1379,18 +1439,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             })
         }
         .await;
-        self.finish_actions_transaction(transaction, result).await
+        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await
     }
 
     pub(crate) async fn actions_record_decision(
         &self,
         decision: ActionDecision,
-    ) -> Result<ActionRecord, ActionStoreError> {
-        let mut connection = self.connection().map_err(access_error)?;
+    ) -> Result<ActionRecord, CommandFailure<ActionStoreError>> {
+        let mut connection = self
+            .connection()
+            .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(sql_error)?;
+            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             self.ensure_actions_schema(&transaction).await?;
             let digest = decision_intent_digest(&decision).map_err(invalid_record)?;
@@ -1404,6 +1469,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     decision.command_id,
                     "decision",
                     &digest,
+                    &mut replay_checked,
+                    &mut prior_command,
                 )
                 .await?
             {
@@ -1435,18 +1502,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(next)
         }
         .await;
-        self.finish_actions_transaction(transaction, result).await
+        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await
     }
 
     pub(crate) async fn actions_admit_reconciliation(
         &self,
         command: ActionReconciliation,
-    ) -> Result<ActionRecord, ActionStoreError> {
-        let mut connection = self.connection().map_err(access_error)?;
+    ) -> Result<ActionRecord, CommandFailure<ActionStoreError>> {
+        let mut connection = self
+            .connection()
+            .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(sql_error)?;
+            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             self.ensure_actions_schema(&transaction).await?;
             let digest = command_digest(b"floe.actions.reconciliation.v1\0", &command)?;
@@ -1460,6 +1532,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     command.command_id,
                     "reconciliation",
                     &digest,
+                    &mut replay_checked,
+                    &mut prior_command,
                 )
                 .await?
             {
@@ -1501,7 +1575,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(current.record)
         }
         .await;
-        self.finish_actions_transaction(transaction, result).await
+        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await
     }
 
     pub(crate) async fn actions_stop_before_dispatch(
@@ -1888,12 +1963,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     pub(crate) async fn actions_compare_and_set_authority(
         &self,
         change: AuthorityChange,
-    ) -> Result<ActionsAuthority, ActionStoreError> {
-        let mut connection = self.connection().map_err(access_error)?;
+    ) -> Result<ActionsAuthority, CommandFailure<ActionStoreError>> {
+        let mut connection = self
+            .connection()
+            .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
-            .map_err(sql_error)?;
+            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
         let result = async {
             self.ensure_actions_schema(&transaction).await?;
             if change.person_id != self.person_id {
@@ -1903,10 +1982,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 return Err(ActionStoreError::InvalidRecord);
             }
             let intent_digest = command_digest(b"floe.actions.authority-change.v1\0", &change)?;
-            if let Some(receipt) = self
+            let receipt = self
                 .command_receipt(&transaction, self.person_id, change.command_id)
-                .await?
-            {
+                .await?;
+            replay_checked = true;
+            if let Some(receipt) = receipt {
+                prior_command = true;
                 if receipt.kind != "authority"
                     || receipt.intent_digest != digest_hex(&intent_digest)
                 {
@@ -1947,6 +2028,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             Ok(next)
         }
         .await;
-        self.finish_actions_transaction(transaction, result).await
+        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await
     }
 }

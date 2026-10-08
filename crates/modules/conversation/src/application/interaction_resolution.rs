@@ -1,7 +1,7 @@
 //! Conversation orchestration over typed Connections receipts. A persisted
 //! subordinate command identity precedes source mutation and survives retries.
 use floe_execution::ExecutionScope;
-use floe_kernel::{AgentFailure, OwnerActor};
+use floe_kernel::{AgentFailure, CommandFailure, OwnerActor};
 use uuid::Uuid;
 
 use crate::{
@@ -17,19 +17,10 @@ pub async fn apply_source_interaction<R: InteractionRepository + ?Sized>(
     command: DecideInteractionCommand,
     now_unix_ms: i64,
     scope: &ExecutionScope,
-) -> Result<ConversationInteraction, AgentFailure> {
-    actor.validate()?;
+) -> Result<ConversationInteraction, CommandFailure<AgentFailure>> {
+    actor.validate().map_err(CommandFailure::NotAdmitted)?;
     if command.principal != actor.person_id.to_string() {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    let current = interactions
-        .get_interaction(actor.person_id, command.interaction_id)
-        .await?
-        .ok_or(AgentFailure::NotFound)?;
-    if matches!(command.kind, crate::InteractionDecisionKind::Approve)
-        && !matches!(current.target, ReviewedTarget::SourceReview(_))
-    {
-        return Err(AgentFailure::InvalidInput);
+        return Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied));
     }
     let recorded =
         match super::interactions::decide_interaction(interactions, command, now_unix_ms).await? {
@@ -48,6 +39,7 @@ pub async fn apply_source_interaction<R: InteractionRepository + ?Sized>(
         scope,
     )
     .await
+    .map_err(CommandFailure::Admitted)
 }
 
 pub async fn recover_source_interaction<R: InteractionRepository + ?Sized>(

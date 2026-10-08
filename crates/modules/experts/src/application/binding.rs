@@ -5,7 +5,7 @@ use floe_agent_contract::{
     TaskExecutionReceipt, TaskExecutionReceiptRef, TaskState,
 };
 use floe_context_contract::SourceSelectionReference;
-use floe_kernel::PersonId;
+use floe_kernel::{CommandFailure, PersonId};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -155,7 +155,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
         identity: BindingPrepareIdentity,
         admitted: Option<&crate::ExpertAdmissionIdentity>,
         scope: &ExecutionScope,
-    ) -> Result<BindingReview, AgentFailure> {
+    ) -> Result<BindingReview, CommandFailure<AgentFailure>> {
         let context = self
             .binding_context(
                 actor,
@@ -165,50 +165,36 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
                 admitted,
                 scope,
             )
-            .await?;
-        let evidence = self.candidate_evidence(actor, &context, scope).await?;
+            .await
+            .map_err(CommandFailure::NotApplied)?;
+        let evidence = self
+            .candidate_evidence(actor, &context, scope)
+            .await
+            .map_err(CommandFailure::NotApplied)?;
         let descriptor = prepare_descriptor(
             identity.clone(),
             &context,
             evidence,
             self.dependencies.clock.now_unix_ms(),
-        )?;
+        )
+        .map_err(CommandFailure::NotApplied)?;
         let stored = scope
-            .run(self.dependencies.binding_reviews.prepare(descriptor, scope))
-            .await?;
-        if stored.identity != identity {
-            return Err(AgentFailure::StorageUnavailable);
-        }
-        validate_stored_descriptor(&stored)?;
-        self.project_stored_review(actor, &stored, scope)
-            .await
-            .map_err(committed_followup_failure)
-    }
-
-    async fn replay_prepared_review(
-        &self,
-        actor: &OwnerActor,
-        identity: &BindingPrepareIdentity,
-        scope: &ExecutionScope,
-    ) -> Result<Option<BindingReview>, AgentFailure> {
-        let stored = scope
-            .run(
-                self.dependencies
+            .run(async {
+                Ok(self
+                    .dependencies
                     .binding_reviews
-                    .find_prepare(actor, identity.command_id, scope),
-            )
-            .await?;
-        let Some(stored) = stored else {
-            return Ok(None);
-        };
-        validate_stored_descriptor(&stored)?;
-        if stored.identity != *identity {
-            return Err(AgentFailure::Conflict);
+                    .prepare(descriptor, scope)
+                    .await)
+            })
+            .await
+            .map_err(CommandFailure::Indeterminate)??;
+        if stored.identity != identity {
+            return Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable));
         }
+        validate_stored_descriptor(&stored).map_err(CommandFailure::Admitted)?;
         self.project_stored_review(actor, &stored, scope)
             .await
-            .map_err(committed_followup_failure)
-            .map(Some)
+            .map_err(|failure| CommandFailure::Admitted(committed_followup_failure(failure)))
     }
 
     async fn read_task_record(
@@ -300,62 +286,103 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         expected_revision: u64,
         enabled: bool,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            let _operation = self.begin_operation(actor, scope).await?;
-            if !command_id.is_valid() || installation_id.is_nil() {
-                return Err(AgentFailure::InvalidInput);
+            let _operation = self
+                .begin_operation(actor, scope)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            if !command_id.is_valid() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
             }
+            let _command = self
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
+            let lookup = scope
+                .run(
+                    self.dependencies
+                        .registry
+                        .find_command(actor, command_id, scope),
+                )
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
+            match lookup {
+                crate::ExpertCommandLookup::Existing(receipt) => {
+                    let request_digest = installation_request_digest(
+                        actor,
+                        command_id,
+                        installation_id,
+                        expected_revision,
+                        enabled,
+                    )
+                    .map_err(CommandFailure::Indeterminate)?;
+                    validate_registry_commit_receipt(
+                        &receipt,
+                        actor,
+                        command_id,
+                        request_digest,
+                        expected_revision,
+                    )
+                    .map_err(CommandFailure::Indeterminate)?;
+                    self.republish_latest(actor, &receipt.snapshot, scope)
+                        .await
+                        .map_err(CommandFailure::Admitted)?;
+                    return project_expert_directory(&receipt.snapshot, actor.person_id)
+                        .map_err(CommandFailure::Admitted);
+                }
+                crate::ExpertCommandLookup::Occupied => {
+                    return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+                }
+                crate::ExpertCommandLookup::Absent => {}
+            }
+
             let request_digest = installation_request_digest(
                 actor,
                 command_id,
                 installation_id,
                 expected_revision,
                 enabled,
-            )?;
-            if let Some(receipt) = scope
-                .run(
-                    self.dependencies
-                        .registry
-                        .find_command(actor, command_id, scope),
-                )
-                .await?
-            {
-                validate_registry_commit_receipt(
-                    &receipt,
-                    actor,
-                    command_id,
-                    request_digest,
-                    expected_revision,
-                )?;
-                self.republish_latest(actor, &receipt.snapshot, scope)
-                    .await?;
-                return project_expert_directory(&receipt.snapshot, actor.person_id)
-                    .map_err(committed_followup_failure);
+            )
+            .map_err(CommandFailure::NotApplied)?;
+            if installation_id.is_nil() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
             }
-
-            let current = self.read_registry(actor, scope).await?;
-            let mut registry = AgentRegistry::restore(current.clone(), current.instance_id)?;
-            registry.set_installation_enabled(expected_revision, installation_id, enabled)?;
+            let current = self
+                .read_registry(actor, scope)
+                .await
+                .map_err(CommandFailure::NotApplied)?;
+            let mut registry = AgentRegistry::restore(current.clone(), current.instance_id)
+                .map_err(CommandFailure::NotApplied)?;
+            registry
+                .set_installation_enabled(expected_revision, installation_id, enabled)
+                .map_err(CommandFailure::NotApplied)?;
             let next = registry.snapshot();
             let expected_next_revision = expected_revision
                 .checked_add(1)
-                .ok_or(AgentFailure::BudgetExceeded)?;
+                .ok_or(CommandFailure::NotApplied(AgentFailure::BudgetExceeded))?;
             if next.revision != expected_next_revision {
-                return Err(AgentFailure::Conflict);
+                return Err(CommandFailure::NotApplied(AgentFailure::Conflict));
             }
             let receipt = scope
-                .run(self.dependencies.registry.commit(
-                    RegistryCommit {
-                        actor: actor.clone(),
-                        command_id,
-                        request_digest,
-                        expected_revision,
-                        next: next.clone(),
-                    },
-                    scope,
-                ))
-                .await?;
+                .run(async {
+                    Ok(self
+                        .dependencies
+                        .registry
+                        .commit(
+                            RegistryCommit {
+                                actor: actor.clone(),
+                                command_id,
+                                request_digest,
+                                expected_revision,
+                                next: next.clone(),
+                            },
+                            scope,
+                        )
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
             validate_registry_commit_receipt(
                 &receipt,
                 actor,
@@ -363,14 +390,15 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 request_digest,
                 expected_revision,
             )
-            .map_err(committed_followup_failure)?;
+            .map_err(CommandFailure::Admitted)?;
             if receipt.snapshot != next {
-                return Err(AgentFailure::StorageUnavailable);
+                return Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable));
             }
             self.republish_latest(actor, &receipt.snapshot, scope)
-                .await?;
+                .await
+                .map_err(CommandFailure::Admitted)?;
             project_expert_directory(&receipt.snapshot, actor.person_id)
-                .map_err(committed_followup_failure)
+                .map_err(CommandFailure::Admitted)
         })
     }
 
@@ -417,25 +445,58 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         requirement_key: String,
         expected_binding_revision: u64,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<BindingReview, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<BindingReview, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            let _operation = self.begin_operation(actor, scope).await?;
-            if !command_id.is_valid() || assignment_id.is_nil() {
-                return Err(AgentFailure::InvalidInput);
+            let _operation = self
+                .begin_operation(actor, scope)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            if !command_id.is_valid() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
             }
-            validate_requirement_key(&requirement_key)?;
+            let _command = self
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
             let identity = BindingPrepareIdentity {
                 command_id,
                 person_id: actor.person_id,
                 device_id: actor.device_id.clone(),
                 assignment_id,
-                requirement_key,
+                requirement_key: requirement_key.clone(),
                 expected_binding_revision,
                 task_origin: None,
             };
-            if let Some(review) = self.replay_prepared_review(actor, &identity, scope).await? {
-                return Ok(review);
+            let lookup = scope
+                .run(
+                    self.dependencies
+                        .binding_reviews
+                        .find_prepare(actor, command_id, scope),
+                )
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
+            match lookup {
+                crate::ExpertCommandLookup::Existing(stored) => {
+                    if stored.identity != identity {
+                        return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+                    }
+                    validate_stored_descriptor(&stored).map_err(CommandFailure::Admitted)?;
+                    return self
+                        .project_stored_review(actor, &stored, scope)
+                        .await
+                        .map_err(|failure| {
+                            CommandFailure::Admitted(committed_followup_failure(failure))
+                        });
+                }
+                crate::ExpertCommandLookup::Occupied => {
+                    return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+                }
+                crate::ExpertCommandLookup::Absent => {}
             }
+            if assignment_id.is_nil() {
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+            }
+            validate_requirement_key(&requirement_key).map_err(CommandFailure::NotApplied)?;
             self.prepare_review(actor, identity, None, scope).await
         })
     }
@@ -464,6 +525,11 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                         .find_prepare(actor, command_id, scope),
                 )
                 .await?;
+            let saved = match saved {
+                crate::ExpertCommandLookup::Absent => None,
+                crate::ExpertCommandLookup::Occupied => return Err(AgentFailure::Conflict),
+                crate::ExpertCommandLookup::Existing(descriptor) => Some(descriptor),
+            };
             if saved.as_ref().is_some_and(|descriptor| {
                 descriptor.identity.task_origin.as_ref() != Some(&task_receipt)
             }) {
@@ -483,6 +549,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             }
             self.prepare_review(actor, identity, Some(&record.admission), scope)
                 .await
+                .map_err(CommandFailure::into_failure)
         })
     }
 
@@ -521,13 +588,63 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
         expected_binding_revision: u64,
         candidate_ids: Vec<Uuid>,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            let _operation = self.begin_operation(actor, scope).await?;
+            let _operation = self
+                .begin_operation(actor, scope)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
             if !command_id.is_valid() {
-                return Err(AgentFailure::InvalidInput);
+                return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
             }
-            review_ref.validate()?;
+            let _command = self
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
+
+            let lookup = scope
+                .run(
+                    self.dependencies
+                        .binding_reviews
+                        .find_replacement(actor, command_id, scope),
+                )
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
+            match lookup {
+                crate::ExpertCommandLookup::Existing(receipt) => {
+                    let mut candidate_refs = candidate_ids.clone();
+                    candidate_refs.sort_unstable();
+                    let request_digest = replacement_request_digest(
+                        actor,
+                        command_id,
+                        &review_ref,
+                        expected_binding_revision,
+                        &candidate_refs,
+                    )
+                    .map_err(CommandFailure::Indeterminate)?;
+                    validate_replacement_receipt(
+                        &receipt,
+                        actor,
+                        command_id,
+                        &review_ref,
+                        request_digest,
+                    )
+                    .map_err(CommandFailure::Indeterminate)?;
+                    self.project_stored_replacement(actor, &receipt, scope)
+                        .await
+                        .map_err(CommandFailure::Admitted)?;
+                    self.republish_latest(actor, &receipt.registry.snapshot, scope)
+                        .await
+                        .map_err(CommandFailure::Admitted)?;
+                    return project_expert_directory(&receipt.registry.snapshot, actor.person_id)
+                        .map_err(CommandFailure::Admitted);
+                }
+                crate::ExpertCommandLookup::Occupied => {
+                    return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+                }
+                crate::ExpertCommandLookup::Absent => {}
+            }
+
             let mut candidate_refs = candidate_ids;
             candidate_refs.sort_unstable();
             let request_digest = replacement_request_digest(
@@ -536,181 +653,173 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
                 &review_ref,
                 expected_binding_revision,
                 &candidate_refs,
-            )?;
-
-            let replay = scope
-                .run(
-                    self.dependencies
-                        .binding_reviews
-                        .find_replacement(actor, command_id, scope),
-                )
-                .await?;
-            if let Some(receipt) = replay {
-                validate_replacement_receipt(
-                    &receipt,
-                    actor,
-                    command_id,
-                    &review_ref,
-                    request_digest,
-                )?;
-                self.project_stored_replacement(actor, &receipt, scope)
-                    .await?;
-                self.republish_latest(actor, &receipt.registry.snapshot, scope)
-                    .await?;
-                return project_expert_directory(&receipt.registry.snapshot, actor.person_id)
-                    .map_err(committed_followup_failure);
-            }
-
-            if expected_binding_revision == 0
-                || candidate_refs.len() > usize::from(MAX_REQUIREMENT_SOURCES)
-                || candidate_refs.iter().any(Uuid::is_nil)
-                || candidate_refs.windows(2).any(|pair| pair[0] == pair[1])
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let descriptor = scope
-                .run(
-                    self.dependencies
-                        .binding_reviews
-                        .get(actor, review_ref.clone(), scope),
-                )
-                .await?;
-            validate_stored_descriptor(&descriptor)?;
-            if descriptor.review_ref != review_ref
-                || descriptor.identity.person_id != actor.person_id
-                || descriptor.identity.device_id != actor.device_id
-            {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            if descriptor.identity.expected_binding_revision != expected_binding_revision {
-                return Err(AgentFailure::Conflict);
-            }
-            if candidate_refs.len() > usize::from(descriptor.requirement.maximum_sources) {
-                return Err(AgentFailure::InvalidInput);
-            }
-            for candidate_ref in &candidate_refs {
-                let reviewed = descriptor
-                    .candidates
-                    .iter()
-                    .find(|candidate| candidate.candidate_ref == *candidate_ref)
-                    .ok_or(AgentFailure::InvalidInput)?;
-                if reviewed.candidate.availability == CandidateAvailability::Unavailable
-                    && !reviewed.selected
+            )
+            .map_err(CommandFailure::NotApplied)?;
+            let prepared = async {
+                review_ref.validate()?;
+                if expected_binding_revision == 0
+                    || candidate_refs.len() > usize::from(MAX_REQUIREMENT_SOURCES)
+                    || candidate_refs.iter().any(Uuid::is_nil)
+                    || candidate_refs.windows(2).any(|pair| pair[0] == pair[1])
                 {
                     return Err(AgentFailure::InvalidInput);
                 }
-            }
-            if self.dependencies.clock.now_unix_ms() >= descriptor.expires_at_unix_ms {
-                return Err(AgentFailure::StaleContext);
-            }
-
-            let admission = crate::ExpertAdmissionIdentity {
-                registry_instance_id: descriptor.registry_instance_id,
-                assignment_id: descriptor.identity.assignment_id,
-                installation_id: descriptor.installation_id,
-                package: descriptor.package.clone(),
-                definition_revision: descriptor.definition_revision,
-            };
-            let context = self
-                .binding_context(
-                    actor,
-                    descriptor.identity.assignment_id,
-                    &descriptor.identity.requirement_key,
-                    Some(expected_binding_revision),
-                    Some(&admission),
-                    scope,
-                )
-                .await?;
-            if context.resolved.registry_revision != context.registry.revision()
-                || context.resolved.assignment.installation_id != descriptor.installation_id
-                || context.resolved.manifest.package != descriptor.package
-                || context.resolved.manifest.definition.definition_revision
-                    != descriptor.definition_revision
-                || context.requirement != descriptor.requirement
-            {
-                return Err(AgentFailure::Conflict);
-            }
-
-            let evidence = self.candidate_evidence(actor, &context, scope).await?;
-            if evidence.revision != descriptor.catalog_revision
-                || evidence.digest != descriptor.catalog_digest
-                || evidence.source_expectations != descriptor.source_expectations
-                || reviewed_candidates(descriptor.review_ref.id, &evidence, &context.selected)?
-                    != descriptor.candidates
-            {
-                return Err(AgentFailure::StaleContext);
-            }
-
-            let mut selected = Vec::with_capacity(candidate_refs.len());
-            for candidate_ref in &candidate_refs {
-                let reviewed = descriptor
-                    .candidates
-                    .iter()
-                    .find(|candidate| candidate.candidate_ref == *candidate_ref)
-                    .ok_or(AgentFailure::InvalidInput)?;
-                if reviewed.candidate.availability == CandidateAvailability::Unavailable
-                    && !reviewed.selected
+                let descriptor = scope
+                    .run(
+                        self.dependencies
+                            .binding_reviews
+                            .get(actor, review_ref.clone(), scope),
+                    )
+                    .await?;
+                validate_stored_descriptor(&descriptor)?;
+                if descriptor.review_ref != review_ref
+                    || descriptor.identity.person_id != actor.person_id
+                    || descriptor.identity.device_id != actor.device_id
                 {
+                    return Err(AgentFailure::CapabilityDenied);
+                }
+                if descriptor.identity.expected_binding_revision != expected_binding_revision {
+                    return Err(AgentFailure::Conflict);
+                }
+                if candidate_refs.len() > usize::from(descriptor.requirement.maximum_sources) {
                     return Err(AgentFailure::InvalidInput);
                 }
-                selected.push(reviewed.candidate.reference.clone());
-            }
-            selected.sort();
-            if selected.len() > usize::from(descriptor.requirement.maximum_sources)
-                || selected.windows(2).any(|pair| pair[0] == pair[1])
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
+                for candidate_ref in &candidate_refs {
+                    let reviewed = descriptor
+                        .candidates
+                        .iter()
+                        .find(|candidate| candidate.candidate_ref == *candidate_ref)
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    if reviewed.candidate.availability == CandidateAvailability::Unavailable
+                        && !reviewed.selected
+                    {
+                        return Err(AgentFailure::InvalidInput);
+                    }
+                }
+                if self.dependencies.clock.now_unix_ms() >= descriptor.expires_at_unix_ms {
+                    return Err(AgentFailure::StaleContext);
+                }
 
-            let mut registry = context.registry;
-            registry.replace_binding(
-                actor.person_id,
-                command_id.as_uuid(),
-                crate::ExpertBindingCommand {
+                let admission = crate::ExpertAdmissionIdentity {
+                    registry_instance_id: descriptor.registry_instance_id,
                     assignment_id: descriptor.identity.assignment_id,
+                    installation_id: descriptor.installation_id,
                     package: descriptor.package.clone(),
                     definition_revision: descriptor.definition_revision,
-                    requirement_key: descriptor.identity.requirement_key.clone(),
-                    expected_binding_revision,
-                    selected,
-                },
-            )?;
-            let next = registry.snapshot();
-            let committed_at_unix_ms = self.dependencies.clock.now_unix_ms();
-            if committed_at_unix_ms >= descriptor.expires_at_unix_ms {
-                return Err(AgentFailure::StaleContext);
-            }
-            let receipt = scope
-                .run(self.dependencies.binding_reviews.commit_replacement(
-                    ReviewedBindingReplacement {
-                        review_ref: review_ref.clone(),
+                };
+                let context = self
+                    .binding_context(
+                        actor,
+                        descriptor.identity.assignment_id,
+                        &descriptor.identity.requirement_key,
+                        Some(expected_binding_revision),
+                        Some(&admission),
+                        scope,
+                    )
+                    .await?;
+                if context.resolved.registry_revision != context.registry.revision()
+                    || context.resolved.assignment.installation_id != descriptor.installation_id
+                    || context.resolved.manifest.package != descriptor.package
+                    || context.resolved.manifest.definition.definition_revision
+                        != descriptor.definition_revision
+                    || context.requirement != descriptor.requirement
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+
+                let evidence = self.candidate_evidence(actor, &context, scope).await?;
+                if evidence.revision != descriptor.catalog_revision
+                    || evidence.digest != descriptor.catalog_digest
+                    || evidence.source_expectations != descriptor.source_expectations
+                    || reviewed_candidates(descriptor.review_ref.id, &evidence, &context.selected)?
+                        != descriptor.candidates
+                {
+                    return Err(AgentFailure::StaleContext);
+                }
+
+                let mut selected = Vec::with_capacity(candidate_refs.len());
+                for candidate_ref in &candidate_refs {
+                    let reviewed = descriptor
+                        .candidates
+                        .iter()
+                        .find(|candidate| candidate.candidate_ref == *candidate_ref)
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    if reviewed.candidate.availability == CandidateAvailability::Unavailable
+                        && !reviewed.selected
+                    {
+                        return Err(AgentFailure::InvalidInput);
+                    }
+                    selected.push(reviewed.candidate.reference.clone());
+                }
+                selected.sort();
+                if selected.len() > usize::from(descriptor.requirement.maximum_sources)
+                    || selected.windows(2).any(|pair| pair[0] == pair[1])
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+
+                let mut registry = context.registry;
+                registry.replace_binding(
+                    actor.person_id,
+                    command_id.as_uuid(),
+                    crate::ExpertBindingCommand {
+                        assignment_id: descriptor.identity.assignment_id,
+                        package: descriptor.package.clone(),
+                        definition_revision: descriptor.definition_revision,
+                        requirement_key: descriptor.identity.requirement_key.clone(),
                         expected_binding_revision,
-                        candidate_refs,
-                        committed_at_unix_ms,
-                        registry: RegistryCommit {
-                            actor: actor.clone(),
-                            command_id,
-                            request_digest,
-                            expected_revision: context.resolved.registry_revision,
-                            next: next.clone(),
-                        },
+                        selected,
                     },
-                    scope,
-                ))
-                .await?;
+                )?;
+                let next = registry.snapshot();
+                let committed_at_unix_ms = self.dependencies.clock.now_unix_ms();
+                if committed_at_unix_ms >= descriptor.expires_at_unix_ms {
+                    return Err(AgentFailure::StaleContext);
+                }
+                Ok(ReviewedBindingReplacement {
+                    review_ref: review_ref.clone(),
+                    expected_binding_revision,
+                    candidate_refs: candidate_refs.clone(),
+                    committed_at_unix_ms,
+                    registry: RegistryCommit {
+                        actor: actor.clone(),
+                        command_id,
+                        request_digest,
+                        expected_revision: context.resolved.registry_revision,
+                        next,
+                    },
+                })
+            }
+            .await
+            .map_err(CommandFailure::NotApplied)?;
+
+            let expected_snapshot = prepared.registry.next.clone();
+            let expected_committed_at = prepared.committed_at_unix_ms;
+            let receipt = scope
+                .run(async {
+                    Ok(self
+                        .dependencies
+                        .binding_reviews
+                        .commit_replacement(prepared, scope)
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
             validate_replacement_receipt(&receipt, actor, command_id, &review_ref, request_digest)
-                .map_err(committed_followup_failure)?;
+                .map_err(CommandFailure::Admitted)?;
             self.project_stored_replacement(actor, &receipt, scope)
-                .await?;
-            if receipt.registry.snapshot != next
-                || receipt.committed_at_unix_ms != committed_at_unix_ms
+                .await
+                .map_err(CommandFailure::Admitted)?;
+            if receipt.registry.snapshot != expected_snapshot
+                || receipt.committed_at_unix_ms != expected_committed_at
             {
-                return Err(AgentFailure::StorageUnavailable);
+                return Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable));
             }
             self.republish_latest(actor, &receipt.registry.snapshot, scope)
-                .await?;
+                .await
+                .map_err(CommandFailure::Admitted)?;
             project_expert_directory(&receipt.registry.snapshot, actor.person_id)
-                .map_err(committed_followup_failure)
+                .map_err(CommandFailure::Admitted)
         })
     }
 
@@ -725,15 +834,17 @@ impl<Tasks: TaskRepository + 'static> ExpertsOwner for ExpertsService<Tasks> {
             if !command_id.is_valid() {
                 return Err(AgentFailure::InvalidInput);
             }
-            let Some(receipt) = scope
+            let lookup = scope
                 .run(
                     self.dependencies
                         .binding_reviews
                         .find_replacement(actor, command_id, scope),
                 )
-                .await?
-            else {
-                return Ok(None);
+                .await?;
+            let receipt = match lookup {
+                crate::ExpertCommandLookup::Absent => return Ok(None),
+                crate::ExpertCommandLookup::Occupied => return Err(AgentFailure::Conflict),
+                crate::ExpertCommandLookup::Existing(receipt) => receipt,
             };
             self.project_stored_replacement(actor, &receipt, scope)
                 .await

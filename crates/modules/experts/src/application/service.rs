@@ -8,6 +8,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::{collections::HashMap, sync::Weak};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub struct ExpertsDependencies<Tasks> {
@@ -27,6 +29,7 @@ pub struct ExpertsService<Tasks> {
     pub(crate) dependencies: ExpertsDependencies<Tasks>,
     pub(crate) closing: AtomicBool,
     pub(crate) operations: tokio::sync::RwLock<()>,
+    command_locks: std::sync::Mutex<HashMap<floe_agent_contract::CommandId, Weak<Mutex<()>>>>,
 }
 impl<Tasks> Drop for ExpertsService<Tasks> {
     fn drop(&mut self) {
@@ -52,6 +55,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             dependencies,
             closing: AtomicBool::new(false),
             operations: tokio::sync::RwLock::new(()),
+            command_locks: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -78,6 +82,32 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
             .await?;
         self.authorize(actor)?;
         Ok(guard)
+    }
+
+    pub(crate) async fn lock_command(
+        &self,
+        command_id: floe_agent_contract::CommandId,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, AgentFailure> {
+        if !command_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let lock = {
+            let mut locks = self
+                .command_locks
+                .lock()
+                .map_err(|_| AgentFailure::Interrupted)?;
+            if locks.len() >= 64 {
+                locks.retain(|_, lock| lock.strong_count() > 0);
+            }
+            if let Some(lock) = locks.get(&command_id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(command_id, Arc::downgrade(&lock));
+                lock
+            }
+        };
+        Ok(lock.lock_owned().await)
     }
 
     pub async fn activate(&self, scope: &ExecutionScope) -> Result<(), AgentFailure> {
@@ -136,6 +166,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
                         scope,
                     )
                     .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)
                 {
                     Ok(receipt) => {
                         if receipt.command_id != command_id

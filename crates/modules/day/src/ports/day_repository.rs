@@ -1,5 +1,5 @@
 use crate::{CalendarMirror, TimelineItem};
-use floe_kernel::{PersonId, Revision};
+use floe_kernel::{CommandFailure, PersonId, Revision};
 use std::{collections::BTreeMap, fmt::Display};
 use thiserror::Error;
 
@@ -67,7 +67,7 @@ pub trait DayRepository: super::refresh_repository::DayRefreshRepository + Send 
         &'a self,
         command: crate::DayMutationCommand,
         fence: &'a crate::DayWriteFence,
-    ) -> floe_execution::BoxFuture<'a, Result<crate::DayMutationResult, DayError>>;
+    ) -> floe_execution::BoxFuture<'a, Result<crate::DayMutationResult, CommandFailure<DayError>>>;
     fn collect_action<'a>(
         &'a self,
         commit: crate::DayCollectionCommit,

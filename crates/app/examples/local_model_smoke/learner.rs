@@ -182,7 +182,13 @@ fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {
         retry_of: None,
     };
     let admitted = match owner_call(host, move |owners, actor, scope| {
-        owners.conversation.start_turn(actor, command, scope)
+        Box::pin(async move {
+            owners
+                .conversation
+                .start_turn(actor, command, scope)
+                .await
+                .map_err(floe_kernel::CommandFailure::into_failure)
+        })
     }) {
         Ok(receipt) => receipt,
         Err(AgentFailure::StorageUnavailable) => owner_call(host, move |owners, actor, scope| {

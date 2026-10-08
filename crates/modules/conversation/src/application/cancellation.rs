@@ -4,7 +4,7 @@ use std::{
 };
 
 use floe_execution::Cancellation;
-use floe_kernel::{AgentFailure, CommandId, RunId};
+use floe_kernel::{AgentFailure, CommandFailure, CommandId, RunId};
 
 const MAX_ACTIVE_RUNS: usize = 64;
 const MAX_TRACKED_RUNS: usize = 256;
@@ -232,8 +232,14 @@ pub async fn cancel_run_command<Repository: crate::ConversationRepository>(
     repository: &Repository,
     run_cancellations: &RunCancellationRegistry,
     command: CancelRunCommand,
-) -> Result<CancelRunStatus, AgentFailure> {
-    command.validate()?;
+) -> Result<CancelRunStatus, CommandFailure<AgentFailure>> {
+    // Only an invalid command identity is safe to reject before consulting
+    // durable owner receipts. A prior receipt makes every other body
+    // validation or mismatch uncertain for this immutable id.
+    if !command.command_id.is_valid() {
+        return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+    }
+    validate_principal(&command.principal).map_err(CommandFailure::NotApplied)?;
     repository.admit_cancel(command.clone()).await?;
     let request = CancelRunRequest {
         run_id: command.run_id,
@@ -246,11 +252,17 @@ pub async fn cancel_run_command<Repository: crate::ConversationRepository>(
             run_id: request.run_id,
         },
     )
-    .await?;
+    .await
+    .map_err(CommandFailure::Admitted)?;
     match receipt {
         Some(receipt) if receipt.state == crate::RunState::Working => {
-            match run_cancellations.cancel_run(request)? {
-                CancelRunStatus::Unknown => Err(AgentFailure::Interrupted),
+            match run_cancellations
+                .cancel_run(request)
+                .map_err(CommandFailure::Admitted)?
+            {
+                CancelRunStatus::Unknown => {
+                    Err(CommandFailure::Admitted(AgentFailure::Interrupted))
+                }
                 status => Ok(status),
             }
         }
