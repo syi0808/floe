@@ -22,16 +22,16 @@ use floe_conversation_contract::{
 };
 use floe_conversation_core::{
     AppendFacts, CheckpointFacts, ConversationHead, ConversationStoreFailure, EMPTY_PREFIX_DIGEST,
-    ExecutorDomain, MAX_TRANSCRIPT_PAGE_ENTRIES, OwnerGenerationFence, OwnerRunEvidence,
-    OwnerRunState, OwnerSettlementEvidence, RecorderCloseFacts, RecorderCloseReceipt,
-    RecorderFence, RecorderOpenFacts, RecorderOpenReceipt, RecorderRecoveryObservation,
-    RecorderRecoveryState, RecorderRetirementFacts, RecorderRetirementReceipt,
-    RecorderStartRequest, RecordingFacts, RecordingReceipt, RecordingRequest, TranscriptEntry,
-    TranscriptEntryKind, TranscriptPage, TranscriptPageBudget, advance_core_prefix_digest,
-    append_input_transition, apply_checkpoint_transition, close_recording_transition,
-    open_recording_transition, record_entry_transition, recording_content_digest,
-    replay_close_recording, replay_open_recording, replay_recording_entry,
-    retire_stale_recording_transition, validate_reference_target,
+    ExecutorDomain, MAX_TRANSCRIPT_PAGE_BYTES, MAX_TRANSCRIPT_PAGE_ENTRIES, OwnerGenerationFence,
+    OwnerRunEvidence, OwnerRunState, OwnerSettlementEvidence, RecorderCloseFacts,
+    RecorderCloseReceipt, RecorderFence, RecorderOpenFacts, RecorderOpenReceipt,
+    RecorderRecoveryObservation, RecorderRecoveryState, RecorderRetirementFacts,
+    RecorderRetirementReceipt, RecorderStartRequest, RecordingFacts, RecordingReceipt,
+    RecordingRequest, TranscriptEntry, TranscriptEntryKind, TranscriptPage, TranscriptPageBudget,
+    advance_core_prefix_digest, append_input_transition, apply_checkpoint_transition,
+    close_recording_transition, open_recording_transition, record_entry_transition,
+    recording_content_digest, replay_close_recording, replay_open_recording,
+    replay_recording_entry, retire_stale_recording_transition, validate_reference_target,
 };
 use floe_kernel::{AgentFailure, PersonId, RunId};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -39,7 +39,6 @@ use sha2::{Digest, Sha256};
 use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
-const MAX_TRANSCRIPT_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STORED_MESSAGE_BYTES: usize = 132_096;
 
 #[derive(Clone, Debug)]
@@ -62,9 +61,9 @@ pub(super) enum CoreComposedRunAdmission {
 }
 
 #[derive(Clone, Debug)]
-struct LoadedHead {
-    state: ConversationHead,
-    identity_json: String,
+pub(super) struct LoadedHead {
+    pub(super) state: ConversationHead,
+    pub(super) identity_json: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -109,14 +108,14 @@ impl OwnerInputBinding {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Scope {
-    person_id: PersonId,
-    conversation_id: ConversationId,
-    branch_id: ConversationBranchId,
+pub(super) struct Scope {
+    pub(super) person_id: PersonId,
+    pub(super) conversation_id: ConversationId,
+    pub(super) branch_id: ConversationBranchId,
 }
 
 impl Scope {
-    fn from_identity(
+    pub(super) fn from_identity(
         person_id: PersonId,
         _identity: &AgentIdentity,
         conversation_id: ConversationId,
@@ -129,7 +128,7 @@ impl Scope {
         }
     }
 
-    fn sql(self) -> (String, String, String) {
+    pub(super) fn sql(self) -> (String, String, String) {
         (
             self.person_id.to_string(),
             self.conversation_id.as_uuid().to_string(),
@@ -151,7 +150,7 @@ fn unavailable() -> ConversationStoreFailure {
     ConversationStoreFailure::Unavailable
 }
 
-fn database_error(error: turso::Error) -> ConversationStoreFailure {
+pub(super) fn database_error(error: turso::Error) -> ConversationStoreFailure {
     if database_failure(error) == AgentFailure::StorageBusy {
         ConversationStoreFailure::Busy
     } else {
@@ -159,7 +158,7 @@ fn database_error(error: turso::Error) -> ConversationStoreFailure {
     }
 }
 
-fn start_error(error: AgentFailure) -> ConversationStoreFailure {
+pub(super) fn start_error(error: AgentFailure) -> ConversationStoreFailure {
     if error == AgentFailure::StorageBusy {
         ConversationStoreFailure::Busy
     } else {
@@ -196,7 +195,7 @@ fn decode<T: DeserializeOwned>(value: &str) -> Result<T, ConversationStoreFailur
     serde_json::from_str(value).map_err(|_| unavailable())
 }
 
-fn integer(value: u64) -> Result<i64, ConversationStoreFailure> {
+pub(super) fn integer(value: u64) -> Result<i64, ConversationStoreFailure> {
     i64::try_from(value)
         .map_err(|_| ConversationStoreFailure::Transition(ConversationFailure::InvalidInput))
 }
@@ -205,7 +204,7 @@ fn nonnegative_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
     u64::try_from(value).map_err(|_| unavailable())
 }
 
-fn positive_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
+pub(super) fn positive_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
     let value = u64::try_from(value).map_err(|_| unavailable())?;
     (value > 0).then_some(value).ok_or_else(unavailable)
 }
@@ -310,13 +309,17 @@ fn request_scope(
     ))
 }
 
-async fn ensure_core_v3_on(transaction: &Transaction<'_>) -> Result<(), ConversationStoreFailure> {
+pub(super) async fn ensure_core_v3_on(
+    transaction: &Transaction<'_>,
+) -> Result<(), ConversationStoreFailure> {
     crate::schema::ensure_conversation_core_v3_family(transaction)
         .await
         .map_err(schema_error)
 }
 
-async fn require_core_v3_on(transaction: &Transaction<'_>) -> Result<(), ConversationStoreFailure> {
+pub(super) async fn require_core_v3_on(
+    transaction: &Transaction<'_>,
+) -> Result<(), ConversationStoreFailure> {
     match crate::schema::conversation_core_family_version(transaction)
         .await
         .map_err(schema_error)?
@@ -326,7 +329,7 @@ async fn require_core_v3_on(transaction: &Transaction<'_>) -> Result<(), Convers
     }
 }
 
-async fn load_head_on(
+pub(super) async fn load_head_on(
     transaction: &Transaction<'_>,
     scope: Scope,
 ) -> Result<Option<LoadedHead>, ConversationStoreFailure> {
@@ -526,7 +529,7 @@ async fn raw_entry_on(
     }))
 }
 
-async fn entry_on(
+pub(super) async fn entry_on(
     transaction: &Transaction<'_>,
     scope: Scope,
     sequence: u64,
@@ -2215,7 +2218,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or_else(unavailable)?;
             self.validate_producing_task_reference_on(transaction, &entry)
                 .await?;
-            let entry_bytes = encode(&entry.message)?.as_bytes().len();
+            let entry_bytes = encode(&entry)?.as_bytes().len();
             if entry_bytes > max_bytes.saturating_sub(encoded_bytes) {
                 if entries.is_empty() {
                     return Err(ConversationStoreFailure::PageItemExceedsBudget);
@@ -2674,7 +2677,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(resolved)
     }
 
-    async fn validate_producing_task_reference_on(
+    pub(super) async fn validate_producing_task_reference_on(
         &self,
         transaction: &Transaction<'_>,
         entry: &TranscriptEntry,
@@ -2744,7 +2747,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
     }
 
-    async fn finish_conversation_core_read<T>(
+    pub(super) async fn finish_conversation_core_read<T>(
         &self,
         transaction: Transaction<'_>,
         result: Result<T, ConversationStoreFailure>,
@@ -5974,11 +5977,11 @@ mod tests {
         assert_eq!(count_limited.entries[0].reference, first.receipt.transcript);
         assert_eq!(count_limited.next_cursor, Some(first.receipt.transcript));
         assert!(count_limited.has_more);
-        let utf8_json_bytes = serde_json::to_string(&first_request.message)
-            .expect("encode UTF-8 message")
+        let utf8_record_bytes = serde_json::to_vec(&count_limited.entries[0])
+            .expect("encode UTF-8 transcript record envelope")
             .len();
-        assert_eq!(count_limited.encoded_bytes, utf8_json_bytes);
-        assert!(utf8_json_bytes > first_request.message.text.chars().count());
+        assert_eq!(count_limited.encoded_bytes, utf8_record_bytes);
+        assert!(utf8_record_bytes > first_request.message.text.chars().count());
 
         let byte_limited = scenario
             .vault()

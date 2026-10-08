@@ -28,6 +28,7 @@ mod context_dependencies;
 mod creation;
 pub use creation::{VaultPresence, inspect_vault_presence};
 mod conversation_core;
+mod conversation_core_reads;
 mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;

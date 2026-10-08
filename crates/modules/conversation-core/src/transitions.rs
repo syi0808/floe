@@ -103,7 +103,7 @@ impl OwnerRunEvidence {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TranscriptEntry {
     pub reference: TranscriptReference,
     pub message: ConversationMessage,

@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use floe_conversation_contract::{
-    AdmissionResult, ConversationBranchId, ConversationCheckpoint, ConversationFailure,
-    ConversationId, ConversationReference, LogicalContributionId, MessageAdmissionRequest,
-    MessageId, TaskEvidenceReference, TranscriptReference,
+    AdmissionResult, AgentIdentity, ConversationBranchId, ConversationCheckpoint,
+    ConversationFailure, ConversationId, ConversationReference, LogicalContributionId,
+    MessageAdmissionRequest, MessageId, TaskEvidenceReference, TranscriptReference,
 };
 use floe_kernel::RunId;
 
@@ -39,6 +39,11 @@ pub enum ConversationStoreFailure {
     NotCommitted,
     OutcomeUnknown,
     PageItemExceedsBudget,
+    InvalidTranscriptReadTarget,
+    InvalidTranscriptBoundary,
+    InvalidTranscriptCursor,
+    TranscriptReferenceMismatch,
+    TranscriptMessageNotFound,
     UnsupportedOwnerDomain,
     UnsupportedOwnerIntent,
     UnsupportedStoredMeaning,
@@ -51,11 +56,69 @@ impl From<ConversationFailure> for ConversationStoreFailure {
 }
 
 pub const MAX_TRANSCRIPT_PAGE_ENTRIES: usize = 128;
+pub const MAX_TRANSCRIPT_PAGE_BYTES: usize = 4 * 1024 * 1024;
+
+/// Exact identity and branch scope for read-only transcript observations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationReadTarget {
+    pub identity: AgentIdentity,
+    pub conversation_id: ConversationId,
+    pub branch_id: ConversationBranchId,
+}
+
+impl ConversationReadTarget {
+    pub fn validate(&self) -> Result<(), ConversationFailure> {
+        self.identity.validate()?;
+        if !self.conversation_id.is_valid() || !self.branch_id.is_valid() {
+            return Err(ConversationFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+/// Immutable transcript upper bound returned by a head read.
+///
+/// `through` is `None` only for an empty transcript. For a nonempty transcript
+/// it is the exact reference at `head_revision`; a later append does not alter
+/// this read boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptReadBoundary {
+    pub target: ConversationReadTarget,
+    pub head_revision: u64,
+    pub through: Option<TranscriptReference>,
+}
+
+/// Reverse-page position. `before` is an exclusive upper bound for the next
+/// page; page results themselves are ordered oldest-to-newest.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptReadCursor {
+    pub boundary: TranscriptReadBoundary,
+    pub before: Option<TranscriptReference>,
+}
+
+impl TranscriptReadCursor {
+    pub fn start(boundary: TranscriptReadBoundary) -> Self {
+        Self {
+            boundary,
+            before: None,
+        }
+    }
+}
+
+/// Exact transcript lookup. A reference lookup must match both MessageId and
+/// sequence; neither field is used to guess the other.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptEntryLookup {
+    MessageId(MessageId),
+    Reference(TranscriptReference),
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TranscriptPageBudget {
     pub max_entries: usize,
-    /// Sum of serialized UTF-8 ConversationMessage payload bytes.
+    /// Sum of serialized UTF-8 `TranscriptEntry` record-envelope bytes. This
+    /// includes the message and its exact Core/evidence references, but not
+    /// hydrated owner evidence payloads or page/cursor metadata.
     pub max_bytes: usize,
 }
 
@@ -63,6 +126,16 @@ pub struct TranscriptPageBudget {
 pub struct TranscriptPage {
     pub entries: Vec<TranscriptEntry>,
     pub next_cursor: Option<TranscriptReference>,
+    pub has_more: bool,
+    pub encoded_bytes: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptReversePage {
+    /// Entries are chronological within this page, even though paging moves
+    /// from the pinned boundary toward older entries.
+    pub entries: Vec<TranscriptEntry>,
+    pub next_cursor: Option<TranscriptReadCursor>,
     pub has_more: bool,
     pub encoded_bytes: usize,
 }
@@ -384,6 +457,7 @@ impl ConversationCore {
             return Err(ConversationFailure::InvalidInput);
         }
         let max_entries = budget.max_entries.min(MAX_TRANSCRIPT_PAGE_ENTRIES);
+        let max_bytes = budget.max_bytes.min(MAX_TRANSCRIPT_PAGE_BYTES);
         let mut cursor_sequence = 0;
         if let Some(cursor) = after {
             cursor.validate()?;
@@ -405,10 +479,10 @@ impl ConversationCore {
             if entries.len() >= max_entries {
                 break;
             }
-            let entry_bytes = serde_json::to_vec(&entry.message)
+            let entry_bytes = serde_json::to_vec(entry)
                 .map_err(|_| ConversationFailure::InvalidInput)?
                 .len();
-            if entry_bytes > budget.max_bytes.saturating_sub(encoded_bytes) {
+            if entry_bytes > max_bytes.saturating_sub(encoded_bytes) {
                 if entries.is_empty() {
                     return Err(ConversationFailure::StorageUnavailable);
                 }
@@ -427,6 +501,212 @@ impl ConversationCore {
             has_more: self.head.head_revision > through,
             encoded_bytes,
         })
+    }
+
+    /// Capture the exact current transcript head for later bounded reads.
+    pub fn read_boundary(&self) -> Result<TranscriptReadBoundary, ConversationStoreFailure> {
+        let target = ConversationReadTarget {
+            identity: self.head.identity.clone(),
+            conversation_id: self.head.conversation_id,
+            branch_id: self.head.branch_id,
+        };
+        let through = if self.head.head_revision == 0 {
+            None
+        } else {
+            Some(
+                self.transcript
+                    .get(
+                        usize::try_from(self.head.head_revision - 1)
+                            .map_err(|_| ConversationStoreFailure::InvalidTranscriptBoundary)?,
+                    )
+                    .filter(|entry| entry.reference.sequence == self.head.head_revision)
+                    .map(|entry| entry.reference)
+                    .ok_or(ConversationStoreFailure::InvalidTranscriptBoundary)?,
+            )
+        };
+        Ok(TranscriptReadBoundary {
+            target,
+            head_revision: self.head.head_revision,
+            through,
+        })
+    }
+
+    /// Resolve one exact MessageId or MessageId+sequence reference within a
+    /// previously captured boundary. The byte limit counts the serialized
+    /// returned `TranscriptEntry`, including its Core and evidence references.
+    pub fn read_transcript_entry(
+        &self,
+        boundary: &TranscriptReadBoundary,
+        lookup: TranscriptEntryLookup,
+        max_bytes: usize,
+    ) -> Result<TranscriptEntry, ConversationStoreFailure> {
+        self.validate_read_boundary(boundary)?;
+        if max_bytes == 0 {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::InvalidInput,
+            ));
+        }
+        let entry = match lookup {
+            TranscriptEntryLookup::MessageId(message_id) => {
+                if !message_id.is_valid() {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::InvalidInput,
+                    ));
+                }
+                let mut matches = self
+                    .transcript
+                    .iter()
+                    .filter(|entry| entry.reference.message_id == message_id);
+                let entry = matches
+                    .next()
+                    .ok_or(ConversationStoreFailure::TranscriptMessageNotFound)?;
+                if matches.next().is_some() {
+                    return Err(ConversationStoreFailure::Unavailable);
+                }
+                if entry.reference.sequence > boundary.head_revision {
+                    return Err(ConversationStoreFailure::InvalidTranscriptBoundary);
+                }
+                entry
+            }
+            TranscriptEntryLookup::Reference(reference) => {
+                if reference.validate().is_err()
+                    || reference.conversation_id != boundary.target.conversation_id
+                    || reference.branch_id != boundary.target.branch_id
+                    || reference.sequence > boundary.head_revision
+                {
+                    return Err(ConversationStoreFailure::TranscriptReferenceMismatch);
+                }
+                let entry = self
+                    .transcript
+                    .get(
+                        usize::try_from(reference.sequence - 1)
+                            .map_err(|_| ConversationStoreFailure::TranscriptReferenceMismatch)?,
+                    )
+                    .ok_or(ConversationStoreFailure::TranscriptReferenceMismatch)?;
+                if entry.reference != reference {
+                    return Err(ConversationStoreFailure::TranscriptReferenceMismatch);
+                }
+                entry
+            }
+        };
+        let encoded_bytes = serde_json::to_vec(entry)
+            .map_err(|_| ConversationStoreFailure::Unavailable)?
+            .len();
+        if encoded_bytes > max_bytes {
+            return Err(ConversationStoreFailure::PageItemExceedsBudget);
+        }
+        Ok(entry.clone())
+    }
+
+    /// Read one reverse page from an exact pinned boundary. The input cursor's
+    /// `before` reference is exclusive. Each result is ordered oldest-to-
+    /// newest, and the returned cursor pins the same boundary before the
+    /// oldest result.
+    pub fn read_previous_page(
+        &self,
+        cursor: &TranscriptReadCursor,
+        budget: TranscriptPageBudget,
+    ) -> Result<TranscriptReversePage, ConversationStoreFailure> {
+        self.validate_read_boundary(&cursor.boundary)?;
+        if budget.max_entries == 0 || budget.max_bytes == 0 {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::InvalidInput,
+            ));
+        }
+        let before_sequence = if let Some(before) = cursor.before {
+            if before.validate().is_err()
+                || before.conversation_id != cursor.boundary.target.conversation_id
+                || before.branch_id != cursor.boundary.target.branch_id
+                || before.sequence > cursor.boundary.head_revision
+                || self.entry(before).is_none()
+            {
+                return Err(ConversationStoreFailure::InvalidTranscriptCursor);
+            }
+            before.sequence
+        } else {
+            cursor.boundary.head_revision.saturating_add(1)
+        };
+        let max_entries = budget.max_entries.min(MAX_TRANSCRIPT_PAGE_ENTRIES);
+        let max_bytes = budget.max_bytes.min(MAX_TRANSCRIPT_PAGE_BYTES);
+        let candidates = self
+            .transcript
+            .iter()
+            .rev()
+            .filter(|entry| {
+                entry.reference.sequence <= cursor.boundary.head_revision
+                    && entry.reference.sequence < before_sequence
+            })
+            .take(max_entries.saturating_add(1))
+            .collect::<Vec<_>>();
+        let mut entries = Vec::with_capacity(max_entries.min(32));
+        let mut encoded_bytes = 0usize;
+        let mut has_more = false;
+        for candidate in candidates.iter().copied() {
+            if entries.len() == max_entries {
+                has_more = true;
+                break;
+            }
+            let entry_bytes = serde_json::to_vec(candidate)
+                .map_err(|_| ConversationStoreFailure::Unavailable)?
+                .len();
+            if entry_bytes > max_bytes.saturating_sub(encoded_bytes) {
+                if entries.is_empty() {
+                    return Err(ConversationStoreFailure::PageItemExceedsBudget);
+                }
+                has_more = true;
+                break;
+            }
+            encoded_bytes = encoded_bytes.checked_add(entry_bytes).ok_or(
+                ConversationStoreFailure::Transition(ConversationFailure::InvalidInput),
+            )?;
+            entries.push(candidate.clone());
+        }
+        entries.reverse();
+        let next_cursor = if has_more {
+            entries.first().map(|entry| TranscriptReadCursor {
+                boundary: cursor.boundary.clone(),
+                before: Some(entry.reference),
+            })
+        } else {
+            None
+        };
+        Ok(TranscriptReversePage {
+            entries,
+            next_cursor,
+            has_more,
+            encoded_bytes,
+        })
+    }
+
+    fn validate_read_boundary(
+        &self,
+        boundary: &TranscriptReadBoundary,
+    ) -> Result<(), ConversationStoreFailure> {
+        boundary
+            .target
+            .validate()
+            .map_err(|_| ConversationStoreFailure::InvalidTranscriptReadTarget)?;
+        if boundary.target.identity != self.head.identity
+            || boundary.target.conversation_id != self.head.conversation_id
+            || boundary.target.branch_id != self.head.branch_id
+            || boundary.head_revision > self.head.head_revision
+        {
+            return Err(ConversationStoreFailure::InvalidTranscriptBoundary);
+        }
+        match (boundary.head_revision, boundary.through) {
+            (0, None) => Ok(()),
+            (sequence, Some(reference)) if sequence > 0 => {
+                if reference.sequence != sequence
+                    || reference.conversation_id != boundary.target.conversation_id
+                    || reference.branch_id != boundary.target.branch_id
+                    || self.entry(reference).is_none()
+                {
+                    return Err(ConversationStoreFailure::InvalidTranscriptBoundary);
+                }
+                Ok(())
+            }
+            _ => Err(ConversationStoreFailure::InvalidTranscriptBoundary),
+        }
     }
 
     pub fn reference(&self) -> ConversationReference {
