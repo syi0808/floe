@@ -67,17 +67,17 @@ The candidate adds contract/journal/continuation selection tests and a mock Cale
 
 The follow-up still has no single end-to-end test through `finalize_exhausted_run`; finalization inheritance is covered by owner tests. Later published bounded ordinary-parent finalization evidence is recorded under “Bounded P1 follow-up — exhausted parent finalization” below; it qualifies ordinary parent only. Child pending-Continue with no local Manager intent and historical Unproven cases remain unqualified today. The candidate does not alter Conversation Core or the conversation-contract schema. The only Vault file touched is the Run journal append owner for transactional model-selection validation; R2 custody/schema code remains unchanged.
 
-### Root-proposed Conversation custody cutover contract (pending final reconciliation)
+### Root-reconciled Conversation custody cutover contract
 
-**Status:** Root proposes this next contract from verified source b6315b066aa37eedae1afd21aefd117cf28db8bf (tree ed78d2ac006c8e7086e448caf60eb991d333516f), after direct code review and the completed Sol critique. A second Opus review is pending. This section is pending final reconciliation: it is a target contract, not implemented or fully approved. The R1, R2a, R2 follow-up and R3a evidence above remains limited to those bounded slices; this section makes no whole-project progress claim. The sketches below are conceptual and do not describe existing APIs or a shipped schema.
+**Status:** Root reconciled this target against direct source review at `b6315b066aa37eedae1afd21aefd117cf28db8bf` (tree `ed78d2ac006c8e7086e448caf60eb991d333516f`) and the completed Sol and Opus reviews. Those reviews examined supplied source excerpts and ran no tests; the Opus call used the approved Opus5/high/Standard configuration, not the previously cited 5.5xhigh configuration. The review gate is closed. This is the settled target contract, not an implementation claim. Remaining choices below are implementation-level design gates. The current published base is `563124d3e50915cef03fe13c18514175a0c17464` (tree `b949268d152b29dd26011284aba163aea27b3e11`); the intervening change from the reviewed code baseline was documentation-only. R1, R2a, R2 follow-up and R3a evidence above remains limited to those bounded slices; this section makes no whole-project progress claim. The sketches below are conceptual and do not describe existing APIs or a shipped schema.
 
-**Source facts at this base:** Core's AdmissionTarget::Continue currently names the append-to-existing-conversation target (crates/contracts/conversation/src/message.rs). WriterClaim carries a numeric executor generation; stale writer observation is read-only and does not retire the claim (crates/modules/conversation-core/src/transitions.rs and crates/modules/conversation-core/src/lib.rs). Current Core pages are forward sequence-reference pages with entry and message-byte caps; the byte budget counts serialized ConversationMessage payloads, not evidence hydration. Generated output receipts identify the producer claim and transcript reference, but do not define the proposed separate logical contribution ID. The optional encrypted Conversation Core family is revision 2, with generated output in a separately marked extension (R2a/R2 follow-up above). Expert task_record::terminal treats every state except Submitted and Working as terminal (crates/modules/experts/src/domain/task_record.rs). These are current facts and bounded-slice limits; the target below does not claim they have already changed.
+**Source facts at the reviewed code baseline:** Core's `AdmissionTarget::Continue` currently names the append-to-existing-conversation target (`crates/contracts/conversation/src/message.rs`). Current Core also has a `Queued` admission disposition, a pending FIFO/earliest-pending scheduler, and owner-wide command occupancy (`crates/modules/conversation-core/src/transitions.rs` and `crates/modules/conversation-core/src/lib.rs`). The target below removes those Core scheduling and duplicate-occupancy authorities; it does not remove immutable Run/claim replay uniqueness that protects custody receipts. `WriterClaim` carries a numeric executor generation; stale-writer observation is read-only and does not retire the claim (`crates/modules/conversation-core/src/transitions.rs` and `crates/modules/conversation-core/src/lib.rs`). Current Core pages are forward sequence-reference pages with entry and message-byte caps; the byte budget counts serialized ConversationMessage payloads, not evidence hydration (`crates/modules/conversation-core/src/lib.rs`). Generated output receipts identify the producer claim and transcript reference, but do not define the proposed separate logical contribution ID (`crates/modules/conversation-core/src/transitions.rs`). The optional encrypted Conversation Core family is revision 2, with generated output in a separately marked extension (R2a/R2 follow-up above). Expert `task_record::terminal` treats every state except Submitted and Working as terminal (`crates/modules/experts/src/domain/task_record.rs`). These are current facts and bounded-slice limits; the target below does not claim they have already changed.
 
 #### Authority and transaction boundary
 
-The Host Run owner remains the only authority for admission, scheduling, cancellation, execution journal, recovery and terminal disposition. Neutral Core owns typed transcript integrity, one writer lane, immutable claim and recording receipts, and checkpoint custody. Core does not grow a second authoritative work-state machine: its transcript transition does not assign the owner admission ordinal or decide which work is runnable. Manager and Expert use the same neutral transitions with separate identity, conversation, Task and journal state.
+The Host Run owner remains the only authority for admission, scheduling, cancellation, execution journal, recovery and terminal disposition. Neutral Core owns typed transcript integrity, one writer lane, immutable claim and recording receipts, and checkpoint custody. Core does not grow a second authoritative work-state machine. The cutover removes Core's pending FIFO, `Queued` disposition, earliest-pending scheduling, and duplicate command-occupancy path. The existing Conversation owner continues to own command identity, occupancy/replay and ACK-loss semantics. Preserve immutable Run/claim replay uniqueness where it protects exact custody receipts; it is not a scheduling ordinal or a work queue. Do not infer a settled watermark from deleted queue arithmetic: the owner supplies verified protection and settlement facts to the same transaction. Manager and Expert use the same neutral transitions with isolated identity, conversation, Task and journal state. Core depends only on shared neutral transcript/value types; it has no Manager or Expert domain-type dependency and does not interpret model-projection text. Typed evidence remains owner-owned and is reached through neutral evidence references and the owning resolver.
 
-Vault composes the owner and Core pure transitions in the **same local transaction**. Independent public calls to the owner store and Core store do not form an atomic composition and are not the product path. The transaction is local and bounded; no model, provider or other external I/O runs while it is held.
+Vault composes the owner and Core pure transitions in the **same local transaction**. Public calls to the owner store and Core store made independently do not form an atomic composition and are not the product path. The transaction is local and bounded; no model, provider or other external I/O runs while it is held.
 
 ~~~mermaid
 flowchart LR
@@ -90,7 +90,7 @@ flowchart LR
   Tx --> Commit["One commit<br/>owner aggregate and journal plus typed Core custody"]
   Commit --> Owner
   Commit --> Replay["Exact receipt on retry<br/>no new dispatch"]
-  Owner --> Gate["Owner scheduling<br/>live Context and Access checks<br/>exact batch and cursor"]
+  Owner -->|"later owner scheduling"| Gate["Live Context and Access checks<br/>exact batch and cursor; owner facts"]
   Gate --> Dispatch["Owner-authorized dispatch"]
   Dispatch --> Journal["Owner journal records settlement<br/>or preserves uncertainty"]
   Journal --> Owner
@@ -100,53 +100,137 @@ A conceptual port and transaction shape, with illustrative names only:
 
 ~~~rust
 // Conceptual only; these are not existing Floe APIs.
-enum SegmentInput {
-    NewUser(TypedMessage),                 // append exactly one User entry
-    Retained { input: ExactInputRef, mode: ContinueOrResume }, // append none
+enum ProductSegmentIntent {
+    New { user: TypedTranscriptEntry },          // one User append
+    Continue { input: ExactInputRef },           // no append
+    Resume { input: ExactInputRef },             // no append
+}
+
+struct OwnerSegmentReceipt {
+    run: RunId,                              // fresh for this admitted segment
+    aggregate_revision: u64,                 // existing owner CAS revision, not a new ordinal
 }
 
 struct RecorderFence {
-    identity: AgentIdentity,                // exact Person/instance/assignment/definition scope
+    identity: AgentIdentity,                 // Person/instance/assignment/definition policy
     conversation: ConversationId,
     branch: ConversationBranchId,
-    run: RunId,                             // fresh for this admitted segment
-    writer_epoch: u64,                      // unique claim epoch, not the executor generation
-    executor_domain: NamedOwnerExecutor,
-    generation: u64,
-}
-
-struct AdmittedSegment {
-    input: SegmentInput,
     run: RunId,
-    owner_admission_ordinal: u64,
-    recorder: RecorderFence,
+    writer_epoch: u64,                       // unique claim epoch
+    executor_domain: NamedOwnerExecutor,
+    executor_generation: u64,
 }
 
-trait HostRunOwnerPort {
-    fn admit_segment(&self, intent: ProductSegmentIntent) -> OwnerAdmission;
-    // Exact journal evidence only; this does not authorize external dispatch.
-    fn claim_exact_pending_batch(&self, run: RunId, batch: BatchId, cursor: Cursor)
-        -> PendingBatchAcknowledgement;
-    fn retire_stale_recorder(&self, fence: RecorderFence, evidence: TerminalEvidence)
+struct RecorderContext {
+    fence: RecorderFence,
+    execution_task: Option<OwnerTaskExecutionRef>, // if host policy binds the execution to a Task
+}
+
+struct OwnerEvidenceReference {
+    schema_version: u32,
+    byte_length: u64,
+    digest: Digest,
+    resolver_key: OpaqueOwnerEvidenceKey,
+}
+
+struct EntryEvidence {
+    original_producer: OwnerEvidenceReference,
+    producing_task: Option<OwnerEvidenceReference>, // owner-proven per-entry reference
+    contribution: LogicalContributionId,
+    payload: OwnerEvidenceReference,           // neutral envelope; evidence remains owner-owned
+}
+
+enum HistoricalProvenance {
+    Imported { recorded_identity: AgentIdentity }, // copied from that historical row
+    LegacyUnproven,
+}
+
+struct NeutralImportedEntry {
+    entry: TypedTranscriptEntry,
+    evidence: OwnerEvidenceReference,
+    provenance: HistoricalProvenance,
+}
+
+struct NeutralImportFacts {
+    source_revision: SourceRevision,
+    raw_digest: Digest,
+    archive: FrozenArchiveReference,
+    entries: Vec<NeutralImportedEntry>,
+    cursor_aliases: Vec<StableCursorAliasFact>,
+}
+
+enum CheckpointEvidenceStatus {
+    Proven { producer: OwnerEvidenceReference, recorder: OwnerEvidenceReference },
+    ImportedLegacyUnproven,
+}
+
+struct CheckpointCustodyFacts {
+    checkpoint_id: StableCheckpointId,
+    exact_prefix: TranscriptCommitment,
+    evidence: CheckpointEvidenceStatus,
+    merged_owner_coverage: MergedOwnerCoverage,
+    protection_roots: VerifiedProtectionRoots,
+}
+
+trait OwnerEvidenceResolver {
+    fn resolve_verified(&self, reference: OwnerEvidenceReference, byte_budget: usize)
+        -> Result<ResolvedTypedEvidence, EvidenceFailure>;
+    // Owning resolver validates schema, declared length and digest within the byte budget.
+}
+
+trait OneTimeOwnerImport {
+    fn decode_frozen_snapshot(&self, source: FrozenSnapshotRef,
+                              expected_revision: SourceRevision, expected_digest: Digest)
+        -> NeutralImportFacts;
+    // Called only by the explicit quiescent development-profile import.
+}
+
+trait HostRunOwnerTransitions {
+    fn admit_segment(&self, intent: ProductSegmentIntent) -> OwnerSegmentReceipt;
+    fn acknowledge_exact_batch(&self, run: RunId, batch: BatchId, cursor: Cursor)
+        -> ExactBatchAcknowledgement;         // journal evidence, never dispatch authority
+    fn close_current_recorder(&self, fence: RecorderFence, terminal: OwnerTerminalEvidence)
+        -> OwnerSettlement;
+    fn fence_old_executor(&self, domain: NamedOwnerExecutor, old_generation: u64)
+        -> DurableGenerationFence;
+    fn retire_stale_recorder(&self, old_fence: RecorderFence, fence: DurableGenerationFence,
+                              terminal: ExactTerminalOrPendingTerminalEvidence)
         -> OwnerRecovery;
 }
 
-// Core functions are pure transition planning over bounded facts. The host
-// owner/Vault transaction composer applies the returned delta with its own.
-trait CoreTranscriptTransitionPort {
-    fn append_new_user(&self, facts: CoreFacts, message: TypedMessage) -> CoreDelta;
-    fn record_output(&self, facts: CoreFacts, claim: RecorderFence,
-                     provenance: ProducerEvidence, contribution: ContributionId)
-        -> CoreDelta;
+trait NeutralCoreTransitions {
+    fn open_recording(&self, facts: CoreFacts, owner: OwnerSegmentReceipt,
+                      fence: RecorderFence) -> (CoreDelta, ImmutableClaimReceipt);
+    fn append_new_user(&self, facts: CoreFacts, entry: TypedTranscriptEntry) -> CoreDelta;
+    fn record_entry(&self, facts: CoreFacts, recorder: RecorderContext,
+                    entry: TypedTranscriptEntry, evidence: EntryEvidence)
+        -> (CoreDelta, ImmutableRecordingReceipt);
+    fn close_recording(&self, facts: CoreFacts, fence: RecorderFence,
+                       owner_settlement: OwnerSettlement)
+        -> (CoreDelta, ImmutableCloseReceipt);
+    fn retire_stale_recording(&self, facts: CoreFacts, old_fence: RecorderFence,
+                              owner_recovery: OwnerRecovery) -> CoreDelta;
+    fn checkpoint(&self, facts: CoreFacts, checkpoint: CheckpointCustodyFacts) -> CoreDelta;
+    fn import_neutral_facts(&self, facts: CoreFacts, import: NeutralImportFacts) -> CoreDelta;
+}
+
+trait NeutralCoreReads {
+    fn head(&self, facts: CoreFacts) -> TranscriptHead;
+    fn reverse_page(&self, facts: CoreFacts, before: Option<StableCursorAlias>,
+                    entry_limit: usize, hydrated_byte_limit: usize) -> BoundedPage;
+    fn get_exact(&self, facts: CoreFacts, reference: StableCursorAliasOrMessageId)
+        -> ExactLookup; // found, missing, or ambiguous; never guess
 }
 ~~~
+
+The Core sketch uses neutral facts and references only. The owner decodes typed payloads and legacy rows; Core does not import Manager/Expert domain types or a legacy snapshot model. A valid typed entry may have empty text: structured evidence is the record, and text is only a projection. On evidence resolution, the owner resolver verifies schema version, declared byte length and digest within the caller's hydration budget.
 
 Conceptual atomic application:
 
 ~~~text
 BEGIN IMMEDIATE
   read bounded owner aggregate/journal facts and Core facts
-  validate owner CAS, stable identities, evidence references and family version
+  validate owner CAS, stable identities, owner-proven evidence refs and family gate
   owner_delta = HostRunOwner.pure_transition(owner_facts, intent)
   core_delta  = ConversationCore.pure_transition(core_facts, owner_delta.transcript_intent)
   write owner aggregate/journal + typed Core rows/links/receipts/aliases
@@ -155,71 +239,74 @@ COMMIT  // both transitions commit, or neither does
 
 On a proven pre-commit rollback, preserve the existing NotCommitted meaning. If commit succeeds but the acknowledgement is lost, retain the existing indeterminate outcome and recover by exact receipt before mutable checks. An exact replay never grants dispatch. Existing Conversation command occupancy, replay and ACK-loss semantics remain authoritative.
 
+Open and close recording receipts are immutable and exactly replayable. If either acknowledgement is lost after commit, retry returns the same claim or close receipt before mutable checks; it does not re-admit a segment, restart work or dispatch an effect. Qualify both lost-open-ACK and lost-close-ACK paths with no extra dispatch.
+
 #### Product segments, claims and pending effects
 
-Keep the legacy Manager busy-admission rejection during this first custody cutover. Do not add queued-user UX as a side effect. Product New, Continue and Resume each admit one fresh owner Run segment and therefore receive a fresh owner Run ID. A separate Work UUID is unnecessary while one segment corresponds to one admission. New appends exactly one User message. Continue and Resume reference the exact retained input and append no User message. Transcript sequence and the Host owner's admission/scheduling ordinal are separate counters. Rename Core's current append-to-existing target to an append/admit-existing term; reserve product Continue for its Run intent, and do not equate the two meanings.
+Keep the legacy Manager busy-admission rejection during this first custody cutover. Do not add queued-user UX as a side effect. Product New, Continue and Resume each admit one fresh owner Run segment and therefore receive a fresh owner Run ID; a separate Work UUID is unnecessary while one segment corresponds to one admission. New appends exactly one User entry. Continue and Resume reference the exact retained input and append none. The Run ID plus the existing owner Run aggregate revision identifies the segment. Do not add an `owner_admission_ordinal` unless an owner query demonstrates the need and defines its semantics. Transcript sequence, owner aggregate revision, recorder epoch, executor generation and checkpoint prefix are distinct values. Rename Core's current append-to-existing target so it cannot be mistaken for product Continue.
 
-Every admitted Run gets a fresh recorder fence bound to exact AgentIdentity (Person, instance, assignment and definition policy), conversation, branch, Run, a unique writer epoch, and the named owner executor domain plus generation. The same retained input may be referenced without requiring equality with the completed-prefix position. Preserve predecessor claims unchanged; never rebind old authority in place.
+Every admitted Run gets a fresh recorder fence bound to exact AgentIdentity (Person, instance, assignment and definition policy), conversation, branch, Run, unique writer epoch, and named owner executor domain plus generation. The same retained input may be referenced without requiring equality with the completed-prefix position. Preserve predecessor claims unchanged; never rebind old authority in place. The recorder's execution Task binding, where the host has one, is distinct from each entry's producing Task reference. A Manager Run may record owner-proven T1 and T2 evidence under one recorder. Validate those references against owner receipts; Core must not accept arbitrary Task IDs.
 
-Admission and writer claim do **not** take over a pending effect batch. Preserve the existing exact journal batch and cursor acknowledgement as later owner-journal evidence, the pinned model selection, stable effect and Task IDs, and live Context/Access checks. The batch/cursor acknowledgement is evidence only; it grants no external-effect dispatch authority. Access admission and effect-owner preflight remain separate and must pass before dispatch. Preserve the reviewed R3a lineage: Continue carries a prior pending batch and selection only when one is pending; explicit Resume and Continue without pending work start fresh. Empty or batch-only Runs within a pending Continue lineage carry that batch and selection until a child claims the exact batch and cursor. An exact ACK retry recovers the stored receipt and grants no dispatch. An unresolved effect stays uncertain: it cannot be dispatched again, released, or cleared to unblock later work.
+Admission and writer claim do **not** take over a pending effect batch. Preserve the exact owner-journal batch and cursor acknowledgement, pinned model selection, stable effect and Task IDs, and live Context/Access checks. The batch/cursor acknowledgement is evidence only; it grants no external-effect dispatch authority. Access admission and effect-owner preflight remain separate and must pass before dispatch. Continue carries a prior pending batch and model pin only when one is pending; explicit Resume and Continue without pending work start fresh. Empty or batch-only Runs in a pending Continue lineage carry the exact prior batch and pin until a child claims the exact batch and cursor. An exact ACK retry recovers the stored receipt and grants no dispatch. An unresolved effect stays uncertain: it cannot be dispatched again, released, or cleared to unblock later work.
 
-Stale writer retirement is an explicit Host owner recovery transition, after durable fencing and exact terminal or pending-terminal evidence for that Run. It is not timeout-based reclaim and is not a Core observation side effect. If effect outcome remains uncertain, keep the uncertainty and do not release the writer merely to unblock a queue.
+A current-generation cancellation or settlement closes through the Host owner's terminal transition and exact close evidence. Stale writer retirement is a different, explicit owner-recovery transition, after durable fencing of the named old executor generation and exact terminal or pending-terminal evidence for that Run. It is not timeout-based reclaim and is not a Core observation side effect. If effect outcome remains uncertain, keep the uncertainty and do not release the writer merely to unblock work.
 
 ~~~mermaid
 flowchart TD
-  Intent["Product segment intent"] --> New["New plan<br/>one User append requested"]
-  Intent --> Continue["Continue plan<br/>exact retained input; no append"]
-  Intent --> Resume["Resume plan<br/>exact retained input; no append"]
-  New --> Tx["One atomic owner + Core admission transaction<br/>User append occurs inside this transaction only for New"]
+  Intent["Product segment intent"] --> New["New<br/>one User append requested"]
+  Intent --> Continue["Continue<br/>exact retained input; no append"]
+  Intent --> Resume["Resume<br/>exact retained input; no append"]
+  New --> Tx["One owner + Core transaction<br/>append occurs only for New"]
   Continue --> Tx
   Resume --> Tx
-  Tx --> Fence["Commit owner Run admission and Core custody together<br/>fresh Run ID, owner ordinal and recorder fence"]
-  Fence --> Pending{"Pending effect batch?"}
-  Pending -->|"none"| Checks["Live Context and Access checks<br/>plus effect-owner preflight"]
-  Pending -->|"yes"| Carry["Carry exact batch and model pin<br/>through empty or batch-only Continue children"]
-  Carry --> PendingClaim["Child claims the exact batch ID and cursor"]
-  PendingClaim --> Evidence["Later owner-journal acknowledgement evidence"]
-  Evidence --> Preflight["Separate Access admission<br/>and effect-owner preflight"]
-  Evidence --> Ack["Exact ACK retry reads receipt only<br/>no new dispatch"]
-  Preflight --> Dispatch["Dispatch only with owner authority"]
-  Checks --> Dispatch
+  Tx --> Fence["Fresh owner Run, existing admission revision<br/>and recorder fence commit together"]
+  Fence --> Pending{"Prior pending batch in Continue lineage?"}
+  Pending -->|"no"| Preflight["Current live Context and Access checks<br/>plus effect-owner preflight"]
+  Pending -->|"yes"| Carry["Carry exact batch and model pin<br/>through empty or batch-only Runs"]
+  Carry --> Ack["Owner validates exact batch ID and cursor"]
+  Ack --> AckResult{"First acknowledgement or exact replay?"}
+  AckResult -->|"first acknowledgement"| Preflight
+  AckResult -->|"exact replay"| Retry["Read stored receipt only<br/>no dispatch"]
+  Preflight --> Dispatch["Owner-authorized dispatch"]
   Dispatch --> Outcome{"Settled or uncertain?"}
   Outcome -->|"settled"| Journal["Record exact owner outcome"]
   Outcome -->|"uncertain"| Hold["Preserve uncertainty<br/>no redispatch or release to unblock"]
-  A["A: pending batch"] --> B1["B: empty"] --> C1["C: exact claim"]
-  A --> B2["B: batch-only"] --> C2["C: exact claim"]
+  BatchA["A: pending batch"] --> EmptyB["B: empty"] --> ClaimC["C: exact batch and cursor claim"]
+  BatchA --> BatchOnlyB["B: batch-only"] --> ClaimC2["C: exact batch and cursor claim"]
 ~~~
 
 #### Transcript identity, historical evidence and bounded custody
 
-Keep three identities distinct: original producer/evidence identity, current recorder claim, and logical contribution ID. Re-recording acknowledged Task evidence maps to the same contribution; it must not append duplicate text or mint a new logical contribution. Manager Task projections and Expert output are separate authenticated views. Do not fabricate transcript Tool roles to represent them.
+Keep three identities distinct: original producer/evidence identity, current recorder claim, and logical contribution ID. Re-recorded acknowledged Task evidence maps to the same contribution; it must not append duplicate text or mint a new contribution identity. Manager Task projections and Expert output are separate authenticated views. Do not fabricate transcript Tool roles to represent them.
 
-Historical import is explicitly Imported/LegacyUnproven. Preserve exact typed fields, owner-linked coverage, Task receipts, interaction references and archive pointers. Do not invent CommandIds, inbound pending items, writer claims, or dispatch receipts for historical rows. Flat model projections are not migration inputs. Define a versioned typed evidence payload/reference with schema, byte size, digest and an owner resolver. Text is a projection, not the custody record. Inline versus separately stored evidence remains a bounded-storage decision; opaque, unresolvable hashes are not sufficient.
+Historical custody is lossless, typed and explicitly Imported/LegacyUnproven. Preserve exact typed fields, recorded provenance, owner-linked coverage, Task receipts, interaction references and archive pointers. Mixed historical policy revisions keep their recorded per-entry identity/provenance; never assign today's AgentIdentity to the whole imported history. Unknown historical authority stays LegacyUnproven. Store imported records in a separate frozen archive namespace referenced from the live identity-bound conversation. Do not invent CommandIds, inbound pending items, writer claims or dispatch receipts for historical rows. Flat model projections are not migration inputs. Define a versioned typed evidence payload/reference contract with schema, byte length, digest and an owner resolver. Text is a projection, not the custody record. Inline versus separately stored evidence remains a bounded-storage decision; opaque, unresolvable hashes are not sufficient. Evidence hydration counts against reverse-page byte limits.
 
-Preserve Session ID and the bounded product-metadata/CAS shell where existing foreign-key contracts require it. Stable public cursor aliases and ordinals remain distinct from internal Core Message IDs and transcript sequence; keep an archive namespace separate. Missing and ambiguous cursors must surface explicitly and never be guessed, silently rebased, skipped or duplicated. Reverse pages stay bounded by entry and byte budgets that include evidence hydration; a paging facade must not load the full history first. Session shell revision, Run aggregate/journal revision, and Core head/tail/coordination revisions are separate values.
+Preserve Session ID and the bounded product-metadata/CAS shell where existing foreign-key contracts need it. Persist stable public cursor aliases and ordinals separately from internal Core Message IDs and transcript sequence; validate the alias mapping as injective. Reject an import whose aliases are ambiguous rather than guessing or silently rebasing them. Keep the frozen archive namespace separate but addressable by references from the live conversation. For reads, missing and ambiguous cursors must be explicit and never skipped or duplicated; the exact result representation remains an implementation gate. Reverse pages stay bounded by entry and byte budgets that include evidence hydration; a paging facade must not load the full history first. Provide bounded head and exact MessageId/reference lookup. Session shell revision, Run aggregate/journal revision, and Core tail/coordination revisions are separate values.
 
-Migration is an explicit owner-coordinated, quiescent Session snapshot import. Validate the source revision, raw digest and relevant references under bounded fanout; atomically commit typed rows, owner links, aliases, protection roots, shell binding and the import marker. No startup reset and no independent dual writes. Freeze the old snapshot as evidence, not as a second live path. After normalized writes begin, old binaries must fail safely rather than read stale frozen data; prefer forward repair over unsafe automatic rollback. Do not delete a key or database. The existing optional Core family revision 2 and output extension cannot be dropped or reinterpreted silently; agree and document deliberate versioned handling before any changed schema ships.
+Migration is a one-time, explicit, owner-coordinated, quiescent Session snapshot import in the selected development profile. Validate source revision, raw digest and relevant references under bounded fanout. The owner performs legacy decoding and supplies inert neutral import facts to Core. For each bounded snapshot, commit typed rows, owner links, injective aliases, protection roots, shell binding and an idempotent import receipt atomically; this receipt proves source-snapshot import/recovery and is not the global family-format gate. Do not pretend independent per-Session transactions atomically activate the whole normalized family. Use one bounded Vault transaction for import plus activation only if the complete scope is demonstrated bounded; otherwise stage per-snapshot imports with live writes quiescent and keep the new family non-live until a bounded verifier confirms every required import, then cross an explicit activation barrier. No automatic startup import or reset and no independent dual writes. Do not add a permanent legacy decoder, dual-read fallback or compatibility bridge. Freeze the legacy snapshot as evidence, not as a second live path.
+
+Old binaries must fail closed before touching stale frozen data through an enforced family-format gate that those binaries actually recognize. An unknown per-row marker is not sufficient. If no enforced discriminator can guarantee this, activation is blocked until the format gate is added and qualified against the old binary. Preserve the existing optional Core family revision 2 and output extension through deliberate, versioned handling; neither may be silently dropped or reinterpreted before any changed schema ships. Prefer forward repair over unsafe automatic rollback. Do not delete a key or database.
 
 #### Checkpointing, retention and Expert boundaries
 
-A summary prefix, transcript commitment, settled scheduling position and physical retention are distinct. Preserve indexed roots for active work, pending batches, open interactions, continuation/resume slots, uncertain effects and archive evidence. Initial checkpointing does not physically delete old payloads. Coverage Unknown never becomes Independent by rewrite, and source revocation continues to apply to summaries.
+A summary prefix, transcript commitment, settled scheduling position and physical retention are distinct. Every checkpoint has a stable identity and exact prefix commitment, proven producer/recorder evidence or explicit Imported/LegacyUnproven status, and merged owner coverage; register these with transcript custody in the same transaction. Preserve indexed protection roots for active work, pending batches, open interactions, Continue origins, pending Resume slots, uncertain effects and archive evidence. Owner-proven roots and settlement facts are registered with custody in the same transaction. Initial checkpointing does not physically delete old payloads. Coverage Unknown never becomes Independent by rewrite, and source revocation continues to apply to summaries.
 
-Manager and Expert reuse neutral Core implementations with isolated state. Expert identity and conversation selection are host-bound to Person, instance, assignment and definition policy; never infer them from a Manager Run or Tool ID. Preserve current terminal Task receipts, including Blocked; do not reopen them. Before Expert caller cutover, freeze the host Task-to-Expert-Run mapping and the sole execution journal home. Whether Expert Tasks span multiple Run segments, and which later Task continues an assignment conversation, remain explicit design gates. Manager remains the only Learner; no Expert learning hook is added. A2A remains mapping only.
+Manager and Expert reuse neutral Core implementations with isolated state. Target a persistent Expert conversation per host-bound assignment and definition identity; resolve it from verified Person, instance, assignment and definition policy, never from a Manager Run or Tool ID. Pin the exact admitted history reference/head and digest in the canonical Task execution input and replay identity. Replaying a Task reads that pinned snapshot, never today's conversation head; live Context and Access reauthorization still runs. Preserve current terminal Task receipts, including Blocked, and do not reopen them. After a Task is terminal, future work uses a new Task and fresh Run segment. Before Expert caller cutover, freeze the host Task-to-Expert-Run mapping and sole execution journal home. Whether one Expert Task may span multiple Run segments, and which later Task continues an assignment conversation, remain explicit design gates. Manager remains the only Learner; add no Expert learning hook. A2A remains mapping only.
 
 #### Ordered cutover and acceptance gates
 
 Implement in this order:
 
-1. Freeze this contract and pure transition traces for New/Continue/Resume, contribution identity, cursor/provenance and pending-batch carry.
-2. Implement atomic owner-plus-Core custody and explicit stale-retirement transitions; qualify concurrent claims, ACK loss, stale generation and exact owner evidence before any caller cutover.
-3. Cut over the Manager caller while preserving current product semantics, including busy rejection and no duplicate User append.
-4. Qualify inert snapshot import, bounded query/cursor behavior and compaction protection. Import causes zero dispatch.
-5. Freeze Expert host/Task-to-Run mapping and journal home, then cut over isolated Expert conversations. Keep multi-segment Task and later-Task continuation choices as gates.
-6. Remove the frozen legacy live path and run the full affected gates, including old-binary fail-closed behavior. Prefer forward repair; no automatic key or database deletion.
+1. Freeze neutral transitions, owner-evidence references/resolution and bounded read contracts; write pure traces for New/Continue/Resume, contribution identity, producer-versus-recorder Task identity, cursor/provenance, pending-batch carry, checkpoint coverage and format handling.
+2. Implement atomic owner-plus-Core custody, current-generation close and explicit stale-retirement transitions. Add fault tests for concurrent claims, exact open/close receipt replay after lost ACKs, recovery and exact owner evidence before caller cutover; retries must not cause extra dispatch.
+3. Qualify inert bounded snapshot import, head/reverse-page/exact lookup, cursor behavior and compaction protection. Import must cause zero dispatch; activation waits for every required import and the enforced family-format gate.
+4. Cut over the Manager caller while preserving current product semantics, including busy rejection and no duplicate User append.
+5. Freeze Expert identity, pinned-history, Task-to-Run and sole journal-home mapping; then cut over isolated Expert conversations. Keep multi-segment Task and later-Task continuation choices as gates.
+6. Remove the frozen legacy live path and run all affected gates, including old-binary fail-closed behavior. Prefer forward repair; no automatic key or database deletion.
 
-Adversarial acceptance cases include: New appends one User while Continue/Resume append none; concurrent admission remains busy-rejected; exact ACK loss and concurrent claims; stale executor generation cannot reclaim by timeout; A pending → empty B → C and A pending → batch-only B → C preserve the exact pending batch/cursor and model pin; replayed output producer/evidence retains the same contribution with no duplicate text; unresolved effects remain uncertain; import performs zero dispatch and fabricates no receipt; revoked sources remain revoked after summarization; missing/ambiguous cursors are explicit; evidence hydration respects the reverse-page byte budget; Blocked Task receipts remain terminal; and an old binary cannot read stale frozen data after normalized writes.
+Adversarial acceptance cases include: New appends one User while Continue/Resume append none; concurrent Manager admission remains busy-rejected; exact ACK loss and concurrent claims; lost open and close acknowledgements replay the exact immutable receipts before mutable checks and cause no extra dispatch; stale executor generation cannot reclaim by timeout; current-generation cancellation closes through owner terminal evidence; A pending → empty B → C and A pending → batch-only B → C preserve the exact batch/cursor and model pin; replayed output evidence maps to the same contribution with no duplicate text; one Manager recorder can link owner-proven T1/T2 receipts; empty-text structured entries survive custody and reads; unresolved effects remain uncertain; import performs zero dispatch, records its valid import receipt, and fabricates no historical command, claim or dispatch authority; mixed historical policy identities remain per-entry or LegacyUnproven; ambiguous cursor aliases reject import and persisted aliases are injective; revoked sources remain revoked after summarization; cursor missing/ambiguity is explicit; evidence hydration stays within reverse-page byte budget; bounded reads do not load full history; checkpoint identity, exact prefix, evidence status and merged coverage commit together; Blocked Task receipts remain terminal; Expert Task replay reads its pinned history snapshot; and an old binary cannot read stale frozen data after normalized writes.
 
-Open design gates for final reconciliation: freeze the exact missing/ambiguous cursor result representation; choose inline or separately stored typed evidence within measured byte budgets; define deliberate versioned handling if the existing optional Core revision-2 family must change; and settle the Expert Task-to-Run/journal mapping, multi-segment Task policy, and later-Task assignment-conversation rule. These questions do not authorize guessing or delaying the preceding independent contract and custody work.
+Remaining implementation-level design gates: specify the exact missing/ambiguous cursor result; choose inline or separate typed evidence storage within measured byte budgets; define deliberate versioned handling for the optional Core revision-2 family and prove the migration activation/family gate with an old binary; freeze the canonical Expert Task-to-Run/journal mapping, history pin representation, multi-segment Task policy and later-Task assignment-conversation rule. These choices remain gates for their dependent schema/caller cutovers; they do not imply implementation or reopen the completed contract review.
 
 
 ### Final-state decisions
