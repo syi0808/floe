@@ -11,10 +11,12 @@ use floe_execution::BoxFuture;
 use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, PersonId, TraceContext};
 use std::{
     collections::HashMap,
+    future::{Future, poll_fn},
     sync::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering},
     },
+    task::Poll,
     time::Duration,
 };
 use tokio::{
@@ -415,53 +417,45 @@ async fn authority_and_submit_serialize_one_command_id_before_submit_validation(
     });
     authority_started.await;
 
-    let (second_started_tx, second_started_rx) = oneshot::channel();
     let second_service = service.clone();
     let second_actor = actor.clone();
     let second_scope = scope();
-    let second = tokio::spawn(async move {
-        second_started_tx
-            .send(())
-            .expect("test is waiting for submit to start");
-        let now = chrono::Utc::now();
-        second_service
-            .submit(
-                &second_actor,
-                command_id,
-                ActionIntent::DirectCreate {
-                    destination_ref: Uuid::nil(),
-                    title: "Changed body".to_owned(),
-                    schedule: floe_day::TimedSchedule::new(
-                        now,
-                        now + chrono::Duration::minutes(30),
-                        "UTC",
-                    )
-                    .expect("valid schedule for invalid destination intent"),
-                },
-                &second_scope,
-            )
-            .await
-    });
-    second_started_rx.await.expect("submit task started");
-    tokio::task::yield_now().await;
+    let now = chrono::Utc::now();
+    let mut second = Box::pin(
+        second_service.submit(
+            &second_actor,
+            command_id,
+            ActionIntent::DirectCreate {
+                destination_ref: Uuid::nil(),
+                title: "Changed body".to_owned(),
+                schedule: floe_day::TimedSchedule::new(
+                    now,
+                    now + chrono::Duration::minutes(30),
+                    "UTC",
+                )
+                .expect("valid schedule for invalid destination intent"),
+            },
+            &second_scope,
+        ),
+    );
+    let first_poll = poll_fn(|context| Poll::Ready(Future::poll(second.as_mut(), context))).await;
+    assert!(
+        first_poll.is_pending(),
+        "same-ID submit must stay pending while authority admission is unsettled"
+    );
 
     assert_eq!(
         repository.find_calls.load(Ordering::Acquire),
         0,
         "same-ID submit must wait for authority receipt before replay lookup"
     );
-    assert!(
-        !second.is_finished(),
-        "same-ID submit returned a precommit validation result during authority admission"
-    );
-
     repository.authority_release.add_permits(1);
     let authority = first
         .await
         .expect("authority task")
         .expect("authority admitted");
     assert_eq!(authority.revision, 2);
-    let submit = second.await.expect("submit task");
+    let submit = second.await;
     assert_eq!(
         submit,
         Err(CommandFailure::Indeterminate(AgentFailure::Conflict)),
