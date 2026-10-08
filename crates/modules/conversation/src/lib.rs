@@ -58,11 +58,15 @@ pub use ports::{
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,
-    AgentSession, AgentSessionScope, AgentUsage, MAX_SESSION_BYTES,
+    AgentSession, AgentSessionScope, AgentUsage, FROZEN_LEGACY_SESSION_ARCHIVE_NAMESPACE,
+    FrozenLegacySessionArchiveIdentity, LegacyCoverageStatus, LegacyExecutionAuthority,
+    LegacyExternalReferenceStatus, LegacySessionPreparationError, LegacyUnprovenAuthority,
+    MAX_PREPARED_LEGACY_SESSION_OUTPUT_CEILING_BYTES, MAX_SESSION_BYTES,
     MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES, MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    PreparedLegacySessionRecord, PreparedLegacySessionShell, PreparedLegacySessionSnapshot,
     SessionRecoveryPointer, SessionStore, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
     TYPED_AGENT_MESSAGE_SCHEMA_ID, TYPED_AGENT_MESSAGE_SCHEMA_VERSION, TypedAgentMessageEvidence,
-    TypedAgentMessageProvenance, TypedAgentMessageReference,
+    TypedAgentMessageProvenance, TypedAgentMessageReference, prepare_legacy_session_snapshot,
 };
 
 pub use domain::{

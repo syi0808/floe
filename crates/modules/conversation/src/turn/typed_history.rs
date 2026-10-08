@@ -298,7 +298,7 @@ fn digest_field(digest: &mut Sha256, value: &[u8]) -> Result<(), AgentFailure> {
     Ok(())
 }
 
-fn validate_agent_message(message: &AgentMessage) -> Result<(), AgentFailure> {
+pub(super) fn validate_agent_message(message: &AgentMessage) -> Result<(), AgentFailure> {
     if message.turn_id().is_nil() {
         return Err(AgentFailure::InvalidInput);
     }

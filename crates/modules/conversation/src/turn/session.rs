@@ -74,6 +74,37 @@ impl AgentSession {
             continuation: None,
         }
     }
+
+    /// Validate the owner-level Session snapshot invariants shared by the
+    /// encrypted Vault read/write path and explicit frozen-snapshot
+    /// preparation. This is shape and owner admission only; it does not prove
+    /// historical coverage or resolve message references.
+    pub fn validate_owner_snapshot(
+        &self,
+        expected_person_id: PersonId,
+    ) -> Result<(), AgentFailure> {
+        if self.person_id != expected_person_id {
+            return Err(AgentFailure::NotFound);
+        }
+        if self.schema_version != AGENT_VERSION {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
+        if self.data_classes.is_empty()
+            || self
+                .scope
+                .is_some_and(|scope| self.data_classes != [scope.data_class()])
+            || self.data_classes.iter().any(|class| {
+                matches!(
+                    class,
+                    floe_agent_contract::DataClass::Credential
+                        | floe_agent_contract::DataClass::DeviceOnlyRaw
+                )
+            })
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

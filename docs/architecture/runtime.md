@@ -115,8 +115,24 @@ normalized rows. A Core revision-2 or output-extension revision-1 marker is
 rejected before writes; the previous bytes remain untouched, with no silent reinterpretation,
 historical import or reset. Startup validates stored recorder receipts and
 transcript commitments. Transcript pages use stable sequence cursors and
-bounded entry and UTF-8 byte budgets. Session history import and typed history
-compaction remain later work.
+bounded entry and UTF-8 byte budgets.
+
+Conversation also exposes an explicit pure preparation step for one bounded
+legacy `AgentSession` snapshot. It checks the exact source-byte SHA-256,
+expected Person/Session/revision, and the same owner-shell admission rules used
+by Vault. Typed messages retain their source order and current public cursor
+aliases, including Preamble/Compaction occurrence ordinals. The frozen archive
+namespace is separate from live owner-recorded history; prepared provenance is
+`ImportedLegacyUnproven`, coverage and external references remain unproven,
+and no execution authority is created. The caller supplies a prepared-record
+output byte budget, capped at 16 MiB for finite preparation bookkeeping; it is
+separate from the 2 MiB raw-source bound and is not a model, context, or history
+quota. The measured record JSON includes typed message data, source ordinal,
+alias, and unproven authority status; it excludes retained raw bytes, shell
+fields, archive identity, and in-memory overhead. This step retains raw source
+bytes and does not verify references or quiescence, write records or an import
+receipt, activate storage, migrate startup, or cut over production callers.
+Typed history transaction import and compaction remain later work.
 
 This slice implements generic recorder custody only. The current
 Conversation/Manager and Expert production execution paths, Run journal

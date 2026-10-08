@@ -51,8 +51,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::InvalidInput);
         }
         if provenance != TypedAgentMessageProvenance::OwnerRecorded {
-            // The imported value is reserved for a future quiescent snapshot
-            // import gate; this ordinary insert primitive does not import.
+            // Pure snapshot preparation does not authorize a storage import.
+            // This ordinary typed-history insert never persists imported rows.
             return Err(AgentFailure::InvalidInput);
         }
         self.check_access()?;

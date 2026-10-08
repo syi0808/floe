@@ -1,5 +1,8 @@
 //! Product-safe session view, excluding storage authority and artifact payloads.
-use crate::{AgentMessage, AgentOutcome, AgentSession, AgentUsage, ContinuationToken};
+use crate::{
+    AgentMessage, AgentOutcome, AgentSession, AgentUsage, ContinuationToken,
+    turn::session_message_aliases,
+};
 use floe_agent_contract::{ArtifactPart, TaskState, UserInteractionKind};
 use floe_kernel::{AgentFailure, PersonId, TaskId};
 use uuid::Uuid;
@@ -82,26 +85,10 @@ pub(super) fn project_session_snapshot(
     continuation_ref: Option<ContinuationToken>,
     before_message_id: Option<Uuid>,
 ) -> Result<SessionSnapshot, AgentFailure> {
-    // Synthetic message kinds can occur more than once within a turn. Derive
-    // their IDs over the full retained session, not the selected page.
-    let mut occurrences = std::collections::HashMap::new();
-    let ids: Vec<_> = session
-        .messages
-        .iter()
-        .map(|message| {
-            let kind = match message {
-                AgentMessage::Preamble { .. } => 0u8,
-                AgentMessage::Compaction { .. } => 1u8,
-                _ => 2u8,
-            };
-            let ordinal = occurrences
-                .entry((message.turn_id(), kind))
-                .or_insert(0usize);
-            let id = projected_message_id(message, *ordinal);
-            *ordinal += 1;
-            id
-        })
-        .collect();
+    // Aliases are derived over the full retained session, not the selected
+    // page, and are shared with the one-time frozen-snapshot preparer.
+    let aliases = session_message_aliases(&session.messages);
+    let ids: Vec<_> = aliases.iter().map(|alias| alias.message_id).collect();
     let end = match before_message_id {
         Some(cursor) => {
             let mut matches = ids.iter().enumerate().filter(|(_, id)| **id == cursor);
@@ -271,21 +258,4 @@ fn bounded(text: &str, limit: usize, total: &mut usize) -> Result<(), AgentFailu
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(())
-}
-
-fn projected_message_id(message: &AgentMessage, ordinal: usize) -> Uuid {
-    let turn = message.turn_id();
-    match message {
-        AgentMessage::User { message_id, .. } => *message_id,
-        AgentMessage::Assistant { .. } => turn,
-        AgentMessage::Preamble { text, .. } => {
-            Uuid::new_v5(&turn, format!("preamble:{ordinal}:{text}").as_bytes())
-        }
-        AgentMessage::Compaction { .. } => {
-            Uuid::new_v5(&turn, format!("compaction:{ordinal}").as_bytes())
-        }
-        AgentMessage::Capability { call_id, .. } => *call_id,
-        AgentMessage::Delegation { task, .. } => task.task_id.as_uuid(),
-        AgentMessage::Interaction { interaction_id, .. } => *interaction_id,
-    }
 }

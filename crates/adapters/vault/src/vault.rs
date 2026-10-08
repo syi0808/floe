@@ -465,23 +465,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     fn payload(&self, session: &AgentSession) -> Result<String, AgentFailure> {
-        if session.person_id != self.person_id {
-            return Err(AgentFailure::NotFound);
-        }
-        if session.schema_version != AGENT_VERSION {
-            return Err(AgentFailure::UnsupportedVersion);
-        }
-        if session.data_classes.is_empty()
-            || session
-                .scope
-                .is_some_and(|scope| session.data_classes != [scope.data_class()])
-            || session
-                .data_classes
-                .iter()
-                .any(|class| matches!(class, DataClass::Credential | DataClass::DeviceOnlyRaw))
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
+        session.validate_owner_snapshot(self.person_id)?;
         let payload = serde_json::to_string(session).map_err(storage)?;
         validate_session_payload_size(&payload)?;
         Ok(payload)
