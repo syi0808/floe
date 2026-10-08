@@ -902,6 +902,50 @@ mod session_payload_tests {
         }
     }
 
+    fn session_with_bounded_message_history(person_id: PersonId) -> (AgentSession, String) {
+        let mut session = AgentSession::new(person_id);
+        for turn_number in 0..32 {
+            let turn_id = Uuid::new_v4();
+            let user_prefix = format!("Question for turn {turn_number}: ");
+            let user_text = format!("{user_prefix}{}", "u".repeat(4_096 - user_prefix.len()));
+            session.messages.push(AgentMessage::User {
+                turn_id,
+                message_id: Uuid::new_v4(),
+                text: user_text,
+            });
+
+            let assistant_prefix = format!("Draft response for turn {turn_number}: ");
+            let assistant_text = format!(
+                "{assistant_prefix}{}",
+                "a".repeat(4_096 - assistant_prefix.len())
+            );
+            session.messages.push(AgentMessage::Assistant {
+                turn_id,
+                text: assistant_text,
+            });
+        }
+
+        let payload = serde_json::to_string(&session).expect("serialize bounded history fixture");
+        assert_eq!(session.messages.len(), 64);
+        assert!(session.messages.len() < 128);
+        assert!(payload.as_bytes().len() > OLD_SESSION_QUERY_LIMIT);
+        assert!(payload.as_bytes().len() <= CURRENT_SESSION_LIMIT);
+        for message in &session.messages {
+            match message {
+                AgentMessage::User { text, .. } => {
+                    assert_eq!(text.len(), 4_096);
+                    assert!(text.len() <= floe_conversation::MAX_TURN_TEXT_BYTES);
+                }
+                AgentMessage::Assistant { text, .. } => {
+                    assert_eq!(text.len(), 4_096);
+                    assert!(text.len() <= floe_agent_contract::MAX_OUTPUT_BYTES);
+                }
+                _ => unreachable!("the bounded transcript uses User and Assistant messages"),
+            }
+        }
+        (session, payload)
+    }
+
     #[tokio::test]
     async fn transactional_reads_accept_payloads_at_and_below_256_kibibytes() {
         let store = SessionVault::new().await;
@@ -967,6 +1011,35 @@ mod session_payload_tests {
         .expect("CAS should read and update a valid session over the old query limit");
 
         assert_eq!(store.load(store.person_id, session.id).await, Ok(updated));
+    }
+
+    #[tokio::test]
+    async fn transactional_cas_reads_realistic_bounded_history_above_256_kibibytes() {
+        let store = SessionVault::new().await;
+        let (session, payload) = session_with_bounded_message_history(store.person_id);
+        store.insert_payload(session.id, 0, payload).await;
+
+        let mut updated = session.clone();
+        updated.revision = 1;
+        updated.messages.push(AgentMessage::User {
+            turn_id: Uuid::new_v4(),
+            message_id: Uuid::new_v4(),
+            text: "Follow-up question.".to_owned(),
+        });
+        assert!(updated.messages.len() < 128);
+        <EncryptedAgentVault<TestKeys> as SessionStore>::compare_and_swap(
+            &store.vault,
+            &updated,
+            0,
+        )
+        .await
+        .expect("CAS should read and update a bounded multi-message history");
+
+        assert_eq!(
+            store.load_transactionally(session.id).await,
+            Ok(updated),
+            "the transactional reader should retain the admitted history"
+        );
     }
 
     #[tokio::test]
