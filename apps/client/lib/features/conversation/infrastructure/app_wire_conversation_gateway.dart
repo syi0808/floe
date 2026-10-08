@@ -107,6 +107,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         stage: stage,
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
+        commandOutcome: error.commandOutcome,
       );
     }
   }
@@ -124,9 +125,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
       if (identical(_pending, pending)) _pending = null;
       return session;
     } on AppWireTransportException catch (error) {
-      if (error.commandOutcome == CommandOutcome.notApplied ||
-          (!wasSubmitted &&
-              error.commandOutcome == CommandOutcome.notAdmitted)) {
+      if (mayDiscardPendingCommand(error, previouslySubmitted: wasSubmitted)) {
         if (identical(_pending, pending)) _pending = null;
       }
       throw AppOwnerException.fromAppWire(
@@ -135,6 +134,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
         stage: 'conversation_session_start',
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
+        commandOutcome: error.commandOutcome,
       );
     } finally {
       _commandBusy = false;

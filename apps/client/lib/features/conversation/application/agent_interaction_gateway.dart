@@ -56,14 +56,19 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
           decision: decision,
           targetDigest: snapshot.targetDigest,
         );
+    final previouslySubmitted = previous != null;
     _pendingDecisions[snapshot.id] = command;
     try {
       final result = await _client.submitInteractionResolve(command);
       _pendingDecisions.remove(snapshot.id);
       return result;
     } on AppWireTransportException catch (error) {
-      if (error.code != 'timeout' && error.code != 'ffi')
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
         _pendingDecisions.remove(snapshot.id);
+      }
       rethrow;
     }
   }
@@ -83,14 +88,19 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
           sessionId: snapshot.sessionId,
           expectedRevision: snapshot.revision,
         );
+    final previouslySubmitted = previous != null;
     _pendingRefreshes[snapshot.id] = command;
     try {
       final result = await _client.submitInteractionRefresh(command);
       _pendingRefreshes.remove(snapshot.id);
       return result;
     } on AppWireTransportException catch (error) {
-      if (error.code != 'timeout' && error.code != 'ffi')
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
         _pendingRefreshes.remove(snapshot.id);
+      }
       rethrow;
     }
   }

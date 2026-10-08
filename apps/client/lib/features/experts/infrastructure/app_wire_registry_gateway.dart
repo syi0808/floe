@@ -222,6 +222,8 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     _PendingExpertCommand pending,
     T Function(Map<String, dynamic>) decode,
   ) async {
+    final previouslySubmitted = pending.submitted;
+    pending.submitted = true;
     final requestId = newAgentRequestId();
     try {
       final result = await _transport.commandV2({
@@ -234,16 +236,10 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
       if (identical(_pendingCommand, pending)) _pendingCommand = null;
       return decoded;
     } on AppWireTransportException catch (error) {
-      // Only these correlated owner rejections are proven precommit. A
-      // transport/decode/storage failure retains the immutable retry request.
-      if ((error.code == 'conflict' &&
-              error.metadata['reason_code'] == 'conflict') ||
-          (error.code == 'not_found' &&
-              error.metadata['reason_code'] == 'not_found') ||
-          (error.code == 'validation' &&
-              error.metadata['reason_code'] == 'invalid_input') ||
-          (error.code == 'unavailable' &&
-              error.metadata['reason_code'] == 'stale_context')) {
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
         if (identical(_pendingCommand, pending)) _pendingCommand = null;
       }
       // The transport error may follow a committed owner command whose
@@ -263,6 +259,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     stage: stage,
     metadata: error.metadata,
     ownerFailure: error.ownerFailure,
+    commandOutcome: error.commandOutcome,
   );
 
   AgentDirectorySnapshot _readDirectoryResult(Map<String, dynamic> result) =>
@@ -329,7 +326,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
 }
 
 final class _PendingExpertCommand {
-  const _PendingExpertCommand({
+  _PendingExpertCommand({
     required this.kind,
     required this.commandId,
     required this.intent,
@@ -340,4 +337,5 @@ final class _PendingExpertCommand {
   final String commandId;
   final Map<String, Object?> intent;
   final String? expectedAssignmentRef;
+  bool submitted = false;
 }

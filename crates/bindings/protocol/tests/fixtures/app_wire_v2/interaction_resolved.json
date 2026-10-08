@@ -13,7 +13,7 @@
       "interaction_kind": "processing_recipient",
       "state": "resolved",
       "revision": 3,
-      "target_digest": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
+      "target_digest": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
       "created_at_unix_ms": 1700000000000,
       "expires_at_unix_ms": 1700003600000,
       "target": {

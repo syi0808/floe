@@ -29,6 +29,7 @@ final class AppRuntimeException implements Exception {
     this.field,
     this.metadata = const {},
     this.ownerFailure,
+    this.commandOutcome,
   });
 
   final String code;
@@ -36,6 +37,7 @@ final class AppRuntimeException implements Exception {
   final String? field;
   final Map<String, String> metadata;
   final OwnerFailure? ownerFailure;
+  final CommandOutcome? commandOutcome;
 
   @override
   String toString() => message;
@@ -156,6 +158,7 @@ final class AppRuntime {
         field: error.field,
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
+        commandOutcome: error.commandOutcome,
       );
     }
   }

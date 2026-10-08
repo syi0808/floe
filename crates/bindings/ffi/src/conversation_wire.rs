@@ -37,7 +37,7 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
             session_id,
             expected_revision,
             decision,
-            reviewed_digest,
+            target_digest,
         } => ConversationCommand::ResolveInteraction {
             interaction_id: interaction_id.get(),
             session_id: session_id.get(),
@@ -51,7 +51,7 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
                     floe_conversation::InteractionDecisionKind::Dismiss
                 }
             },
-            target_digest: digest_bytes(&reviewed_digest)?,
+            target_digest: digest_bytes(&target_digest)?,
         },
         AppProductCommandDto::ConversationInteractionRefresh {
             interaction_id,
@@ -859,6 +859,25 @@ fn task_receipt_reference(
 #[cfg(test)]
 mod failure_projection_tests {
     use super::*;
+
+    #[test]
+    fn flutter_interaction_resolve_digest_reaches_conversation_owner() {
+        let request: AppCommandRequestDto = serde_json::from_str(include_str!(
+            "../../protocol/tests/fixtures/app_wire_v2/interaction_resolve.json"
+        ))
+        .expect("Flutter interaction resolve request must decode");
+        let AppCommandDto::Product(command) = request.command else {
+            panic!("interaction resolve request was not a product command");
+        };
+        let command = command_in(command).expect("interaction resolve must convert");
+        let expected_digest: [u8; 32] = std::array::from_fn(|index| (index + 1) as u8);
+
+        assert!(matches!(
+            command,
+            ConversationCommand::ResolveInteraction { target_digest, .. }
+                if target_digest == expected_digest
+        ));
+    }
 
     #[test]
     fn vault_failure_and_model_provider_failure_keep_distinct_owner_projections() {

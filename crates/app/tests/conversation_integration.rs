@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 use floe_app::{
     ActionsQuery, ActionsQueryResult, AppComposition, AppHost, ConnectionsCommand,
     ConversationCommand, ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome,
-    DayProductQuery, ExpertQuery, ExpertQueryResult, MemoryQuery, MemoryQueryResult,
-    ProductCommand, ProductCommandDisposition, ProductCommandOutcome, ProductCommandRequest,
-    ProductFailure, ProductObservation, ProductQuery, ProductQueryOutcome, RuntimeReadinessState,
+    DayCommand, DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertQuery,
+    ExpertQueryResult, MemoryQuery, MemoryQueryResult, ProductCommand, ProductCommandDisposition,
+    ProductCommandOutcome, ProductCommandRequest, ProductFailure, ProductObservation, ProductQuery,
+    ProductQueryOutcome, RuntimeReadinessState,
 };
 use floe_conversation::{RunState, SessionMessage};
 use floe_inference::ModelObservationError;
@@ -545,7 +546,6 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 #[test]
 fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
-    use floe_app::{DayCommands as _, DayQueries as _};
     use floe_day::{DayCoverageState, DayRefreshState, DayTimelineItem};
 
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
@@ -570,36 +570,60 @@ fn day_refresh_reads_only_the_selected_synthetic_calendar_for_fixed_day() {
             .expect("valid fixed fixture instant")
             .with_timezone(&chrono::Utc),
     };
-    let (refresh, day) = support::with_ready(&host, |services, caller, _owners| {
-        let admitted = services
-            .refresh_day(caller, Uuid::new_v4(), query.clone())
-            .unwrap_or_else(|failure| panic!("phase=day_refresh_admission failure={failure:?}"));
-        let deadline = Instant::now() + WAIT_TIMEOUT;
-        let refresh = loop {
-            let current = services
-                .get_day_refresh(caller, admitted.operation_ref)
-                .unwrap_or_else(|failure| panic!("phase=day_refresh_poll failure={failure:?}"));
-            if current.state.terminal() {
-                break current;
-            }
-            let last_phase = match &current.state {
-                DayRefreshState::Pending => "pending".to_owned(),
-                DayRefreshState::Running => "running".to_owned(),
-                DayRefreshState::Completed { .. } => "completed".to_owned(),
-                DayRefreshState::Failed { failure } => format!("failed:{failure:?}"),
-                DayRefreshState::Interrupted { failure } => format!("interrupted:{failure:?}"),
-            };
-            assert!(
-                Instant::now() < deadline,
-                "phase=day_refresh_wait timed out; last_state={last_phase}"
-            );
-            std::thread::yield_now();
+    let refresh_request = host
+        .request(Uuid::new_v4())
+        .expect("admit typed Day refresh command");
+    let admitted = refresh_request
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4())
+                .expect("valid Day command identity"),
+            command: ProductCommand::Day(DayCommand::Refresh(query.clone())),
+        })
+        .unwrap_or_else(|failure| panic!("phase=day_refresh_admission failure={failure:?}"));
+    let ProductCommandOutcome::Day(DayCommandOutcome::Refresh(admitted)) = admitted else {
+        panic!("Day refresh returned another command result");
+    };
+    drop(refresh_request);
+
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    let refresh = loop {
+        let request = host
+            .request(Uuid::new_v4())
+            .expect("admit typed Day refresh query");
+        let current = request
+            .product_query(ProductQuery::Day(DayProductQuery::RefreshGet {
+                operation_ref: admitted.operation_ref,
+            }))
+            .unwrap_or_else(|failure| panic!("phase=day_refresh_poll failure={failure:?}"));
+        let ProductQueryOutcome::Day(DayQueryOutcome::Refresh(current)) = current else {
+            panic!("Day refresh query returned another product result");
         };
-        let day = services
-            .read_day(caller, query.clone())
-            .unwrap_or_else(|failure| panic!("phase=day_read failure={failure:?}"));
-        (refresh, day)
-    });
+        if current.state.terminal() {
+            break current;
+        }
+        let last_phase = match &current.state {
+            DayRefreshState::Pending => "pending".to_owned(),
+            DayRefreshState::Running => "running".to_owned(),
+            DayRefreshState::Completed { .. } => "completed".to_owned(),
+            DayRefreshState::Failed { failure } => format!("failed:{failure:?}"),
+            DayRefreshState::Interrupted { failure } => format!("interrupted:{failure:?}"),
+        };
+        assert!(
+            Instant::now() < deadline,
+            "phase=day_refresh_wait timed out; last_state={last_phase}"
+        );
+        std::thread::yield_now();
+    };
+
+    let request = host
+        .request(Uuid::new_v4())
+        .expect("admit typed Day snapshot query");
+    let snapshot = request
+        .product_query(ProductQuery::Day(DayProductQuery::Snapshot(query.clone())))
+        .unwrap_or_else(|failure| panic!("phase=day_read failure={failure:?}"));
+    let ProductQueryOutcome::Day(DayQueryOutcome::Snapshot(day)) = snapshot else {
+        panic!("Day snapshot query returned another product result");
+    };
 
     let refresh_phase = match &refresh.state {
         DayRefreshState::Pending => "pending".to_owned(),

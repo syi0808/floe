@@ -214,6 +214,7 @@ final class NativeCalendarActionGateway implements CalendarActionGateway {
         field: error.field,
         metadata: error.metadata,
         ownerFailure: error.ownerFailure,
+        commandOutcome: error.commandOutcome,
       );
     }
   }

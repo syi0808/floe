@@ -194,7 +194,7 @@ pub enum AppProductCommandDto {
         session_id: SessionRefDto,
         expected_revision: u64,
         decision: super::AppInteractionDecisionDto,
-        reviewed_digest: super::DigestHex64Dto,
+        target_digest: super::DigestHex64Dto,
     },
     #[serde(rename = "conversation.interaction.refresh")]
     ConversationInteractionRefresh {
@@ -353,13 +353,37 @@ impl AppProductCommandDto {
             Self::ConversationCancelRun { .. } => Ok(()),
             Self::ConversationInteractionResolve {
                 expected_revision,
-                reviewed_digest: _,
+                target_digest: _,
                 ..
             } => validate_revision(*expected_revision),
             Self::ConversationInteractionRefresh {
                 expected_revision, ..
             } => validate_revision(*expected_revision),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppCommandDto, AppCommandRequestDto, AppProductCommandDto};
+
+    #[test]
+    fn flutter_interaction_resolve_wire_shape_decodes() {
+        let request: AppCommandRequestDto = serde_json::from_str(include_str!(
+            "../../tests/fixtures/app_wire_v2/interaction_resolve.json"
+        ))
+        .expect("Flutter interaction resolve request must decode");
+        request
+            .validate()
+            .expect("Flutter interaction resolve request must validate");
+
+        assert!(matches!(
+            request.command,
+            AppCommandDto::Product(AppProductCommandDto::ConversationInteractionResolve {
+                target_digest,
+                ..
+            }) if target_digest.as_str() == "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+        ));
     }
 }
 

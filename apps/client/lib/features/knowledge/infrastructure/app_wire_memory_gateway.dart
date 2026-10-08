@@ -87,6 +87,8 @@ final class AppWireMemoryGateway
   Future<AgentMemoryDecisionAcknowledgement> _submit(
     _PendingMemoryDecision pending,
   ) async {
+    final previouslySubmitted = pending.submitted;
+    pending.submitted = true;
     final requestId = newAgentRequestId();
     try {
       final result = await _transport.commandV2({
@@ -108,16 +110,10 @@ final class AppWireMemoryGateway
       if (identical(_pending, pending)) _pending = null;
       return acknowledgement;
     } on AppWireTransportException catch (error) {
-      // Only these correlated owner rejections are proven precommit. A
-      // transport/decode/storage failure retains the immutable retry request.
-      if ((error.code == 'conflict' &&
-              error.metadata['reason_code'] == 'conflict') ||
-          (error.code == 'not_found' &&
-              error.metadata['reason_code'] == 'not_found') ||
-          (error.code == 'validation' &&
-              error.metadata['reason_code'] == 'invalid_input') ||
-          (error.code == 'unavailable' &&
-              error.metadata['reason_code'] == 'stale_context')) {
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
         if (identical(_pending, pending)) _pending = null;
       }
       throw _fromTransport(error, pending.commandId, 'knowledge_decide');
@@ -134,6 +130,7 @@ final class AppWireMemoryGateway
     stage: stage,
     metadata: error.metadata,
     ownerFailure: error.ownerFailure,
+    commandOutcome: error.commandOutcome,
   );
 
   static Map<String, dynamic> _payload(
@@ -155,7 +152,7 @@ final class AppWireMemoryGateway
 }
 
 final class _PendingMemoryDecision {
-  const _PendingMemoryDecision({
+  _PendingMemoryDecision({
     required this.commandId,
     required this.personId,
     required this.candidateId,
@@ -168,4 +165,5 @@ final class _PendingMemoryDecision {
   final String candidateId;
   final AgentMemoryDecision decision;
   final Map<String, Object?> payload;
+  bool submitted = false;
 }

@@ -30,6 +30,7 @@ use uuid::Uuid;
 
 const OWNER_TIMEOUT: Duration = Duration::from_secs(15);
 const PREPARATION_TIMEOUT: Duration = Duration::from_secs(55);
+const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(60);
 const SCRIPTED_REPLY: &str = "A deterministic scripted reply.";
 
 #[derive(Clone, Copy)]

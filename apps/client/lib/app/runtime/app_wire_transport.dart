@@ -56,6 +56,19 @@ final class AppWireTransportException implements Exception {
   String toString() => message;
 }
 
+/// Whether an uncertain command identity can be discarded after a failure.
+///
+/// Command recovery follows the AppWire disposition. Owner reason codes do not
+/// prove whether the command was admitted or committed.
+bool mayDiscardPendingCommand(
+  AppWireTransportException error, {
+  required bool previouslySubmitted,
+}) {
+  return error.commandOutcome == CommandOutcome.notApplied ||
+      (!previouslySubmitted &&
+          error.commandOutcome == CommandOutcome.notAdmitted);
+}
+
 abstract interface class AppWireTransport {
   Future<Map<String, dynamic>> commandV2(
     Map<String, dynamic> request, {

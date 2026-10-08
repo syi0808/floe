@@ -11,6 +11,9 @@ use crate::api::*;
 use crate::{AppComposition, CallerContext, HostRequest};
 
 const PRODUCT_SCOPE: Duration = Duration::from_secs(35);
+// Day snapshots inspect external source metadata and must finish before the
+// Flutter query's 35-second transport deadline.
+const DAY_SNAPSHOT_SCOPE: Duration = Duration::from_secs(30);
 const OBSERVATION_SCOPE: Duration = Duration::from_secs(5);
 
 impl HostRequest<'_, AppComposition> {
@@ -724,7 +727,11 @@ fn route_query(
         }
         ProductQuery::Day(query) => {
             let actor = caller.owner_actor();
-            let scope = scope();
+            let timeout = match &query {
+                DayProductQuery::Snapshot(_) => DAY_SNAPSHOT_SCOPE,
+                DayProductQuery::RefreshGet { .. } => PRODUCT_SCOPE,
+            };
+            let scope = crate::host_scope(request_id, Cancellation::new(), timeout);
             let service = app.core.day.clone();
             app.execute_owner(async move {
                 let outcome = match query {
@@ -873,5 +880,17 @@ fn command_failure(
     ProductCommandFailure {
         disposition,
         failure,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DAY_SNAPSHOT_SCOPE, PRODUCT_SCOPE};
+
+    #[test]
+    fn day_snapshot_owner_deadline_precedes_the_flutter_transport_deadline() {
+        assert_eq!(DAY_SNAPSHOT_SCOPE.as_secs(), 30);
+        assert_eq!(PRODUCT_SCOPE.as_secs(), 35);
+        assert!(DAY_SNAPSHOT_SCOPE < PRODUCT_SCOPE);
     }
 }

@@ -50,16 +50,26 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       );
       _pendingRefreshes[intent] = pending;
     }
+    final active = pending;
+    final previouslySubmitted = active.submitted;
+    active.submitted = true;
     try {
       final result = await ownerCommand(
         _runtime.wireTransport,
-        pending.commandId,
-        {'kind': 'day.refresh', 'day': pending.day},
+        active.commandId,
+        {'kind': 'day.refresh', 'day': active.day},
       );
       final snapshot = _refreshSnapshot(result);
-      _acceptRefresh(intent, pending, snapshot, result);
+      _acceptRefresh(intent, active, snapshot, result);
       return snapshot;
     } on AppWireTransportException catch (error) {
+      if (mayDiscardPendingCommand(
+            error,
+            previouslySubmitted: previouslySubmitted,
+          ) &&
+          identical(_pendingRefreshes[intent], active)) {
+        _pendingRefreshes.remove(intent);
+      }
       // The original body stays available when this screen is replaced.
       throw _runtimeError(error);
     }
@@ -210,6 +220,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
     final queryIntent = _queryIntent(query);
     final mutationIntent = _mutationIntent(mutation);
     final pending = _pendingMutation;
+    late final _PendingDayMutation active;
     late final String commandId;
     late final Map<String, dynamic> requestDay;
     late final Map<String, dynamic> requestMutation;
@@ -219,13 +230,14 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       requestMutation = Map<String, dynamic>.unmodifiable(
         jsonDecode(jsonEncode(mutation)) as Map<String, dynamic>,
       );
-      _pendingMutation = _PendingDayMutation(
+      active = _PendingDayMutation(
         commandId: commandId,
         queryIntent: queryIntent,
         mutationIntent: mutationIntent,
         day: requestDay,
         mutation: requestMutation,
       );
+      _pendingMutation = active;
     } else {
       if (pending.queryIntent != queryIntent ||
           pending.mutationIntent != mutationIntent) {
@@ -236,8 +248,11 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       commandId = pending.commandId;
       requestDay = pending.day;
       requestMutation = pending.mutation;
+      active = pending;
     }
 
+    final previouslySubmitted = active.submitted;
+    active.submitted = true;
     try {
       final result = await ownerCommand(_runtime.wireTransport, commandId, {
         'kind': 'day.mutate',
@@ -261,11 +276,11 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       if (_pendingMutation?.commandId == commandId) _pendingMutation = null;
       return decoded;
     } on AppWireTransportException catch (error) {
-      // These exact Day owner rejections prove that its transaction did not
-      // commit. Transport and post-commit conversion failures stay uncertain.
-      if ((error.code == 'conflict' || error.code == 'not_found') &&
-          error.metadata['owner_code'] == error.code &&
-          _pendingMutation?.commandId == commandId) {
+      if (mayDiscardPendingCommand(
+            error,
+            previouslySubmitted: previouslySubmitted,
+          ) &&
+          identical(_pendingMutation, active)) {
         _pendingMutation = null;
       }
       throw _runtimeError(error);
@@ -300,10 +315,11 @@ final class _PendingRefreshCommand {
   final Map<String, dynamic> day;
   DayRefreshSnapshot? observed;
   String? observedWire;
+  bool submitted = false;
 }
 
 final class _PendingDayMutation {
-  const _PendingDayMutation({
+  _PendingDayMutation({
     required this.commandId,
     required this.queryIntent,
     required this.mutationIntent,
@@ -316,6 +332,7 @@ final class _PendingDayMutation {
   final String mutationIntent;
   final Map<String, dynamic> day;
   final Map<String, dynamic> mutation;
+  bool submitted = false;
 }
 
 final class _DecodedMutation {
@@ -337,6 +354,7 @@ AppRuntimeException _runtimeError(AppWireTransportException error) =>
       field: error.field,
       metadata: error.metadata,
       ownerFailure: error.ownerFailure,
+      commandOutcome: error.commandOutcome,
     );
 
 _DecodedMutation _decodeMutationResult(
