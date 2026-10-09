@@ -67,11 +67,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if session_id.is_nil() || entry_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        if provenance != TypedAgentMessageProvenance::OwnerRecorded {
-            // Pure snapshot preparation does not authorize a storage import.
-            // This ordinary typed-history insert never persists imported rows.
-            return Err(AgentFailure::InvalidInput);
-        }
         self.check_access()?;
         let evidence = TypedAgentMessageEvidence::encode(
             self.person_id,
@@ -252,6 +247,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Resolve from the trusted owner scope and opaque Core evidence digest.
     /// The unique scoped digest index recovers the complete owner reference;
     /// the caller never needs to reconstruct or scan for its fields.
+    #[cfg(test)]
     pub(super) async fn resolve_typed_agent_message_by_digest_on(
         &self,
         transaction: &Transaction<'_>,
@@ -443,6 +439,7 @@ async fn load_header_on(
     }))
 }
 
+#[cfg(test)]
 async fn load_header_by_digest_on(
     transaction: &Transaction<'_>,
     person_id: PersonId,
@@ -1636,16 +1633,17 @@ mod tests {
             )
             .await;
 
-        store
-            .update_integer_entry(session_id, entry_id, "schema_version", 2)
-            .await;
+        let mut unsupported_reference_json =
+            serde_json::to_value(&reference).expect("serialize typed reference");
+        unsupported_reference_json["schema_version"] =
+            serde_json::json!(reference.schema_version() + 1);
+        let unsupported_reference: TypedAgentMessageReference =
+            serde_json::from_value(unsupported_reference_json)
+                .expect("decode unsupported typed reference version");
         assert_eq!(
-            store.resolve(&reference).await.unwrap_err(),
+            store.resolve(&unsupported_reference).await.unwrap_err(),
             AgentFailure::UnsupportedVersion
         );
-        store
-            .update_integer_entry(session_id, entry_id, "schema_version", 1)
-            .await;
 
         store
             .update_integer_entry(session_id, entry_id, "payload_byte_length", 0)

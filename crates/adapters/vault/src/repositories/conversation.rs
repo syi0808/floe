@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
 use crate::{
-    EncryptedAgentVault, VaultConversationAdmission, VaultConversationCancelAdmission,
-    VaultConversationCancelRequest, VaultKeyProvider,
+    EncryptedAgentVault, VaultConversationCancelAdmission, VaultConversationCancelRequest,
+    VaultKeyProvider, VaultManagerConversationAdmission,
 };
 use floe_agent_contract::{
     AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
-    ArchiveSnapshot, ArchivedMessage, BoxFuture, ExecutionJournal, JournalAck, JournalEvent,
-    MessageRole, RunId,
+    ArchiveSnapshot, BoxFuture, ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId,
 };
 use floe_conversation::{
     AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
@@ -20,6 +19,7 @@ use uuid::Uuid;
 
 pub struct VaultConversationRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
+    manager_identity: floe_conversation_contract::AgentIdentity,
 }
 
 impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRepository<Keys> {
@@ -41,7 +41,7 @@ impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRe
             request.validate()?;
             self.verify_principal(&request.principal)?;
             self.vault
-                .resume_conversation_session()
+                .resume_manager_conversation_session(&self.manager_identity)
                 .await?
                 .map(floe_conversation::project_session_receipt)
                 .transpose()
@@ -81,7 +81,7 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
             }
             let result = self
                 .vault
-                .compact_session(
+                .compact_manager_session(
                     request.session_id,
                     request.expected_session_revision,
                     request.through_turn_id,
@@ -115,56 +115,20 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
             if request.person_id != self.vault.person_id() {
                 return Err(AgentFailure::CapabilityDenied);
             }
-            let recovery = session_recovery_pointer(&request.pointer);
-            let source = self.vault.recover_session_with_coverage(&recovery).await?;
-            if source.session.id != request.session_id
-                || source.session.person_id != request.person_id
-                || source.recovery != recovery
-            {
-                return Err(AgentFailure::StorageUnavailable);
-            }
-            let archived = source
-                .session
-                .messages
-                .get(..recovery.archived_message_count)
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            let messages = archived
-                .iter()
-                .enumerate()
-                .map(|(index, message)| {
-                    let turn_id = message.turn_id();
-                    let coverage = source
-                        .coverage_by_turn
-                        .get(&turn_id)
-                        .cloned()
-                        .ok_or(AgentFailure::StorageUnavailable)?;
-                    let message_id = Uuid::new_v5(
-                        &recovery.archive_id,
-                        &u64::try_from(index)
-                            .map_err(|_| AgentFailure::StorageUnavailable)?
-                            .to_be_bytes(),
-                    );
-                    Ok(ArchivedMessage {
-                        turn_id,
-                        message: floe_conversation::contract_message(
-                            message, message_id, coverage,
-                        )?,
-                    })
-                })
-                .collect::<Result<Vec<_>, AgentFailure>>()?;
-            Ok(ArchiveSnapshot {
-                person_id: request.person_id,
-                session_id: request.session_id,
-                pointer: request.pointer.clone(),
-                messages,
-            })
+            self.vault.read_manager_session_archive(request).await
         })
     }
 }
 
 impl<Keys> VaultConversationRepository<Keys> {
-    pub fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
-        Self { vault }
+    pub fn new(
+        vault: Arc<EncryptedAgentVault<Keys>>,
+        manager_identity: floe_conversation_contract::AgentIdentity,
+    ) -> Self {
+        Self {
+            vault,
+            manager_identity,
+        }
     }
 }
 
@@ -195,11 +159,70 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
         }
         Ok(current)
     }
+
+    async fn manager_history_for_session(
+        &self,
+        session_id: Uuid,
+        required_user_id: Option<Uuid>,
+    ) -> Result<Vec<ContractMessage>, AgentFailure> {
+        let page = self
+            .vault
+            .read_manager_session_history_page(
+                session_id,
+                None,
+                required_user_id,
+                floe_agent_contract::MAX_AGENT_MESSAGES,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await?;
+        let mut seen = std::collections::HashSet::new();
+        if page.messages.iter().any(|item| !seen.insert(item.alias_id)) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        page.messages
+            .into_iter()
+            .map(|item| {
+                floe_conversation::contract_message(&item.message, item.alias_id, item.coverage)
+            })
+            .collect()
+    }
 }
 
 impl<Keys: VaultKeyProvider + 'static> ConversationRepository
     for VaultConversationRepository<Keys>
 {
+    fn read_session_history_page<'a>(
+        &'a self,
+        session_id: Uuid,
+        before_message_id: Option<Uuid>,
+        limit: usize,
+        byte_limit: usize,
+    ) -> BoxFuture<'a, Result<floe_conversation::SessionHistoryPage, AgentFailure>> {
+        Box::pin(async move {
+            self.vault
+                .read_manager_session_history_page(
+                    session_id,
+                    before_message_id,
+                    None,
+                    limit,
+                    byte_limit,
+                )
+                .await
+        })
+    }
+
+    fn read_session_user_message<'a>(
+        &'a self,
+        session_id: Uuid,
+        message_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<floe_conversation::SessionHistoryMessage>, AgentFailure>> {
+        Box::pin(async move {
+            self.vault
+                .read_manager_session_user_message(session_id, message_id)
+                .await
+        })
+    }
+
     fn recovery_runs<'a>(
         &'a self,
         actor: &'a floe_kernel::OwnerActor,
@@ -220,7 +243,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         Box::pin(async move {
             let record = self
                 .vault
-                .settle_pending_conversation_terminal(actor, run_id)
+                .settle_pending_manager_conversation_terminal(actor, run_id)
                 .await?;
             self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                 .await
@@ -233,8 +256,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
             self.vault
-                .reconcile_conversation_delegation(run_id, receipt)
+                .reconcile_manager_conversation_delegation(run_id, receipt)
                 .await
+                .map(|_| ())
         })
     }
 
@@ -243,7 +267,10 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         commit: floe_conversation::BlockedRunCommit,
     ) -> BoxFuture<'a, Result<RunReceipt, AgentFailure>> {
         Box::pin(async move {
-            let record = self.vault.finish_blocked_conversation_run(commit).await?;
+            let record = self
+                .vault
+                .settle_manager_blocked_conversation_run(commit)
+                .await?;
             self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                 .await
         })
@@ -259,18 +286,29 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                     AgentFailure::CapabilityDenied,
                 ));
             }
-            match self.vault.admit_conversation_turn(request).await? {
-                VaultConversationAdmission::Created { record, session } => {
+            let session_id = request.session_id;
+            let required_user_id = match &request.input {
+                floe_conversation::TurnInput::NewMessage(message) => Some(message.message_id),
+                floe_conversation::TurnInput::ExistingMessage { message_id } => Some(*message_id),
+            };
+            match self
+                .vault
+                .admit_manager_conversation_turn(request, self.manager_identity.clone())
+                .await?
+            {
+                VaultManagerConversationAdmission::Created(record) => {
                     let receipt = floe_conversation::project_run_receipt(record)
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
-                    let transcript = floe_conversation::project_transcript(&session.messages)
+                    let transcript = self
+                        .manager_history_for_session(session_id, required_user_id)
+                        .await
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
                         receipt,
                         transcript,
                     }))
                 }
-                VaultConversationAdmission::Existing(record) => {
+                VaultManagerConversationAdmission::Existing(record) => {
                     let receipt = floe_conversation::project_run_receipt(record)
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
                     Ok(TurnAdmission::Existing(
@@ -279,7 +317,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                             .map_err(floe_kernel::CommandFailure::Admitted)?,
                     ))
                 }
-                VaultConversationAdmission::Resumed(record) => {
+                VaultManagerConversationAdmission::Resumed(record) => {
                     let receipt = floe_conversation::project_run_receipt(record)
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
                     Ok(TurnAdmission::Resumed(
@@ -288,6 +326,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                             .map_err(floe_kernel::CommandFailure::Admitted)?,
                     ))
                 }
+                VaultManagerConversationAdmission::Superseded => Err(
+                    floe_kernel::CommandFailure::NotApplied(AgentFailure::Conflict),
+                ),
             }
         })
     }
@@ -380,7 +421,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             terminal.validate()?;
             let record = self
                 .vault
-                .finish_conversation_run(run_id, expected_aggregate_revision, terminal)
+                .settle_manager_conversation_run(run_id, expected_aggregate_revision, terminal)
                 .await?;
             self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                 .await
@@ -407,7 +448,9 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             if session.revision != receipt.session_revision {
                 return Err(AgentFailure::Conflict);
             }
-            let transcript = floe_conversation::project_transcript(&session.messages)?;
+            let transcript = self
+                .manager_history_for_session(receipt.session_id, Some(receipt.user_message_id))
+                .await?;
             Ok(Some(AdmittedTurn {
                 receipt,
                 transcript,
@@ -487,6 +530,22 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
             }
             self.vault
                 .run_conversation_interactions(origin_run_id)
+                .await
+        })
+    }
+
+    fn list_session_interactions<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        session_id: Uuid,
+        device_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            if person_id != self.vault.person_id() {
+                return Ok(Vec::new());
+            }
+            self.vault
+                .session_conversation_interactions(session_id, device_id)
                 .await
         })
     }
@@ -595,25 +654,41 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
         request: floe_conversation::ResumeChildAdmission,
     ) -> BoxFuture<'a, Result<TurnAdmission, AgentFailure>> {
         Box::pin(async move {
-            match self.vault.claim_conversation_resume(request).await? {
-                VaultConversationAdmission::Created { record, session } => {
+            let prepared_request = request.child.clone();
+            match self
+                .vault
+                .claim_manager_conversation_resume(request, self.manager_identity.clone())
+                .await?
+            {
+                VaultManagerConversationAdmission::Created(record) => {
                     let receipt = self
                         .attach_run_references(floe_conversation::project_run_receipt(record)?)
                         .await?;
-                    let transcript = floe_conversation::project_transcript(&session.messages)?;
+                    let required_user_id = match &prepared_request.input {
+                        floe_conversation::TurnInput::NewMessage(message) => {
+                            Some(message.message_id)
+                        }
+                        floe_conversation::TurnInput::ExistingMessage { message_id } => {
+                            Some(*message_id)
+                        }
+                    };
+                    let transcript = self
+                        .manager_history_for_session(prepared_request.session_id, required_user_id)
+                        .await?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
                         receipt,
                         transcript,
                     }))
                 }
-                VaultConversationAdmission::Existing(record) => Ok(TurnAdmission::Existing(
+                VaultManagerConversationAdmission::Existing(record) => Ok(TurnAdmission::Existing(
                     self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                         .await?,
                 )),
-                VaultConversationAdmission::Resumed(record) => Ok(TurnAdmission::Resumed(
+                VaultManagerConversationAdmission::Resumed(record) => Ok(TurnAdmission::Resumed(
                     self.attach_run_references(floe_conversation::project_run_receipt(record)?)
                         .await?,
                 )),
+                VaultManagerConversationAdmission::Superseded => Err(AgentFailure::Conflict),
             }
         })
     }
@@ -676,11 +751,9 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationJournal<Keys> {
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         Box::pin(async move {
-            let payload =
-                serde_json::to_string(&event).map_err(|_| AgentFailure::StorageUnavailable)?;
             let revision = self
                 .vault
-                .append_conversation_journal(self.run_id, phase, &payload)
+                .record_manager_conversation_journal(self.run_id, phase, event)
                 .await?;
             Ok(JournalAck::Accepted { revision })
         })
@@ -723,14 +796,5 @@ fn archive_pointer(recovery: &floe_conversation::SessionRecoveryPointer) -> Arch
         source_revision: recovery.source_revision,
         through_turn_id: recovery.through_turn_id,
         archived_message_count: recovery.archived_message_count,
-    }
-}
-
-fn session_recovery_pointer(pointer: &ArchivePointer) -> floe_conversation::SessionRecoveryPointer {
-    floe_conversation::SessionRecoveryPointer {
-        archive_id: pointer.archive_id,
-        source_revision: pointer.source_revision,
-        through_turn_id: pointer.through_turn_id,
-        archived_message_count: pointer.archived_message_count,
     }
 }

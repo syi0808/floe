@@ -4,9 +4,9 @@ use floe_access::DependencyCoverage;
 use floe_actions::{
     ActionAdmission, ActionDecision, ActionDigest, ActionOrigin, ActionPage, ActionReconciliation,
     ActionRecord, ActionState, ActionStoreError, ActionsAuthority, AdmittedAction, AuthorityChange,
-    CollectionAck, CollectionTicket, DispatchAdmission, DispatchIntent, ExecutionIntent,
-    ExecutionSettlement, PreDispatchStop, RecoveryPage, acknowledge_action_collection,
-    action_digest, change_action_authority, decision_intent_digest, invalidate_action_dependency,
+    CollectionAck, CollectionTicket, DispatchAdmission, DispatchIntent, ExecutionSettlement,
+    PreDispatchStop, RecoveryPage, acknowledge_action_collection, action_digest,
+    change_action_authority, decision_intent_digest, invalidate_action_dependency,
     invalidate_action_policy, prepare_action_dispatch, settle_action, stop_action,
     validate_action_admission,
 };

@@ -6,15 +6,18 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::Path,
     pin::Pin,
-    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use crate::RootKey;
 use floe_access::{ContextDependency, DependencyCoverage};
 use floe_agent_contract::{AgentFailure, DataClass, SessionProtection};
 use floe_conversation::{AgentBudget, AgentSession, SessionStore};
+#[cfg(test)]
 use floe_kernel::AGENT_VERSION;
 use floe_kernel::PersonId;
+#[cfg(test)]
+use std::sync::atomic::AtomicU8;
 use subtle::ConstantTimeEq;
 use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
@@ -54,6 +57,7 @@ pub use access_grants::AccessGrantCleanup;
 pub use conversations::{
     VaultConversationActivation, VaultConversationAdmission, VaultConversationCancelAdmission,
     VaultConversationCancelReceipt, VaultConversationCancelRequest, VaultConversationJournalEntry,
+    VaultManagerConversationAdmission,
 };
 #[cfg(feature = "development-storage")]
 pub use development_keys::DevelopmentVaultKeys;
@@ -120,6 +124,8 @@ pub struct EncryptedAgentVault<Keys> {
     typed_history_payload_hydrations: AtomicU64,
     #[cfg(test)]
     context_coverage_payload_hydrations: AtomicU64,
+    #[cfg(test)]
+    owner_transcript_entry_hydrations: AtomicU64,
     _host_lock: File,
 }
 
@@ -255,6 +261,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             typed_history_payload_hydrations: AtomicU64::new(0),
             #[cfg(test)]
             context_coverage_payload_hydrations: AtomicU64::new(0),
+            #[cfg(test)]
+            owner_transcript_entry_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         vault.create_schema().await?;
@@ -330,6 +338,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             typed_history_payload_hydrations: AtomicU64::new(0),
             #[cfg(test)]
             context_coverage_payload_hydrations: AtomicU64::new(0),
+            #[cfg(test)]
+            owner_transcript_entry_hydrations: AtomicU64::new(0),
             _host_lock: host_lock,
         };
         let connection = vault.connection()?;
@@ -366,7 +376,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     async fn validate_stored_records(&self) -> Result<(), AgentFailure> {
-        self.validate_session_archive_records().await?;
+        self.validate_session_records().await?;
         self.validate_access_grant_store().await?;
         self.validate_actions_store().await?;
         self.validate_expert_binding_reviews().await?;
@@ -504,6 +514,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     fn payload(&self, session: &AgentSession) -> Result<String, AgentFailure> {
         session.validate_owner_snapshot(self.person_id)?;
+        if session.scope.is_none()
+            && session.data_classes == [DataClass::Personal]
+            && !session.messages.is_empty()
+        {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
         let payload = serde_json::to_string(session).map_err(storage)?;
         validate_session_payload_size(&payload)?;
         Ok(payload)
@@ -512,6 +528,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     fn decode_session_payload(&self, payload: &str) -> Result<AgentSession, AgentFailure> {
         validate_session_payload_size(payload)?;
         let session: AgentSession = serde_json::from_str(payload).map_err(unavailable)?;
+        if session.scope.is_none()
+            && session.data_classes == [DataClass::Personal]
+            && !session.messages.is_empty()
+        {
+            return Err(AgentFailure::UnsupportedVersion);
+        }
         self.payload(&session)?;
         Ok(session)
     }
@@ -541,6 +563,9 @@ impl<Keys: VaultKeyProvider> SessionStore for EncryptedAgentVault<Keys> {
     ) -> Result<AgentSession, AgentFailure> {
         if person_id != self.person_id {
             return Err(AgentFailure::NotFound);
+        }
+        if let Some(session) = self.read_manager_session_shell(session_id).await? {
+            return Ok(session);
         }
         let connection = self.connection()?;
         let mut rows = connection
@@ -613,7 +638,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(database_failure)?;
         let result = async {
             let candidate = session.clone();
-            let stored = self.session_on(&transaction, session.id).await?;
+            let stored = if let Some(stored) = self
+                .manager_session_shell_on(&transaction, session.id)
+                .await
+                .map_err(crate::vault::conversation_core::owner_store_failure)?
+            {
+                if !candidate.messages.is_empty() {
+                    return Err(AgentFailure::UnsupportedVersion);
+                }
+                stored
+            } else {
+                self.session_on(&transaction, session.id).await?
+            };
             if stored.revision != previous_revision
                 || stored.scope != candidate.scope
                 || candidate.messages.len() < stored.messages.len()
@@ -828,7 +864,7 @@ mod session_payload_tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::PathBuf, sync::Mutex};
 
     use super::*;
-    use floe_conversation::AgentMessage;
+    use floe_conversation::{AgentMessage, AgentSessionScope};
 
     const OLD_SESSION_QUERY_LIMIT: usize = 256 * 1024;
     const CURRENT_SESSION_LIMIT: usize = 2_097_152;
@@ -926,6 +962,11 @@ mod session_payload_tests {
         payload_bytes: usize,
     ) -> (AgentSession, String) {
         let mut session = AgentSession::new(person_id);
+        session.scope = Some(AgentSessionScope::Calendar {
+            setup_id: Uuid::new_v4(),
+            provider: floe_agent_contract::CalendarProvider::Fixture,
+        });
+        session.data_classes = vec![DataClass::Synthetic];
         session.messages.push(AgentMessage::User {
             turn_id: Uuid::new_v4(),
             message_id: Uuid::new_v4(),
@@ -959,6 +1000,11 @@ mod session_payload_tests {
 
     fn session_with_bounded_message_history(person_id: PersonId) -> (AgentSession, String) {
         let mut session = AgentSession::new(person_id);
+        session.scope = Some(AgentSessionScope::Calendar {
+            setup_id: Uuid::new_v4(),
+            provider: floe_agent_contract::CalendarProvider::Fixture,
+        });
+        session.data_classes = vec![DataClass::Synthetic];
         for turn_number in 0..32 {
             let turn_id = Uuid::new_v4();
             let user_prefix = format!("Question for turn {turn_number}: ");

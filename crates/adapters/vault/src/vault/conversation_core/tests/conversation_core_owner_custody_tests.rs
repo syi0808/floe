@@ -5,9 +5,71 @@ use crate::vault::owner_custody::{ConversationRunOutputReceipt, ConversationRunO
 use crate::vault::owner_transcript_reads::{
     OwnerResolvedTranscriptEntry, OwnerTranscriptPageBudget, OwnerTranscriptTypedEvidence,
 };
+use floe_conversation::TypedAgentMessageProvenance;
 use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
+
+async fn complete_manager_turn_with_output(
+    scenario: &mut Scenario,
+    user_text: &str,
+    answer: String,
+) -> RunRecord {
+    use floe_agent_contract::{EngineStep, JournalEvent};
+
+    scenario.identity = floe_conversation::prompts::default_manager_identity(scenario.person_id)
+        .expect("derive the stable default Manager identity");
+    let request = scenario.owner_request(user_text);
+    let run = match scenario
+        .vault()
+        .admit_manager_conversation_turn(request, scenario.identity.clone())
+        .await
+        .expect("admit Manager turn through the production Vault composer")
+    {
+        crate::vault::VaultManagerConversationAdmission::Created(run) => run,
+        other => panic!("unexpected Manager admission: {other:?}"),
+    };
+    append_valid_answer_batch(scenario, &run, &answer, Vec::new()).await;
+    scenario
+        .vault()
+        .record_manager_conversation_journal(
+            run.run_id,
+            "output",
+            JournalEvent::Output {
+                text: answer.clone(),
+                artifacts: Vec::new(),
+            },
+        )
+        .await
+        .expect("atomically record Manager output and typed Core contribution");
+    let terminal = floe_conversation::RunTerminal {
+        state: floe_conversation::RunState::Completed,
+        output: Some(answer.clone()),
+        steps: vec![EngineStep::Answer {
+            text: answer,
+            artifacts: Vec::new(),
+        }],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+        blocked: None,
+        interactions: Vec::new(),
+    };
+    let settlement = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: run.aggregate_revision,
+            terminal,
+        },
+    )
+    .await
+    .expect("settle Manager owner and recorder together");
+    let CoreComposedSettlementResult::Settled { record, .. } = settlement else {
+        panic!("Manager turn should settle both owner and recorder")
+    };
+    scenario.session_revision = record.session_revision;
+    record
+}
 
 async fn append_unresolved_model_attempt(scenario: &Scenario, run: &RunRecord) -> Uuid {
     use floe_agent_contract::{
@@ -208,7 +270,9 @@ async fn actual_terminal_task_with_parent_result_for_recovery(
         .await
         .expect("activate actual Task owner")
         .executor_generation;
-    let (_, receipts) = scenario.terminal_task_receipts(run, generation, true).await;
+    let (_, receipts) = scenario
+        .terminal_task_receipts_with_manager_history(run, generation, 2, 2, false, true)
+        .await;
     receipts
         .into_iter()
         .next()
@@ -1261,8 +1325,9 @@ async fn actual_task_result_finishes_pending_current_run_and_closes_core_atomica
     assert!(record.pending_terminal.is_none());
     assert_eq!(close.fence, open.fence);
     assert_eq!(
-        close.settled_prefix, 0,
-        "recovery does not invent a settled prefix"
+        close.settled_prefix,
+        open.fence.input.sequence + 1,
+        "recovery settles the input and exact authenticated Task contribution"
     );
     assert_eq!(close.owner_aggregate_revision, record.aggregate_revision);
     let task = scenario
@@ -1353,19 +1418,38 @@ async fn actual_task_result_finishes_pending_current_run_and_closes_core_atomica
 }
 
 #[tokio::test]
-async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_custody() {
+async fn first_late_task_result_inserts_with_unresolved_model_and_keeps_current_custody() {
     let mut scenario = Scenario::new().await;
     let (run, _) = scenario
         .admit_run_and_append_input("Task result with separate uncertain model attempt")
         .await;
-    let task_result = actual_terminal_task_with_parent_result_for_recovery(&scenario, &run).await;
-    scenario
-        .append_owner_event(
-            run.run_id,
-            floe_agent_contract::JournalEvent::Checkpoint { iteration: 1 },
-        )
+    let task_generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate real Task owner for the nested-accounting fixture")
+        .executor_generation;
+    let (_, task_receipts) = scenario
+        .terminal_task_receipts_with_manager_history(&run, task_generation, 2, 1, true, true)
         .await;
-    let unresolved_attempt = append_unresolved_model_attempt(&scenario, &run).await;
+    let unresolved_attempt = match &task_receipts[0].execution {
+        floe_agent_contract::TaskExecutionEvidence::Admitted(execution) => {
+            execution
+                .accounting
+                .unresolved_attempts
+                .first()
+                .expect("prior Interrupted Task retains unresolved model accounting")
+                .attempt_id
+        }
+        floe_agent_contract::TaskExecutionEvidence::Unadmitted => {
+            panic!("prior Task has an authenticated execution receipt")
+        }
+    };
+    let prior_task_id = task_receipts[0].task_id;
+    let task_result = task_receipts
+        .into_iter()
+        .nth(1)
+        .expect("the second actual Task result remains absent from the parent journal");
     let open = scenario
         .last_core_recorder
         .as_ref()
@@ -1387,13 +1471,14 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
     )
     .await
     .expect("Host cancellation commits while the model attempt retains custody");
-    let CoreComposedSettlementResult::CustodyPending {
+    let CoreComposedSettlementResult::OwnerOutcomeDeferred {
         record: owner_record,
     } = settled
     else {
-        panic!("terminal owner uncertainty must retain Core custody");
+        panic!("late Task result must keep cancellation pending before recovery");
     };
-    assert_eq!(owner_record.state, RunState::Cancelled);
+    assert_eq!(owner_record.state, RunState::Working);
+    assert!(owner_record.pending_terminal.is_some());
 
     let result = scenario
         .vault()
@@ -1424,6 +1509,23 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
         task.snapshot.state,
         floe_agent_contract::TaskState::Interrupted
     );
+    let prior_task = scenario
+        .vault()
+        .task(prior_task_id)
+        .await
+        .expect("read prior Task with separate model uncertainty")
+        .expect("prior Task receipt remains durable");
+    let prior_task_receipt = prior_task
+        .receipt
+        .as_ref()
+        .expect("prior Task has an authenticated terminal receipt");
+    assert!(
+        prior_task_receipt
+            .accounting
+            .unresolved_attempts
+            .iter()
+            .any(|attempt| attempt.attempt_id == unresolved_attempt)
+    );
     assert_eq!(
         scenario
             .vault()
@@ -1446,24 +1548,6 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
         .map(|entry| serde_json::from_str::<floe_agent_contract::JournalEvent>(&entry.payload))
         .collect::<Result<Vec<_>, _>>()
         .expect("decode actual owner journal");
-    assert!(events.iter().any(|event| matches!(
-        event,
-        floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
-            if *attempt_id == unresolved_attempt
-    )));
-    assert!(!events.iter().any(|event| matches!(
-        event,
-        floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
-            if *attempt_id == unresolved_attempt
-    )));
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            floe_agent_contract::JournalEvent::ModelResult { accounting, .. }
-                if accounting.unknown_tokens && accounting.unknown_cost
-        )),
-        "Task result processing preserves separate unknown model accounting"
-    );
     assert_eq!(
         events
             .iter()
@@ -1474,7 +1558,67 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
             ))
             .count(),
         1,
-        "the replayed Task result has exactly one journal entry"
+        "the first-inserted late Task result has exactly one journal entry"
+    );
+    let task_connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to read prior Task journal evidence");
+    let mut task_rows = task_connection
+        .query(
+            "SELECT payload FROM agent_task_journal WHERE task_id = ? ORDER BY revision",
+            [prior_task_id.as_uuid().to_string()],
+        )
+        .await
+        .expect("read prior Task journal");
+    let mut prior_task_events = Vec::new();
+    while let Some(row) = task_rows.next().await.expect("read prior Task event") {
+        let payload = row.get::<String>(0).expect("Task event payload");
+        prior_task_events.push(
+            serde_json::from_str::<floe_agent_contract::JournalEvent>(&payload)
+                .expect("decode prior Task event"),
+        );
+    }
+    assert!(prior_task_events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(!prior_task_events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    drop(task_rows);
+    drop(task_connection);
+
+    let history_before_replay = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            None,
+            16,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .expect("read first-inserted normalized Manager Task contribution");
+    let recorded_late_task = history_before_replay
+        .messages
+        .iter()
+        .filter(|item| {
+            matches!(
+                &item.message,
+                floe_conversation::AgentMessage::Delegation { task, .. }
+                    if task.task_id == task_result.task_id
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(recorded_late_task.len(), 1);
+    assert_eq!(
+        recorded_late_task[0].alias_id,
+        task_result.task_id.as_uuid(),
+        "the public stable cursor aliases the exact Task contribution"
     );
 
     scenario.reopen().await;
@@ -1502,6 +1646,21 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
         CoreComposedRecoveryResult::CustodyPending { record }
     );
     assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                None,
+                16,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .expect("read normalized history after exact replay"),
+        history_before_replay,
+        "exact result replay creates no duplicate typed or Core contribution"
+    );
+    assert_eq!(
         settlement_custody_snapshot(&scenario, run.run_id).await,
         before_replay,
         "exact replay adds no owner, accounting, or Core rows"
@@ -1517,6 +1676,587 @@ async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_cust
         "replay does not redispatch or create another Task execution"
     );
     drop(connection);
+}
+
+#[tokio::test]
+async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
+    use floe_agent_contract::{
+        ArchivePointer, ArchiveReadRequest, BatchCursor, EngineStep, JournalEvent,
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+        ModelStep, ModelUsage, PreparedModelPlan, ProcessingBoundary, ProjectionRef,
+        ValidatedModelBatch,
+    };
+
+    let mut scenario = Scenario::new().await;
+    scenario.identity = floe_conversation::prompts::default_manager_identity(scenario.person_id)
+        .expect("derive the stable default Manager identity");
+    let text = "Archive this Manager turn";
+    let request = scenario.owner_request(text);
+    let user_message_id = match &request.input {
+        TurnInput::NewMessage(message) => message.message_id,
+        TurnInput::ExistingMessage { message_id } => *message_id,
+    };
+    let run = match scenario
+        .vault()
+        .admit_manager_conversation_turn(request, scenario.identity.clone())
+        .await
+        .expect("admit Manager Run with normalized input custody")
+    {
+        crate::vault::VaultManagerConversationAdmission::Created(run) => run,
+        other => panic!("unexpected Manager admission: {other:?}"),
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let answer = "A stable archived answer.".to_owned();
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([101; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([102; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::Answer {
+                        text: answer.clone(),
+                        artifacts: Vec::new(),
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: None,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    scenario
+        .vault()
+        .record_manager_conversation_journal(
+            run.run_id,
+            "output",
+            JournalEvent::Output {
+                text: answer.clone(),
+                artifacts: Vec::new(),
+            },
+        )
+        .await
+        .expect("atomically record owner output and typed Core contribution");
+    let terminal = RunTerminal {
+        state: RunState::Completed,
+        output: Some(answer.clone()),
+        steps: vec![EngineStep::Answer {
+            text: answer,
+            artifacts: Vec::new(),
+        }],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+        blocked: None,
+        interactions: vec![],
+    };
+    let settled = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: run.aggregate_revision,
+            terminal,
+        },
+    )
+    .await
+    .expect("settle Manager owner and recorder together");
+    let CoreComposedSettlementResult::Settled { record, .. } = settled else {
+        panic!("completed Manager Run did not settle its recorder")
+    };
+
+    let full_history = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            None,
+            8,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .expect("preflight the complete exact Manager history");
+    let user_item_bytes = full_history
+        .messages
+        .iter()
+        .find(|message| message.alias_id == user_message_id)
+        .expect("New Manager history has its exact User alias")
+        .encoded_bytes;
+    assert_eq!(full_history.messages.len(), 2);
+
+    scenario
+        .vault()
+        .owner_transcript_entry_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_history_page(scenario.session_id, None, None, 8, 1,)
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "an oversized first live item fails from its preflight"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                Some(user_message_id),
+                8,
+                1,
+            )
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "an oversized required User is rejected before owner entry hydration"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+
+    let compacted = scenario
+        .vault()
+        .compact_manager_session(
+            scenario.session_id,
+            record.session_revision,
+            run.run_id.as_uuid(),
+            "The Manager answered the user.".into(),
+        )
+        .await
+        .expect("commit archive manifest, exact Core checkpoint, and Session CAS");
+    let pointer = ArchivePointer {
+        archive_id: compacted.recovery.archive_id,
+        source_revision: compacted.recovery.source_revision,
+        through_turn_id: compacted.recovery.through_turn_id,
+        archived_message_count: compacted.recovery.archived_message_count,
+    };
+    let request = ArchiveReadRequest {
+        person_id: scenario.person_id,
+        session_id: scenario.session_id,
+        pointer: pointer.clone(),
+        max_messages: 8,
+        max_bytes: 32 * 1024,
+    };
+    scenario
+        .vault()
+        .owner_transcript_entry_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_history_page(scenario.session_id, None, None, 8, 1)
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "oversized compaction summary coverage fails before hydration"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    let mut oversized_first = request.clone();
+    oversized_first.max_bytes = 2;
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_archive(&oversized_first)
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "oversized first archived item is rejected before hydration"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    let mut cumulative_overflow = request.clone();
+    cumulative_overflow.max_bytes = 2 + user_item_bytes;
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_archive(&cumulative_overflow)
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "the next archive item is preflighted against remaining aggregate bytes"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "only the first inbound archived entry was hydrated"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "the typed output body did not hydrate after cumulative overflow"
+    );
+    scenario
+        .vault()
+        .owner_transcript_entry_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    let archive = scenario
+        .vault()
+        .read_manager_session_archive(&request)
+        .await
+        .expect("resolve the archive from normalized Core entries");
+    archive
+        .validate(&request)
+        .expect("archive preserves exact turn and message count");
+    assert_eq!(archive.messages.len(), 2);
+    assert_eq!(
+        archive.messages[0].message.text,
+        "Archive this Manager turn"
+    );
+    assert_eq!(
+        archive.messages[1].message.text,
+        "A stable archived answer."
+    );
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("open Vault for payload count");
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_entries").await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn manager_compaction_preflights_the_aggregate_archive_budget() {
+    let mut scenario = Scenario::new().await;
+    let answer = "x".repeat(63_000);
+    complete_manager_turn_with_output(&mut scenario, "first large answer", answer.clone()).await;
+    let last =
+        complete_manager_turn_with_output(&mut scenario, "second large answer", answer).await;
+
+    let history = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            None,
+            8,
+            floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES * 4,
+        )
+        .await
+        .expect("resolve each exact Manager archive contribution size");
+    assert_eq!(history.messages.len(), 4);
+    let item_bytes = history
+        .messages
+        .iter()
+        .map(|message| message.encoded_bytes)
+        .collect::<Vec<_>>();
+    assert!(
+        item_bytes
+            .iter()
+            .all(|bytes| *bytes < floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES)
+    );
+    assert!(
+        item_bytes.iter().sum::<usize>() + 2 > floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES
+    );
+
+    let page_budget = item_bytes
+        .iter()
+        .copied()
+        .max()
+        .expect("history has entries");
+    let expected_aliases = history
+        .messages
+        .iter()
+        .map(|message| message.alias_id)
+        .collect::<Vec<_>>();
+    let mut before = None;
+    let mut byte_limited_pages = Vec::new();
+    loop {
+        let page = scenario
+            .vault()
+            .read_manager_session_history_page(scenario.session_id, before, None, 8, page_budget)
+            .await
+            .expect("cursor page fits the byte limit");
+        assert!(!page.messages.is_empty());
+        assert!(page.encoded_bytes <= page_budget);
+        let aliases = page
+            .messages
+            .iter()
+            .map(|message| message.alias_id)
+            .collect::<Vec<_>>();
+        let next_before = aliases.first().copied();
+        byte_limited_pages.push(aliases);
+        if !page.has_earlier_messages {
+            break;
+        }
+        assert_ne!(next_before, before, "byte cursor makes progress");
+        before = next_before;
+    }
+    byte_limited_pages.reverse();
+    let flattened_aliases = byte_limited_pages.into_iter().flatten().collect::<Vec<_>>();
+    let unique_aliases = flattened_aliases
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(flattened_aliases, expected_aliases);
+    assert_eq!(unique_aliases.len(), flattened_aliases.len());
+
+    scenario
+        .vault()
+        .owner_transcript_entry_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .typed_history_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    scenario
+        .vault()
+        .context_coverage_payload_hydrations
+        .store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        scenario
+            .vault()
+            .compact_manager_session(
+                scenario.session_id,
+                last.session_revision,
+                last.run_id.as_uuid(),
+                "Both large answers are retained exactly.".into(),
+            )
+            .await,
+        Err(AgentFailure::BudgetExceeded),
+        "bounded compaction refuses a cumulative projection over the archive cap"
+    );
+    assert!(
+        scenario
+            .vault()
+            .owner_transcript_entry_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < 4,
+        "the last cumulative-overflow entry is rejected before owner hydration"
+    );
+    assert!(
+        scenario
+            .vault()
+            .typed_history_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < 2,
+        "not all typed output bodies hydrate after aggregate overflow"
+    );
+    assert!(
+        scenario
+            .vault()
+            .context_coverage_payload_hydrations
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < 2,
+        "not all output coverage bodies hydrate after aggregate overflow"
+    );
+}
+
+#[tokio::test]
+async fn manager_continue_reuses_the_original_normalized_user_entry() {
+    let mut scenario = Scenario::new().await;
+    scenario.identity = floe_conversation::prompts::default_manager_identity(scenario.person_id)
+        .expect("derive the stable default Manager identity");
+    let original_text = "Continue this exact Manager request";
+    let first_request = scenario.owner_request(original_text);
+    let first = match scenario
+        .vault()
+        .admit_manager_conversation_turn(first_request, scenario.identity.clone())
+        .await
+        .expect("admit the Manager New turn through the production composer")
+    {
+        crate::vault::VaultManagerConversationAdmission::Created(run) => run,
+        other => panic!("unexpected Manager admission: {other:?}"),
+    };
+    let failed = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: first.run_id,
+            expected_aggregate_revision: first.aggregate_revision,
+            terminal: RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+        },
+    )
+    .await
+    .expect("settle a Continue-eligible Manager failure and close its recorder");
+    let CoreComposedSettlementResult::Settled { record: failed, .. } = failed else {
+        panic!("resolved Manager failure left recorder custody open")
+    };
+    scenario.session_revision = failed.session_revision;
+    let continuation = floe_conversation::project_run_receipt(failed.clone())
+        .expect("project exact failed Manager receipt")
+        .continuation()
+        .expect("BudgetExceeded Manager run admits Continue");
+    let mode = TurnMode::Continue(continuation);
+    let command_id = CommandId::new();
+    let intent = CanonicalTurnIntent {
+        session_id: scenario.session_id,
+        expected_revision: failed.session_revision,
+        text: original_text.to_owned(),
+        mode: mode.clone(),
+        retry_of: None,
+    };
+    let principal = scenario.person_id.to_string();
+    let continued_request = TurnAdmissionRequest {
+        expert_environment: failed.expert_environment,
+        run_id: RunId::new(),
+        command_id,
+        session_id: scenario.session_id,
+        expected_session_revision: failed.session_revision,
+        principal: principal.clone(),
+        device_id: failed.device_id.clone(),
+        request_digest: intent
+            .digest(&principal)
+            .expect("digest exact Continue intent"),
+        mode,
+        retry_of: None,
+        input: TurnInput::ExistingMessage {
+            message_id: failed.user_message_id,
+        },
+    };
+    let continued = match scenario
+        .vault()
+        .admit_manager_conversation_turn(continued_request, scenario.identity.clone())
+        .await
+        .expect("admit Manager Continue through the production composer")
+    {
+        crate::vault::VaultManagerConversationAdmission::Created(run) => run,
+        other => panic!("unexpected Manager Continue admission: {other:?}"),
+    };
+    assert_ne!(continued.run_id, failed.run_id);
+    assert_eq!(continued.user_message_id, failed.user_message_id);
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect for Core input count");
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_entries").await,
+        1,
+        "Manager Continue binds the existing input and appends no User duplicate"
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
+        1,
+        "the original New mapping remains the only owner input mapping"
+    );
+    assert_eq!(
+        table_count(
+            &connection,
+            "agent_conversation_owner_transcript_run_inputs_v1"
+        )
+        .await,
+        2,
+        "New and Continue Runs both link to the original input mapping"
+    );
 }
 
 #[tokio::test]
@@ -3506,7 +4246,7 @@ async fn failed_owner_mapping_write_rolls_back_the_new_optional_family() {
         0
     );
     assert!(
-        !crate::schema::conversation_owner_custody_family_present(&connection)
+        !crate::schema::conversation_owner_custody_family_v2_present(&connection)
             .await
             .expect("inspect optional family without creating it")
     );
@@ -3560,7 +4300,7 @@ async fn fault_after_composed_recorder_open_rolls_back_every_owner_and_core_writ
         );
     }
     assert!(
-        !crate::schema::conversation_owner_custody_family_present(&connection)
+        !crate::schema::conversation_owner_custody_family_v2_present(&connection)
             .await
             .expect("inspect owner mapping family without creating it"),
         "rollback removes the Run-to-input mapping family"
@@ -4459,7 +5199,15 @@ async fn typed_interaction_requires_current_valid_owner_row_and_stays_textless()
     let foreign_interaction = pending_navigation_interaction(&foreign_run, foreign_task);
     publish_interaction_with_owner_audit(&scenario, &foreign_run, foreign_interaction.clone())
         .await;
-    scenario.budget_exceeded_owner_run(&foreign_run).await;
+    scenario
+        .vault()
+        .finish_conversation_run(
+            foreign_run.run_id,
+            foreign_run.aggregate_revision,
+            floe_conversation::RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+        )
+        .await
+        .expect("settle the unbound foreign Session through its existing owner");
     scenario.session_revision = original_session_revision;
 
     let (run, input) = scenario
@@ -5082,23 +5830,68 @@ async fn owner_exact_input_read_returns_explicit_absent_and_checks_owner_session
 #[tokio::test]
 async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
     let mut scenario = Scenario::new().await;
-    let (run, input) = scenario
-        .admit_run_and_append_input("page owner history")
+    let (older_run, older_input) = scenario
+        .admit_run_and_append_input("page owner history one")
         .await;
-    let open = scenario
+    let older_open = scenario
         .vault()
-        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .open_conversation_recorder(
+            scenario.start_request(&older_run, older_input.receipt.transcript),
+        )
         .await
-        .expect("open page fixture recorder");
-    let older_request = typed_assistant_request(open.fence.clone(), "typed answer one");
+        .expect("open first page fixture recorder");
+    let older_request = typed_assistant_request(older_open.fence, "typed answer one");
     let older_receipt = compose_typed_recording(scenario.vault(), older_request.clone())
         .await
         .expect("record first page output");
-    let newer_request = typed_assistant_request(open.fence, "typed answer two");
+    scenario.complete_owner_run(&older_run).await;
+    let (newer_run, newer_input) = scenario
+        .admit_run_and_append_input("page owner history two")
+        .await;
+    let newer_open = scenario
+        .vault()
+        .open_conversation_recorder(
+            scenario.start_request(&newer_run, newer_input.receipt.transcript),
+        )
+        .await
+        .expect("open second page fixture recorder");
+    let newer_request = typed_assistant_request(newer_open.fence, "typed answer two");
     let newer_receipt = compose_typed_recording(scenario.vault(), newer_request.clone())
         .await
         .expect("record second page output");
-    remove_owner_coverage(&scenario, run.run_id.as_uuid()).await;
+    remove_owner_coverage(&scenario, older_run.run_id.as_uuid()).await;
+    remove_owner_coverage(&scenario, newer_run.run_id.as_uuid()).await;
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to normalized learning history");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await
+        .expect("begin normalized learning history read");
+    let learning_history = scenario
+        .vault()
+        .read_manager_learning_history_on(&transaction, scenario.session_id, 256, 512 * 1024)
+        .await
+        .expect("read bounded Manager learning suffix from normalized history");
+    transaction
+        .commit()
+        .await
+        .expect("commit normalized learning history read");
+    assert_eq!(learning_history.len(), 4);
+    assert!(matches!(
+        learning_history
+            .iter()
+            .map(|item| &item.message)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [
+            floe_conversation::AgentMessage::User { .. },
+            floe_conversation::AgentMessage::Assistant { .. },
+            floe_conversation::AgentMessage::User { .. },
+            floe_conversation::AgentMessage::Assistant { .. },
+        ]
+    ));
     let boundary = owner_read_boundary(&scenario).await;
     let target = owner_read_target(&scenario);
     let older = scenario
@@ -5112,6 +5905,28 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
         )
         .await
         .expect("compute exact older entry cost");
+    let older_input_page = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            target.clone(),
+            scenario.session_id,
+            boundary.clone(),
+            TranscriptEntryLookup::Reference(older_input.receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("compute exact first User input cost");
+    let newer_input_page = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            target.clone(),
+            scenario.session_id,
+            boundary.clone(),
+            TranscriptEntryLookup::Reference(newer_input.receipt.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("compute exact second User input cost");
     let newer = scenario
         .vault()
         .read_owner_transcript_entry(
@@ -5134,12 +5949,15 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
         } => {
             assert_eq!(message, &older_request.typed_message);
             assert_eq!(coverage, &DependencyCoverage::Unknown);
-            assert_eq!(*first_recording_run_id, run.run_id);
+            assert_eq!(*first_recording_run_id, older_run.run_id);
             assert_eq!(*original_task_receipt, None);
         }
         OwnerTranscriptTypedEvidence::Absent => panic!("generated output has typed evidence"),
     }
-    let exact_total = older.encoded_bytes + newer.encoded_bytes;
+    let exact_total = older_input_page.encoded_bytes
+        + older.encoded_bytes
+        + newer_input_page.encoded_bytes
+        + newer.encoded_bytes;
     scenario
         .vault()
         .typed_history_payload_hydrations
@@ -5155,33 +5973,35 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
             scenario.session_id,
             TranscriptReadCursor::start(boundary.clone()),
             OwnerTranscriptPageBudget {
-                max_entries: 2,
+                max_entries: 4,
                 max_bytes: exact_total,
             },
         )
         .await
         .expect("exact cumulative byte fit includes both generated outputs");
     assert_eq!(exact_fit.encoded_bytes, exact_total);
-    assert_eq!(exact_fit.entries.len(), 2);
+    assert_eq!(exact_fit.entries.len(), 4);
     assert!(
-        exact_fit.has_more,
-        "the older inbound item remains available"
+        !exact_fit.has_more,
+        "the exact page contains the whole two-turn prefix"
     );
     assert_eq!(
         exact_fit.entries[0].transcript_entry.reference,
-        older_receipt.transcript
+        older_input.receipt.transcript
     );
     assert_eq!(
         exact_fit.entries[1].transcript_entry.reference,
-        newer_receipt.transcript
+        older_receipt.transcript
     );
     assert_eq!(
-        exact_fit
-            .next_cursor
-            .as_ref()
-            .and_then(|cursor| cursor.before),
-        Some(older_receipt.transcript)
+        exact_fit.entries[2].transcript_entry.reference,
+        newer_input.receipt.transcript
     );
+    assert_eq!(
+        exact_fit.entries[3].transcript_entry.reference,
+        newer_receipt.transcript
+    );
+    assert_eq!(exact_fit.next_cursor, None);
     assert_eq!(
         scenario
             .vault()
@@ -5197,13 +6017,19 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
         0,
         "missing coverage remains Unknown without a body SELECT"
     );
-    assert!(exact_fit.entries.iter().all(|entry| matches!(
-        &entry.typed_evidence,
-        OwnerTranscriptTypedEvidence::Present {
-            coverage: DependencyCoverage::Unknown,
-            ..
-        }
-    )));
+    assert!(
+        exact_fit
+            .entries
+            .iter()
+            .filter(|entry| { entry.transcript_entry.kind == TranscriptEntryKind::GeneratedOutput })
+            .all(|entry| matches!(
+                &entry.typed_evidence,
+                OwnerTranscriptTypedEvidence::Present {
+                    coverage: DependencyCoverage::Unknown,
+                    ..
+                }
+            ))
+    );
 
     scenario
         .vault()
@@ -5216,25 +6042,33 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
             scenario.session_id,
             TranscriptReadCursor::start(boundary.clone()),
             OwnerTranscriptPageBudget {
-                max_entries: 2,
-                max_bytes: exact_total - 1,
+                max_entries: 4,
+                max_bytes: newer_input_page.encoded_bytes
+                    + newer.encoded_bytes
+                    + older.encoded_bytes
+                    - 1,
             },
         )
         .await
-        .expect("a later record outside the cumulative budget ends the page");
-    assert_eq!(one_short.encoded_bytes, newer.encoded_bytes);
-    assert_eq!(one_short.entries.len(), 1);
+        .expect("a later typed record outside the cumulative budget ends the page");
+    assert_eq!(
+        one_short.encoded_bytes,
+        newer_input_page.encoded_bytes + newer.encoded_bytes
+    );
+    assert_eq!(one_short.entries.len(), 2);
     assert_eq!(
         one_short.entries[0].transcript_entry.reference,
-        newer_receipt.transcript
+        newer_input.receipt.transcript
     );
     assert_eq!(
-        one_short
-            .next_cursor
-            .as_ref()
-            .and_then(|cursor| cursor.before),
-        Some(newer_receipt.transcript)
+        one_short.entries[1].transcript_entry.reference,
+        newer_receipt.transcript
     );
+    let next_cursor = one_short
+        .next_cursor
+        .clone()
+        .expect("older history remains behind the exact cursor");
+    assert_eq!(next_cursor.before, Some(newer_input.receipt.transcript));
     assert_eq!(
         scenario
             .vault()
@@ -5242,6 +6076,33 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
             .load(std::sync::atomic::Ordering::Relaxed),
         1,
         "the later oversized payload was preflighted but not fetched"
+    );
+
+    let prior_page = scenario
+        .vault()
+        .read_previous_owner_transcript_page(
+            target.clone(),
+            scenario.session_id,
+            next_cursor,
+            OwnerTranscriptPageBudget {
+                max_entries: 4,
+                max_bytes: older_input_page.encoded_bytes + older.encoded_bytes,
+            },
+        )
+        .await
+        .expect("continue with the exact exclusive cursor without duplicates");
+    assert_eq!(prior_page.entries.len(), 2);
+    assert_eq!(
+        prior_page.entries[0].transcript_entry.reference,
+        older_input.receipt.transcript
+    );
+    assert_eq!(
+        prior_page.entries[1].transcript_entry.reference,
+        older_receipt.transcript
+    );
+    assert_eq!(
+        prior_page.encoded_bytes,
+        older_input_page.encoded_bytes + older.encoded_bytes
     );
 
     scenario
@@ -5310,23 +6171,22 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
 #[tokio::test]
 async fn owner_reverse_cursor_survives_later_append_and_reopen() {
     let mut scenario = Scenario::new().await;
-    let (run, input) = scenario
-        .admit_run_and_append_input("pinned owner cursor")
+    let (first_run, first_input) = scenario
+        .admit_run_and_append_input("first pinned cursor input")
         .await;
-    let open = scenario
-        .vault()
-        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
-        .await
-        .expect("open pinned cursor recorder");
-    let first_request = typed_assistant_request(open.fence.clone(), "before pinned head");
-    let first = compose_typed_recording(scenario.vault(), first_request)
-        .await
-        .expect("record entry on pinned head");
+    scenario.budget_exceeded_owner_run(&first_run).await;
+    let (boundary_run, boundary_input) = scenario
+        .admit_run_and_append_input("second pinned cursor input")
+        .await;
     let boundary = owner_read_boundary(&scenario).await;
-    let second_request = typed_assistant_request(open.fence, "after pinned head");
-    let second = compose_typed_recording(scenario.vault(), second_request)
-        .await
-        .expect("append beyond existing boundary");
+    assert_eq!(
+        boundary.head_revision,
+        boundary_input.receipt.transcript.sequence
+    );
+    scenario.budget_exceeded_owner_run(&boundary_run).await;
+    let (_, later_input) = scenario
+        .admit_run_and_append_input("input appended after pinned head")
+        .await;
     let target = owner_read_target(&scenario);
     let first_page = scenario
         .vault()
@@ -5344,11 +6204,11 @@ async fn owner_reverse_cursor_survives_later_append_and_reopen() {
     assert_eq!(first_page.entries.len(), 1);
     assert_eq!(
         first_page.entries[0].transcript_entry.reference,
-        first.transcript
+        boundary_input.receipt.transcript
     );
     assert_ne!(
         first_page.entries[0].transcript_entry.reference,
-        second.transcript
+        later_input.receipt.transcript
     );
     let cursor = first_page.next_cursor.expect("older inbound entry remains");
     scenario.reopen().await;
@@ -5383,7 +6243,7 @@ async fn owner_reverse_cursor_survives_later_append_and_reopen() {
     assert_eq!(previous_page.entries.len(), 1);
     assert_eq!(
         previous_page.entries[0].transcript_entry.reference,
-        input.receipt.transcript
+        first_input.receipt.transcript
     );
     assert_eq!(
         previous_page.entries[0].typed_evidence,

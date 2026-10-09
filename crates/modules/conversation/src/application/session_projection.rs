@@ -1,7 +1,6 @@
 //! Product-safe session view, excluding storage authority and artifact payloads.
 use crate::{
-    AgentMessage, AgentOutcome, AgentSession, AgentUsage, ContinuationToken,
-    turn::session_message_aliases,
+    AgentMessage, AgentOutcome, AgentSession, AgentUsage, ContinuationToken, SessionHistoryPage,
 };
 use floe_agent_contract::{ArtifactPart, TaskState, UserInteractionKind};
 use floe_kernel::{AgentFailure, PersonId, TaskId};
@@ -83,29 +82,20 @@ pub struct ArtifactSummary {
 pub(super) fn project_session_snapshot(
     session: AgentSession,
     continuation_ref: Option<ContinuationToken>,
-    before_message_id: Option<Uuid>,
+    page: SessionHistoryPage,
 ) -> Result<SessionSnapshot, AgentFailure> {
-    // Aliases are derived over the full retained session, not the selected
-    // page, and are shared with the one-time frozen-snapshot preparer.
-    let aliases = session_message_aliases(&session.messages);
-    let ids: Vec<_> = aliases.iter().map(|alias| alias.message_id).collect();
-    let end = match before_message_id {
-        Some(cursor) => {
-            let mut matches = ids.iter().enumerate().filter(|(_, id)| **id == cursor);
-            let index = matches.next().ok_or(AgentFailure::Conflict)?.0;
-            if matches.next().is_some() {
-                return Err(AgentFailure::Conflict);
-            }
-            index
-        }
-        None => session.messages.len(),
-    };
-    let start = end.saturating_sub(MAX_SESSION_MESSAGES);
+    if page.messages.len() > MAX_SESSION_MESSAGES
+        || page.encoded_bytes > 2 * 1024 * 1024
+        || session.messages.len() != 0
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
     let mut bytes = 0usize;
-    let mut messages = Vec::new();
-    for (message, projected_id) in session.messages[start..end].iter().zip(&ids[start..end]) {
+    let mut messages = Vec::with_capacity(page.messages.len());
+    for item in page.messages {
+        let message = &item.message;
+        let projected_id = item.alias_id;
         let turn_id = message.turn_id();
-        let projected_id = *projected_id;
         if turn_id.is_nil() {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -246,7 +236,7 @@ pub(super) fn project_session_snapshot(
         usage: session.usage,
         continuation_ref,
         messages,
-        has_earlier_messages: start != 0,
+        has_earlier_messages: page.has_earlier_messages,
     })
 }
 

@@ -10,6 +10,7 @@ floe-access = { path = "../access" }
 floe-connections = { path = "../connections" }
 floe-actions = { path = "../actions" }
 floe-context-contract = { path = "../../contracts/context" }
+floe-conversation-contract = { path = "../../contracts/conversation" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-context = { path = "../context" }

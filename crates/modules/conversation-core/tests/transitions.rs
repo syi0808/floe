@@ -7,7 +7,8 @@ use floe_conversation_contract::{
 use floe_conversation_core::{
     ConversationCore, ExecutorDomain, OwnerGenerationFence, OwnerRunEvidence, OwnerRunState,
     OwnerSettlementEvidence, RecorderFence, RecorderRecoveryState, RecorderStartRequest,
-    RecordingRequest,
+    RecordingFacts, RecordingRequest, RecoveredTaskContribution,
+    record_task_recovery_entry_transition,
 };
 use floe_kernel::{CommandId, PersonId, RunId, TaskId};
 use uuid::Uuid;
@@ -116,6 +117,7 @@ fn owner(
         journal_revision: 2,
         state,
         record_digest: [7; 32],
+        unresolved_model_attempts: unresolved_effects.clone(),
         unresolved_effects,
     }
 }
@@ -136,6 +138,7 @@ fn close_owner(
             journal_revision: 3,
             state,
             record_digest: [8; 32],
+            unresolved_model_attempts: unresolved.clone(),
             unresolved_effects: unresolved,
         },
         terminal_receipt_digest: [9; 32],
@@ -512,6 +515,107 @@ fn stale_append_retry_uses_the_original_receipt_and_structured_empty_text_surviv
     changed_body.message.evidence = Some(MessageEvidenceReference::from_digest([22; 32]));
     assert_eq!(
         fixture.core.append_input(changed_body),
+        Err(ConversationFailure::MessageIdConflict)
+    );
+}
+
+#[test]
+fn late_task_result_replay_precedes_owner_and_generation_validation() {
+    let mut fixture = Fixture::new();
+    let input = fixture.append_input("recovered Task input");
+    let start = fixture.start(RunId::new(), input, 1);
+    let open = fixture
+        .core
+        .open_recording(
+            start.clone(),
+            Some(owner(&start, OwnerRunState::Working, vec![])),
+        )
+        .unwrap();
+    let task_id = TaskId::new();
+    let task_reference = task_receipt(task_id);
+    let mut late_result = message(MessageOrigin::Host, "settled result", Some(task_id));
+    late_result.evidence = Some(MessageEvidenceReference::from_digest([31; 32]));
+    let request = RecordingRequest {
+        recorder: open.fence.clone(),
+        message: late_result,
+        contribution_id: LogicalContributionId::new(),
+        producing_task: Some(task_reference.clone()),
+    };
+    let recovery = RecoveredTaskContribution {
+        task_id,
+        result_digest: [32; 32],
+        producing_task: Some(task_reference.clone()),
+        current_executor_generation: 1,
+        generation_fence: None,
+    };
+    let first = record_task_recovery_entry_transition(
+        request.clone(),
+        recovery,
+        RecordingFacts {
+            head: fixture.core.head().clone(),
+            active_recorder: Some(open.fence.clone()),
+            owner: Some(owner(&start, OwnerRunState::Terminal, vec![])),
+            verified_task_reference: Some(task_reference),
+            stored_receipt: None,
+            message_id_in_transcript: false,
+            previous_prefix_digest: fixture
+                .core
+                .transcript_entries()
+                .last()
+                .expect("input transcript entry exists")
+                .prefix_digest,
+        },
+    )
+    .expect("first authenticated late Task contribution is recorded");
+    assert!(!first.replayed);
+    assert!(first.appended.is_some());
+
+    let replay = record_task_recovery_entry_transition(
+        request.clone(),
+        RecoveredTaskContribution {
+            task_id: TaskId::new(),
+            result_digest: [0; 32],
+            producing_task: None,
+            current_executor_generation: 0,
+            generation_fence: None,
+        },
+        RecordingFacts {
+            head: fixture.core.head().clone(),
+            active_recorder: None,
+            owner: None,
+            verified_task_reference: None,
+            stored_receipt: Some(first.receipt.clone()),
+            message_id_in_transcript: true,
+            previous_prefix_digest: [0; 32],
+        },
+    )
+    .expect("exact receipt replays before owner or current-generation checks");
+    assert!(replay.replayed);
+    assert!(replay.appended.is_none());
+    assert_eq!(replay.receipt, first.receipt);
+
+    let mut changed = request;
+    changed.message.text.push_str(" changed");
+    assert_eq!(
+        record_task_recovery_entry_transition(
+            changed,
+            RecoveredTaskContribution {
+                task_id,
+                result_digest: [32; 32],
+                producing_task: first.receipt.producing_task.clone(),
+                current_executor_generation: 1,
+                generation_fence: None,
+            },
+            RecordingFacts {
+                head: fixture.core.head().clone(),
+                active_recorder: None,
+                owner: None,
+                verified_task_reference: None,
+                stored_receipt: Some(first.receipt),
+                message_id_in_transcript: true,
+                previous_prefix_digest: [0; 32],
+            },
+        ),
         Err(ConversationFailure::MessageIdConflict)
     );
 }

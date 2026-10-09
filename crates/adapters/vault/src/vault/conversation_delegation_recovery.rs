@@ -48,7 +48,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn reconcile_conversation_delegation(
+    #[cfg(test)]
+    pub(super) async fn reconcile_conversation_delegation(
         &self,
         run_id: RunId,
         receipt: TaskReceipt,
@@ -361,28 +362,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             items: ids,
             next_cursor,
         })
-    }
-
-    pub async fn settle_pending_conversation_terminal(
-        &self,
-        actor: &floe_kernel::OwnerActor,
-        run_id: RunId,
-    ) -> Result<RunRecord, AgentFailure> {
-        actor.validate()?;
-        if actor.person_id != self.person_id || !run_id.is_valid() {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = self
-            .prepare_pending_conversation_terminal_on(&transaction, actor, run_id)
-            .await
-            .map(|(record, _)| record);
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
     }
 
     /// Stage an interrupted outcome for a stale Working Run if required, then

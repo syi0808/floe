@@ -51,9 +51,11 @@ pub enum PrimaryBehavior {
 #[derive(Clone)]
 pub enum ModelOutput {
     Answer,
+    RepeatedAnswers(usize),
     UnsupportedManagerToolCall,
     WaitForCancellation(Arc<GenerateBarrier>),
     ScheduleExpertFlow,
+    ScheduleBlockedResumeFlow,
     ScheduleFinalizationFlow,
 }
 
@@ -305,12 +307,18 @@ impl ScriptedModel {
         output: ModelOutput,
     ) -> Self {
         let expected_consumers = match &output {
+            ModelOutput::RepeatedAnswers(count) => {
+                vec![CONVERSATION_CONSUMER.into(); *count]
+            }
             ModelOutput::ScheduleExpertFlow => vec![
                 CONVERSATION_CONSUMER.into(),
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
                 CONVERSATION_CONSUMER.into(),
             ],
+            ModelOutput::ScheduleBlockedResumeFlow => {
+                vec![CONVERSATION_CONSUMER.into(), CONVERSATION_CONSUMER.into()]
+            }
             ModelOutput::ScheduleFinalizationFlow => vec![
                 CONVERSATION_CONSUMER.into(),
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
@@ -351,6 +359,8 @@ impl ScriptedModel {
         &self,
         request: &InferenceRequest,
         plan: &ModelPlanRequest,
+        run_id: Option<Uuid>,
+        task_id: Option<Uuid>,
     ) -> Result<(), AgentFailure> {
         request.validate()?;
         let expected_user_entries = request
@@ -368,7 +378,9 @@ impl ScriptedModel {
         )?;
         let schedule_flow = matches!(
             &self.output,
-            ModelOutput::ScheduleExpertFlow | ModelOutput::ScheduleFinalizationFlow
+            ModelOutput::ScheduleExpertFlow
+                | ModelOutput::ScheduleBlockedResumeFlow
+                | ModelOutput::ScheduleFinalizationFlow
         );
         let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
         let consumer_is_expert = plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
@@ -402,9 +414,9 @@ impl ScriptedModel {
         let catalog_key = if request.envelope.run_instructions.response_contract
             == floe_conversation::FINALIZATION_OUTPUT_CONTRACT
         {
-            format!("{}:finalization", plan.consumer)
+            format!("{}:{run_id:?}:{task_id:?}:finalization", plan.consumer)
         } else {
-            plan.consumer.clone()
+            format!("{}:{run_id:?}:{task_id:?}", plan.consumer)
         };
         if let Some(expected_catalog) = state.catalogs.get(&catalog_key) {
             if expected_catalog != &request.catalog {
@@ -448,6 +460,12 @@ impl ScriptedModel {
                 } else {
                     Err(AgentFailure::InvalidInput)
                 }
+            }
+            1 if matches!(&self.output, ModelOutput::ScheduleBlockedResumeFlow) => {
+                Ok(response(vec![ModelStep::Answer {
+                    text: "I resumed with the original request and no new source result.".into(),
+                    artifacts: vec![],
+                }]))
             }
             1 => {
                 let [calendar] = request.catalog.tools.as_slice() else {
@@ -505,6 +523,7 @@ impl ScriptedModel {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],
                 }])),
+                ModelOutput::ScheduleBlockedResumeFlow => Err(AgentFailure::InvalidInput),
                 ModelOutput::ScheduleFinalizationFlow => Err(AgentFailure::BudgetExceeded),
                 _ => Err(AgentFailure::InvalidInput),
             },
@@ -662,7 +681,8 @@ struct ScriptedTransport {
 
 impl PreparedModelTransport for ScriptedTransport {
     fn validate_request(&self, request: &InferenceRequest) -> Result<(), AgentFailure> {
-        self.model.validate_canonical(request, &self.plan)
+        self.model
+            .validate_canonical(request, &self.plan, self.run_id, self.task_id)
     }
 
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
@@ -698,6 +718,10 @@ impl PreparedModelTransport for ScriptedTransport {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],
                 }])),
+                ModelOutput::RepeatedAnswers(_) => Ok(response(vec![ModelStep::Answer {
+                    text: SCRIPTED_REPLY.into(),
+                    artifacts: vec![],
+                }])),
                 ModelOutput::UnsupportedManagerToolCall => {
                     Ok(response(vec![ModelStep::CallTool {
                         tool_id: "unsupported.manager.test".into(),
@@ -713,6 +737,9 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::ScheduleExpertFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
+                }
+                ModelOutput::ScheduleBlockedResumeFlow => {
                     self.model.schedule_flow_response(call_index, &request)
                 }
                 ModelOutput::ScheduleFinalizationFlow => {
@@ -1216,6 +1243,25 @@ pub fn read_session(host: &AppHost<AppComposition>, session_id: Uuid) -> Session
                     .await
             })
             .expect("read persisted Conversation transcript")
+    })
+}
+
+pub fn read_session_before(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    before_message_id: Uuid,
+) -> SessionSnapshot {
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+        services
+            .execute_owner(async move {
+                owners
+                    .conversation
+                    .get_session(&actor, session_id, Some(before_message_id), &scope)
+                    .await
+            })
+            .expect("read normalized Conversation history before public cursor")
     })
 }
 

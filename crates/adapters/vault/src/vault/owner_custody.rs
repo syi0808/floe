@@ -12,7 +12,7 @@ use super::conversation_core::{
 };
 use super::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{
-    JournalEvent, TaskExecutionEvidence, TaskExecutionReceiptRef, TaskReceipt,
+    AGENT_VERSION, JournalEvent, TaskExecutionEvidence, TaskExecutionReceiptRef, TaskReceipt,
 };
 use floe_conversation::{
     AgentMessage, RunRecord, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE, TypedAgentMessageProvenance,
@@ -25,7 +25,8 @@ use floe_conversation_contract::{
 };
 use floe_conversation_core::{
     ConversationStoreFailure, ExecutorDomain, RecorderFence, RecordingReceipt, RecordingRequest,
-    TranscriptEntry, TranscriptEntryKind, recording_content_digest, replay_recording_entry,
+    RecoveredTaskContribution, TranscriptEntry, TranscriptEntryKind, recording_content_digest,
+    replay_recording_entry,
 };
 use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,38 @@ pub(super) struct OwnerInputBinding {
     pub(super) input: TranscriptReference,
     pub(super) executor_domain: ExecutorDomain,
     pub(super) executor_generation: u64,
+}
+
+/// One immutable Manager Session to neutral Conversation binding for an exact
+/// identity definition. A changed definition revision receives a new row and
+/// therefore a fresh conversation instead of reinterpreting old history.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ManagerSessionBinding {
+    pub(super) person_id: PersonId,
+    pub(super) session_id: Uuid,
+    pub(super) identity: AgentIdentity,
+    pub(super) conversation_id: ConversationId,
+    pub(super) branch_id: ConversationBranchId,
+}
+
+impl ManagerSessionBinding {
+    pub(super) fn validate(&self, person_id: PersonId) -> Result<(), ConversationStoreFailure> {
+        self.identity
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        if self.person_id != person_id
+            || self.identity.person_id != person_id
+            || self.session_id.is_nil()
+            || !self.conversation_id.is_valid()
+            || !self.branch_id.is_valid()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Immutable first-admission mapping from an exact Core inbound record to
@@ -206,20 +239,391 @@ impl OwnerInputBinding {
     }
 }
 
-pub(super) async fn owner_custody_v1_present_on(
+pub(super) async fn owner_custody_v2_present_on(
     transaction: &Transaction<'_>,
 ) -> Result<bool, ConversationStoreFailure> {
-    crate::schema::conversation_owner_custody_family_present(transaction)
+    crate::schema::conversation_owner_custody_family_v2_present(transaction)
         .await
         .map_err(schema_error)
 }
 
-pub(super) async fn ensure_owner_custody_v1_on(
+pub(super) async fn ensure_owner_custody_v2_on(
     transaction: &Transaction<'_>,
 ) -> Result<(), ConversationStoreFailure> {
-    crate::schema::ensure_conversation_owner_custody_family(transaction)
+    crate::schema::ensure_conversation_owner_custody_family_v2(transaction)
         .await
         .map_err(schema_error)
+}
+
+pub(super) async fn manager_session_binding_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    identity: &AgentIdentity,
+) -> Result<Option<ManagerSessionBinding>, ConversationStoreFailure> {
+    if session_id.is_nil() || identity.person_id != person_id {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
+    }
+    if !owner_custody_v2_present_on(transaction).await? {
+        return Ok(None);
+    }
+    let Some(binding) =
+        manager_session_binding_for_session_on(transaction, person_id, session_id).await?
+    else {
+        return Ok(None);
+    };
+    if binding.identity != *identity {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
+    }
+    Ok(Some(binding))
+}
+
+/// Resolve an immutable binding by product Session, independent of the
+/// currently selected Manager policy revision. Reads use the pinned identity
+/// to keep older normalized history available after policy changes.
+pub(super) async fn manager_session_binding_for_session_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+) -> Result<Option<ManagerSessionBinding>, ConversationStoreFailure> {
+    if session_id.is_nil() {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
+    }
+    if !owner_custody_v2_present_on(transaction).await? {
+        return Ok(None);
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT identity_json, binding_json FROM agent_conversation_manager_session_bindings_v2 WHERE person_id = ? AND session_id = ? LIMIT 2",
+            (person_id.to_string(), session_id.to_string()),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let identity_json = row.get::<String>(0).map_err(|_| unavailable())?;
+    let payload = row.get::<String>(1).map_err(|_| unavailable())?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    drop(rows);
+    let binding: ManagerSessionBinding = decode(&payload)?;
+    binding.validate(person_id)?;
+    if encode(&binding)? != payload
+        || encode(&binding.identity)? != identity_json
+        || binding.person_id != person_id
+        || binding.session_id != session_id
+    {
+        return Err(unavailable());
+    }
+    Ok(Some(binding))
+}
+
+/// Positively verify the only Session shape which may be activated without an
+/// existing immutable Manager binding. Read JSON scalars and array lengths
+/// only: this deliberately never decodes a potentially large legacy messages
+/// vector. Any missing, changed, or previously used Session is incompatible.
+pub(super) async fn validate_manager_pristine_session_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+) -> Result<(), ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT revision, json_extract(payload, '$.schema_version'), json_extract(payload, '$.id'), json_extract(payload, '$.person_id'), json_extract(payload, '$.revision'), json_type(payload, '$.scope'), json_array_length(payload, '$.data_classes'), json_extract(payload, '$.data_classes[0]'), json_array_length(payload, '$.messages'), json_extract(payload, '$.usage.unknown_token_attempts'), json_extract(payload, '$.usage.unknown_cost_attempts'), json_extract(payload, '$.usage.model_attempts'), json_extract(payload, '$.usage.estimated_tokens'), json_extract(payload, '$.usage.estimated_cost_micros'), json_extract(payload, '$.usage.iterations'), json_extract(payload, '$.usage.capability_calls'), json_extract(payload, '$.usage.tokens'), json_extract(payload, '$.usage.cost_micros'), json_type(payload, '$.pending_output'), json_type(payload, '$.active_turn'), json_type(payload, '$.last_outcome'), json_type(payload, '$.continuation') FROM agent_sessions WHERE id = ? LIMIT 2",
+            [session_id.to_string()],
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Err(ConversationStoreFailure::InvalidTranscriptReadTarget);
+    };
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    let pristine_header = row.get::<i64>(0).map_err(|_| unavailable())? == 0
+        && row.get::<i64>(1).map_err(|_| unavailable())? == i64::from(AGENT_VERSION)
+        && row.get::<String>(2).map_err(|_| unavailable())? == session_id.to_string()
+        && row.get::<String>(3).map_err(|_| unavailable())? == person_id.to_string()
+        && row.get::<i64>(4).map_err(|_| unavailable())? == 0
+        && row.get::<String>(5).map_err(|_| unavailable())? == "null"
+        && row.get::<i64>(6).map_err(|_| unavailable())? == 1
+        && row.get::<String>(7).map_err(|_| unavailable())? == "personal"
+        && row.get::<i64>(8).map_err(|_| unavailable())? == 0
+        && (9..=17).all(|index| row.get::<i64>(index).is_ok_and(|value| value == 0))
+        && (18..=21).all(|index| row.get::<String>(index).is_ok_and(|value| value == "null"));
+    if !pristine_header {
+        return Err(ConversationStoreFailure::UnsupportedStoredMeaning);
+    }
+
+    // A Session start receipt is allowed here; it only proves the empty
+    // product Session was created. Every authority-bearing Run, archive or
+    // normalized owner proof makes the unbound payload incompatible.
+    let mut history_union = Vec::new();
+    let mut parameters = Vec::<turso::Value>::new();
+    if table_present_on(transaction, "agent_conversation_runs").await? {
+        history_union
+            .push("SELECT 1 FROM agent_conversation_runs WHERE person_id = ? AND session_id = ?");
+        parameters.push(person_id.to_string().into());
+        parameters.push(session_id.to_string().into());
+    }
+    if table_present_on(transaction, "agent_session_archives").await? {
+        history_union.push("SELECT 1 FROM agent_session_archives WHERE session_id = ?");
+        parameters.push(session_id.to_string().into());
+    }
+    if owner_custody_v2_present_on(transaction).await? {
+        for (table, predicate) in [
+            (
+                "agent_conversation_owner_transcript_inputs_v1",
+                "SELECT 1 FROM agent_conversation_owner_transcript_inputs_v1 WHERE person_id = ? AND session_id = ?",
+            ),
+            (
+                "agent_conversation_manager_session_bindings_v2",
+                "SELECT 1 FROM agent_conversation_manager_session_bindings_v2 WHERE person_id = ? AND session_id = ?",
+            ),
+            (
+                "agent_conversation_manager_session_aliases_v2",
+                "SELECT 1 FROM agent_conversation_manager_session_aliases_v2 WHERE person_id = ? AND session_id = ?",
+            ),
+            (
+                "agent_conversation_owner_transcript_evidence_v1",
+                "SELECT 1 FROM agent_conversation_owner_transcript_evidence_v1 WHERE person_id = ? AND session_id = ?",
+            ),
+            (
+                "agent_conversation_manager_archives_v3",
+                "SELECT 1 FROM agent_conversation_manager_archives_v3 WHERE person_id = ? AND session_id = ?",
+            ),
+        ] {
+            if table_present_on(transaction, table).await? {
+                history_union.push(predicate);
+                parameters.push(person_id.to_string().into());
+                parameters.push(session_id.to_string().into());
+            }
+        }
+    }
+    if !history_union.is_empty() {
+        let sql = format!("{} LIMIT 1", history_union.join(" UNION ALL "));
+        let mut owner_rows = transaction
+            .query(&sql, parameters)
+            .await
+            .map_err(database_error)?;
+        if owner_rows.next().await.map_err(database_error)?.is_some() {
+            return Err(ConversationStoreFailure::UnsupportedStoredMeaning);
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn table_present_on(
+    transaction: &Transaction<'_>,
+    table: &str,
+) -> Result<bool, ConversationStoreFailure> {
+    let mut rows = transaction
+        .query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            [table],
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(rows.next().await.map_err(database_error)?.is_some())
+}
+
+pub(super) async fn insert_manager_session_binding_on(
+    transaction: &Transaction<'_>,
+    binding: &ManagerSessionBinding,
+) -> Result<(), ConversationStoreFailure> {
+    binding.validate(binding.person_id)?;
+    let identity_json = encode(&binding.identity)?;
+    let binding_json = encode(binding)?;
+    let existing = manager_session_binding_on(
+        transaction,
+        binding.person_id,
+        binding.session_id,
+        &binding.identity,
+    )
+    .await?;
+    if let Some(existing) = existing {
+        return if existing == *binding {
+            Ok(())
+        } else {
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::MessageIdConflict,
+            ))
+        };
+    }
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_manager_session_bindings_v2 (person_id, session_id, identity_json, conversation_id, branch_id, binding_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                binding.person_id.to_string(),
+                binding.session_id.to_string(),
+                identity_json,
+                binding.conversation_id.as_uuid().to_string(),
+                binding.branch_id.as_uuid().to_string(),
+                binding_json,
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+pub(super) async fn manager_session_alias_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    alias_id: Uuid,
+) -> Result<Option<TranscriptReference>, ConversationStoreFailure> {
+    if session_id.is_nil() || alias_id.is_nil() {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::InvalidInput,
+        ));
+    }
+    if !owner_custody_v2_present_on(transaction).await? {
+        return Ok(None);
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT conversation_id, branch_id, sequence, message_id FROM agent_conversation_manager_session_aliases_v2 WHERE person_id = ? AND session_id = ? AND alias_id = ? LIMIT 2",
+            (person_id.to_string(), session_id.to_string(), alias_id.to_string()),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let conversation_id = parse_conversation_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    let branch_id = parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?;
+    let sequence = positive_integer(row.get::<i64>(2).map_err(|_| unavailable())?)?;
+    let message_id = parse_message_id(&row.get::<String>(3).map_err(|_| unavailable())?)?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    let reference = TranscriptReference {
+        conversation_id,
+        branch_id,
+        message_id,
+        sequence,
+    };
+    reference
+        .validate()
+        .map_err(ConversationStoreFailure::Transition)?;
+    Ok(Some(reference))
+}
+
+pub(super) async fn manager_session_alias_for_reference_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    reference: TranscriptReference,
+) -> Result<Option<Uuid>, ConversationStoreFailure> {
+    if session_id.is_nil() {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::InvalidInput,
+        ));
+    }
+    if !owner_custody_v2_present_on(transaction).await? {
+        return Ok(None);
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT alias_id FROM agent_conversation_manager_session_aliases_v2 WHERE person_id = ? AND session_id = ? AND conversation_id = ? AND branch_id = ? AND sequence = ? AND message_id = ? LIMIT 2",
+            (
+                person_id.to_string(),
+                session_id.to_string(),
+                reference.conversation_id.as_uuid().to_string(),
+                reference.branch_id.as_uuid().to_string(),
+                integer(reference.sequence)?,
+                reference.message_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    let Some(row) = rows.next().await.map_err(database_error)? else {
+        return Ok(None);
+    };
+    let alias = parse_uuid(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+    if rows.next().await.map_err(database_error)?.is_some() {
+        return Err(unavailable());
+    }
+    Ok(Some(alias))
+}
+
+pub(super) async fn insert_manager_session_alias_on(
+    transaction: &Transaction<'_>,
+    person_id: PersonId,
+    session_id: Uuid,
+    alias_id: Uuid,
+    reference: TranscriptReference,
+) -> Result<(), ConversationStoreFailure> {
+    if alias_id.is_nil() {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::InvalidInput,
+        ));
+    }
+    reference
+        .validate()
+        .map_err(ConversationStoreFailure::Transition)?;
+    let binding = manager_session_binding_for_session_on(transaction, person_id, session_id)
+        .await?
+        .ok_or(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ))?;
+    if binding.conversation_id != reference.conversation_id
+        || binding.branch_id != reference.branch_id
+    {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
+    }
+    if let Some(existing) =
+        manager_session_alias_on(transaction, person_id, session_id, alias_id).await?
+    {
+        return if existing == reference {
+            Ok(())
+        } else {
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::MessageIdConflict,
+            ))
+        };
+    }
+    transaction
+        .execute(
+            "INSERT INTO agent_conversation_manager_session_aliases_v2 (person_id, session_id, alias_id, conversation_id, branch_id, sequence, message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                person_id.to_string(),
+                session_id.to_string(),
+                alias_id.to_string(),
+                reference.conversation_id.as_uuid().to_string(),
+                reference.branch_id.as_uuid().to_string(),
+                integer(reference.sequence)?,
+                reference.message_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .map_err(database_error)?;
+    Ok(())
+}
+
+pub(super) fn manager_session_message_alias(message: &AgentMessage) -> Uuid {
+    match message {
+        AgentMessage::User { message_id, .. } => *message_id,
+        AgentMessage::Assistant { turn_id, .. } => *turn_id,
+        AgentMessage::Preamble { turn_id, text } => {
+            Uuid::new_v5(turn_id, format!("preamble:0:{text}").as_bytes())
+        }
+        AgentMessage::Compaction { turn_id, .. } => Uuid::new_v5(turn_id, b"compaction:0"),
+        AgentMessage::Capability { call_id, .. } => *call_id,
+        AgentMessage::Delegation { task, .. } => task.task_id.as_uuid(),
+        AgentMessage::Interaction { interaction_id, .. } => *interaction_id,
+    }
 }
 
 pub(super) async fn owner_input_binding_on(
@@ -301,7 +705,7 @@ pub(super) async fn owner_transcript_input_for_reference_on(
     input
         .validate()
         .map_err(ConversationStoreFailure::Transition)?;
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Ok(None);
     }
     let mut rows = transaction
@@ -371,7 +775,7 @@ pub(super) async fn owner_transcript_input_for_owner_message_on(
             ConversationFailure::InvalidInput,
         ));
     }
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Ok(None);
     }
     let mut rows = transaction
@@ -415,7 +819,7 @@ pub(super) async fn owner_transcript_input_for_run_on(
     person_id: PersonId,
     run_id: RunId,
 ) -> Result<Option<OwnerTranscriptInputMapping>, ConversationStoreFailure> {
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Ok(None);
     }
     let mut rows = transaction
@@ -561,7 +965,7 @@ pub(super) async fn typed_transcript_link_for_contribution_on(
     person_id: PersonId,
     contribution_id: floe_conversation_contract::LogicalContributionId,
 ) -> Result<Option<TypedTranscriptEvidenceLink>, ConversationStoreFailure> {
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Ok(None);
     }
     let mut rows = transaction
@@ -684,7 +1088,7 @@ pub(super) async fn typed_transcript_link_for_entry_on(
     reference
         .validate()
         .map_err(ConversationStoreFailure::Transition)?;
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Ok(None);
     }
     let mut rows = transaction
@@ -723,7 +1127,7 @@ async fn insert_typed_transcript_link_on(
     link: &TypedTranscriptEvidenceLink,
 ) -> Result<(), ConversationStoreFailure> {
     link.validate(link.person_id)?;
-    if !owner_custody_v1_present_on(transaction).await? {
+    if !owner_custody_v2_present_on(transaction).await? {
         return Err(unavailable());
     }
     if typed_transcript_link_for_contribution_on(transaction, link.person_id, link.contribution_id)
@@ -847,6 +1251,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
         recorder: &RecorderFence,
+        task_recovery: bool,
     ) -> Result<(RunRecord, OwnerTranscriptInputMapping), ConversationStoreFailure> {
         recorder
             .validate()
@@ -905,7 +1310,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(owner_error)?;
         if open.fence != *recorder
             || active.as_ref() != Some(recorder)
-            || current_generation != recorder.executor_generation
+            || current_generation < recorder.executor_generation
+            || (current_generation > recorder.executor_generation && !task_recovery)
         {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::WrongWriter,
@@ -1279,7 +1685,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 // Only a genuinely new Output consults the mutable recorder and
                 // executor fences. The stored replay branch above is immutable.
                 let (verified_run, _) = self
-                    .verified_typed_recorder_on(transaction, &request.recorder)
+                    .verified_typed_recorder_on(transaction, &request.recorder, false)
                     .await?;
                 let typed_message = AgentMessage::Assistant {
                     turn_id: verified_run.run_id.as_uuid(),
@@ -1348,6 +1754,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         request: TypedConversationRecordingRequest,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        self.record_typed_conversation_entry_with_policy(transaction, request, None)
+            .await
+    }
+
+    pub(super) async fn record_task_recovery_typed_conversation_entry_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: TypedConversationRecordingRequest,
+        recovery: RecoveredTaskContribution,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        self.record_typed_conversation_entry_with_policy(transaction, request, Some(recovery))
+            .await
+    }
+
+    async fn record_typed_conversation_entry_with_policy(
+        &self,
+        transaction: &Transaction<'_>,
+        request: TypedConversationRecordingRequest,
+        task_recovery: Option<RecoveredTaskContribution>,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
         ensure_core_v3_on(transaction).await?;
         let stored_receipt =
             recording_receipt_on(transaction, self.person_id, request.contribution_id).await?;
@@ -1381,7 +1807,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ));
         }
         let (run, mapping) = self
-            .verified_typed_recorder_on(transaction, &request.recorder)
+            .verified_typed_recorder_on(transaction, &request.recorder, task_recovery.is_some())
             .await?;
         if request.typed_message.turn_id() != request.recorder.run_id.as_uuid()
             || mapping.input != request.recorder.input
@@ -1404,6 +1830,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let (original_task_receipt, producing_task) = self
             .verified_typed_task_on(transaction, request.recorder.run_id, &request.typed_message)
             .await?;
+        if task_recovery.is_some()
+            && !matches!(&request.typed_message, AgentMessage::Delegation { .. })
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        if let Some(recovery) = task_recovery.as_ref()
+            && (match &request.typed_message {
+                AgentMessage::Delegation { task, .. } => task.task_id != recovery.task_id,
+                _ => true,
+            } || recovery.producing_task != producing_task)
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
         self.verified_typed_interaction_on(
             transaction,
             request.recorder.run_id,
@@ -1413,7 +1856,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
         // A unique immutable link family is required for this composed write.
         // It is never created by any read/open path.
-        ensure_owner_custody_v1_on(transaction).await?;
+        ensure_owner_custody_v2_on(transaction).await?;
         let typed_reference = self
             .insert_typed_agent_message_on(
                 transaction,
@@ -1459,9 +1902,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             contribution_id: request.contribution_id,
             producing_task: producing_task.clone(),
         };
-        let receipt = self
-            .record_conversation_entry_on(transaction, core_request)
-            .await?;
+        let receipt = if let Some(recovery) = task_recovery {
+            self.record_task_recovery_entry_on(transaction, core_request, recovery)
+                .await?
+        } else {
+            self.record_conversation_entry_on(transaction, core_request)
+                .await?
+        };
         if receipt.recorder != request.recorder
             || receipt.contribution_id != request.contribution_id
             || receipt.producing_task != producing_task
@@ -1508,6 +1955,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         link.validate(self.person_id)?;
         insert_typed_transcript_link_on(transaction, &link).await?;
+        if let Some(binding) =
+            manager_session_binding_for_session_on(transaction, self.person_id, run.session_id)
+                .await?
+        {
+            if binding.identity != request.recorder.identity {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            insert_manager_session_alias_on(
+                transaction,
+                self.person_id,
+                run.session_id,
+                manager_session_message_alias(&request.typed_message),
+                receipt.transcript,
+            )
+            .await?;
+        }
         #[cfg(test)]
         if self
             .conversation_core_typed_write_fault
@@ -1597,7 +2062,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         if request.recorder != receipt.recorder {
             let (current_run, current_mapping) = self
-                .verified_typed_recorder_on(transaction, &request.recorder)
+                .verified_typed_recorder_on(transaction, &request.recorder, false)
                 .await?;
             if current_mapping.input != link.owner_input
                 || current_mapping.session_id != link.owner_session_id

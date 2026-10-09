@@ -480,8 +480,10 @@ impl SourceOperationRepository for TursoStore {
                 .map_err(source_connection_failure)?;
             let requested = request.record;
             requested.validate()?;
-            if requested.revision != 1 || requested.phase != SourceOperationPhase::Reserved
-                || requested.kind == floe_connections::SourceOperationKind::ConnectionPresentation {
+            if requested.revision != 1
+                || requested.phase != SourceOperationPhase::Reserved
+                || requested.kind == floe_connections::SourceOperationKind::ConnectionPresentation
+            {
                 return Err(SourceRepositoryError::Conflict);
             }
             let connection = self.connection().await.map_err(source_connection_failure)?;

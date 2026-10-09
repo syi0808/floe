@@ -1,54 +1,57 @@
 //! Vault persistence for owner-driven neutral Conversation recorder custody.
 //!
 //! Core 3 is the only supported stored meaning for neutral recorder custody.
-//! The internal `*_on` methods accept the caller's transaction so an
-//! owner admission, journal, terminal write, and the matching Core receipt can
-//! be composed atomically by a later product cutover.
+//! The internal `*_on` methods accept the caller's transaction so Manager
+//! admission, journal, terminal, recovery, and matching Core receipts commit
+//! atomically in their owning Vault composition.
 
 use std::collections::HashSet;
 
-use super::owner_custody::{
-    OwnerInputBinding, OwnerTranscriptInputMapping, ensure_owner_custody_v1_on,
-    insert_owner_input_binding_on, insert_owner_transcript_input_mapping_on,
-    insert_owner_transcript_run_input_on, owner_input_binding_on,
-    owner_transcript_input_for_owner_message_on, owner_transcript_input_for_reference_on,
-    owner_transcript_input_for_run_on,
-};
 #[cfg(test)]
+use super::owner_custody::TypedTranscriptEvidenceLink;
 use super::owner_custody::{
-    TypedConversationRecordingRequest, TypedTranscriptEvidenceLink,
-    typed_transcript_link_for_contribution_on, typed_transcript_link_for_entry_on,
+    ConversationRunOutputRequest, ManagerSessionBinding, OwnerInputBinding,
+    OwnerTranscriptInputMapping, TypedConversationRecordingRequest, ensure_owner_custody_v2_on,
+    insert_manager_session_alias_on, insert_manager_session_binding_on,
+    insert_owner_input_binding_on, insert_owner_transcript_input_mapping_on,
+    insert_owner_transcript_run_input_on, manager_session_binding_for_session_on,
+    manager_session_binding_on, owner_input_binding_on,
+    owner_transcript_input_for_owner_message_on, owner_transcript_input_for_reference_on,
+    owner_transcript_input_for_run_on, table_present_on, typed_transcript_link_for_contribution_on,
+    typed_transcript_link_for_entry_on, validate_manager_pristine_session_on,
 };
 use super::{EncryptedAgentVault, VaultKeyProvider, database_failure};
 use crate::write_fence::JournalWriteGuard;
-use floe_agent_contract::{TaskExecutionReceiptRef, TaskReceipt};
-#[cfg(test)]
-use floe_conversation::TypedAgentMessageProvenance;
+use floe_agent_contract::{JournalEvent, TaskExecutionReceiptRef, TaskReceipt};
 use floe_conversation::{
-    BlockedRunCommit, CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState, RunTerminal,
-    TurnAdmissionRequest, TurnInput, TurnMode,
+    AgentMessage, BlockedRunCommit, CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState,
+    RunTerminal, TurnAdmissionRequest, TurnInput, TurnMode,
 };
 use floe_conversation_contract::{
     AdmissionDisposition, AdmissionResult, AdmissionTarget, AgentIdentity, ConversationBranchId,
     ConversationCheckpoint, ConversationFailure, ConversationId, ConversationMessage,
-    ConversationReference, MessageAdmissionRequest, MessageId, TaskEvidenceReference,
-    TranscriptReference,
+    ConversationReference, LogicalContributionId, MessageAdmissionRequest, MessageId,
+    TaskEvidenceReference, TranscriptReference,
 };
 use floe_conversation_core::{
     AppendFacts, CheckpointFacts, ConversationHead, ConversationStoreFailure, EMPTY_PREFIX_DIGEST,
-    ExecutorDomain, MAX_TRANSCRIPT_PAGE_BYTES, MAX_TRANSCRIPT_PAGE_ENTRIES, OwnerGenerationFence,
-    OwnerRunEvidence, OwnerRunState, OwnerSettlementEvidence, RecorderCloseFacts,
-    RecorderCloseReceipt, RecorderFence, RecorderOpenFacts, RecorderOpenReceipt,
-    RecorderRecoveryObservation, RecorderRecoveryState, RecorderRetirementFacts,
+    ExecutorDomain, MAX_TRANSCRIPT_PAGE_ENTRIES, OwnerGenerationFence, OwnerRunEvidence,
+    OwnerRunState, OwnerSettlementEvidence, RecorderCloseFacts, RecorderCloseReceipt,
+    RecorderFence, RecorderOpenFacts, RecorderOpenReceipt, RecorderRetirementFacts,
     RecorderRetirementReceipt, RecorderStartRequest, RecordingFacts, RecordingReceipt,
-    RecordingRequest, TranscriptEntry, TranscriptEntryKind, TranscriptPage, TranscriptPageBudget,
+    RecordingRequest, RecoveredTaskContribution, TranscriptEntry, TranscriptEntryKind,
     advance_core_prefix_digest, append_input_transition, apply_checkpoint_transition,
     close_recording_transition, open_recording_transition, record_entry_transition,
-    recording_content_digest, replay_close_recording, replay_open_recording,
-    replay_recording_entry, replay_retirement, retire_stale_recording_transition,
-    validate_reference_target,
+    record_task_recovery_entry_transition, recording_content_digest, replay_close_recording,
+    replay_open_recording, replay_recording_entry, replay_retirement,
+    retire_stale_recording_transition,
 };
-use floe_kernel::{AgentFailure, PersonId, RunId};
+#[cfg(test)]
+use floe_conversation_core::{
+    MAX_TRANSCRIPT_PAGE_BYTES, RecorderRecoveryObservation, RecorderRecoveryState, TranscriptPage,
+    TranscriptPageBudget, validate_reference_target,
+};
+use floe_kernel::{AgentFailure, CommandFailure, CommandId, PersonId, RunId};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use turso::transaction::{Transaction, TransactionBehavior};
@@ -65,8 +68,18 @@ pub(super) const CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY: u8 = 3;
 
 #[derive(Clone, Debug)]
 pub(super) enum CoreComposedOwnerIntent {
+    #[cfg(test)]
     Turn(TurnAdmissionRequest),
+    #[cfg(test)]
     Resume(ResumeChildAdmission),
+    ManagerTurn {
+        request: TurnAdmissionRequest,
+        identity: AgentIdentity,
+    },
+    ManagerResume {
+        request: ResumeChildAdmission,
+        identity: AgentIdentity,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +93,89 @@ pub(super) enum CoreComposedRunAdmission {
     /// The enclosing transaction must commit this outcome; report Conflict
     /// only after that commit succeeds.
     ResumeSuperseded,
+}
+
+pub(super) fn manager_contribution_ids(
+    run_id: RunId,
+    kind: &str,
+    alias_id: Uuid,
+) -> Result<(MessageId, CommandId, LogicalContributionId, Uuid), ConversationStoreFailure> {
+    let run_uuid = run_id.as_uuid();
+    let suffix = alias_id.as_hyphenated().to_string();
+    let message_uuid = Uuid::new_v5(
+        &run_uuid,
+        format!("manager.message:{kind}:{suffix}").as_bytes(),
+    );
+    let command_uuid = Uuid::new_v5(
+        &run_uuid,
+        format!("manager.command:{kind}:{suffix}").as_bytes(),
+    );
+    let contribution_uuid = Uuid::new_v5(
+        &run_uuid,
+        format!("manager.contribution:{kind}:{suffix}").as_bytes(),
+    );
+    Ok((
+        MessageId::from_uuid(message_uuid).ok_or_else(unavailable)?,
+        CommandId::from_uuid(command_uuid).ok_or_else(unavailable)?,
+        LogicalContributionId::from_uuid(contribution_uuid).ok_or_else(unavailable)?,
+        alias_id,
+    ))
+}
+
+fn manager_recovered_task_result_digest(
+    event: &JournalEvent,
+) -> Result<[u8; 32], ConversationStoreFailure> {
+    if !matches!(event, JournalEvent::DelegationResult { .. }) {
+        return Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch,
+        ));
+    }
+    let payload = serde_json::to_vec(event).map_err(|_| unavailable())?;
+    let mut digest = Sha256::new();
+    digest.update(b"floe-manager-recovered-task-result-v1\0");
+    digest.update(
+        u64::try_from(payload.len())
+            .map_err(|_| unavailable())?
+            .to_be_bytes(),
+    );
+    digest.update(payload);
+    Ok(digest.finalize().into())
+}
+
+fn manager_core_input_request(
+    request: &TurnAdmissionRequest,
+    identity: &AgentIdentity,
+) -> Result<MessageAdmissionRequest, ConversationStoreFailure> {
+    identity
+        .validate()
+        .map_err(ConversationStoreFailure::Transition)?;
+    let (owner_message_id, text) = match &request.input {
+        TurnInput::NewMessage(message) => (message.message_id, message.text.clone()),
+        TurnInput::ExistingMessage { message_id } => (*message_id, String::new()),
+    };
+    let message_id = MessageId::from_uuid(owner_message_id).ok_or(
+        ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch),
+    )?;
+    let command_id = CommandId::from_uuid(owner_message_id).ok_or(
+        ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch),
+    )?;
+    Ok(MessageAdmissionRequest {
+        target: AdmissionTarget::New {
+            conversation_id: ConversationId::new(),
+            branch_id: ConversationBranchId::new(),
+            identity: identity.clone(),
+        },
+        message: ConversationMessage {
+            message_id,
+            command_id,
+            origin: floe_conversation_contract::MessageOrigin::Person {
+                person_id: identity.person_id,
+            },
+            text,
+            evidence: None,
+            task_id: None,
+        },
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -208,6 +304,24 @@ pub(super) fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
     }
 }
 
+pub(super) fn owner_store_failure(error: ConversationStoreFailure) -> AgentFailure {
+    match error {
+        ConversationStoreFailure::Busy => AgentFailure::StorageBusy,
+        ConversationStoreFailure::UnsupportedStoredMeaning => AgentFailure::UnsupportedVersion,
+        ConversationStoreFailure::TranscriptMessageNotFound => AgentFailure::NotFound,
+        ConversationStoreFailure::PageItemExceedsBudget => AgentFailure::BudgetExceeded,
+        ConversationStoreFailure::InvalidTranscriptCursor
+        | ConversationStoreFailure::TranscriptReferenceMismatch
+        | ConversationStoreFailure::InvalidTranscriptBoundary
+        | ConversationStoreFailure::InvalidTranscriptReadTarget => AgentFailure::Conflict,
+        ConversationStoreFailure::Transition(_) => AgentFailure::Conflict,
+        ConversationStoreFailure::NotCommitted | ConversationStoreFailure::OutcomeUnknown => {
+            AgentFailure::StorageUnavailable
+        }
+        _ => AgentFailure::StorageUnavailable,
+    }
+}
+
 fn owner_evidence_mismatch() -> ConversationStoreFailure {
     ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
 }
@@ -234,7 +348,7 @@ pub(super) fn integer(value: u64) -> Result<i64, ConversationStoreFailure> {
         .map_err(|_| ConversationStoreFailure::Transition(ConversationFailure::InvalidInput))
 }
 
-fn nonnegative_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
+pub(super) fn nonnegative_integer(value: i64) -> Result<u64, ConversationStoreFailure> {
     u64::try_from(value).map_err(|_| unavailable())
 }
 
@@ -1219,6 +1333,565 @@ pub(super) fn parse_logical_contribution_id(
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    /// A new Manager binding may only be attached to a positively verified
+    /// pristine Session. Existing bindings remain immutable and are checked
+    /// against the pinned Manager definition; owner input rows do not excuse
+    /// a missing binding.
+    async fn validate_manager_fresh_activation_on(
+        &self,
+        transaction: &Transaction<'_>,
+        session_id: Uuid,
+        identity: &AgentIdentity,
+    ) -> Result<(), ConversationStoreFailure> {
+        if let Some(binding) =
+            manager_session_binding_for_session_on(transaction, self.person_id, session_id).await?
+        {
+            if binding.identity != *identity {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            return Ok(());
+        }
+        validate_manager_pristine_session_on(transaction, self.person_id, session_id).await
+    }
+
+    /// Manager admission joins the owner Run and Core input/recorder in one
+    /// write transaction. The definition identity is supplied by Ready and
+    /// pinned in the Session binding; owner Run and Task IDs remain separate.
+    pub async fn admit_manager_conversation_turn(
+        &self,
+        request: TurnAdmissionRequest,
+        identity: AgentIdentity,
+    ) -> Result<super::VaultManagerConversationAdmission, CommandFailure<AgentFailure>> {
+        request
+            .validate()
+            .map_err(|_| CommandFailure::NotAdmitted(AgentFailure::InvalidInput))?;
+        identity
+            .validate()
+            .map_err(|_| CommandFailure::NotAdmitted(AgentFailure::InvalidInput))?;
+        if identity.person_id != self.person_id || request.principal != self.person_id.to_string() {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::CapabilityDenied));
+        }
+        if matches!(&request.mode, TurnMode::Resume(_)) {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::InvalidInput));
+        }
+        if !request.command_id.is_valid() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+        }
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(CommandFailure::Indeterminate)?;
+        let already_admitted = self
+            .conversation_run_on(&transaction, request.run_id)
+            .await
+            .map_err(|failure| CommandFailure::Indeterminate(failure))?
+            .is_some();
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let core_request = manager_core_input_request(&request, &identity)
+            .map_err(|failure| CommandFailure::NotAdmitted(owner_store_failure(failure)))?;
+        let result = self
+            .admit_conversation_run_with_core_input_on(
+                &transaction,
+                CoreComposedOwnerIntent::ManagerTurn { request, identity },
+                core_request,
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await
+            .and_then(|admission| match admission {
+                CoreComposedRunAdmission::Admitted { record, .. } => Ok(if already_admitted {
+                    super::VaultManagerConversationAdmission::Existing(record)
+                } else {
+                    super::VaultManagerConversationAdmission::Created(record)
+                }),
+                CoreComposedRunAdmission::ResumeSuperseded => {
+                    Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ))
+                }
+            });
+        let result = self
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+            .map_err(|failure| {
+                let outcome_unknown = failure == ConversationStoreFailure::OutcomeUnknown;
+                let failure = owner_store_failure(failure);
+                if outcome_unknown || prior_command {
+                    CommandFailure::Indeterminate(failure)
+                } else if replay_checked {
+                    CommandFailure::NotApplied(failure)
+                } else {
+                    CommandFailure::Indeterminate(failure)
+                }
+            });
+        self.check_access().map_err(CommandFailure::Indeterminate)?;
+        result
+    }
+
+    /// Linked Resume uses the same owner claim as the owner-only path, plus
+    /// exact normalized input binding and a fresh recorder in the same write.
+    pub async fn claim_manager_conversation_resume(
+        &self,
+        request: ResumeChildAdmission,
+        identity: AgentIdentity,
+    ) -> Result<super::VaultManagerConversationAdmission, AgentFailure> {
+        request.validate()?;
+        identity
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if identity.person_id != self.person_id
+            || request.child.principal != self.person_id.to_string()
+        {
+            return Err(AgentFailure::CapabilityDenied);
+        }
+        let mut connection = self.connection()?;
+        let (guard, transaction) = self.journal_transaction(&mut connection).await?;
+        let already_admitted = self
+            .conversation_run_on(&transaction, request.child.run_id)
+            .await?
+            .is_some();
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let core_request =
+            manager_core_input_request(&request.child, &identity).map_err(owner_store_failure)?;
+        let result = self
+            .admit_conversation_run_with_core_input_on(
+                &transaction,
+                CoreComposedOwnerIntent::ManagerResume { request, identity },
+                core_request,
+                &mut replay_checked,
+                &mut prior_command,
+            )
+            .await
+            .and_then(|admission| match admission {
+                CoreComposedRunAdmission::Admitted { record, .. } => Ok(if already_admitted {
+                    super::VaultManagerConversationAdmission::Resumed(record)
+                } else {
+                    super::VaultManagerConversationAdmission::Created(record)
+                }),
+                CoreComposedRunAdmission::ResumeSuperseded => {
+                    Ok(super::VaultManagerConversationAdmission::Superseded)
+                }
+            });
+        let admission = self
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+            .map_err(owner_store_failure)?;
+        self.check_access()?;
+        match admission {
+            super::VaultManagerConversationAdmission::Superseded => Err(AgentFailure::Conflict),
+            admission => Ok(admission),
+        }
+    }
+
+    pub(super) async fn manager_recorder_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run_id: RunId,
+    ) -> Result<(RunRecord, RecorderFence), ConversationStoreFailure> {
+        let run = self
+            .conversation_run_on(transaction, run_id)
+            .await
+            .map_err(owner_error)?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        run.validate(self.person_id).map_err(owner_error)?;
+        let binding = owner_input_binding_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let manager_binding =
+            manager_session_binding_for_session_on(transaction, self.person_id, run.session_id)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+        if binding.identity != manager_binding.identity
+            || binding.session_id != run.session_id
+            || binding.owner_user_message_id != run.user_message_id
+            || binding.conversation_id != manager_binding.conversation_id
+            || binding.branch_id != manager_binding.branch_id
+            || binding.input.conversation_id != manager_binding.conversation_id
+            || binding.input.branch_id != manager_binding.branch_id
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        let open = open_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        if open.fence.identity != binding.identity
+            || open.fence.conversation_id != binding.conversation_id
+            || open.fence.branch_id != binding.branch_id
+            || open.fence.input != binding.input
+            || open.fence.executor_domain != ExecutorDomain::HostRun
+            || open.fence.executor_generation != run.executor_generation
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok((run, open.fence))
+    }
+
+    /// The production Manager's Output, ToolResult, and DelegationResult
+    /// journal acknowledgements also record typed history and neutral Core
+    /// custody in the same transaction. Other Run evidence remains in the
+    /// existing Run journal only.
+    pub async fn record_manager_conversation_journal(
+        &self,
+        run_id: RunId,
+        phase: &'static str,
+        event: JournalEvent,
+    ) -> Result<u64, AgentFailure> {
+        if !run_id.is_valid() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let payload = serde_json::to_string(&event).map_err(|_| AgentFailure::InvalidInput)?;
+        let mut connection = self.connection()?;
+        let (guard, transaction) = self.journal_transaction(&mut connection).await?;
+        let result = async {
+            match (&event, phase) {
+                (JournalEvent::Output { .. }, "output") => {
+                    let (_, recorder) = self.manager_recorder_on(&transaction, run_id).await?;
+                    let (message_id, command_id, contribution_id, typed_entry_id) =
+                        manager_contribution_ids(run_id, "output", run_id.as_uuid())?;
+                    self.record_conversation_run_output_on(
+                        &transaction,
+                        ConversationRunOutputRequest {
+                            recorder,
+                            message_id,
+                            command_id,
+                            contribution_id,
+                            typed_entry_id,
+                            event: event.clone(),
+                        },
+                    )
+                    .await
+                    .map(|receipt| receipt.journal_revision)
+                }
+                (JournalEvent::ToolResult { result }, "result") => {
+                    let (run, recorder) = self.manager_recorder_on(&transaction, run_id).await?;
+                    let entries = self
+                        .conversation_journal_on(&transaction, &run)
+                        .await
+                        .map_err(owner_error)?;
+                    let mut calls = entries.iter().filter_map(|entry| match &entry.event {
+                        JournalEvent::ToolIntent { call } if call.call_id == result.call_id => {
+                            Some(call.clone())
+                        }
+                        _ => None,
+                    });
+                    let call = calls.next().ok_or(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ))?;
+                    if calls.next().is_some() {
+                        return Err(ConversationStoreFailure::Unavailable);
+                    }
+                    let typed_message = AgentMessage::Capability {
+                        turn_id: run_id.as_uuid(),
+                        call_id: result.call_id,
+                        capability_id: call.tool_id,
+                        input: call.input,
+                        result: result
+                            .issue
+                            .as_ref()
+                            .map_or_else(|| Ok(result.text.clone()), |issue| Err(issue.failure)),
+                    };
+                    let (message_id, command_id, contribution_id, typed_entry_id) =
+                        manager_contribution_ids(run_id, "tool", result.call_id)?;
+                    self.record_manager_typed_result_on(
+                        &transaction,
+                        &run,
+                        recorder,
+                        result.coverage.clone(),
+                        typed_message,
+                        message_id,
+                        command_id,
+                        contribution_id,
+                        typed_entry_id,
+                        event.clone(),
+                        &payload,
+                    )
+                    .await
+                }
+                (JournalEvent::DelegationResult { receipt }, "result") => {
+                    let (run, recorder) = self.manager_recorder_on(&transaction, run_id).await?;
+                    let coverage = receipt.snapshot.coverage.clone();
+                    let task = receipt.snapshot.clone();
+                    let execution_receipt = match &receipt.execution {
+                        floe_agent_contract::TaskExecutionEvidence::Admitted(evidence) => {
+                            Some(evidence.reference.clone())
+                        }
+                        floe_agent_contract::TaskExecutionEvidence::Unadmitted => None,
+                    };
+                    let typed_message = AgentMessage::Delegation {
+                        turn_id: run_id.as_uuid(),
+                        task,
+                        execution_receipt,
+                    };
+                    let alias_id = receipt.task_id.as_uuid();
+                    let (message_id, command_id, contribution_id, typed_entry_id) =
+                        manager_contribution_ids(run_id, "delegation", alias_id)?;
+                    self.record_manager_typed_result_on(
+                        &transaction,
+                        &run,
+                        recorder,
+                        coverage,
+                        typed_message,
+                        message_id,
+                        command_id,
+                        contribution_id,
+                        typed_entry_id,
+                        event.clone(),
+                        &payload,
+                    )
+                    .await
+                }
+                (_, expected_phase) => {
+                    if phase != super::conversations::journal_kind(&event) {
+                        Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::InvalidInput,
+                        ))
+                    } else {
+                        self.append_conversation_journal_on(
+                            &transaction,
+                            run_id,
+                            expected_phase,
+                            &payload,
+                        )
+                        .await
+                        .map_err(owner_error)
+                    }
+                }
+            }
+        }
+        .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+            .map_err(owner_store_failure)
+    }
+
+    /// Settle a product Manager Run and its recorder custody in the same
+    /// Vault transaction. A committed owner outcome may remain deferred while
+    /// Task or model effects are uncertain; the caller still receives the
+    /// exact current Run receipt and recovery will finish custody later.
+    pub(crate) async fn settle_manager_conversation_run(
+        &self,
+        run_id: RunId,
+        expected_aggregate_revision: u64,
+        terminal: RunTerminal,
+    ) -> Result<RunRecord, AgentFailure> {
+        let mut connection = self.connection()?;
+        let (guard, transaction) = self.journal_transaction(&mut connection).await?;
+        let result = self
+            .settle_conversation_run_with_core_on(
+                &transaction,
+                CoreComposedSettlementRequest::Finish {
+                    run_id,
+                    expected_aggregate_revision,
+                    terminal,
+                },
+            )
+            .await
+            .map(|settlement| match settlement {
+                CoreComposedSettlementResult::Settled { record, .. }
+                | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+                | CoreComposedSettlementResult::CustodyPending { record } => record,
+            });
+        let record = self
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+            .map_err(owner_store_failure)?;
+        self.check_access()?;
+        Ok(record)
+    }
+
+    /// Publish a blocked Manager outcome, its textless Interaction history,
+    /// and the matching Core settlement atomically.
+    pub(crate) async fn settle_manager_blocked_conversation_run(
+        &self,
+        commit: BlockedRunCommit,
+    ) -> Result<RunRecord, AgentFailure> {
+        let mut connection = self.connection()?;
+        let (guard, transaction) = self.journal_transaction(&mut connection).await?;
+        let result = self
+            .settle_conversation_run_with_core_on(
+                &transaction,
+                CoreComposedSettlementRequest::Blocked(commit),
+            )
+            .await
+            .map(|settlement| match settlement {
+                CoreComposedSettlementResult::Settled { record, .. }
+                | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+                | CoreComposedSettlementResult::CustodyPending { record } => record,
+            });
+        let record = self
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+            .map_err(owner_store_failure)?;
+        self.check_access()?;
+        Ok(record)
+    }
+
+    /// Authenticate and journal one late Task result before settling its exact
+    /// Run and Core recorder in the same transaction.
+    pub(crate) async fn reconcile_manager_conversation_delegation(
+        &self,
+        run_id: RunId,
+        receipt: TaskReceipt,
+    ) -> Result<RunRecord, AgentFailure> {
+        let result = self
+            .reconcile_conversation_delegation_with_core(run_id, receipt)
+            .await
+            .map_err(owner_store_failure)?;
+        let record = match result {
+            CoreComposedRecoveryResult::CustodyPending { record }
+            | CoreComposedRecoveryResult::Closed { record, .. }
+            | CoreComposedRecoveryResult::Retired { record, .. } => record,
+        };
+        self.check_access()?;
+        Ok(record)
+    }
+
+    /// Recover interrupted Manager owner work and settle matching Core
+    /// custody only when the durable Run journal proves all effects settled.
+    pub(crate) async fn settle_pending_manager_conversation_terminal(
+        &self,
+        actor: &floe_kernel::OwnerActor,
+        run_id: RunId,
+    ) -> Result<RunRecord, AgentFailure> {
+        let result = self
+            .settle_pending_conversation_terminal_with_core(actor, run_id)
+            .await
+            .map_err(owner_store_failure)?;
+        let record = match result {
+            CoreComposedRecoveryResult::CustodyPending { record }
+            | CoreComposedRecoveryResult::Closed { record, .. }
+            | CoreComposedRecoveryResult::Retired { record, .. } => record,
+        };
+        self.check_access()?;
+        Ok(record)
+    }
+
+    async fn record_manager_typed_result_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run: &RunRecord,
+        recorder: RecorderFence,
+        coverage: floe_access::DependencyCoverage,
+        typed_message: AgentMessage,
+        message_id: MessageId,
+        command_id: CommandId,
+        contribution_id: LogicalContributionId,
+        typed_entry_id: Uuid,
+        event: JournalEvent,
+        payload: &str,
+    ) -> Result<u64, ConversationStoreFailure> {
+        let entries = self
+            .conversation_journal_on(transaction, run)
+            .await
+            .map_err(owner_error)?;
+        let existing = entries
+            .iter()
+            .filter(|entry| match (&entry.event, &event) {
+                (
+                    JournalEvent::ToolResult { result: stored },
+                    JournalEvent::ToolResult { result },
+                ) => stored.call_id == result.call_id,
+                (
+                    JournalEvent::DelegationResult { receipt: stored },
+                    JournalEvent::DelegationResult { receipt },
+                ) => stored.task_id == receipt.task_id,
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        if existing.len() > 1 {
+            return Err(ConversationStoreFailure::Unavailable);
+        }
+        let journal_revision = if let Some(stored) = existing.first() {
+            let stored_payload = serde_json::to_string(&stored.event)
+                .map_err(|_| ConversationStoreFailure::Unavailable)?;
+            if stored_payload != payload {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::MessageIdConflict,
+                ));
+            }
+            if recording_receipt_on(transaction, self.person_id, contribution_id)
+                .await?
+                .is_none()
+                || typed_transcript_link_for_contribution_on(
+                    transaction,
+                    self.person_id,
+                    contribution_id,
+                )
+                .await?
+                .is_none()
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            stored.revision
+        } else {
+            if recording_receipt_on(transaction, self.person_id, contribution_id)
+                .await?
+                .is_some()
+                || typed_transcript_link_for_contribution_on(
+                    transaction,
+                    self.person_id,
+                    contribution_id,
+                )
+                .await?
+                .is_some()
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            self.append_conversation_journal_on(transaction, run.run_id, "result", payload)
+                .await
+                .map_err(owner_error)?
+        };
+        super::context_dependencies::merge_context_dependency_coverage(
+            transaction,
+            self.person_id,
+            run.session_id,
+            run.run_id.as_uuid(),
+            coverage,
+        )
+        .await
+        .map_err(owner_error)?;
+        let recording = self
+            .record_typed_conversation_entry_on(
+                transaction,
+                TypedConversationRecordingRequest {
+                    recorder,
+                    message_id,
+                    command_id,
+                    contribution_id,
+                    typed_entry_id,
+                    typed_message,
+                },
+            )
+            .await?;
+        if recording.recorder.run_id != run.run_id || recording.contribution_id != contribution_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+        Ok(journal_revision)
+    }
+
     /// Host composition primitive: append neutral input custody inside the
     /// caller's owner-admission transaction.
     pub(super) async fn append_conversation_input_on(
@@ -1285,22 +1958,42 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
         intent: CoreComposedOwnerIntent,
-        core_request: MessageAdmissionRequest,
+        mut core_request: MessageAdmissionRequest,
         replay_checked: &mut bool,
         prior_command: &mut bool,
     ) -> Result<CoreComposedRunAdmission, ConversationStoreFailure> {
-        let (owner_request, resume_claim) = match intent {
+        let (owner_request, resume_claim, manager_identity) = match intent {
+            #[cfg(test)]
             CoreComposedOwnerIntent::Turn(request) => {
                 if matches!(&request.mode, TurnMode::Resume(_)) {
                     return Err(ConversationStoreFailure::UnsupportedOwnerIntent);
                 }
-                (request, None)
+                (request, None, None)
             }
+            #[cfg(test)]
             CoreComposedOwnerIntent::Resume(request) => {
                 let child = request.child.clone();
-                (child, Some(request))
+                (child, Some(request), None)
+            }
+            CoreComposedOwnerIntent::ManagerTurn { request, identity } => {
+                if matches!(&request.mode, TurnMode::Resume(_)) {
+                    return Err(ConversationStoreFailure::UnsupportedOwnerIntent);
+                }
+                (request, None, Some(identity))
+            }
+            CoreComposedOwnerIntent::ManagerResume { request, identity } => {
+                let child = request.child.clone();
+                (child, Some(request), Some(identity))
             }
         };
+        if let Some(identity) = manager_identity.as_ref() {
+            self.validate_manager_fresh_activation_on(
+                transaction,
+                owner_request.session_id,
+                identity,
+            )
+            .await?;
+        }
         ensure_core_v3_on(transaction).await?;
         owner_request.validate().map_err(|_| {
             ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
@@ -1310,9 +2003,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
             })?;
         }
-        core_request
-            .validate()
-            .map_err(ConversationStoreFailure::Transition)?;
         let (owner_user_message_id, owner_message_text) =
             match (&owner_request.mode, &owner_request.input) {
                 (TurnMode::New, TurnInput::NewMessage(message)) => {
@@ -1370,7 +2060,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let source_binding = source_mapping
             .as_ref()
             .map(|mapping| mapping.original_binding.clone());
-        let (identity, conversation_id, branch_id) = match &core_request.target {
+        let (mut identity, mut conversation_id, mut branch_id) = match &core_request.target {
             AdmissionTarget::New {
                 identity,
                 conversation_id,
@@ -1382,6 +2072,139 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 reference.branch_id,
             ),
         };
+        let retained_message = if manager_identity.is_some() && owner_message_text.is_none() {
+            // Continue and linked Resume replay the exact original User record.
+            // The caller's new command is not a new Core input identity.
+            let binding = source_binding
+                .as_ref()
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            let (stored_receipt, stored_message) = input_receipt_on(
+                transaction,
+                Scope::from_identity(
+                    self.person_id,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                ),
+                binding.input.message_id,
+            )
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+            if stored_receipt.receipt.transcript != binding.input
+                || stored_receipt.receipt.task_id.is_some()
+            {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            Some(stored_message)
+        } else {
+            None
+        };
+        if let Some(manager_identity) = manager_identity.as_ref() {
+            manager_identity
+                .validate()
+                .map_err(ConversationStoreFailure::Transition)?;
+            if manager_identity.person_id != self.person_id {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::AgentMismatch,
+                ));
+            }
+            if let Some(binding) = source_binding.as_ref() {
+                if binding.identity != *manager_identity
+                    || binding.session_id != owner_request.session_id
+                    || binding.owner_user_message_id != owner_user_message_id
+                {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                identity = binding.identity.clone();
+                conversation_id = binding.conversation_id;
+                branch_id = binding.branch_id;
+                let scope =
+                    Scope::from_identity(self.person_id, &identity, conversation_id, branch_id);
+                let head = load_head_on(transaction, scope).await?.ok_or(
+                    ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ),
+                )?;
+                core_request.target = AdmissionTarget::AppendToExisting {
+                    reference: ConversationReference {
+                        conversation_id,
+                        branch_id,
+                        identity: identity.clone(),
+                        head_revision: head.state.head_revision,
+                    },
+                };
+                if let Some(message) = retained_message.as_ref() {
+                    core_request.message = message.clone();
+                }
+            } else {
+                let session_binding = manager_session_binding_on(
+                    transaction,
+                    self.person_id,
+                    owner_request.session_id,
+                    manager_identity,
+                )
+                .await?;
+                match (session_binding, &core_request.target) {
+                    (Some(binding), _) => {
+                        if binding.identity != *manager_identity
+                            || binding.session_id != owner_request.session_id
+                        {
+                            return Err(ConversationStoreFailure::Transition(
+                                ConversationFailure::OwnerEvidenceMismatch,
+                            ));
+                        }
+                        identity = binding.identity;
+                        conversation_id = binding.conversation_id;
+                        branch_id = binding.branch_id;
+                        let head = load_head_on(
+                            transaction,
+                            Scope::from_identity(
+                                self.person_id,
+                                &identity,
+                                conversation_id,
+                                branch_id,
+                            ),
+                        )
+                        .await?
+                        .ok_or(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ))?;
+                        core_request.target = AdmissionTarget::AppendToExisting {
+                            reference: ConversationReference {
+                                conversation_id,
+                                branch_id,
+                                identity: identity.clone(),
+                                head_revision: head.state.head_revision,
+                            },
+                        };
+                    }
+                    (
+                        None,
+                        AdmissionTarget::New {
+                            identity: target, ..
+                        },
+                    ) if target == manager_identity => {
+                        identity = manager_identity.clone();
+                    }
+                    _ => {
+                        return Err(ConversationStoreFailure::Transition(
+                            ConversationFailure::OwnerEvidenceMismatch,
+                        ));
+                    }
+                }
+            }
+        }
+        core_request
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
         if identity.person_id != self.person_id {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::AgentMismatch,
@@ -1389,8 +2212,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         if let Some(binding) = source_binding.as_ref()
             && (binding.identity != identity
-                || binding.conversation_id != conversation_id
-                || binding.branch_id != branch_id
+                || (manager_identity.is_none()
+                    && (binding.conversation_id != conversation_id
+                        || binding.branch_id != branch_id))
                 || binding.input.message_id != core_request.message.message_id
                 || binding.session_id != owner_request.session_id
                 || binding.owner_user_message_id != owner_user_message_id)
@@ -1427,7 +2251,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ))?;
             if stored_receipt.receipt.transcript != binding.input
                 || stored_receipt.receipt.task_id.is_some()
-                || stored_message != core_request.message
+                || (manager_identity.is_none() && stored_message != core_request.message)
             {
                 return Err(ConversationStoreFailure::Transition(
                     ConversationFailure::OwnerEvidenceMismatch,
@@ -1628,6 +2452,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ));
             }
         }
+        let has_source_mapping = source_mapping.is_some();
         let mapping = if let Some(mapping) = source_mapping {
             if mapping.input != binding.input
                 || mapping.session_id != binding.session_id
@@ -1652,7 +2477,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if newly_created {
                 // This optional family is created only by the explicit
                 // composed owner/Core admission write.
-                ensure_owner_custody_v1_on(transaction).await?;
+                ensure_owner_custody_v2_on(transaction).await?;
                 insert_owner_transcript_input_mapping_on(transaction, &mapping).await?;
             } else if owner_transcript_input_for_reference_on(
                 transaction,
@@ -1671,6 +2496,48 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             mapping
         };
+        if let Some(manager_identity) = manager_identity.as_ref() {
+            let expected_binding = ManagerSessionBinding {
+                person_id: self.person_id,
+                session_id: record.session_id,
+                identity: manager_identity.clone(),
+                conversation_id,
+                branch_id,
+            };
+            expected_binding.validate(self.person_id)?;
+            match manager_session_binding_on(
+                transaction,
+                self.person_id,
+                record.session_id,
+                manager_identity,
+            )
+            .await?
+            {
+                Some(existing) if existing == expected_binding => {}
+                Some(_) => {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                None if newly_created && !has_source_mapping => {
+                    ensure_owner_custody_v2_on(transaction).await?;
+                    insert_manager_session_binding_on(transaction, &expected_binding).await?;
+                }
+                None => {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+            }
+            insert_manager_session_alias_on(
+                transaction,
+                self.person_id,
+                record.session_id,
+                record.user_message_id,
+                mapping.input,
+            )
+            .await?;
+        }
         if newly_created {
             insert_owner_transcript_run_input_on(
                 transaction,
@@ -1728,6 +2595,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
+    #[cfg(test)]
     pub(super) async fn append_conversation_input(
         &self,
         request: MessageAdmissionRequest,
@@ -1824,6 +2692,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(transition.receipt)
     }
 
+    #[cfg(test)]
     pub(super) async fn open_conversation_recorder(
         &self,
         request: RecorderStartRequest,
@@ -1847,6 +2716,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         request: RecordingRequest,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        self.record_conversation_entry_on_with_policy(transaction, request, None)
+            .await
+    }
+
+    pub(super) async fn record_task_recovery_entry_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: RecordingRequest,
+        recovery: RecoveredTaskContribution,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        self.record_conversation_entry_on_with_policy(transaction, request, Some(recovery))
+            .await
+    }
+
+    async fn record_conversation_entry_on_with_policy(
+        &self,
+        transaction: &Transaction<'_>,
+        request: RecordingRequest,
+        task_recovery: Option<RecoveredTaskContribution>,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
         ensure_core_v3_on(transaction).await?;
         if let Some(receipt) =
             recording_receipt_on(transaction, self.person_id, request.contribution_id).await?
@@ -1862,6 +2751,44 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         if request.recorder.executor_domain == ExecutorDomain::TaskExecution {
             return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        if let Some(recovery) = task_recovery.as_ref() {
+            if !recovery.task_id.is_valid() {
+                return Err(owner_evidence_mismatch());
+            }
+            let run = self
+                .conversation_run_on(transaction, request.recorder.run_id)
+                .await
+                .map_err(owner_error)?
+                .ok_or_else(owner_evidence_mismatch)?;
+            let journal = self
+                .conversation_journal_on(transaction, &run)
+                .await
+                .map_err(owner_error)?;
+            let mut matching_results = journal.iter().filter(|entry| {
+                matches!(
+                    &entry.event,
+                    JournalEvent::DelegationResult { receipt }
+                        if receipt.task_id == recovery.task_id
+                )
+            });
+            let result = matching_results
+                .next()
+                .ok_or_else(owner_evidence_mismatch)?;
+            if matching_results.next().is_some()
+                || manager_recovered_task_result_digest(&result.event)? != recovery.result_digest
+            {
+                return Err(owner_evidence_mismatch());
+            }
+            if close_receipt_on(transaction, self.person_id, request.recorder.run_id)
+                .await?
+                .is_some()
+                || retirement_receipt_on(transaction, self.person_id, request.recorder.run_id)
+                    .await?
+                    .is_some()
+            {
+                return Err(owner_evidence_mismatch());
+            }
         }
         let scope = Scope::from_identity(
             self.person_id,
@@ -1880,10 +2807,34 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .active_conversation_executor_generation(transaction)
             .await
             .map_err(owner_error)?;
-        if current_generation != request.recorder.executor_generation {
+        if current_generation < request.recorder.executor_generation {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::WrongWriter,
             ));
+        }
+        match task_recovery.as_ref() {
+            None if current_generation == request.recorder.executor_generation => {}
+            Some(recovery) if current_generation == recovery.current_executor_generation => {
+                let expected_generation_fence =
+                    if current_generation > request.recorder.executor_generation {
+                        Some(owner_generation_fence(
+                            request.recorder.executor_domain,
+                            request.recorder.run_id,
+                            request.recorder.executor_generation,
+                            current_generation,
+                        )?)
+                    } else {
+                        None
+                    };
+                if expected_generation_fence != recovery.generation_fence {
+                    return Err(owner_evidence_mismatch());
+                }
+            }
+            _ => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::WrongWriter,
+                ));
+            }
         }
         let (owner, _, _) = self
             .verified_owner_evidence_on(
@@ -1908,18 +2859,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             transcript_has_message_id_on(transaction, scope, request.message.message_id).await?;
         let previous_prefix_digest =
             tail_prefix_digest_on(transaction, scope, &loaded_head.state).await?;
-        let transition = record_entry_transition(
-            request,
-            RecordingFacts {
-                head: loaded_head.state.clone(),
-                active_recorder,
-                owner: Some(owner),
-                verified_task_reference,
-                stored_receipt: None,
-                message_id_in_transcript,
-                previous_prefix_digest,
-            },
-        )
+        let facts = RecordingFacts {
+            head: loaded_head.state.clone(),
+            active_recorder,
+            owner: Some(owner),
+            verified_task_reference,
+            stored_receipt: None,
+            message_id_in_transcript,
+            previous_prefix_digest,
+        };
+        let transition = if let Some(recovery) = task_recovery {
+            record_task_recovery_entry_transition(request, recovery, facts)
+        } else {
+            record_entry_transition(request, facts)
+        }
         .map_err(ConversationStoreFailure::Transition)?;
         if let Some(entry) = &transition.appended {
             let next = transition.head.as_ref().ok_or_else(unavailable)?;
@@ -1930,6 +2883,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(transition.receipt)
     }
 
+    #[cfg(test)]
     pub(super) async fn record_conversation_entry(
         &self,
         request: RecordingRequest,
@@ -1949,7 +2903,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Compose Host Run terminal settlement with its recorder custody decision
     /// in the caller's Vault transaction. Unresolved owner effects preserve the
     /// active recorder; settled effects permit the existing close transition.
-    /// This is internal until the separate Manager caller cutover.
+    /// Manager admission, completion, blocked publication and recovery call
+    /// this through their existing Vault compositions.
     pub(super) async fn settle_conversation_run_with_core_on(
         &self,
         transaction: &Transaction<'_>,
@@ -1982,7 +2937,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(owner_error)?
             .ok_or_else(owner_evidence_mismatch)?;
-
         if current.state.is_terminal() {
             // Owner request identity is checked before any current-generation
             // fence. A settled replay must present its exact Core receipt. A
@@ -2074,7 +3028,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         self.active_recorder_owner_evidence_on(transaction, &current, &open)
             .await?;
-
         let record = match request {
             CoreComposedSettlementRequest::Finish {
                 run_id,
@@ -2094,7 +3047,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await
                 .map_err(owner_error)?,
         };
-
         if record.state == RunState::Working && record.pending_terminal.is_some() {
             let owner = self
                 .active_recorder_owner_evidence_on(transaction, &record, &open)
@@ -2129,10 +3081,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(CoreComposedSettlementResult::Settled { record, close })
     }
 
-    /// Recovery composition for the later Manager caller cutover. Task result
-    /// authentication/journaling and the pending Host Run outcome remain in
-    /// their owner primitives; this boundary only ends the matching Core
-    /// custody in the same transaction when the owner proves terminality.
+    /// Recovery composition for the Manager caller. The owner authenticates
+    /// and journals the Task result, then typed/Core contribution and custody
+    /// settlement use the same exact recorder in this transaction.
     pub(super) async fn reconcile_conversation_delegation_with_core(
         &self,
         run_id: RunId,
@@ -2144,10 +3095,117 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(start_error)?;
         let result = async {
+            let recovery_event = JournalEvent::DelegationResult {
+                receipt: Box::new(receipt.clone()),
+            };
+            let result_digest = manager_recovered_task_result_digest(&recovery_event)?;
             let (record, replay) = self
                 .reconcile_conversation_delegation_on(&transaction, run_id, receipt)
                 .await
                 .map_err(terminal_owner_error)?;
+            let alias_id = match &recovery_event {
+                JournalEvent::DelegationResult { receipt } => receipt.task_id.as_uuid(),
+                _ => return Err(owner_evidence_mismatch()),
+            };
+            let (message_id, command_id, contribution_id, typed_entry_id) =
+                manager_contribution_ids(run_id, "delegation", alias_id)?;
+            let task_receipt = match &recovery_event {
+                JournalEvent::DelegationResult { receipt } => receipt,
+                _ => return Err(owner_evidence_mismatch()),
+            };
+            let typed_message = AgentMessage::Delegation {
+                turn_id: run_id.as_uuid(),
+                task: task_receipt.snapshot.clone(),
+                execution_receipt: match &task_receipt.execution {
+                    floe_agent_contract::TaskExecutionEvidence::Admitted(evidence) => {
+                        Some(evidence.reference.clone())
+                    }
+                    floe_agent_contract::TaskExecutionEvidence::Unadmitted => None,
+                },
+            };
+            if replay {
+                let stored_recording =
+                    recording_receipt_on(&transaction, self.person_id, contribution_id)
+                        .await?
+                        .ok_or_else(owner_evidence_mismatch)?;
+                if typed_transcript_link_for_contribution_on(
+                    &transaction,
+                    self.person_id,
+                    contribution_id,
+                )
+                .await?
+                .is_none()
+                {
+                    return Err(owner_evidence_mismatch());
+                }
+                self.record_typed_conversation_entry_on(
+                    &transaction,
+                    TypedConversationRecordingRequest {
+                        recorder: stored_recording.recorder,
+                        message_id,
+                        command_id,
+                        contribution_id,
+                        typed_entry_id,
+                        typed_message,
+                    },
+                )
+                .await?;
+            } else {
+                let (verified_run, recorder) =
+                    self.manager_recorder_on(&transaction, run_id).await?;
+                if verified_run != record {
+                    return Err(owner_evidence_mismatch());
+                }
+                let execution_receipt = match &task_receipt.execution {
+                    floe_agent_contract::TaskExecutionEvidence::Admitted(evidence) => {
+                        Some(task_evidence_reference(&evidence.reference)?)
+                    }
+                    floe_agent_contract::TaskExecutionEvidence::Unadmitted => None,
+                };
+                let current_executor_generation = self
+                    .active_conversation_executor_generation(&transaction)
+                    .await
+                    .map_err(owner_error)?;
+                let generation_fence = if current_executor_generation > recorder.executor_generation
+                {
+                    Some(owner_generation_fence(
+                        recorder.executor_domain,
+                        recorder.run_id,
+                        recorder.executor_generation,
+                        current_executor_generation,
+                    )?)
+                } else {
+                    None
+                };
+                super::context_dependencies::merge_context_dependency_coverage(
+                    &transaction,
+                    self.person_id,
+                    record.session_id,
+                    record.run_id.as_uuid(),
+                    task_receipt.snapshot.coverage.clone(),
+                )
+                .await
+                .map_err(owner_error)?;
+                self.record_task_recovery_typed_conversation_entry_on(
+                    &transaction,
+                    TypedConversationRecordingRequest {
+                        recorder,
+                        message_id,
+                        command_id,
+                        contribution_id,
+                        typed_entry_id,
+                        typed_message,
+                    },
+                    RecoveredTaskContribution {
+                        task_id: task_receipt.task_id,
+                        result_digest,
+                        producing_task: execution_receipt,
+                        current_executor_generation,
+                        generation_fence,
+                    },
+                )
+                .await?;
+            }
             self.finish_recovered_conversation_custody_on(&transaction, record, replay)
                 .await
         }
@@ -2158,8 +3216,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     /// Recover an interrupted stale Working Run or finish an existing pending
     /// terminal outcome. Close or retire its exact recorder only after all
-    /// owner effects are settled; otherwise retain active custody. This remains
-    /// internal until the separate Manager caller cutover.
+    /// owner effects are settled; otherwise retain active custody. The Manager
+    /// recovery driver uses this after authenticating the owner request.
     pub(super) async fn settle_pending_conversation_terminal_with_core(
         &self,
         actor: &floe_kernel::OwnerActor,
@@ -2487,9 +3545,216 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(ConversationStoreFailure::Transition)
     }
 
-    /// Host composition primitive. Current Vault owner records do not yet
-    /// expose verified transcript settlement/protection roots, so this close
-    /// persists an unchanged settled prefix and never infers one from queue data.
+    /// Verify a bounded contiguous Manager prefix against immutable owner
+    /// input/output proofs and terminal Run journals. The owner supplies live
+    /// Continue, pending Resume and open-interaction roots; Core only applies
+    /// the neutral settlement facts.
+    async fn manager_close_settlement_facts_on(
+        &self,
+        transaction: &Transaction<'_>,
+        binding: &ManagerSessionBinding,
+        head: &ConversationHead,
+    ) -> Result<
+        (Option<TranscriptReference>, Vec<TranscriptReference>, bool),
+        ConversationStoreFailure,
+    > {
+        let session = self
+            .manager_session_shell_on(transaction, binding.session_id)
+            .await?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        let mut protection_roots = Vec::new();
+        if let Some(marker) = session.continuation {
+            let run_id = RunId::from_uuid(marker.turn_id).ok_or_else(unavailable)?;
+            let run = self
+                .conversation_run_on(transaction, run_id)
+                .await
+                .map_err(owner_error)?
+                .ok_or_else(unavailable)?;
+            let continuation =
+                floe_conversation::project_run_receipt(run.clone()).map_err(owner_error)?;
+            if run.person_id != self.person_id
+                || run.session_id != binding.session_id
+                || run.session_revision != session.revision
+                || run.continuation_level != marker.level
+                || continuation.continuation().is_none()
+            {
+                return Err(unavailable());
+            }
+            let input = owner_input_binding_on(transaction, self.person_id, run_id)
+                .await?
+                .ok_or_else(unavailable)?;
+            protection_roots.push(input.input);
+        }
+
+        let mut pending_resumes = transaction
+            .query(
+                "SELECT origin_run_id FROM agent_conversation_resume_requests WHERE person_id = ? AND session_id = ? AND state = 'pending' LIMIT 65",
+                (self.person_id.to_string(), binding.session_id.to_string()),
+            )
+            .await
+            .map_err(database_error)?;
+        let mut resume_origins = Vec::new();
+        while let Some(row) = pending_resumes.next().await.map_err(database_error)? {
+            if resume_origins.len() >= 64 {
+                return Ok((None, protection_roots, false));
+            }
+            let value = row.get::<String>(0).map_err(|_| unavailable())?;
+            let id = Uuid::parse_str(&value).map_err(|_| unavailable())?;
+            resume_origins.push(RunId::from_uuid(id).ok_or_else(unavailable)?);
+        }
+        drop(pending_resumes);
+        for origin in resume_origins {
+            let run = self
+                .conversation_run_on(transaction, origin)
+                .await
+                .map_err(owner_error)?
+                .ok_or_else(unavailable)?;
+            if run.person_id != self.person_id || run.session_id != binding.session_id {
+                return Err(unavailable());
+            }
+            let input = owner_input_binding_on(transaction, self.person_id, origin)
+                .await?
+                .ok_or_else(unavailable)?;
+            protection_roots.push(input.input);
+        }
+
+        if table_present_on(transaction, "agent_conversation_interactions").await? {
+            let mut open_interactions = transaction
+                .query(
+                    "SELECT DISTINCT origin_run_id FROM agent_conversation_interactions INDEXED BY agent_conversation_interactions_session WHERE person_id = ? AND session_id = ? AND state IN ('pending', 'resolving') ORDER BY origin_run_id LIMIT 65",
+                    (self.person_id.to_string(), binding.session_id.to_string()),
+                )
+                .await
+                .map_err(database_error)?;
+            let mut origins = Vec::new();
+            while let Some(row) = open_interactions.next().await.map_err(database_error)? {
+                if origins.len() >= 64 {
+                    return Ok((None, protection_roots, false));
+                }
+                let value = row.get::<String>(0).map_err(|_| unavailable())?;
+                let id = Uuid::parse_str(&value).map_err(|_| unavailable())?;
+                origins.push(RunId::from_uuid(id).ok_or_else(unavailable)?);
+            }
+            drop(open_interactions);
+            for origin in origins {
+                let run = self
+                    .conversation_run_on(transaction, origin)
+                    .await
+                    .map_err(owner_error)?
+                    .ok_or_else(unavailable)?;
+                if run.person_id != self.person_id || run.session_id != binding.session_id {
+                    return Err(unavailable());
+                }
+                if run.session_revision == session.revision {
+                    if !matches!(run.state, RunState::Completed | RunState::Blocked) {
+                        return Err(unavailable());
+                    }
+                    let input = owner_input_binding_on(transaction, self.person_id, origin)
+                        .await?
+                        .ok_or_else(unavailable)?;
+                    protection_roots.push(input.input);
+                }
+            }
+        }
+        protection_roots.sort_by_key(|reference| reference.sequence);
+        protection_roots.dedup();
+
+        let remaining = head.head_revision.saturating_sub(head.settled_prefix);
+        if remaining == 0 {
+            return Ok((None, protection_roots, false));
+        }
+        let through_sequence = head
+            .settled_prefix
+            .checked_add(remaining.min(MAX_TRANSCRIPT_PAGE_ENTRIES as u64))
+            .ok_or_else(unavailable)?;
+        let mut through = None;
+        for sequence in (head.settled_prefix + 1)..=through_sequence {
+            let entry = entry_on(
+                transaction,
+                Scope::from_identity(
+                    self.person_id,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                ),
+                sequence,
+            )
+            .await?
+            .ok_or_else(unavailable)?;
+            let owner_input = match entry.kind {
+                TranscriptEntryKind::Inbound => owner_transcript_input_for_reference_on(
+                    transaction,
+                    self.person_id,
+                    entry.reference,
+                )
+                .await?
+                .ok_or_else(owner_evidence_mismatch)?,
+                TranscriptEntryKind::GeneratedOutput => {
+                    let link = typed_transcript_link_for_entry_on(
+                        transaction,
+                        self.person_id,
+                        entry.reference,
+                    )
+                    .await?
+                    .ok_or_else(owner_evidence_mismatch)?;
+                    if Some(link.first_recording_run_id) != entry.producer_run {
+                        return Err(owner_evidence_mismatch());
+                    }
+                    owner_transcript_input_for_reference_on(
+                        transaction,
+                        self.person_id,
+                        link.owner_input,
+                    )
+                    .await?
+                    .ok_or_else(owner_evidence_mismatch)?
+                }
+            };
+            let producer = match entry.kind {
+                TranscriptEntryKind::Inbound => owner_input.original_owner_run_id,
+                TranscriptEntryKind::GeneratedOutput => {
+                    entry.producer_run.ok_or_else(owner_evidence_mismatch)?
+                }
+            };
+            let producer_binding = owner_input_binding_on(transaction, self.person_id, producer)
+                .await?
+                .ok_or_else(owner_evidence_mismatch)?;
+            if producer_binding.session_id != binding.session_id
+                || producer_binding.identity != binding.identity
+                || producer_binding.conversation_id != binding.conversation_id
+                || producer_binding.branch_id != binding.branch_id
+                || producer_binding.input != owner_input.input
+            {
+                return Err(owner_evidence_mismatch());
+            }
+            let (evidence, _, terminal_digest) = self
+                .verified_owner_evidence_on(
+                    transaction,
+                    producer,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                    producer_binding.input,
+                    producer_binding.executor_domain,
+                    producer_binding.executor_generation,
+                )
+                .await?;
+            if evidence.state != OwnerRunState::Terminal
+                || !evidence.unresolved_effects.is_empty()
+                || terminal_digest.is_none()
+            {
+                break;
+            }
+            through = Some(entry.reference);
+        }
+        Ok((through, protection_roots, through.is_some()))
+    }
+
+    /// Host composition primitive. Manager close supplies only a contiguous
+    /// prefix whose producer Runs, journals and exact Core entry links have
+    /// all been verified in this transaction. Other owner domains retain the
+    /// existing non-advancing behavior.
     pub(super) async fn close_conversation_recorder_on(
         &self,
         transaction: &Transaction<'_>,
@@ -2557,11 +3822,27 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ));
         }
         let terminal_digest = terminal_digest.ok_or_else(unavailable)?;
+        let manager_binding =
+            manager_session_binding_for_session_on(transaction, self.person_id, record.session_id)
+                .await?;
+        let (settled_through, protection_roots, settlement_prefix_verified) =
+            if let Some(binding) = manager_binding {
+                if binding.identity != fence.identity
+                    || binding.conversation_id != fence.conversation_id
+                    || binding.branch_id != fence.branch_id
+                {
+                    return Err(owner_evidence_mismatch());
+                }
+                self.manager_close_settlement_facts_on(transaction, &binding, &loaded_head.state)
+                    .await?
+            } else {
+                (None, Vec::new(), false)
+            };
         let settlement = OwnerSettlementEvidence {
             owner,
             terminal_receipt_digest: terminal_digest,
-            settled_through: None,
-            protection_roots: Vec::new(),
+            settled_through,
+            protection_roots,
         };
         let transition = close_recording_transition(
             fence.clone(),
@@ -2570,7 +3851,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 active_recorder,
                 owner: Some(settlement),
                 stored_receipt: None,
-                settlement_prefix_verified: false,
+                settlement_prefix_verified,
             },
         )
         .map_err(ConversationStoreFailure::Transition)?;
@@ -2583,6 +3864,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(transition.receipt)
     }
 
+    #[cfg(test)]
     pub(super) async fn close_conversation_recorder(
         &self,
         fence: RecorderFence,
@@ -2690,6 +3972,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(transition.receipt)
     }
 
+    #[cfg(test)]
     pub(super) async fn retire_conversation_recorder(
         &self,
         fence: RecorderFence,
@@ -2706,6 +3989,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn read_conversation_page(
         &self,
         target: ConversationReference,
@@ -2729,6 +4013,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn read_conversation_page_on(
         &self,
         transaction: &Transaction<'_>,
@@ -2806,6 +4091,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         })
     }
 
+    #[cfg(test)]
     pub(super) async fn observe_conversation_recorder(
         &self,
         target: ConversationReference,
@@ -3043,9 +4329,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         } else {
             return Err(unavailable());
         };
+        let mut unresolved_model_attempts = accounting
+            .unresolved_attempts
+            .iter()
+            .map(|attempt| attempt.attempt_id)
+            .collect::<Vec<_>>();
+        unresolved_model_attempts.sort_unstable();
         let mut unresolved = HashSet::new();
-        for attempt in accounting.unresolved_attempts {
-            unresolved.insert(attempt.attempt_id);
+        for attempt_id in &unresolved_model_attempts {
+            unresolved.insert(*attempt_id);
         }
         for task_id in accounting.unresolved_delegations {
             unresolved.insert(task_id.as_uuid());
@@ -3067,6 +4359,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             state,
             record_digest,
             unresolved_effects,
+            unresolved_model_attempts,
         };
         evidence
             .validate()
@@ -3264,7 +4557,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    async fn finish_conversation_core_transaction<'vault, 'transaction, T>(
+    pub(super) async fn finish_conversation_core_transaction<'vault, 'transaction, T>(
         &'vault self,
         mut guard: JournalWriteGuard<'vault>,
         transaction: Transaction<'transaction>,
@@ -3305,7 +4598,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationStoreFailure::Transition(_)
                     | ConversationStoreFailure::UnsupportedOwnerDomain
                     | ConversationStoreFailure::UnsupportedOwnerIntent
-                    | ConversationStoreFailure::UnsupportedStoredMeaning => Err(failure),
+                    | ConversationStoreFailure::UnsupportedStoredMeaning
+                    | ConversationStoreFailure::PageItemExceedsBudget => Err(failure),
                     _ => Err(ConversationStoreFailure::NotCommitted),
                 }
             }
@@ -4390,7 +5684,10 @@ mod tests {
                 .vault()
                 .admit_conversation_run_with_core_input_on(
                     &transaction,
-                    CoreComposedOwnerIntent::Turn(owner_request),
+                    CoreComposedOwnerIntent::ManagerTurn {
+                        request: owner_request,
+                        identity: self.identity.clone(),
+                    },
                     core_request.clone(),
                     &mut replay_checked,
                     &mut prior_command,
@@ -4667,21 +5964,21 @@ mod tests {
 
         async fn complete_owner_run(&mut self, run: &RunRecord) -> RunRecord {
             let terminal = self.prepare_completed_terminal(run).await;
-            let completed = self
-                .vault()
-                .finish_conversation_run(run.run_id, run.aggregate_revision, terminal)
-                .await
-                .expect("finish synthetic owner Run through the Vault API");
-            if let Some(recorder) = self
-                .last_core_recorder
-                .as_ref()
-                .filter(|recorder| recorder.fence.run_id == run.run_id)
-            {
-                self.vault()
-                    .close_conversation_recorder(recorder.fence.clone())
-                    .await
-                    .expect("close the completed origin recorder through Vault");
-            }
+            let settlement = compose_owner_core_settlement(
+                self.vault(),
+                CoreComposedSettlementRequest::Finish {
+                    run_id: run.run_id,
+                    expected_aggregate_revision: run.aggregate_revision,
+                    terminal,
+                },
+            )
+            .await
+            .expect("settle synthetic Manager Run and recorder");
+            let completed = match settlement {
+                CoreComposedSettlementResult::Settled { record, .. }
+                | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+                | CoreComposedSettlementResult::CustodyPending { record } => record,
+            };
             self.session_revision = completed.session_revision;
             completed
         }
@@ -4784,7 +6081,7 @@ mod tests {
             core_request: MessageAdmissionRequest,
         ) -> CoreComposedRunAdmission {
             let mut connection = self.vault().connection().expect("connect to test Vault");
-            let (mut guard, transaction) = self
+            let (guard, transaction) = self
                 .vault()
                 .journal_transaction(&mut connection)
                 .await
@@ -4795,7 +6092,10 @@ mod tests {
                 .vault()
                 .admit_conversation_run_with_core_input_on(
                     &transaction,
-                    CoreComposedOwnerIntent::Resume(request),
+                    CoreComposedOwnerIntent::ManagerResume {
+                        request,
+                        identity: self.identity.clone(),
+                    },
                     core_request.clone(),
                     &mut replay_checked,
                     &mut prior_command,
@@ -4824,6 +6124,55 @@ mod tests {
             run: &RunRecord,
             executor_generation: u64,
             record_parent_results: bool,
+        ) -> (
+            Vec<TaskExecutionReceiptRef>,
+            Vec<floe_agent_contract::TaskReceipt>,
+        ) {
+            let (task_count, parent_result_count) = if record_parent_results {
+                (2, 2)
+            } else {
+                (1, 0)
+            };
+            self.terminal_task_receipts_with_policy(
+                run,
+                executor_generation,
+                task_count,
+                parent_result_count,
+                false,
+            )
+            .await
+        }
+
+        async fn terminal_task_receipts_with_policy(
+            &self,
+            run: &RunRecord,
+            executor_generation: u64,
+            task_count: usize,
+            parent_result_count: usize,
+            first_task_has_unresolved_model_attempt: bool,
+        ) -> (
+            Vec<TaskExecutionReceiptRef>,
+            Vec<floe_agent_contract::TaskReceipt>,
+        ) {
+            self.terminal_task_receipts_with_manager_history(
+                run,
+                executor_generation,
+                task_count,
+                parent_result_count,
+                first_task_has_unresolved_model_attempt,
+                false,
+            )
+            .await
+        }
+
+        async fn terminal_task_receipts_with_manager_history(
+            &self,
+            run: &RunRecord,
+            executor_generation: u64,
+            task_count: usize,
+            parent_result_count: usize,
+            first_task_has_unresolved_model_attempt: bool,
+            record_manager_results: bool,
         ) -> (
             Vec<TaskExecutionReceiptRef>,
             Vec<floe_agent_contract::TaskReceipt>,
@@ -4894,11 +6243,9 @@ mod tests {
                 },
             )
             .await;
-            let task_messages = if record_parent_results {
-                vec!["Task A input", "Task B input"]
-            } else {
-                vec!["Task A input"]
-            };
+            assert!(matches!(task_count, 1 | 2));
+            assert!(parent_result_count <= task_count);
+            let task_messages = ["Task A input", "Task B input"][..task_count].to_vec();
             let batch = ValidatedModelBatch {
                 execution_id,
                 attempt_id,
@@ -5028,7 +6375,7 @@ mod tests {
                     .admit_task(proposed.clone())
                     .await
                     .expect("admit Task for evidence fixture");
-                let working = self
+                let mut working = self
                     .vault()
                     .compare_and_swap_task(
                         task_id,
@@ -5041,6 +6388,44 @@ mod tests {
                     )
                     .await
                     .expect("start Task execution fixture");
+                if first_task_has_unresolved_model_attempt && ordinal == 0 {
+                    self.vault()
+                        .append_task_journal(
+                            working.execution(),
+                            "intent",
+                            JournalEvent::ModelIntent {
+                                attempt_id: Uuid::new_v4(),
+                                parent_task_id: Some(task_id),
+                                reservation_ceiling:
+                                    floe_execution::budget::ModelReservationCeiling {
+                                        tokens: 128,
+                                        cost_micros: 128,
+                                    },
+                                projection_ref: ProjectionRef::new(),
+                                plan: PreparedModelPlan {
+                                    operation_id: Uuid::new_v4(),
+                                    principal: request.principal.clone(),
+                                    device_id: working.device_id.clone(),
+                                    purpose: "everyday_assistance".into(),
+                                    consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
+                                        .into(),
+                                    capabilities: ModelCapabilities::chat(),
+                                    boundary: ProcessingBoundary::Device,
+                                    binding_digest: ModelBindingDigest([61; 32]),
+                                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                                },
+                            },
+                        )
+                        .await
+                        .expect("record a real unresolved Task model intent");
+                    working = self
+                        .vault()
+                        .task(task_id)
+                        .await
+                        .expect("reload Task after advancing its journal")
+                        .expect("Task remains present after model intent");
+                }
                 let receipt = self
                     .vault()
                     .settle_task_execution(TaskExecutionCommit {
@@ -5062,37 +6447,43 @@ mod tests {
                     replay: None,
                     execution: TaskExecutionEvidence::Admitted(receipt.clone()),
                 };
-                if record_parent_results {
-                    self.append_owner_event(
-                        run.run_id,
-                        JournalEvent::DelegationResult {
-                            receipt: Box::new(task_receipt.clone()),
-                        },
-                    )
-                    .await;
+                if (ordinal as usize) < parent_result_count {
+                    let event = JournalEvent::DelegationResult {
+                        receipt: Box::new(task_receipt.clone()),
+                    };
+                    if record_manager_results {
+                        self.vault()
+                            .record_manager_conversation_journal(run.run_id, "result", event)
+                            .await
+                            .expect("record Task result in normalized Manager history atomically");
+                    } else {
+                        self.append_owner_event(run.run_id, event).await;
+                    }
                 }
                 task_receipts.push(task_receipt);
                 references.push(receipt.reference.clone());
-                if record_parent_results && ordinal == 0 {
+                if (ordinal as usize) < parent_result_count
+                    && ordinal + 1 < task_messages.len() as u32
+                {
                     self.append_owner_event(
                         run.run_id,
                         JournalEvent::BatchProgress {
                             cursor: floe_agent_contract::BatchCursor {
                                 batch_id,
-                                next_step_index: 1,
+                                next_step_index: ordinal + 1,
                             },
                         },
                     )
                     .await;
                 }
             }
-            if record_parent_results {
+            if parent_result_count == task_messages.len() {
                 self.append_owner_event(
                     run.run_id,
                     JournalEvent::BatchProgress {
                         cursor: floe_agent_contract::BatchCursor {
                             batch_id,
-                            next_step_index: task_messages.len() as u32,
+                            next_step_index: parent_result_count as u32,
                         },
                     },
                 )
@@ -5102,39 +6493,41 @@ mod tests {
         }
 
         async fn cancel_owner_run(&mut self, run: &RunRecord) -> RunRecord {
-            let next = self
-                .vault()
-                .finish_conversation_run(
-                    run.run_id,
-                    run.aggregate_revision,
-                    RunTerminal::from_failure(AgentFailure::Cancelled),
-                )
-                .await
-                .expect("write normal owner terminal receipt");
+            let settlement = compose_owner_core_settlement(
+                self.vault(),
+                CoreComposedSettlementRequest::Finish {
+                    run_id: run.run_id,
+                    expected_aggregate_revision: run.aggregate_revision,
+                    terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+                },
+            )
+            .await
+            .expect("settle Manager cancellation and recorder custody");
+            let next = match settlement {
+                CoreComposedSettlementResult::Settled { record, .. }
+                | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+                | CoreComposedSettlementResult::CustodyPending { record } => record,
+            };
             self.session_revision = next.session_revision;
-            if let Some(recorder) = self
-                .last_core_recorder
-                .as_ref()
-                .filter(|recorder| recorder.fence.run_id == run.run_id)
-            {
-                self.vault()
-                    .close_conversation_recorder(recorder.fence.clone())
-                    .await
-                    .expect("close the cancelled Run's composed recorder");
-            }
             next
         }
 
         async fn budget_exceeded_owner_run(&mut self, run: &RunRecord) -> RunRecord {
-            let next = self
-                .vault()
-                .finish_conversation_run(
-                    run.run_id,
-                    run.aggregate_revision,
-                    RunTerminal::from_failure(AgentFailure::BudgetExceeded),
-                )
-                .await
-                .expect("finish owner Run with an eligible Continue failure");
+            let settlement = compose_owner_core_settlement(
+                self.vault(),
+                CoreComposedSettlementRequest::Finish {
+                    run_id: run.run_id,
+                    expected_aggregate_revision: run.aggregate_revision,
+                    terminal: RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+                },
+            )
+            .await
+            .expect("settle Manager failure and recorder custody");
+            let next = match settlement {
+                CoreComposedSettlementResult::Settled { record, .. }
+                | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+                | CoreComposedSettlementResult::CustodyPending { record } => record,
+            };
             self.session_revision = next.session_revision;
             next
         }
@@ -5358,13 +6751,21 @@ mod tests {
             "origin and Resume child both point to that mapping"
         );
         drop(connection);
-        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+        let history = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                None,
+                64,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
             .await
-            .expect("reload Session after Resume");
-        let user_messages = session
+            .expect("reload normalized history after Resume");
+        let user_messages = history
             .messages
             .iter()
-            .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
+            .filter(|item| matches!(item.message, floe_conversation::AgentMessage::User { .. }))
             .count();
         assert_eq!(user_messages, 1, "Resume never adds a duplicate User entry");
         assert!(
@@ -5628,14 +7029,22 @@ mod tests {
                 .is_empty(),
             "ACK recovery does not create model or dispatch journal entries"
         );
-        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
+        let history = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                None,
+                64,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
             .await
-            .expect("reload Session after committed Resume");
+            .expect("reload normalized history after committed Resume");
         assert_eq!(
-            session
+            history
                 .messages
                 .iter()
-                .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
+                .filter(|item| matches!(item.message, floe_conversation::AgentMessage::User { .. }))
                 .count(),
             1,
             "Resume ACK recovery never appends a duplicate User entry"
@@ -5970,89 +7379,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_only_resume_still_works_without_retrofitting_a_core_binding() {
-        let mut scenario = Scenario::new().await;
-        let origin_request = scenario.owner_request("owner-only Resume source");
-        let origin = scenario.admit_unbound_owner_run(origin_request).await;
-        let pending = scenario.create_pending_resume(&origin).await;
-        let generation = scenario
-            .vault()
-            .activate_conversation_executor()
-            .await
-            .expect("advance generation before legacy owner-only Resume")
-            .executor_generation;
-        let request = scenario.resume_child_admission(pending, &origin, "owner-only Resume source");
-        let missing_source = scenario.core_input_request("owner-only Resume source");
-        let before = scenario
-            .vault()
-            .connection()
-            .expect("connect before fail-closed composed attempt");
-        let before_session = session_storage_snapshot(&before, scenario.session_id).await;
-        drop(before);
-        assert_eq!(
-            compose_owner_core_run(
-                scenario.vault(),
-                CoreComposedOwnerIntent::Resume(request.clone()),
-                missing_source,
-            )
-            .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch
-            )),
-            "the composed path requires the source's actual Core binding"
-        );
-        let connection = scenario
-            .vault()
-            .connection()
-            .expect("connect after fail-closed attempt");
-        assert_eq!(
-            session_storage_snapshot(&connection, scenario.session_id).await,
-            before_session
-        );
-        assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
-            0
-        );
-        assert_eq!(
-            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
-            0,
-            "a missing source binding is not silently imported"
-        );
-        drop(connection);
-
-        let admission = scenario
-            .vault()
-            .claim_conversation_resume(request)
-            .await
-            .expect("public legacy owner-only Resume remains supported");
-        let super::super::VaultConversationAdmission::Created { record: child, .. } = admission
-        else {
-            panic!("first owner-only Resume claim creates its child");
-        };
-        assert_eq!(child.resume_of, Some(origin.run_id));
-        assert!(generation > origin.executor_generation);
-        assert_eq!(child.executor_generation, generation);
-        assert_eq!(child.continuation_of, None);
-        let session = SessionStore::load(scenario.vault(), scenario.person_id, scenario.session_id)
-            .await
-            .expect("reload legacy owner-only Session");
-        assert_eq!(
-            session
-                .messages
-                .iter()
-                .filter(|message| matches!(message, floe_conversation::AgentMessage::User { .. }))
-                .count(),
-            1,
-            "owner-only Resume preserves the original user message"
-        );
-        assert!(matches!(
-            session.messages.first(),
-            Some(floe_conversation::AgentMessage::User { message_id, .. })
-                if *message_id == origin.user_message_id
-        ));
-    }
-
-    #[tokio::test]
     async fn a_real_new_supersedes_pending_resume_without_composer_revival() {
         let mut scenario = Scenario::new().await;
         let (origin, _) = scenario
@@ -6062,13 +7388,11 @@ mod tests {
         let request = scenario.resume_child_admission(pending, &origin, "New supersedes Resume");
         let (core_request, _) = scenario.resume_core_request();
         let new_request = scenario.owner_request("real New input");
-        let super::super::VaultConversationAdmission::Created {
-            record: new_run, ..
-        } = scenario
+        let super::super::VaultManagerConversationAdmission::Created(new_run) = scenario
             .vault()
-            .admit_conversation_turn(new_request)
+            .admit_manager_conversation_turn(new_request, scenario.identity.clone())
             .await
-            .expect("real New admits through the Conversation owner")
+            .expect("real New admits through the Manager composition")
         else {
             panic!("real New creates its owner Run");
         };
@@ -6102,7 +7426,8 @@ mod tests {
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
-            1
+            2,
+            "the superseding Manager New retains its own input and recorder binding"
         );
     }
 
@@ -6680,7 +8005,10 @@ mod tests {
             .expect("exact close receipt replays after restart");
         assert_eq!(replay.fence, open.fence);
         assert_eq!(replay.owner_aggregate_revision, terminal.aggregate_revision);
-        assert_eq!(replay.settled_prefix, 0);
+        assert_eq!(
+            replay.settled_prefix, 1,
+            "Manager settlement commits the exact safe input prefix before close replay"
+        );
         assert!(replay.protection_roots.is_empty());
     }
 
@@ -6721,7 +8049,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recorder_can_open_a_fresh_input_beyond_the_unsettled_prefix() {
+    async fn fresh_manager_input_opens_after_the_exact_settled_prefix() {
         let mut scenario = Scenario::new().await;
         let (first_run, first_input) = scenario.admit_run_and_append_input("first turn").await;
         let first_open = scenario
@@ -6731,20 +8059,13 @@ mod tests {
             )
             .await
             .expect("open first recorder");
-        scenario
-            .vault()
-            .record_conversation_entry(
-                scenario.recording_request(first_open.fence.clone(), "first output"),
-            )
-            .await
-            .expect("append first generated output");
         scenario.cancel_owner_run(&first_run).await;
         let first_close = scenario
             .vault()
-            .close_conversation_recorder(first_open.fence)
+            .close_conversation_recorder(first_open.fence.clone())
             .await
-            .expect("close first recorder without settlement proof");
-        assert_eq!(first_close.settled_prefix, 0);
+            .expect("replay the close composed with Manager cancellation");
+        assert_eq!(first_close.settled_prefix, 1);
 
         let owner_request = scenario.owner_request("second turn");
         let mut core_request = scenario.core_input_request("second turn");
@@ -6753,14 +8074,14 @@ mod tests {
                 identity: scenario.identity.clone(),
                 conversation_id: scenario.conversation_id,
                 branch_id: scenario.branch_id,
-                head_revision: 2,
+                head_revision: 1,
             },
         };
         let (second_run, second_input) = scenario
             .admit_run_and_bind_input(owner_request, core_request)
             .await;
         assert_eq!(second_input.disposition, AdmissionDisposition::Appended);
-        assert_eq!(second_input.receipt.transcript.sequence, 3);
+        assert_eq!(second_input.receipt.transcript.sequence, 2);
 
         let connection = scenario
             .vault()
@@ -6782,8 +8103,8 @@ mod tests {
             .await
             .expect("read transcript head")
             .expect("head exists");
-        assert_eq!(head.get::<i64>(0).expect("head revision"), 3);
-        assert_eq!(head.get::<i64>(1).expect("settled prefix"), 0);
+        assert_eq!(head.get::<i64>(0).expect("head revision"), 2);
+        assert_eq!(head.get::<i64>(1).expect("settled prefix"), 1);
         drop(rows);
         drop(connection);
 
@@ -6794,7 +8115,7 @@ mod tests {
             )
             .await
             .expect("open recorder for input beyond the settled prefix");
-        assert_eq!(second_open.fence.input.sequence, 3);
+        assert_eq!(second_open.fence.input.sequence, 2);
         assert_eq!(
             second_open.fence.recorder_epoch,
             first_close.fence.recorder_epoch + 1
@@ -6989,118 +8310,73 @@ mod tests {
         let (run, input) = scenario
             .admit_run_and_append_input("manager coordinates two Tasks")
             .await;
-        let open = scenario
-            .vault()
-            .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
-            .await
-            .expect("open Manager recorder");
         let task_generation = scenario
             .vault()
             .activate_task_executor()
             .await
             .expect("activate Task owner")
             .executor_generation;
-        let (task_receipt_references, _) = scenario
-            .terminal_task_receipts(&run, task_generation, true)
+        let (_, task_receipts) = scenario
+            .terminal_task_receipts_with_manager_history(&run, task_generation, 2, 2, false, true)
             .await;
-        let receipt_a = task_receipt_references[0].clone();
-        let receipt_b = task_receipt_references[1].clone();
-        assert_ne!(receipt_a.execution.task_id, receipt_b.execution.task_id);
-        let task_reference_a =
-            task_evidence_reference(&receipt_a).expect("bind exact Task A receipt reference");
-        let task_reference_b =
-            task_evidence_reference(&receipt_b).expect("bind exact Task B receipt reference");
+        assert_ne!(task_receipts[0].task_id, task_receipts[1].task_id);
 
-        let mut request_a = scenario.recording_request(open.fence.clone(), "Task A interrupted");
-        request_a.message.task_id = Some(receipt_a.execution.task_id);
-        request_a.producing_task = Some(task_reference_a.clone());
-        let mut request_b = scenario.recording_request(open.fence.clone(), "Task B interrupted");
-        request_b.message.task_id = Some(receipt_b.execution.task_id);
-        request_b.producing_task = Some(task_reference_b.clone());
-        let recorded_a = scenario
+        let history = scenario
             .vault()
-            .record_conversation_entry(request_a.clone())
+            .read_manager_session_history_page(scenario.session_id, None, None, 8, 32 * 1024)
             .await
-            .expect("record Task A contribution after owner verification");
-        let recorded_b = scenario
-            .vault()
-            .record_conversation_entry(request_b)
-            .await
-            .expect("record Task B contribution after owner verification");
-        assert_eq!(recorded_a.producing_task, Some(task_reference_a.clone()));
-        assert_eq!(recorded_b.producing_task, Some(task_reference_b.clone()));
+            .expect("read normalized Manager Task history");
+        let delegations = history
+            .messages
+            .iter()
+            .filter_map(|message| match &message.message {
+                floe_conversation::AgentMessage::Delegation { task, .. } => {
+                    Some((message.alias_id, task.task_id))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            scenario
-                .vault()
-                .record_conversation_entry(request_a.clone())
-                .await
-                .expect("replay exact Task A contribution"),
-            recorded_a,
+            delegations,
+            task_receipts
+                .iter()
+                .map(|receipt| (receipt.task_id.as_uuid(), receipt.task_id))
+                .collect::<Vec<_>>(),
+            "each Manager Task contribution has its stable Task alias exactly once"
         );
-
         let terminal = scenario.budget_exceeded_owner_run(&run).await;
-        scenario
-            .vault()
-            .close_conversation_recorder(open.fence.clone())
-            .await
-            .expect("close completed owner before admitting another Run");
-        let (other_run, _) = scenario
-            .admit_owner_run_reusing_input(&terminal, "Continue after Task evidence")
-            .await;
-        let other_open = scenario
-            .vault()
-            .open_conversation_recorder(
-                scenario.start_request(&other_run, input.receipt.transcript),
-            )
-            .await
-            .expect("open second owner Run against the retained input");
-        let mut cross_run_task =
-            scenario.recording_request(other_open.fence, "cannot attach another Run Task");
-        cross_run_task.message.task_id = Some(receipt_a.execution.task_id);
-        cross_run_task.producing_task = Some(task_reference_a.clone());
-        assert_eq!(
-            scenario
-                .vault()
-                .record_conversation_entry(cross_run_task)
-                .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch
-            )),
-            "Task receipt must be linked through this recorder's own intent/result"
-        );
-
-        let page = scenario
+        let transcript = scenario
             .vault()
             .read_conversation_page(
                 ConversationReference {
                     identity: scenario.identity.clone(),
                     conversation_id: scenario.conversation_id,
                     branch_id: scenario.branch_id,
-                    head_revision: recorded_b.transcript.sequence,
+                    head_revision: history
+                        .messages
+                        .last()
+                        .expect("normalized page includes both Tasks")
+                        .transcript_sequence,
                 },
                 None,
                 TranscriptPageBudget {
                     max_entries: 8,
-                    max_bytes: 4096,
+                    max_bytes: 32 * 1024,
                 },
             )
             .await
-            .expect("read exact Task evidence links");
-        assert_eq!(page.entries[1].producing_task, recorded_a.producing_task);
-        assert_eq!(page.entries[2].producing_task, recorded_b.producing_task);
-
-        let mut changed_task = request_a;
-        changed_task.message.task_id = Some(receipt_b.execution.task_id);
-        changed_task.producing_task = Some(task_reference_b);
-        assert_eq!(
-            scenario
-                .vault()
-                .record_conversation_entry(changed_task)
-                .await,
-            Err(ConversationStoreFailure::Transition(
-                ConversationFailure::MessageIdConflict
-            )),
-        );
+            .expect("read exact neutral Task proof links");
+        assert_eq!(transcript.entries.len(), 3);
+        for (entry, task_receipt) in transcript.entries[1..].iter().zip(&task_receipts) {
+            assert_eq!(
+                entry
+                    .producing_task
+                    .as_ref()
+                    .map(TaskEvidenceReference::task_id),
+                Some(task_receipt.task_id)
+            );
+        }
+        assert!(terminal.state.is_terminal());
     }
 
     #[tokio::test]
@@ -7322,33 +8598,6 @@ mod tests {
             before_second_session
         );
         drop(connection);
-
-        scenario.cancel_owner_run(&first_run).await;
-        let (second_run, second_input) = scenario
-            .admit_run_and_bind_input(second_owner, second_core)
-            .await;
-        assert_eq!(second_input.disposition, AdmissionDisposition::Appended);
-        let second_recorder = scenario
-            .last_core_recorder
-            .clone()
-            .expect("retry after the first Run closes opens its recorder");
-        assert_eq!(second_recorder.fence.run_id, second_run.run_id);
-        assert_eq!(second_recorder.fence.input, second_input.receipt.transcript);
-        assert!(second_recorder.fence.recorder_epoch > first_recorder.fence.recorder_epoch);
-        let target_after = ConversationReference {
-            identity: scenario.identity.clone(),
-            conversation_id: scenario.conversation_id,
-            branch_id: scenario.branch_id,
-            head_revision: second_input.receipt.transcript.sequence,
-        };
-        let after = scenario
-            .vault()
-            .observe_conversation_recorder(target_after, second_run.run_id)
-            .await
-            .expect("observe the recorder opened by the admitted retry");
-        assert_eq!(after.active_recorder, Some(second_recorder.fence.clone()));
-        assert_eq!(after.head.recorder_epoch, before.head.recorder_epoch + 1);
-        assert!(after.head.state_revision > before.head.state_revision);
     }
 
     #[tokio::test]
@@ -7449,7 +8698,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_fencing_and_terminal_evidence_allow_crash_retirement_then_reopen() {
+    async fn composed_terminal_close_ack_replays_after_generation_advance_and_continue_reuses_input()
+     {
         let mut scenario = Scenario::new().await;
         let (old_run, input) = scenario
             .admit_run_and_append_input("interrupted owner")
@@ -7466,21 +8716,14 @@ mod tests {
             .await
             .expect("persist a newer executor generation");
         scenario.executor_generation = activation.executor_generation;
-        let retired = scenario
+        let close = scenario
             .vault()
-            .retire_conversation_recorder(old_open.fence.clone())
+            .close_conversation_recorder(old_open.fence.clone())
             .await
-            .expect("retire only after generation fencing and terminal evidence");
-        assert_eq!(retired.fence, old_open.fence);
-        assert_eq!(
-            retired.generation_fence.old_generation,
-            old_open.fence.executor_generation
-        );
-        assert_eq!(
-            retired.generation_fence.current_generation,
-            activation.executor_generation
-        );
-        assert_eq!(retired.owner_evidence_digest.len(), 32);
+            .expect("replay the atomic close receipt after generation movement");
+        assert_eq!(close.fence, old_open.fence);
+        assert_eq!(close.settled_prefix, 0);
+        assert_eq!(close.owner_aggregate_revision, terminal.aggregate_revision);
 
         let (new_run, reused_input) = scenario
             .admit_owner_run_reusing_input(&terminal, "Continue interrupted owner")
@@ -7490,7 +8733,7 @@ mod tests {
             .vault()
             .open_conversation_recorder(scenario.start_request(&new_run, input.receipt.transcript))
             .await
-            .expect("open new recorder after stale retirement");
+            .expect("open new recorder after the original close");
         assert!(new_open.fence.recorder_epoch > old_open.fence.recorder_epoch);
         assert_eq!(new_open.fence.input, old_open.fence.input);
         assert!(terminal.state.is_terminal());
@@ -7567,7 +8810,7 @@ mod tests {
     }
 }
 
-async fn checkpoint_on(
+pub(super) async fn checkpoint_on(
     transaction: &Transaction<'_>,
     scope: Scope,
 ) -> Result<Option<ConversationCheckpoint>, ConversationStoreFailure> {

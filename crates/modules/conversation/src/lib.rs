@@ -38,11 +38,11 @@ pub use domain::{
     MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES,
     NavigationDestination, NavigationOnlyTarget, PendingRunTerminal, PriorExhaustion,
     ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState,
-    RunTerminal, SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest,
-    StartTurn, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode,
-    UnresolvedModelAttempt, canonical_requirement_digest, canonical_target_digest,
-    decision_owner_command_id, interaction_publication_id, next_state_after_decision,
-    resume_command_id, state_after_resolution,
+    RunTerminal, SessionHistoryMessage, SessionHistoryPage, SessionReadRequest, SessionReceipt,
+    SessionRequest, StartSessionRequest, StartTurn, SupersedeInteraction, TurnAdmission,
+    TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt, canonical_requirement_digest,
+    canonical_target_digest, decision_owner_command_id, interaction_publication_id,
+    next_state_after_decision, resume_command_id, state_after_resolution,
 };
 pub use domain::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CanonicalTurnIntent, normalize_turn_text,
@@ -58,15 +58,11 @@ pub use ports::{
 
 pub use turn::{
     AgentBudget, AgentContinuation, AgentEvent, AgentEventKind, AgentMessage, AgentOutcome,
-    AgentSession, AgentSessionScope, AgentUsage, FROZEN_LEGACY_SESSION_ARCHIVE_NAMESPACE,
-    FrozenLegacySessionArchiveIdentity, LegacyCoverageStatus, LegacyExecutionAuthority,
-    LegacyExternalReferenceStatus, LegacySessionPreparationError, LegacyUnprovenAuthority,
-    MAX_PREPARED_LEGACY_SESSION_OUTPUT_CEILING_BYTES, MAX_SESSION_BYTES,
+    AgentSession, AgentSessionScope, AgentUsage, MAX_SESSION_BYTES,
     MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES, MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
-    PreparedLegacySessionRecord, PreparedLegacySessionShell, PreparedLegacySessionSnapshot,
     SessionRecoveryPointer, SessionStore, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
     TYPED_AGENT_MESSAGE_SCHEMA_ID, TYPED_AGENT_MESSAGE_SCHEMA_VERSION, TypedAgentMessageEvidence,
-    TypedAgentMessageProvenance, TypedAgentMessageReference, prepare_legacy_session_snapshot,
+    TypedAgentMessageProvenance, TypedAgentMessageReference,
 };
 
 pub use domain::{

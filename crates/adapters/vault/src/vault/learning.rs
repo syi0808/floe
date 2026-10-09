@@ -8,7 +8,7 @@ use floe_agent_contract::{
     AgentFailure, CommandId, DataClass, ExecutionScope, JournalEntry, JournalEvent, OwnerActor,
     RunId,
 };
-use floe_conversation::{AgentOutcome, AgentSession};
+use floe_conversation::{AgentMessage, AgentOutcome};
 use floe_kernel::CommandFailure;
 use floe_knowledge::{
     EvidenceReader, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
@@ -456,78 +456,93 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
             .map_err(database_failure)?;
-        let result =
-            async {
-                let mut rows = transaction.query(
-                "SELECT id, revision, payload FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
-                [i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?],
-            ).await.map_err(database_failure)?;
-                let mut snapshots = Vec::new();
-                while let Some(row) = rows.next().await.map_err(database_failure)? {
-                    let stored_id = row.get::<String>(0).map_err(storage)?;
-                    let stored_revision = row.get::<i64>(1).map_err(storage)?;
-                    let session: AgentSession = decode(&row.get::<String>(2).map_err(storage)?)?;
-                    if session.person_id != self.person_id
-                        || session.id.to_string() != stored_id
-                        || i64::try_from(session.revision)
-                            .map_err(|_| AgentFailure::StorageUnavailable)?
-                            != stored_revision
-                    {
-                        return Err(AgentFailure::VaultUnavailable);
-                    }
-                    self.payload(&session)?;
-                    let messages =
-                        learning_transcript_messages(self, &transaction, &session).await?;
-                    let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
-                    let evidence_reader = TransactionLearningEvidence {
-                        vault: self,
-                        transaction: &transaction,
-                    };
-                    let evidence = if actual_turns.is_empty() {
-                        LearningEvidenceSnapshot {
-                            person_id: session.person_id,
-                            session_id: session.id,
-                            revision: session.revision,
-                            outcome: session.last_outcome.map(learning_outcome),
-                            personal: session.scope.is_none()
-                                && session.data_classes == [DataClass::Personal],
-                            active_turn: session.active_turn.is_some(),
-                            pending_output: session.pending_output.is_some(),
-                            turn_ids: Vec::new(),
-                            coverage: DependencyCoverage::Unknown,
-                            purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
-                        }
-                    } else {
-                        evidence_reader
-                            .read_learning_evidence(self.person_id, session.id, &actual_turns)
-                            .await?
-                    };
-                    if evidence.session_id != session.id
-                        || evidence.revision != session.revision
-                        || evidence.person_id != self.person_id
-                    {
-                        return Err(AgentFailure::StorageUnavailable);
-                    }
-                    let snapshot = LearningSessionSnapshot { evidence, messages };
-                    let bounded_bytes = snapshot.messages.iter().fold(0usize, |total, message| {
-                        total.saturating_add(match message {
-                            LearningTranscriptMessage::User { text, .. }
-                            | LearningTranscriptMessage::Assistant { text, .. } => {
-                                text.len().saturating_add(64)
-                            }
-                            LearningTranscriptMessage::Other => 8,
-                        })
-                    });
-                    if bounded_bytes > 512 * 1024 {
-                        return Err(AgentFailure::BudgetExceeded);
-                    }
-                    snapshots.push(snapshot);
+        let result = async {
+            let mut rows = transaction
+                .query(
+                    "SELECT id, revision FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
+                    [i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?],
+                )
+                .await
+                .map_err(database_failure)?;
+            let mut snapshots = Vec::new();
+            while let Some(row) = rows.next().await.map_err(database_failure)? {
+                let stored_id = row.get::<String>(0).map_err(storage)?;
+                let stored_revision = row.get::<i64>(1).map_err(storage)?;
+                let session_id = Uuid::parse_str(&stored_id).map_err(unavailable)?;
+                let Some(session) = self
+                    .manager_session_shell_on(&transaction, session_id)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?
+                else {
+                    // Scoped Expert Sessions have their own Task-owned
+                    // history and are outside Manager-only learning.
+                    continue;
+                };
+                if session.person_id != self.person_id
+                    || session.id != session_id
+                    || i64::try_from(session.revision)
+                        .map_err(|_| AgentFailure::StorageUnavailable)?
+                        != stored_revision
+                {
+                    return Err(AgentFailure::VaultUnavailable);
                 }
-                drop(rows);
-                self.check_learning_scope(scope)?;
-                Ok(snapshots)
+                self.payload(&session)?;
+                let history = self
+                    .read_manager_learning_history_on(&transaction, session.id, 256, 512 * 1024)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                let messages =
+                    learning_transcript_messages(self, &transaction, session.id, &history).await?;
+                let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
+                let evidence_reader = TransactionLearningEvidence {
+                    vault: self,
+                    transaction: &transaction,
+                };
+                let evidence = if actual_turns.is_empty() {
+                    LearningEvidenceSnapshot {
+                        person_id: session.person_id,
+                        session_id: session.id,
+                        revision: session.revision,
+                        outcome: session.last_outcome.map(learning_outcome),
+                        personal: session.scope.is_none()
+                            && session.data_classes == [DataClass::Personal],
+                        active_turn: session.active_turn.is_some(),
+                        pending_output: session.pending_output.is_some(),
+                        turn_ids: Vec::new(),
+                        coverage: DependencyCoverage::Unknown,
+                        purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
+                    }
+                } else {
+                    evidence_reader
+                        .read_learning_evidence(self.person_id, session.id, &actual_turns)
+                        .await?
+                };
+                if evidence.session_id != session.id
+                    || evidence.revision != session.revision
+                    || evidence.person_id != self.person_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let snapshot = LearningSessionSnapshot { evidence, messages };
+                let bounded_bytes = snapshot.messages.iter().fold(0usize, |total, message| {
+                    total.saturating_add(match message {
+                        LearningTranscriptMessage::User { text, .. }
+                        | LearningTranscriptMessage::Assistant { text, .. } => {
+                            text.len().saturating_add(64)
+                        }
+                        LearningTranscriptMessage::Other => 8,
+                    })
+                });
+                if bounded_bytes > 512 * 1024 {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                snapshots.push(snapshot);
             }
-            .await;
+            drop(rows);
+            self.check_learning_scope(scope)?;
+            Ok(snapshots)
+        }
+        .await;
         finish_transaction(self, transaction, result).await
     }
 
@@ -993,12 +1008,14 @@ fn validate_settlement_result(
 async fn learning_transcript_messages<Keys: VaultKeyProvider>(
     vault: &EncryptedAgentVault<Keys>,
     transaction: &turso::transaction::Transaction<'_>,
-    session: &AgentSession,
+    session_id: Uuid,
+    history: &[floe_conversation::SessionHistoryMessage],
 ) -> Result<Vec<LearningTranscriptMessage>, AgentFailure> {
-    let mut output = Vec::with_capacity(session.messages.len());
-    for message in &session.messages {
+    let mut output = Vec::with_capacity(history.len());
+    for item in history {
+        let message = &item.message;
         match message {
-            floe_conversation::AgentMessage::User {
+            AgentMessage::User {
                 turn_id,
                 message_id,
                 text,
@@ -1012,14 +1029,14 @@ async fn learning_transcript_messages<Keys: VaultKeyProvider>(
                     text: text.clone(),
                 });
             }
-            floe_conversation::AgentMessage::Assistant { turn_id, text } => {
+            AgentMessage::Assistant { turn_id, text } => {
                 let run_id = RunId::from_uuid(*turn_id).ok_or(AgentFailure::VaultUnavailable)?;
                 let run = vault
                     .conversation_run_on(transaction, run_id)
                     .await?
                     .ok_or(AgentFailure::StorageUnavailable)?;
                 run.validate(vault.person_id)?;
-                if run.session_id != session.id
+                if run.session_id != session_id
                     || run.run_id != run_id
                     || run.user_message_id.is_nil()
                 {

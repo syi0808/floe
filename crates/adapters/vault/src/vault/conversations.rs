@@ -1,4 +1,8 @@
+use super::conversation_core::owner_store_failure;
 use super::database_failure;
+use super::owner_custody::{
+    TypedConversationRecordingRequest, manager_session_binding_for_session_on,
+};
 use floe_agent_contract::DataClass;
 use floe_agent_contract::{CommandId, DependencyCoverage, RunId};
 use floe_agent_contract::{EngineStep, JournalEvent};
@@ -32,6 +36,17 @@ pub enum VaultConversationAdmission {
     Existing(RunRecord),
     /// The origin slot already admitted this resume under another command.
     Resumed(RunRecord),
+}
+
+/// The Manager route returns the admitted owner record without hydrating the
+/// deprecated Session message vector. Product transcript reads come from the
+/// normalized Core transcript and typed owner evidence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum VaultManagerConversationAdmission {
+    Created(RunRecord),
+    Existing(RunRecord),
+    Resumed(RunRecord),
+    Superseded,
 }
 
 /// Result of the one transaction-scoped linked-Resume owner transition.
@@ -117,6 +132,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(activation)
     }
 
+    #[cfg(test)]
     pub async fn admit_conversation_turn(
         &self,
         request: TurnAdmissionRequest,
@@ -335,10 +351,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if rows >= MAX_RUN_ROWS {
             return Err(AgentFailure::BudgetExceeded);
         }
-        if matches!(request.input, TurnInput::ExistingMessage { .. }) && !session.messages.iter().any(|message|
-            matches!(message, AgentMessage::User { message_id, .. } if *message_id == user_message_id)) {
-            return Err(AgentFailure::Conflict);
-        }
         if matches!(request.mode, TurnMode::New) {
             transaction.execute("UPDATE agent_conversation_resume_requests SET state = 'superseded' WHERE session_id = ? AND person_id = ? AND state = 'pending'",
                 (session.id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
@@ -348,16 +360,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .revision
             .checked_add(1)
             .ok_or(AgentFailure::Conflict)?;
-        if continuation.is_none() && resume.is_none() {
-            let TurnInput::NewMessage(message) = &request.input else {
-                return Err(AgentFailure::InvalidInput);
-            };
-            session.messages.push(AgentMessage::User {
-                turn_id: request.run_id.as_uuid(),
-                message_id: message.message_id,
-                text: message.text.clone(),
-            });
-        }
         session.usage = AgentUsage::default();
         session.active_turn = Some(request.run_id.as_uuid());
         session.last_outcome = None;
@@ -580,7 +582,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub async fn append_conversation_journal(
+    #[cfg(test)]
+    pub(super) async fn append_conversation_journal(
         &self,
         run_id: RunId,
         kind: &str,
@@ -768,7 +771,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(fold.execution_selection)
     }
 
-    pub async fn finish_conversation_run(
+    #[cfg(test)]
+    pub(super) async fn finish_conversation_run(
         &self,
         run_id: RunId,
         expected_aggregate_revision: u64,
@@ -947,26 +951,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(next)
     }
 
-    pub async fn finish_blocked_conversation_run(
-        &self,
-        commit: BlockedRunCommit,
-    ) -> Result<RunRecord, AgentFailure> {
-        commit.validate()?;
-        if commit.person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = self
-            .finish_blocked_conversation_run_on(&transaction, commit)
-            .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
-    }
-
     /// Apply the existing blocked owner publication and settlement inside a
     /// caller-owned transaction. Core settlement composes this primitive so
     /// its close receipt commits with the same audit, interactions, Run,
@@ -1074,6 +1058,58 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     }
                     super::conversation_interactions::insert_interaction(transaction, interaction)
                         .await?;
+                }
+            }
+        }
+
+        // A blocked interaction is a textless typed contribution. Publish its
+        // authoritative owner row first, then record Core custody, then settle
+        // the Run below; all three writes remain in this one transaction.
+        if let Some(binding) =
+            manager_session_binding_for_session_on(transaction, self.person_id, current.session_id)
+                .await
+                .map_err(owner_store_failure)?
+        {
+            let (manager_run, recorder) = self
+                .manager_recorder_on(transaction, current.run_id)
+                .await
+                .map_err(owner_store_failure)?;
+            if manager_run.session_id != current.session_id
+                || manager_run.person_id != current.person_id
+                || binding.identity != recorder.identity
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let mut recorded_interactions = std::collections::HashSet::new();
+            for publication in &commit.publications {
+                for interaction in &publication.interactions {
+                    if !recorded_interactions.insert(interaction.id) {
+                        continue;
+                    }
+                    let (message_id, command_id, contribution_id, typed_entry_id) =
+                        super::conversation_core::manager_contribution_ids(
+                            current.run_id,
+                            "interaction",
+                            interaction.id,
+                        )
+                        .map_err(owner_store_failure)?;
+                    self.record_typed_conversation_entry_on(
+                        transaction,
+                        TypedConversationRecordingRequest {
+                            recorder: recorder.clone(),
+                            message_id,
+                            command_id,
+                            contribution_id,
+                            typed_entry_id,
+                            typed_message: AgentMessage::Interaction {
+                                turn_id: current.run_id.as_uuid(),
+                                interaction_id: interaction.id,
+                                interaction_kind: interaction.kind,
+                            },
+                        },
+                    )
+                    .await
+                    .map_err(owner_store_failure)?;
                 }
             }
         }
@@ -1804,35 +1840,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_registry_transaction_checked(transaction, result)
             .await
     }
-    pub async fn claim_conversation_resume(
-        &self,
-        request: ResumeChildAdmission,
-    ) -> Result<VaultConversationAdmission, AgentFailure> {
-        request.validate()?;
-        if request.request.person_id != self.person_id {
-            return Err(AgentFailure::CapabilityDenied);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = self
-            .claim_conversation_resume_on(&transaction, request)
-            .await
-            .map(|outcome| match outcome {
-                ResumeClaimOutcome::Admitted(admission) => Some(admission),
-                ResumeClaimOutcome::Superseded => None,
-            });
-        self.finish_registry_transaction_checked(transaction, result)
-            .await?
-            .ok_or(AgentFailure::Conflict)
-    }
-
-    /// The single linked-Resume owner implementation, shared by the public
-    /// owner-only wrapper and the internal owner/Core composer. The caller
-    /// owns the Immediate transaction and must commit `Superseded` before
-    /// returning its public conflict.
+    /// The linked-Resume owner implementation used by the Manager/Core
+    /// composer. The caller owns the Immediate transaction and must commit
+    /// `Superseded` before returning its public conflict.
     pub(super) async fn claim_conversation_resume_on(
         &self,
         transaction: &Transaction<'_>,
@@ -2044,16 +2054,77 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         writer.settled();
         finished.map_err(F::Indeterminate)
     }
-    pub async fn resume_conversation_session(&self) -> Result<Option<AgentSession>, AgentFailure> {
+    /// Resume only a pristine or exactly pinned Manager Session for the
+    /// selected prompt revision. A Session bound to another policy remains
+    /// readable by ID but is never retargeted for new Manager execution.
+    pub async fn resume_manager_conversation_session(
+        &self,
+        identity: &floe_conversation_contract::AgentIdentity,
+    ) -> Result<Option<AgentSession>, AgentFailure> {
+        identity
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if identity.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
+        }
         let connection = self.connection()?;
-        let mut rows = connection.query("SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1", ()).await.map_err(database_failure)?;
-        let Some(row) = rows.next().await.map_err(database_failure)? else {
+        let family_present =
+            crate::schema::conversation_owner_custody_family_v2_present(&connection)
+                .await
+                .map_err(crate::schema::SchemaFailure::into_agent)?;
+        let current = if family_present {
+            let identity_json = serde_json::to_string(identity).map_err(storage)?;
+            let mut rows = connection
+                .query(
+                    "SELECT s.id FROM agent_conversation_manager_session_bindings_v2 b JOIN agent_sessions s ON s.id = b.session_id WHERE b.person_id = ? AND b.identity_json = ? ORDER BY s.revision DESC, s.id DESC LIMIT 1",
+                    (self.person_id.to_string(), identity_json),
+                )
+                .await
+                .map_err(database_failure)?;
+            if let Some(row) = rows.next().await.map_err(database_failure)? {
+                Some(
+                    Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+                        .map_err(unavailable)?,
+                )
+            } else {
+                drop(rows);
+                let mut rows = connection
+                    .query(
+                        "SELECT s.id FROM agent_sessions s WHERE json_extract(s.payload, '$.scope') IS NULL AND json_extract(s.payload, '$.data_classes[0]') = 'personal' AND NOT EXISTS (SELECT 1 FROM agent_conversation_manager_session_bindings_v2 b WHERE b.person_id = ? AND b.session_id = s.id) ORDER BY s.rowid DESC LIMIT 1",
+                        [self.person_id.to_string()],
+                    )
+                    .await
+                    .map_err(database_failure)?;
+                rows.next()
+                    .await
+                    .map_err(database_failure)?
+                    .map(|row| {
+                        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+                            .map_err(unavailable)
+                    })
+                    .transpose()?
+            }
+        } else {
+            let mut rows = connection
+                .query(
+                    "SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1",
+                    (),
+                )
+                .await
+                .map_err(database_failure)?;
+            rows.next()
+                .await
+                .map_err(database_failure)?
+                .map(|row| {
+                    Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)
+                })
+                .transpose()?
+        };
+        let Some(session_id) = current else {
             self.check_access()?;
             return Ok(None);
         };
-        let id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
-        drop(rows);
-        let session = self.session_on(&connection, id).await?;
+        let session = self.session_on(&connection, session_id).await?;
         if session.person_id != self.person_id
             || session.scope.is_some()
             || session.data_classes != [DataClass::Personal]
@@ -2271,11 +2342,13 @@ mod model_selection_owner_tests {
                 coverage: DependencyCoverage::Independent,
             }),
         };
+        let identity = floe_conversation::prompts::default_manager_identity(person_id)
+            .expect("derive stable Manager identity");
         let admission = vault
-            .admit_conversation_turn(request)
+            .admit_manager_conversation_turn(request, identity)
             .await
-            .expect("admit owner Run");
-        let VaultConversationAdmission::Created { record, .. } = admission else {
+            .expect("admit Manager Run with normalized Core custody");
+        let VaultManagerConversationAdmission::Created(record) = admission else {
             panic!("initial Run was not newly admitted: {admission:?}");
         };
         StartedRun {
@@ -2331,1441 +2404,8 @@ mod model_selection_owner_tests {
             .await
     }
 
-    fn resolved_binding_interaction(
-        record: &RunRecord,
-    ) -> floe_conversation::ConversationInteraction {
-        use floe_conversation::{
-            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
-            InteractionRequirement, InteractionRequirementKind, InteractionResolutionCause,
-            InteractionResolutionReceipt, InteractionState, OwnerResolutionReceipt,
-            ReviewAuditRecord, ReviewedTarget, canonical_requirement_digest,
-            canonical_target_digest, interaction_publication_id,
-        };
-
-        let review_ref = floe_experts::BindingReviewRef {
-            id: Uuid::new_v4(),
-            digest: [3; 32],
-        };
-        let execution = floe_agent_contract::TaskExecutionReceiptRef {
-            execution: floe_agent_contract::TaskExecutionKey {
-                task_id: floe_agent_contract::TaskId::new(),
-                execution_id: Uuid::new_v4(),
-                executor_generation: 1,
-            },
-            task_revision: 2,
-            journal_revision: 0,
-            digest: [4; 32],
-        };
-        let origin = InteractionOrigin::Task {
-            execution: execution.clone(),
-            capability_call_id: None,
-        };
-        let target = ReviewedTarget::ExpertBinding(review_ref.clone());
-        let requirement = InteractionRequirement {
-            kind: InteractionRequirementKind::ConfigureExpertBinding,
-            source_id: "floe.expert.binding".into(),
-            connection_id: None,
-            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
-            purpose: "configuration".into(),
-            inline: false,
-        };
-        let owner_receipt = OwnerResolutionReceipt::ExpertBinding {
-            receipt: floe_experts::BindingMutationReceipt {
-                command_id: CommandId::new(),
-                review_ref: review_ref.clone(),
-                assignment_ref: Uuid::new_v4(),
-                binding_revision: 1,
-                registry_revision: 1,
-                committed_at_unix_ms: 1,
-            },
-        };
-        let receipt = InteractionResolutionReceipt {
-            cause: InteractionResolutionCause::Refresh {
-                command_id: Uuid::new_v4(),
-            },
-            owner_command_id: owner_receipt.command_id(),
-            owner_operation_id: owner_receipt.operation_id(),
-            owner_receipt,
-            resolved_at_unix_ms: 1,
-        };
-        let audit = ReviewAuditRecord {
-            person_id: record.person_id,
-            device_id: record.device_id.clone(),
-            session_id: record.session_id,
-            run_id: record.run_id,
-            executor_generation: record.executor_generation,
-            operation_id: Uuid::new_v4(),
-            evidence: BlockedReviewEvidence::ExpertBinding {
-                execution,
-                requirement_key: "calendar".into(),
-                review: review_ref,
-            },
-        };
-        let requirement_digest =
-            canonical_requirement_digest(&requirement).expect("valid binding requirement digest");
-        let target_digest = canonical_target_digest(&target).expect("valid binding target digest");
-        let id =
-            interaction_publication_id(record.run_id, &origin, &requirement_digest, &target_digest)
-                .expect("valid publication identity");
-        let interaction = ConversationInteraction {
-            id,
-            person_id: record.person_id,
-            session_id: record.session_id,
-            origin_run_id: record.run_id,
-            origin_turn_id: record.run_id.as_uuid(),
-            origin,
-            audit,
-            kind: floe_agent_contract::UserInteractionKind::ExpertBinding,
-            requirement,
-            requirement_digest,
-            target,
-            target_digest,
-            state: InteractionState::Resolved { receipt },
-            revision: 2,
-            created_at_unix_ms: 1,
-            expires_at_unix_ms: 1 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
-        };
-        interaction
-            .validate()
-            .expect("valid resolved interaction fixture");
-        interaction
-    }
-
-    async fn persist_resolved_interaction_fixture(
-        vault: &EncryptedAgentVault<TestKeys>,
-        interaction: &floe_conversation::ConversationInteraction,
-    ) {
-        let mut connection = vault.connection().expect("connect to fixture Vault");
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("begin interaction fixture transaction");
-        super::conversation_interactions::insert_interaction(&transaction, interaction)
-            .await
-            .expect("persist valid resolved interaction fixture");
-        transaction
-            .commit()
-            .await
-            .expect("commit interaction fixture");
-    }
-
-    async fn replace_session_fixture(
-        vault: &EncryptedAgentVault<TestKeys>,
-        session: &AgentSession,
-    ) {
-        let mut connection = vault
-            .connection()
-            .expect("connect to Session fixture Vault");
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("begin Session fixture transaction");
-        let changed = transaction
-            .execute(
-                "UPDATE agent_sessions SET payload = ? WHERE id = ? AND revision = ?",
-                (
-                    serde_json::to_string(session).expect("serialize Session fixture"),
-                    session.id.to_string(),
-                    i64::try_from(session.revision).expect("Session revision fits SQLite"),
-                ),
-            )
-            .await
-            .expect("replace Session fixture payload");
-        assert_eq!(changed, 1);
-        transaction
-            .commit()
-            .await
-            .expect("commit Session fixture transaction");
-    }
-
-    async fn replace_interaction_origin_fixture(
-        vault: &EncryptedAgentVault<TestKeys>,
-        interaction_id: Uuid,
-        origin_run_id: RunId,
-    ) {
-        let mut connection = vault
-            .connection()
-            .expect("connect to interaction fixture Vault");
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("begin interaction-link fixture transaction");
-        let changed = transaction
-            .execute(
-                "UPDATE agent_conversation_interactions SET origin_run_id = ? WHERE interaction_id = ?",
-                (
-                    origin_run_id.as_uuid().to_string(),
-                    interaction_id.to_string(),
-                ),
-            )
-            .await
-            .expect("replace interaction origin link fixture");
-        assert_eq!(changed, 1);
-        transaction
-            .commit()
-            .await
-            .expect("commit interaction-link fixture transaction");
-    }
-
-    async fn replace_interaction_session_fixture(
-        vault: &EncryptedAgentVault<TestKeys>,
-        interaction: &floe_conversation::ConversationInteraction,
-    ) {
-        interaction
-            .validate()
-            .expect("cross-session interaction fixture remains self-consistent");
-        let mut connection = vault
-            .connection()
-            .expect("connect to interaction-session fixture Vault");
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .expect("begin interaction-session fixture transaction");
-        let changed = transaction
-            .execute(
-                "UPDATE agent_conversation_interactions SET session_id = ?, payload = ? WHERE interaction_id = ?",
-                (
-                    interaction.session_id.to_string(),
-                    serde_json::to_string(interaction)
-                        .expect("serialize self-consistent cross-session interaction"),
-                    interaction.id.to_string(),
-                ),
-            )
-            .await
-            .expect("replace interaction session linkage fixture");
-        assert_eq!(changed, 1);
-        transaction
-            .commit()
-            .await
-            .expect("commit interaction-session fixture transaction");
-    }
-
-    async fn finish_completed_run(
-        vault: &EncryptedAgentVault<TestKeys>,
-        record: &RunRecord,
-    ) -> RunRecord {
-        use floe_agent_contract::{BatchCursor, EngineStep, JournalEvent, ModelStep};
-
-        let text = "A completed owner run.".to_owned();
-        let artifacts = Vec::new();
-        let attempt_id = Uuid::new_v4();
-        let projection_ref = ProjectionRef::new();
-        append_event(
-            vault,
-            record.run_id,
-            model_intent(attempt_id, projection_ref, plan(record, 8)),
-        )
-        .await
-        .expect("append a pinned model intent");
-        append_event(
-            vault,
-            record.run_id,
-            JournalEvent::ModelResult {
-                attempt_id,
-                usage: floe_agent_contract::ModelUsage::default(),
-                accounting: floe_execution::budget::ModelAccounting {
-                    observed_tokens: None,
-                    observed_cost_micros: None,
-                    unknown_tokens: true,
-                    unknown_cost: true,
-                },
-            },
-        )
-        .await
-        .expect("settle the model attempt");
-        let batch = ValidatedModelBatch {
-            execution_id: record.run_id.as_uuid(),
-            attempt_id,
-            projection_ref,
-            batch_id: Uuid::new_v4(),
-            steps: vec![ModelStep::Answer {
-                text: text.clone(),
-                artifacts: artifacts.clone(),
-            }],
-            catalog_revision: record.expert_environment.revision,
-            tool_revisions: vec![],
-            agent_revisions: vec![],
-            projection_coverage: DependencyCoverage::Independent,
-            delegation_context: None,
-        };
-        append_event(
-            vault,
-            record.run_id,
-            JournalEvent::ValidatedBatch {
-                batch: batch.clone(),
-            },
-        )
-        .await
-        .expect("persist the answer batch");
-        append_event(
-            vault,
-            record.run_id,
-            JournalEvent::BatchProgress {
-                cursor: BatchCursor {
-                    batch_id: batch.batch_id,
-                    next_step_index: 0,
-                },
-            },
-        )
-        .await
-        .expect("persist the answer cursor");
-        append_event(
-            vault,
-            record.run_id,
-            JournalEvent::Output {
-                text: text.clone(),
-                artifacts: artifacts.clone(),
-            },
-        )
-        .await
-        .expect("persist the final answer");
-        vault
-            .finish_conversation_run(
-                record.run_id,
-                record.aggregate_revision,
-                RunTerminal {
-                    state: RunState::Completed,
-                    output: Some(text.clone()),
-                    steps: vec![EngineStep::Answer { text, artifacts }],
-                    coverage: DependencyCoverage::Independent,
-                    issue: None,
-                    blocked: None,
-                    interactions: vec![],
-                },
-            )
-            .await
-            .expect("finish owner Run and enqueue any eligible resume")
-    }
-
-    async fn finish_failed_run(
-        vault: &EncryptedAgentVault<TestKeys>,
-        record: &RunRecord,
-        failure: AgentFailure,
-    ) -> RunRecord {
-        vault
-            .finish_conversation_run(
-                record.run_id,
-                record.aggregate_revision,
-                RunTerminal::from_failure(failure),
-            )
-            .await
-            .expect("finish owner Run with the requested failure")
-    }
-
-    struct OpenInteractionScenario {
-        started: StartedRun,
-        origin: RunRecord,
-        session: AgentSession,
-        interaction: floe_conversation::ConversationInteraction,
-        future_resume: floe_conversation::ResumeRequired,
-    }
-
-    async fn start_open_interaction_scenario(resolving: bool) -> OpenInteractionScenario {
-        let started = start_run().await;
-        let resolved_sibling = resolved_binding_interaction(&started.record);
-        let future_resolved = resolved_binding_interaction(&started.record);
-        let mut open = future_resolved.clone();
-        open.state = floe_conversation::InteractionState::Pending;
-        open.revision = 1;
-        persist_resolved_interaction_fixture(&started.vault, &resolved_sibling).await;
-        persist_resolved_interaction_fixture(&started.vault, &open).await;
-
-        if resolving {
-            let decision = floe_conversation::InteractionDecision {
-                command_id: Uuid::new_v4(),
-                interaction_id: open.id,
-                interaction_revision: open.revision,
-                kind: floe_conversation::InteractionDecisionKind::Approve,
-                target_digest: open.target_digest,
-                principal: started.person_id.to_string(),
-                decided_at_unix_ms: 2,
-            };
-            open = match started
-                .vault
-                .record_conversation_interaction_decision(decision)
-                .await
-                .expect("admit owner decision for interaction")
-            {
-                floe_conversation::DecisionAdmission::Applied(updated) => updated,
-                other => panic!("unexpected interaction decision result: {other:?}"),
-            };
-            assert!(matches!(
-                open.state,
-                floe_conversation::InteractionState::Resolving { .. }
-            ));
-        }
-
-        let origin = finish_completed_run(&started.vault, &started.record).await;
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            origin.session_id,
-        )
-        .await
-        .expect("load Session for resumable open interaction");
-        let actor = floe_kernel::OwnerActor {
-            person_id: started.person_id,
-            device_id: origin.device_id.clone(),
-            runtime_epoch: 1,
-        };
-        let group = started
-            .vault
-            .run_conversation_interactions(origin.run_id)
-            .await
-            .expect("read interaction group through owner API");
-        assert_eq!(group.len(), 2);
-        let persisted_open = group
-            .iter()
-            .find(|interaction| interaction.id == open.id)
-            .expect("open interaction is retained");
-        assert_eq!(persisted_open, &open);
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("read absent resume while group is open"),
-            None
-        );
-
-        let mut resolved_after_settlement = open.clone();
-        resolved_after_settlement.state = future_resolved.state;
-        resolved_after_settlement.revision = open.revision + 1;
-        if let floe_conversation::InteractionState::Resolved { receipt } =
-            &mut resolved_after_settlement.state
-        {
-            receipt.resolved_at_unix_ms = 3;
-        }
-        resolved_after_settlement
-            .validate()
-            .expect("interaction remains structurally valid after resolution");
-        let future_group = group
-            .iter()
-            .map(|interaction| {
-                if interaction.id == open.id {
-                    resolved_after_settlement.clone()
-                } else {
-                    interaction.clone()
-                }
-            })
-            .collect::<Vec<_>>();
-        let future_resume = floe_conversation::build_resume_required(
-            &floe_conversation::project_run_receipt(origin.clone())
-                .expect("project completed resume origin"),
-            &future_group,
-        )
-        .expect("validate settled interaction group")
-        .expect("a resolved terminal group can enqueue a linked child");
-        assert_eq!(future_resume.expected_session_revision, session.revision);
-
-        OpenInteractionScenario {
-            started,
-            origin,
-            session,
-            interaction: open,
-            future_resume,
-        }
-    }
-
-    async fn read_continuation_snapshot(
-        vault: &Arc<EncryptedAgentVault<TestKeys>>,
-        person_id: PersonId,
-        device_id: &str,
-        session_id: Uuid,
-    ) -> Result<floe_conversation::SessionSnapshot, AgentFailure> {
-        use std::time::Duration;
-
-        let repository = crate::VaultConversationRepository::new(vault.clone());
-        let scope = floe_execution::ExecutionScope::root(
-            floe_execution::Cancellation::new(),
-            tokio::time::Instant::now() + Duration::from_secs(30),
-            floe_execution::budget::BudgetLedger::new(
-                floe_execution::budget::BudgetConfig::new(1_000, 1_000),
-                floe_execution::budget::ModelUsage::default(),
-            )
-            .work_lease(),
-            floe_kernel::TraceContext::new(Uuid::new_v4()),
-        );
-        let actor = floe_kernel::OwnerActor {
-            person_id,
-            device_id: device_id.to_owned(),
-            runtime_epoch: 1,
-        };
-        floe_conversation::read_session_snapshot(
-            &repository,
-            vault.as_ref(),
-            &actor,
-            session_id,
-            None,
-            &scope,
-        )
-        .await
-    }
-
-    #[tokio::test]
-    async fn compaction_refuses_a_live_issued_continuation() {
-        let started = start_run().await;
-        let failed = finish_failed_run(
-            &started.vault,
-            &started.record,
-            AgentFailure::DeadlineExceeded,
-        )
-        .await;
-        assert_eq!(failed.state, RunState::TimedOut);
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            failed.session_id,
-        )
-        .await
-        .expect("load Session carrying the live continuation marker");
-        assert_eq!(
-            session.continuation.as_ref().map(|value| value.turn_id),
-            Some(failed.run_id.as_uuid())
-        );
-        let before = read_continuation_snapshot(
-            &started.vault,
-            started.person_id,
-            &failed.device_id,
-            session.id,
-        )
-        .await
-        .expect("read the owner-issued continuation before compaction");
-        assert!(before.continuation_ref.is_some());
-
-        let compacted = started
-            .vault
-            .compact_session(
-                session.id,
-                session.revision,
-                failed.run_id.as_uuid(),
-                "Timed out turn summary".into(),
-            )
-            .await;
-        match compacted {
-            Err(AgentFailure::Conflict) => {
-                assert_eq!(
-                    floe_conversation::SessionStore::load(
-                        started.vault.as_ref(),
-                        started.person_id,
-                        session.id,
-                    )
-                    .await
-                    .expect("reload Session after refused compaction"),
-                    session
-                );
-                assert_eq!(
-                    read_continuation_snapshot(
-                        &started.vault,
-                        started.person_id,
-                        &failed.device_id,
-                        session.id,
-                    )
-                    .await
-                    .expect("continuation remains issuable after refused compaction"),
-                    before
-                );
-            }
-            other => {
-                let after = read_continuation_snapshot(
-                    &started.vault,
-                    started.person_id,
-                    &failed.device_id,
-                    session.id,
-                )
-                .await;
-                panic!(
-                    "compaction must protect the live continuation; got {other:?}, then owner snapshot {after:?}"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn new_input_clears_continue_capability_before_compaction() {
-        let started = start_run().await;
-        let failed = finish_failed_run(
-            &started.vault,
-            &started.record,
-            AgentFailure::DeadlineExceeded,
-        )
-        .await;
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            failed.session_id,
-        )
-        .await
-        .expect("load Session with issued continuation");
-        let before = read_continuation_snapshot(
-            &started.vault,
-            started.person_id,
-            &failed.device_id,
-            session.id,
-        )
-        .await
-        .expect("read current Continue capability");
-        assert!(before.continuation_ref.is_some());
-
-        let new_run = admit_new_run(&started, session.revision, "A fresh explicit turn").await;
-        let admitted_session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            session.id,
-        )
-        .await
-        .expect("load Session after New admission");
-        assert!(admitted_session.continuation.is_none());
-        let new_run = finish_completed_run(&started.vault, &new_run).await;
-        let current_session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            session.id,
-        )
-        .await
-        .expect("load Session after New turn completes");
-        assert!(current_session.continuation.is_none());
-        assert!(
-            read_continuation_snapshot(
-                &started.vault,
-                started.person_id,
-                &failed.device_id,
-                current_session.id,
-            )
-            .await
-            .expect("read Session after New clears Continue")
-            .continuation_ref
-            .is_none()
-        );
-
-        let compaction = started
-            .vault
-            .compact_session(
-                current_session.id,
-                current_session.revision,
-                failed.run_id.as_uuid(),
-                "Superseded failure turn summary".into(),
-            )
-            .await
-            .expect("compact after New cleared the stale Continue capability");
-        assert_eq!(compaction.session.revision, current_session.revision + 1);
-        assert!(
-            compaction
-                .session
-                .messages
-                .iter()
-                .any(|message| message.turn_id() == new_run.run_id.as_uuid()),
-            "the newly admitted turn remains in the retained suffix"
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_refuses_a_current_pending_interaction_with_resume_eligibility() {
-        assert_current_open_interaction_is_protected(false).await;
-    }
-
-    #[tokio::test]
-    async fn compaction_refuses_a_current_resolving_interaction_with_resume_eligibility() {
-        assert_current_open_interaction_is_protected(true).await;
-    }
-
-    async fn assert_current_open_interaction_is_protected(resolving: bool) {
-        let scenario = start_open_interaction_scenario(resolving).await;
-        assert_eq!(
-            matches!(
-                scenario.interaction.state,
-                floe_conversation::InteractionState::Resolving { .. }
-            ),
-            resolving
-        );
-        let compacted = scenario
-            .started
-            .vault
-            .compact_session(
-                scenario.session.id,
-                scenario.session.revision,
-                scenario.origin.run_id.as_uuid(),
-                "Completed turn summary".into(),
-            )
-            .await;
-        match compacted {
-            Err(AgentFailure::Conflict) => {
-                assert_eq!(
-                    floe_conversation::SessionStore::load(
-                        scenario.started.vault.as_ref(),
-                        scenario.started.person_id,
-                        scenario.session.id,
-                    )
-                    .await
-                    .expect("reload Session after refused compaction"),
-                    scenario.session
-                );
-                assert_eq!(
-                    scenario
-                        .started
-                        .vault
-                        .conversation_interaction(scenario.interaction.id)
-                        .await
-                        .expect("read unchanged open interaction")
-                        .expect("interaction remains stored"),
-                    scenario.interaction
-                );
-                assert_eq!(
-                    count_session_archives(&scenario.started.vault, scenario.session.id).await,
-                    0
-                );
-            }
-            other => panic!(
-                "compaction must preserve this current resume opportunity (expected revision {}, got {other:?})",
-                scenario.future_resume.expected_session_revision
-            ),
-        }
-    }
-
-    #[tokio::test]
-    async fn compaction_after_new_input_allows_stale_open_interaction_history() {
-        let scenario = start_open_interaction_scenario(false).await;
-        let new_run = admit_new_run(
-            &scenario.started,
-            scenario.session.revision,
-            "Supersede old interaction opportunity",
-        )
-        .await;
-        let new_run = finish_completed_run(&scenario.started.vault, &new_run).await;
-        let current_session = floe_conversation::SessionStore::load(
-            scenario.started.vault.as_ref(),
-            scenario.started.person_id,
-            scenario.session.id,
-        )
-        .await
-        .expect("load Session after New supersedes the old opportunity");
-        assert!(current_session.revision > scenario.session.revision);
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .conversation_interaction(scenario.interaction.id)
-                .await
-                .expect("read historical interaction after New")
-                .expect("New preserves interaction history"),
-            scenario.interaction,
-            "New does not rewrite the old Pending interaction"
-        );
-
-        let compaction = scenario
-            .started
-            .vault
-            .compact_session(
-                current_session.id,
-                current_session.revision,
-                scenario.origin.run_id.as_uuid(),
-                "Earlier completed turn summary".into(),
-            )
-            .await
-            .expect("compact when only a stale interaction opportunity remains");
-        assert_eq!(compaction.session.revision, current_session.revision + 1);
-        assert!(
-            compaction
-                .session
-                .messages
-                .iter()
-                .any(|message| message.turn_id() == new_run.run_id.as_uuid()),
-            "the new turn remains in the retained Session suffix"
-        );
-        assert_eq!(
-            count_session_archives(&scenario.started.vault, current_session.id).await,
-            1
-        );
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .conversation_interaction(scenario.interaction.id)
-                .await
-                .expect("read retained historical interaction")
-                .expect("historical interaction remains stored"),
-            scenario.interaction
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_fails_closed_for_self_consistent_wrong_session_group_member() {
-        let scenario = start_open_interaction_scenario(false).await;
-        let group = scenario
-            .started
-            .vault
-            .run_conversation_interactions(scenario.origin.run_id)
-            .await
-            .expect("read interaction group before cross-record corruption");
-        let resolved_sibling = group
-            .into_iter()
-            .find(|interaction| interaction.id != scenario.interaction.id)
-            .expect("group has a resolved sibling for the current resume opportunity");
-
-        let other_session = match scenario
-            .started
-            .vault
-            .start_conversation_session(StartSessionRequest {
-                principal: scenario.started.person_id.to_string(),
-                command_id: CommandId::new(),
-            })
-            .await
-            .expect("start a distinct owner Session")
-        {
-            floe_conversation::SessionStartAdmission::Started(receipt) => receipt.session_id,
-            other => panic!("unexpected second Session admission: {other:?}"),
-        };
-        let new_run = admit_new_run(
-            &scenario.started,
-            scenario.session.revision,
-            "Make the original interaction group stale",
-        )
-        .await;
-        let _new_run = finish_completed_run(&scenario.started.vault, &new_run).await;
-        let current_session = floe_conversation::SessionStore::load(
-            scenario.started.vault.as_ref(),
-            scenario.started.person_id,
-            scenario.session.id,
-        )
-        .await
-        .expect("load current Session after New");
-
-        let mut wrong_session_member = resolved_sibling;
-        wrong_session_member.session_id = other_session;
-        wrong_session_member.audit.session_id = other_session;
-        replace_interaction_session_fixture(&scenario.started.vault, &wrong_session_member).await;
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .conversation_interaction(wrong_session_member.id)
-                .await
-                .expect("read self-consistent interaction fixture through owner API"),
-            Some(wrong_session_member),
-            "the row and its payload agree, but the loaded origin Run belongs to another Session"
-        );
-
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .compact_session(
-                    current_session.id,
-                    current_session.revision,
-                    scenario.origin.run_id.as_uuid(),
-                    "Must not compact a stale group with a wrong-Session member".into(),
-                )
-                .await,
-            Err(AgentFailure::VaultUnavailable),
-            "every group member must link to the requested Session and loaded origin Run before stale history is skipped"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                scenario.started.vault.as_ref(),
-                scenario.started.person_id,
-                current_session.id,
-            )
-            .await
-            .expect("reload Session after cross-record refusal"),
-            current_session
-        );
-        assert_eq!(
-            count_session_archives(&scenario.started.vault, current_session.id).await,
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_after_exhausted_continue_chain_succeeds() {
-        let started = start_run().await;
-        let mut parent = started.record.clone();
-        let mut expected_level = 0;
-        let exhausted = loop {
-            let failed =
-                finish_failed_run(&started.vault, &parent, AgentFailure::BudgetExceeded).await;
-            assert_eq!(failed.continuation_level, expected_level);
-            let receipt = floe_conversation::project_run_receipt(failed.clone())
-                .expect("project failed lineage receipt");
-            if expected_level == 3 {
-                assert!(receipt.continuation().is_none());
-                break failed;
-            }
-            assert!(receipt.continuation().is_some());
-            parent = admit_continue_child(
-                &started.vault,
-                &failed,
-                "Continue the bounded failure lineage",
-            )
-            .await;
-            expected_level += 1;
-        };
-
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            exhausted.session_id,
-        )
-        .await
-        .expect("load Session after continuation exhaustion");
-        assert!(session.continuation.is_none());
-        let compaction = started
-            .vault
-            .compact_session(
-                session.id,
-                session.revision,
-                started.record.run_id.as_uuid(),
-                "Exhausted failure lineage summary".into(),
-            )
-            .await
-            .expect("compact after Continue lineage is exhausted");
-        assert_eq!(compaction.session.revision, session.revision + 1);
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
-    }
-
-    #[tokio::test]
-    async fn compaction_after_explicit_expiry_preserves_terminal_interaction_history() {
-        let started = start_run().await;
-        let mut interaction = resolved_binding_interaction(&started.record);
-        interaction.state = floe_conversation::InteractionState::Pending;
-        interaction.revision = 1;
-        interaction
-            .validate()
-            .expect("valid pending interaction fixture");
-        persist_resolved_interaction_fixture(&started.vault, &interaction).await;
-
-        let expired = started
-            .vault
-            .expire_conversation_interaction(floe_conversation::ExpireInteraction {
-                interaction_id: interaction.id,
-                person_id: started.person_id,
-                now_unix_ms: interaction.expires_at_unix_ms,
-            })
-            .await
-            .expect("expire interaction through owner API at its explicit deadline");
-        let floe_conversation::ExpireOutcome::Expired(expired) = expired else {
-            panic!("owner expiry did not transition the due interaction: {expired:?}");
-        };
-        assert_eq!(expired.state, floe_conversation::InteractionState::Expired);
-
-        let origin = finish_completed_run(&started.vault, &started.record).await;
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            origin.session_id,
-        )
-        .await
-        .expect("load Session with terminal interaction group");
-        let actor = floe_kernel::OwnerActor {
-            person_id: started.person_id,
-            device_id: origin.device_id.clone(),
-            runtime_epoch: 1,
-        };
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("read absent resume for group with no resolved member"),
-            None
-        );
-        let compaction = started
-            .vault
-            .compact_session(
-                session.id,
-                session.revision,
-                origin.run_id.as_uuid(),
-                "Expired interaction history summary".into(),
-            )
-            .await
-            .expect("compact after explicit expiry closed the group");
-        assert_eq!(compaction.session.revision, session.revision + 1);
-        assert_eq!(
-            started
-                .vault
-                .conversation_interaction(interaction.id)
-                .await
-                .expect("read expired historical interaction")
-                .expect("expired interaction remains stored"),
-            expired
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
-    }
-
-    #[tokio::test]
-    async fn compaction_fails_closed_when_continuation_run_is_missing() {
-        let started = start_run().await;
-        let failed = finish_failed_run(
-            &started.vault,
-            &started.record,
-            AgentFailure::DeadlineExceeded,
-        )
-        .await;
-        let mut session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            failed.session_id,
-        )
-        .await
-        .expect("load Session with current continuation marker");
-        let missing_run_id = RunId::new();
-        session
-            .continuation
-            .as_mut()
-            .expect("failed Run has a continuation marker")
-            .turn_id = missing_run_id.as_uuid();
-        replace_session_fixture(&started.vault, &session).await;
-
-        assert_eq!(
-            started
-                .vault
-                .compact_session(
-                    session.id,
-                    session.revision,
-                    failed.run_id.as_uuid(),
-                    "Must not launder a missing continuation origin".into(),
-                )
-                .await,
-            Err(AgentFailure::StorageUnavailable),
-            "missing referenced Run evidence follows the owner snapshot failure"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                started.vault.as_ref(),
-                started.person_id,
-                session.id,
-            )
-            .await
-            .expect("reload corrupt but structurally valid Session"),
-            session
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
-    }
-
-    #[tokio::test]
-    async fn compaction_fails_closed_for_ineligible_continuation_link() {
-        let started = start_run().await;
-        let completed = finish_completed_run(&started.vault, &started.record).await;
-        let mut session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            completed.session_id,
-        )
-        .await
-        .expect("load completed Session without continuation");
-        assert!(session.continuation.is_none());
-        session.continuation = Some(floe_conversation::AgentContinuation {
-            turn_id: completed.run_id.as_uuid(),
-            level: completed.continuation_level,
-            usage: session.usage,
-        });
-        replace_session_fixture(&started.vault, &session).await;
-
-        assert_eq!(
-            started
-                .vault
-                .compact_session(
-                    session.id,
-                    session.revision,
-                    completed.run_id.as_uuid(),
-                    "Must not launder an ineligible continuation link".into(),
-                )
-                .await,
-            Err(AgentFailure::StorageUnavailable),
-            "a marker linked to a non-continuable Run is corrupt owner evidence"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                started.vault.as_ref(),
-                started.person_id,
-                session.id,
-            )
-            .await
-            .expect("reload structurally valid Session after refusal"),
-            session
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
-    }
-
-    #[tokio::test]
-    async fn compaction_fails_closed_when_interaction_origin_run_is_missing() {
-        let scenario = start_open_interaction_scenario(false).await;
-        let missing_run_id = RunId::new();
-        replace_interaction_origin_fixture(
-            &scenario.started.vault,
-            scenario.interaction.id,
-            missing_run_id,
-        )
-        .await;
-
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .compact_session(
-                    scenario.session.id,
-                    scenario.session.revision,
-                    scenario.origin.run_id.as_uuid(),
-                    "Must not compact past a missing interaction origin".into(),
-                )
-                .await,
-            Err(AgentFailure::VaultUnavailable),
-            "missing interaction-origin evidence fails closed"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                scenario.started.vault.as_ref(),
-                scenario.started.person_id,
-                scenario.session.id,
-            )
-            .await
-            .expect("reload Session after missing-link refusal"),
-            scenario.session
-        );
-        assert_eq!(
-            count_session_archives(&scenario.started.vault, scenario.session.id).await,
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_fails_closed_when_interaction_origin_link_disagrees_with_payload() {
-        let scenario = start_open_interaction_scenario(false).await;
-        let new_run = admit_new_run(
-            &scenario.started,
-            scenario.session.revision,
-            "Create a distinct owner run for link validation",
-        )
-        .await;
-        let new_run = finish_completed_run(&scenario.started.vault, &new_run).await;
-        let current_session = floe_conversation::SessionStore::load(
-            scenario.started.vault.as_ref(),
-            scenario.started.person_id,
-            scenario.session.id,
-        )
-        .await
-        .expect("load current Session before corrupt-link refusal");
-        replace_interaction_origin_fixture(
-            &scenario.started.vault,
-            scenario.interaction.id,
-            new_run.run_id,
-        )
-        .await;
-
-        assert_eq!(
-            scenario
-                .started
-                .vault
-                .compact_session(
-                    current_session.id,
-                    current_session.revision,
-                    scenario.origin.run_id.as_uuid(),
-                    "Must not compact with conflicting interaction linkage".into(),
-                )
-                .await,
-            Err(AgentFailure::VaultUnavailable),
-            "the indexed run link must match the validated interaction payload"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                scenario.started.vault.as_ref(),
-                scenario.started.person_id,
-                current_session.id,
-            )
-            .await
-            .expect("reload Session after conflicting-link refusal"),
-            current_session
-        );
-        assert_eq!(
-            count_session_archives(&scenario.started.vault, current_session.id).await,
-            0
-        );
-    }
-
-    async fn admit_new_run(started: &StartedRun, expected_revision: u64, text: &str) -> RunRecord {
-        let command_id = CommandId::new();
-        let run_id = RunId::new();
-        let principal = started.person_id.to_string();
-        let intent = CanonicalTurnIntent {
-            session_id: started.record.session_id,
-            expected_revision,
-            text: text.to_owned(),
-            mode: TurnMode::New,
-            retry_of: None,
-        };
-        let admission = started
-            .vault
-            .admit_conversation_turn(TurnAdmissionRequest {
-                expert_environment: floe_experts::RunExpertEnvironmentIdentity {
-                    revision: 1,
-                    digest: [1; 32],
-                },
-                run_id,
-                command_id,
-                session_id: started.record.session_id,
-                expected_session_revision: expected_revision,
-                principal: principal.clone(),
-                device_id: started.record.device_id.clone(),
-                request_digest: intent.digest(&principal).expect("canonical turn digest"),
-                mode: TurnMode::New,
-                retry_of: None,
-                input: TurnInput::NewMessage(floe_agent_contract::AgentMessage {
-                    message_id: command_id.as_uuid(),
-                    role: floe_agent_contract::MessageRole::User,
-                    text: text.to_owned(),
-                    call_id: None,
-                    coverage: DependencyCoverage::Independent,
-                }),
-            })
-            .await
-            .expect("admit new owner Run");
-        let VaultConversationAdmission::Created { record, .. } = admission else {
-            panic!("new input did not create a Run: {admission:?}");
-        };
-        record
-    }
-
-    async fn count_session_archives(
-        vault: &EncryptedAgentVault<TestKeys>,
-        session_id: Uuid,
-    ) -> u64 {
-        let connection = vault.connection().expect("connect to test Vault");
-        let mut rows = connection
-            .query(
-                "SELECT count(*) FROM agent_session_archives WHERE session_id = ?",
-                [session_id.to_string()],
-            )
-            .await
-            .expect("count session archives");
-        let row = rows
-            .next()
-            .await
-            .expect("read archive count")
-            .expect("count row");
-        u64::try_from(row.get::<i64>(0).expect("archive count value"))
-            .expect("nonnegative archive count")
-    }
-
-    #[tokio::test]
-    async fn pending_resume_refuses_compaction_without_changing_any_state() {
-        let mut started = start_run().await;
-        let first_run = finish_completed_run(&started.vault, &started.record).await;
-        started.record = first_run.clone();
-        let first_session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            first_run.session_id,
-        )
-        .await
-        .expect("load first completed Session");
-        let origin = admit_new_run(&started, first_session.revision, "Resume this turn").await;
-        let interaction = resolved_binding_interaction(&origin);
-        persist_resolved_interaction_fixture(&started.vault, &interaction).await;
-        let origin = finish_completed_run(&started.vault, &origin).await;
-
-        let actor = floe_kernel::OwnerActor {
-            person_id: started.person_id,
-            device_id: origin.device_id.clone(),
-            runtime_epoch: 1,
-        };
-        let pending = started
-            .vault
-            .pending_conversation_resume_request(&actor, origin.run_id)
-            .await
-            .expect("read durable resume request")
-            .expect("completed Run with resolved interaction queues a resume");
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            started.record.session_id,
-        )
-        .await
-        .expect("load completed Session");
-        assert_eq!(pending.expected_session_revision, session.revision);
-        assert_ne!(first_run.run_id.as_uuid(), origin.run_id.as_uuid());
-        let prefix_end = session
-            .messages
-            .iter()
-            .rposition(|message| message.turn_id() == first_run.run_id.as_uuid())
-            .expect("first completed turn defines the archive prefix");
-        let origin_position = session
-            .messages
-            .iter()
-            .position(|message| message.turn_id() == origin.run_id.as_uuid())
-            .expect("resume origin remains in the Session");
-        assert!(
-            origin_position > prefix_end,
-            "resume origin is outside the selected archive prefix"
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
-
-        assert_eq!(
-            started
-                .vault
-                .compact_session(
-                    session.id,
-                    session.revision,
-                    first_run.run_id.as_uuid(),
-                    "Completed turn summary".into(),
-                )
-                .await,
-            Err(AgentFailure::Conflict),
-            "the origin turn being retained does not make a revision bump safe"
-        );
-        assert_eq!(
-            floe_conversation::SessionStore::load(
-                started.vault.as_ref(),
-                started.person_id,
-                session.id,
-            )
-            .await
-            .expect("reload Session after refusal"),
-            session,
-            "refused compaction preserves the complete Session"
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 0);
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("read preserved resume request"),
-            Some(pending.clone())
-        );
-        assert_eq!(
-            started
-                .vault
-                .reconcile_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("reconcile stored resume"),
-            Some(pending.clone()),
-            "the exact expected revision remains reconcilable"
-        );
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("read pending resume after reconciliation"),
-            Some(pending)
-        );
-    }
-
-    #[tokio::test]
-    async fn compaction_without_a_pending_resume_preserves_coverage_and_archive() {
-        let started = start_run().await;
-        let completed = finish_completed_run(&started.vault, &started.record).await;
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            completed.session_id,
-        )
-        .await
-        .expect("load completed Session");
-        let actor = floe_kernel::OwnerActor {
-            person_id: started.person_id,
-            device_id: completed.device_id.clone(),
-            runtime_epoch: 1,
-        };
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, completed.run_id)
-                .await
-                .expect("read absent resume request"),
-            None
-        );
-
-        let compaction = started
-            .vault
-            .compact_session(
-                session.id,
-                session.revision,
-                completed.run_id.as_uuid(),
-                "Completed turn summary".into(),
-            )
-            .await
-            .expect("compact quiescent Session");
-        assert_eq!(compaction.session.revision, session.revision + 1);
-        assert_eq!(
-            compaction.summary_coverage,
-            DependencyCoverage::Independent,
-            "the archived turn's coverage is merged into its summary"
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
-        let recovered = started
-            .vault
-            .recover_session_with_coverage(&compaction.recovery)
-            .await
-            .expect("recover archived source snapshot");
-        assert_eq!(recovered.session, session);
-        assert_eq!(
-            recovered.coverage_by_turn.get(&completed.run_id.as_uuid()),
-            Some(&DependencyCoverage::Independent)
-        );
-    }
-
-    #[tokio::test]
-    async fn new_input_supersedes_pending_resume_before_compaction() {
-        let started = start_run().await;
-        let interaction = resolved_binding_interaction(&started.record);
-        persist_resolved_interaction_fixture(&started.vault, &interaction).await;
-        let origin = finish_completed_run(&started.vault, &started.record).await;
-        let actor = floe_kernel::OwnerActor {
-            person_id: started.person_id,
-            device_id: origin.device_id.clone(),
-            runtime_epoch: 1,
-        };
-        let pending = started
-            .vault
-            .pending_conversation_resume_request(&actor, origin.run_id)
-            .await
-            .expect("read pending resume")
-            .expect("resolved interaction queues resume");
-        let next = admit_new_run(
-            &started,
-            pending.expected_session_revision,
-            "A new explicit turn",
-        )
-        .await;
-        assert_eq!(
-            started
-                .vault
-                .pending_conversation_resume_request(&actor, origin.run_id)
-                .await
-                .expect("read request after New input"),
-            None,
-            "New input legitimately supersedes the old resume slot"
-        );
-
-        let next = finish_completed_run(&started.vault, &next).await;
-        let session = floe_conversation::SessionStore::load(
-            started.vault.as_ref(),
-            started.person_id,
-            next.session_id,
-        )
-        .await
-        .expect("load Session after new turn");
-        let compaction = started
-            .vault
-            .compact_session(
-                session.id,
-                session.revision,
-                origin.run_id.as_uuid(),
-                "Earlier turn summary".into(),
-            )
-            .await
-            .expect("compact after the request was superseded");
-        assert_eq!(compaction.session.revision, session.revision + 1);
-        assert!(
-            compaction
-                .session
-                .messages
-                .iter()
-                .any(|message| message.turn_id() == next.run_id.as_uuid()),
-            "newer turn remains in the retained suffix"
-        );
-        assert_eq!(count_session_archives(&started.vault, session.id).await, 1);
-    }
+    // Manager archive/compaction coverage lives in the normalized Manager integration path.
+    // The removed tests exercised the retired serialized Session archive store.
 
     fn batch(
         record: &RunRecord,
@@ -3914,13 +2554,13 @@ mod model_selection_owner_tests {
         .expect("advance beyond the settled tool result");
         started.record = started
             .vault
-            .finish_conversation_run(
+            .settle_manager_conversation_run(
                 parent.run_id,
                 parent.aggregate_revision,
                 RunTerminal::from_failure(AgentFailure::BudgetExceeded),
             )
             .await
-            .expect("fail parent with its pending batch recoverable");
+            .expect("settle parent Manager failure with its pending batch recoverable");
         (started, pending_batch, parent_plan)
     }
 
@@ -3942,26 +2582,29 @@ mod model_selection_owner_tests {
             mode: mode.clone(),
             retry_of: None,
         };
+        let request = TurnAdmissionRequest {
+            expert_environment: parent.expert_environment,
+            run_id: RunId::new(),
+            command_id: CommandId::new(),
+            session_id: parent.session_id,
+            expected_session_revision: parent.session_revision,
+            principal: principal.clone(),
+            device_id: parent.device_id.clone(),
+            request_digest: intent.digest(&principal).expect("continuation digest"),
+            mode,
+            retry_of: None,
+            input: TurnInput::ExistingMessage {
+                message_id: parent.user_message_id,
+            },
+        };
+        let identity = floe_conversation::prompts::default_manager_identity(parent.person_id)
+            .expect("derive stable Manager identity");
         let admission = vault
-            .admit_conversation_turn(TurnAdmissionRequest {
-                expert_environment: parent.expert_environment,
-                run_id: RunId::new(),
-                command_id: CommandId::new(),
-                session_id: parent.session_id,
-                expected_session_revision: parent.session_revision,
-                principal: principal.clone(),
-                device_id: parent.device_id.clone(),
-                request_digest: intent.digest(&principal).expect("continuation digest"),
-                mode,
-                retry_of: None,
-                input: TurnInput::ExistingMessage {
-                    message_id: parent.user_message_id,
-                },
-            })
+            .admit_manager_conversation_turn(request, identity)
             .await
-            .expect("admit exact Continue child");
+            .expect("admit exact Manager Continue child");
         match admission {
-            VaultConversationAdmission::Created { record, .. } => record,
+            VaultManagerConversationAdmission::Created(record) => record,
             other => panic!("Continue child was not newly admitted: {other:?}"),
         }
     }
@@ -4092,15 +2735,27 @@ mod model_selection_owner_tests {
                 .conversation_journal_on(&parent_connection, parent)
                 .await
                 .expect("projectable parent journal");
-            let parent_session =
-                floe_conversation::SessionStore::load(vault, started.person_id, parent.session_id)
-                    .await
-                    .expect("load the admitted turn transcript");
+            let parent_history = vault
+                .read_manager_session_history_page(
+                    parent.session_id,
+                    None,
+                    Some(parent.user_message_id),
+                    16,
+                    floe_conversation::MAX_SESSION_BYTES,
+                )
+                .await
+                .expect("read normalized admitted turn history");
             let continuation_snapshot = floe_conversation::project_continuation(
                 &floe_conversation::AdmittedTurn {
                     receipt: parent_receipt.clone(),
-                    transcript: floe_conversation::project_transcript(&parent_session.messages)
-                        .expect("project the admitted transcript"),
+                    transcript: floe_conversation::project_transcript(
+                        &parent_history
+                            .messages
+                            .iter()
+                            .map(|item| item.message.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                    .expect("project the admitted transcript"),
                 },
                 &parent_entries,
             )
@@ -4149,7 +2804,7 @@ mod model_selection_owner_tests {
                 .expect("middle run re-records the inherited batch without claiming it");
             }
             let middle = vault
-                .finish_conversation_run(
+                .settle_manager_conversation_run(
                     middle.run_id,
                     middle.aggregate_revision,
                     RunTerminal::from_failure(AgentFailure::BudgetExceeded),
@@ -4225,7 +2880,7 @@ mod model_selection_owner_tests {
         let middle =
             admit_continue_child(&vault, &parent, "Create an empty intermediate run.").await;
         let middle = vault
-            .finish_conversation_run(
+            .settle_manager_conversation_run(
                 middle.run_id,
                 middle.aggregate_revision,
                 RunTerminal::from_failure(AgentFailure::BudgetExceeded),
@@ -4262,16 +2917,6 @@ mod model_selection_owner_tests {
             .await
             .expect("inject an invalid unpinned intermediate link");
         drop(connection);
-        let before = vault
-            .conversation_run(child.run_id)
-            .await
-            .expect("read child before rejected intent")
-            .expect("child receipt persists");
-        let before_journal_len = vault
-            .conversation_journal(child.run_id)
-            .await
-            .expect("read child journal before rejected intent")
-            .len();
         assert_eq!(
             append_event(
                 &vault,
@@ -4283,21 +2928,13 @@ mod model_selection_owner_tests {
             "the complete chain is validated even though the middle run has no pin"
         );
         drop(vault);
-        let reopened = EncryptedAgentVault::open(&root.0, person_id, keys)
-            .await
-            .expect("reopen the isolated test Vault after corruption is fenced");
-        let after = reopened
-            .conversation_run(child.run_id)
-            .await
-            .expect("read child after rejected intent")
-            .expect("child receipt persists");
-        let after_journal_len = reopened
-            .conversation_journal(child.run_id)
-            .await
-            .expect("read child journal after rejected intent")
-            .len();
-        assert_eq!(after.journal_revision, before.journal_revision);
-        assert_eq!(after_journal_len, before_journal_len);
+        assert_eq!(
+            EncryptedAgentVault::open(&root.0, person_id, keys)
+                .await
+                .err(),
+            Some(AgentFailure::VaultUnavailable),
+            "a Vault with corrupt continuation ancestry fails closed at open"
+        );
     }
 
     #[tokio::test]

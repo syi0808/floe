@@ -798,6 +798,7 @@ dependencies = [
  "floe-connections",
  "floe-context",
  "floe-context-contract",
+ "floe-conversation-contract",
  "floe-execution",
  "floe-experts",
  "floe-inference",

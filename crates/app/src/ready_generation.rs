@@ -181,9 +181,14 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             task_repository,
         )?;
         let budget = floe_conversation::AgentBudget::default();
+        let manager_identity =
+            floe_conversation::prompts::default_manager_identity(actor.person_id)?;
         let conversation = Arc::new(floe_conversation::ConversationService::new(
             floe_conversation::ConversationDependencies {
-                repository: Arc::new(floe_vault::VaultConversationRepository::new(vault.clone())),
+                repository: Arc::new(floe_vault::VaultConversationRepository::new(
+                    vault.clone(),
+                    manager_identity.clone(),
+                )),
                 sessions: vault.clone(),
                 experts: tasks,
                 experts_owner: experts.clone(),
@@ -195,6 +200,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 runtime_epoch: actor.runtime_epoch,
             },
             floe_conversation::ManagerConfig {
+                manager_identity,
                 role_spec: floe_conversation::prompts::manager_role_spec(),
                 purpose: floe_conversation::CONVERSATION_PURPOSE.into(),
                 max_iterations: budget.max_iterations.min(64),

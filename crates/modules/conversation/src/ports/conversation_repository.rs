@@ -7,6 +7,29 @@ use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, RunId};
 use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
+    /// Read a bounded reverse page from normalized Manager custody. Product
+    /// cursor aliases resolve to exact transcript references in the adapter.
+    fn read_session_history_page<'a>(
+        &'a self,
+        session_id: uuid::Uuid,
+        before_message_id: Option<uuid::Uuid>,
+        limit: usize,
+        byte_limit: usize,
+    ) -> BoxFuture<'a, Result<crate::SessionHistoryPage, AgentFailure>> {
+        let _ = (session_id, before_message_id, limit, byte_limit);
+        Box::pin(async { Err(AgentFailure::UnsupportedVersion) })
+    }
+
+    /// Exact retained User text for Continue and linked Resume preparation.
+    fn read_session_user_message<'a>(
+        &'a self,
+        session_id: uuid::Uuid,
+        message_id: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<Option<crate::SessionHistoryMessage>, AgentFailure>> {
+        let _ = (session_id, message_id);
+        Box::pin(async { Err(AgentFailure::UnsupportedVersion) })
+    }
+
     fn recovery_runs<'a>(
         &'a self,
         actor: &'a OwnerActor,

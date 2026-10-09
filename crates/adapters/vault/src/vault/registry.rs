@@ -195,6 +195,90 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         id: Uuid,
     ) -> Result<AgentSession, AgentFailure> {
+        // Bound the stored payload before JSON helpers inspect it. Besides
+        // keeping the normal path within the Session byte budget, this makes
+        // malformed oversized rows fail with the same explicit budget result
+        // as a valid oversized row.
+        let mut size_rows = connection
+            .query(
+                "SELECT length(CAST(payload AS BLOB)) FROM agent_sessions WHERE id = ? LIMIT 2",
+                [id.to_string()],
+            )
+            .await
+            .map_err(database_failure)?;
+        let Some(size_row) = size_rows.next().await.map_err(database_failure)? else {
+            return Err(AgentFailure::NotFound);
+        };
+        let payload_bytes = usize::try_from(size_row.get::<i64>(0).map_err(storage)?)
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+        if payload_bytes > AgentBudget::default().max_session_bytes {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        if size_rows.next().await.map_err(database_failure)?.is_some() {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        drop(size_rows);
+
+        // Manager Sessions keep owner metadata in this bounded payload and
+        // their transcript in normalized Core custody. Inspect the JSON
+        // array length first so a stale profile fails closed without loading
+        // its historical message vector into Rust.
+        let mut header_rows = connection
+            .query(
+                "SELECT revision, json_type(payload, '$.scope'), json_extract(payload, '$.data_classes[0]'), json_array_length(payload, '$.messages') FROM agent_sessions WHERE id = ? LIMIT 2",
+                [id.to_string()],
+            )
+            .await
+            .map_err(database_failure)?;
+        let Some(header) = header_rows.next().await.map_err(database_failure)? else {
+            return Err(AgentFailure::NotFound);
+        };
+        if header_rows
+            .next()
+            .await
+            .map_err(database_failure)?
+            .is_some()
+        {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+        let is_personal_manager = header.get::<Option<String>>(1).map_err(storage)?.as_deref()
+            == Some("null")
+            && header.get::<Option<String>>(2).map_err(storage)?.as_deref() == Some("personal");
+        let revision = header.get::<i64>(0).map_err(storage)?;
+        if is_personal_manager {
+            if revision < 0 || header.get::<Option<i64>>(3).map_err(storage)? != Some(0) {
+                return Err(AgentFailure::UnsupportedVersion);
+            }
+            drop(header_rows);
+            let mut rows = connection
+                .query(
+                    "SELECT revision, json_set(payload, '$.messages', json('[]')) FROM agent_sessions WHERE id = ? AND revision = ? LIMIT 2",
+                    (id.to_string(), revision),
+                )
+                .await
+                .map_err(database_failure)?;
+            let row = rows
+                .next()
+                .await
+                .map_err(database_failure)?
+                .ok_or(AgentFailure::VaultUnavailable)?;
+            let stored_revision = row.get::<i64>(0).map_err(storage)?;
+            let payload = row.get::<String>(1).map_err(storage)?;
+            if rows.next().await.map_err(database_failure)?.is_some() {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            drop(rows);
+            let session: AgentSession = serde_json::from_str(&payload).map_err(unavailable)?;
+            self.payload(&session)?;
+            if session.id != id
+                || integer(session.revision)? != stored_revision
+                || !session.messages.is_empty()
+            {
+                return Err(AgentFailure::VaultUnavailable);
+            }
+            return Ok(session);
+        }
+        drop(header_rows);
         let mut rows = connection
             .query(
                 "SELECT revision, payload FROM agent_sessions WHERE id = ?",

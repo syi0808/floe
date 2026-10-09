@@ -17,6 +17,9 @@ pub const FINALIZATION_OUTPUT_CONTRACT: &str = "Return one concise user-facing a
 pub const MANAGER_OUTPUT_CONTRACT: &str = "Return exactly one supported user-facing answer or one registered delegation. A factual answer about private, current, or changing external state requires admissible support from the user's relevant supplied information, admitted current context, or a settled Expert result. When that support is required but unavailable, return a limitation answer rather than inventing the missing state.";
 #[derive(Clone, Debug)]
 pub struct ManagerConfig {
+    /// The Person-scoped product Manager identity. Expert registry revisions
+    /// and Run/Task identifiers are deliberately not used here.
+    pub manager_identity: floe_conversation_contract::AgentIdentity,
     pub role_spec: RoleSpec,
     pub purpose: String,
     pub max_iterations: u32,
@@ -28,7 +31,12 @@ pub struct ManagerConfig {
 impl ManagerConfig {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.role_spec.validate()?;
+        self.manager_identity
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
         if self.role_spec.role_id != "manager"
+            || self.manager_identity.definition_id != crate::prompts::MANAGER_DEFINITION_ID
+            || self.manager_identity.definition_revision != crate::prompts::MANAGER_ROLE_REVISION
             || self.purpose.trim().is_empty()
             || self.purpose.len() > 512
             || self.max_iterations == 0

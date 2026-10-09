@@ -14,22 +14,29 @@
 //! hydrated under the transcript byte budget.
 
 use super::conversation_core::{
-    Scope, database_error, entry_on, integer, load_head_on, positive_integer, require_core_v3_on,
-    start_error,
+    Scope, database_error, entry_on, integer, load_head_on, positive_integer,
 };
+#[cfg(test)]
+use super::conversation_core::{require_core_v3_on, start_error};
 use super::{EncryptedAgentVault, VaultKeyProvider};
 use floe_conversation_contract::{ConversationFailure, MessageId, TranscriptReference};
 use floe_conversation_core::{
-    ConversationReadTarget, ConversationStoreFailure, MAX_TRANSCRIPT_PAGE_BYTES,
-    MAX_TRANSCRIPT_PAGE_ENTRIES, TranscriptEntry, TranscriptEntryLookup, TranscriptPageBudget,
-    TranscriptReadBoundary, TranscriptReadCursor, TranscriptReversePage,
+    ConversationReadTarget, ConversationStoreFailure, TranscriptReadBoundary,
+};
+#[cfg(test)]
+use floe_conversation_core::{
+    MAX_TRANSCRIPT_PAGE_BYTES, MAX_TRANSCRIPT_PAGE_ENTRIES, TranscriptEntry, TranscriptEntryLookup,
+    TranscriptPageBudget, TranscriptReadCursor, TranscriptReversePage,
 };
 use floe_kernel::PersonId;
-use turso::transaction::{Transaction, TransactionBehavior};
+use turso::transaction::Transaction;
+#[cfg(test)]
+use turso::transaction::TransactionBehavior;
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Return the current exact transcript boundary without initializing or
     /// repairing Conversation Core storage.
+    #[cfg(test)]
     pub(super) async fn read_conversation_head(
         &self,
         target: ConversationReadTarget,
@@ -71,6 +78,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Look up one exact transcript record in a pinned boundary. MessageId
     /// absence has its own typed result; a reference never falls back to a
     /// nearby sequence or a different MessageId.
+    #[cfg(test)]
     pub(super) async fn read_transcript_entry(
         &self,
         target: ConversationReadTarget,
@@ -142,6 +150,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// sequence keys for at most `max_entries + 1` rows; exact entries are
     /// loaded and validated only until the entry or byte budget stops the
     /// page. Results are chronological within the page.
+    #[cfg(test)]
     pub(super) async fn read_previous_conversation_page(
         &self,
         target: ConversationReadTarget,

@@ -1,29 +1,194 @@
 use super::database_failure;
-use std::collections::{BTreeMap, HashSet};
-
 use floe_agent_contract::AgentFailure;
-use floe_conversation::{AgentMessage, AgentSession, SessionRecoveryPointer};
+use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, ArchivedMessage};
+use floe_conversation::{AgentMessage as ManagerMessage, AgentSession, SessionRecoveryPointer};
+use floe_conversation_contract::{ConversationBranchId, ConversationCheckpoint, ConversationId};
+use floe_conversation_core::{ConversationReadTarget, ConversationStoreFailure};
 use serde::{Deserialize, Serialize};
-use turso::transaction::TransactionBehavior;
+use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 use super::context_dependencies::{
-    merge_context_dependency_coverage, read_context_dependency_coverage,
+    hydrate_context_dependency_coverage_on, merge_context_dependency_coverage,
+    preflight_context_dependency_coverage_on, read_context_dependency_coverage,
+};
+use super::conversation_core::{
+    Scope, checkpoint_on, entry_on, hex_digest, load_head_on, owner_error, require_core_v3_on,
+};
+use super::owner_custody::{
+    manager_session_alias_on, manager_session_binding_for_session_on,
+    manager_session_message_alias, owner_input_binding_on, table_present_on,
 };
 use super::*;
+use floe_kernel::RunId;
 
 const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
-const MAX_SEARCH_QUERY_BYTES: usize = 512;
-const MAX_SEARCH_RESULTS: usize = 50;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionSearchHit {
-    pub session_id: Uuid,
-    pub session_revision: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recovery: Option<SessionRecoveryPointer>,
-    pub excerpt: String,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ManagerArchiveManifest {
+    pub(super) person_id: floe_kernel::PersonId,
+    pub(super) session_id: Uuid,
+    pub(super) archive_id: Uuid,
+    pub(super) source_revision: u64,
+    pub(super) through_turn_id: Uuid,
+    pub(super) summary_alias_id: Uuid,
+    pub(super) message_count: usize,
+    pub(super) conversation_id: ConversationId,
+    pub(super) branch_id: ConversationBranchId,
+    pub(super) start_sequence: u64,
+    pub(super) through_sequence: u64,
+    pub(super) through_message_id: Uuid,
+    pub(super) prefix_digest: [u8; 32],
+    pub(super) previous_archive_id: Option<Uuid>,
+    pub(super) summary: String,
+}
+
+impl ManagerArchiveManifest {
+    pub(super) fn recovery(&self) -> SessionRecoveryPointer {
+        SessionRecoveryPointer {
+            archive_id: self.archive_id,
+            source_revision: self.source_revision,
+            through_turn_id: self.through_turn_id,
+            archived_message_count: self.message_count,
+        }
+    }
+
+    pub(super) fn checkpoint(&self) -> Result<ConversationCheckpoint, AgentFailure> {
+        Ok(ConversationCheckpoint {
+            through: floe_conversation_contract::TranscriptReference {
+                conversation_id: self.conversation_id,
+                branch_id: self.branch_id,
+                message_id: floe_conversation_contract::MessageId::from_uuid(
+                    self.through_message_id,
+                )
+                .ok_or(AgentFailure::StorageUnavailable)?,
+                sequence: self.through_sequence,
+            },
+            prefix_digest: self.prefix_digest,
+            summary: self.summary.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ManagerArchiveLookup {
+    Id(Uuid),
+    Checkpoint(u64),
+    SourceRevision(u64),
+}
+
+pub(super) async fn manager_archive_manifest_on(
+    transaction: &Transaction<'_>,
+    person_id: floe_kernel::PersonId,
+    session_id: Uuid,
+    lookup: ManagerArchiveLookup,
+) -> Result<Option<ManagerArchiveManifest>, AgentFailure> {
+    let columns = "SELECT archive_id, source_revision, through_turn_id, summary_alias_id, message_count, conversation_id, branch_id, start_sequence, through_sequence, through_message_id, prefix_digest, previous_archive_id, summary FROM agent_conversation_manager_archives_v3 WHERE person_id = ? AND session_id = ? AND ";
+    let (sql, selector) = match lookup {
+        ManagerArchiveLookup::Id(id) => {
+            (format!("{columns}archive_id = ? LIMIT 2"), id.to_string())
+        }
+        ManagerArchiveLookup::Checkpoint(sequence) => (
+            format!("{columns}through_sequence = ? LIMIT 2"),
+            i64::try_from(sequence)
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .to_string(),
+        ),
+        ManagerArchiveLookup::SourceRevision(revision) => (
+            format!("{columns}source_revision = ? LIMIT 2"),
+            i64::try_from(revision)
+                .map_err(|_| AgentFailure::StorageUnavailable)?
+                .to_string(),
+        ),
+    };
+    let mut rows = transaction
+        .query(
+            &sql,
+            (person_id.to_string(), session_id.to_string(), selector),
+        )
+        .await
+        .map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
+        return Ok(None);
+    };
+    let manifest = parse_manager_archive_row(person_id, session_id, &row)?;
+    if rows.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(Some(manifest))
+}
+
+fn parse_manager_archive_row(
+    person_id: floe_kernel::PersonId,
+    session_id: Uuid,
+    row: &turso::Row,
+) -> Result<ManagerArchiveManifest, AgentFailure> {
+    let parse_uuid = |index| {
+        Uuid::parse_str(&row.get::<String>(index).map_err(storage)?)
+            .map_err(|_| AgentFailure::StorageUnavailable)
+    };
+    let archive_id = parse_uuid(0)?;
+    let source_revision = u64::try_from(row.get::<i64>(1).map_err(storage)?)
+        .ok()
+        .filter(|revision| *revision > 0)
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    let through_turn_id = parse_uuid(2)?;
+    let summary_alias_id = parse_uuid(3)?;
+    let message_count = usize::try_from(row.get::<i64>(4).map_err(storage)?)
+        .ok()
+        .filter(|count| *count > 0 && *count <= floe_agent_contract::MAX_AGENT_MESSAGES)
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    let conversation_id =
+        ConversationId::from_uuid(parse_uuid(5)?).ok_or(AgentFailure::StorageUnavailable)?;
+    let branch_id =
+        ConversationBranchId::from_uuid(parse_uuid(6)?).ok_or(AgentFailure::StorageUnavailable)?;
+    let start_sequence = u64::try_from(row.get::<i64>(7).map_err(storage)?)
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+    let through_sequence = u64::try_from(row.get::<i64>(8).map_err(storage)?)
+        .ok()
+        .filter(|sequence| *sequence > start_sequence)
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    let through_message_id = parse_uuid(9)?;
+    let prefix_digest =
+        super::conversation_core::parse_digest(&row.get::<String>(10).map_err(storage)?)
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
+    let previous_archive_id = row
+        .get::<Option<String>>(11)
+        .map_err(storage)?
+        .map(|value| Uuid::parse_str(&value).map_err(|_| AgentFailure::StorageUnavailable))
+        .transpose()?;
+    let summary = row.get::<String>(12).map_err(storage)?;
+    let message_count_expected = usize::try_from(through_sequence - start_sequence)
+        .ok()
+        .and_then(|count| count.checked_add(usize::from(previous_archive_id.is_some())))
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    if archive_id.is_nil()
+        || through_turn_id.is_nil()
+        || summary_alias_id.is_nil()
+        || through_message_id.is_nil()
+        || summary.is_empty()
+        || summary.len() > MAX_COMPACTION_SUMMARY_BYTES
+        || message_count != message_count_expected
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(ManagerArchiveManifest {
+        person_id,
+        session_id,
+        archive_id,
+        source_revision,
+        through_turn_id,
+        summary_alias_id,
+        message_count,
+        conversation_id,
+        branch_id,
+        start_sequence,
+        through_sequence,
+        through_message_id,
+        prefix_digest,
+        previous_archive_id,
+        summary,
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -34,89 +199,44 @@ pub struct SessionCompactionResult {
     pub summary_coverage: floe_access::DependencyCoverage,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionArchiveSnapshot {
-    pub session: AgentSession,
-    pub recovery: SessionRecoveryPointer,
-    pub coverage_by_turn: BTreeMap<Uuid, floe_access::DependencyCoverage>,
-}
-
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    /// Preserve stored-session decoding checks without rebuilding derived search.
-    pub(super) async fn validate_session_archive_records(&self) -> Result<(), AgentFailure> {
+    /// Check bounded Session headers without hydrating their transcript vector.
+    pub(super) async fn validate_session_records(&self) -> Result<(), AgentFailure> {
         let connection = self.connection()?;
-        for query in [
-            "SELECT id,payload FROM agent_sessions",
-            "SELECT id,payload FROM agent_session_archives",
-        ] {
-            let mut rows = connection
-                .query(query, ())
-                .await
-                .map_err(database_failure)?;
-            while let Some(row) = rows.next().await.map_err(database_failure)? {
-                let _: String = row.get(0).map_err(storage)?;
-                let session: AgentSession =
-                    serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
-                        .map_err(unavailable)?;
-                integer(session.revision)?;
+        let mut rows = connection
+            .query(
+                "SELECT id, revision, json_extract(payload, '$.id'), json_extract(payload, '$.person_id'), json_extract(payload, '$.revision'), json_extract(payload, '$.schema_version'), json_type(payload, '$.messages') FROM agent_sessions",
+                (),
+            )
+            .await
+            .map_err(database_failure)?;
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
+            let id = row.get::<String>(0).map_err(storage)?;
+            let revision = row.get::<i64>(1).map_err(storage)?;
+            let payload_id = row.get::<String>(2).map_err(storage)?;
+            let person_id = row.get::<String>(3).map_err(storage)?;
+            let payload_revision = row.get::<i64>(4).map_err(storage)?;
+            let schema_version = row.get::<i64>(5).map_err(storage)?;
+            let messages_type = row.get::<String>(6).map_err(storage)?;
+            if Uuid::parse_str(&id).is_err()
+                || id != payload_id
+                || Uuid::parse_str(&person_id).is_err()
+                || revision < 0
+                || revision != payload_revision
+                || schema_version != i64::from(floe_agent_contract::AGENT_VERSION)
+                || messages_type != "array"
+            {
+                return Err(AgentFailure::VaultUnavailable);
             }
         }
+        drop(rows);
         Ok(())
     }
 
-    pub async fn search_sessions(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SessionSearchHit>, AgentFailure> {
-        let terms = search_terms(query)?;
-        if limit == 0 || limit > MAX_SEARCH_RESULTS {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let connection = self.connection()?;
-        self.rebuild_session_search(&connection).await?;
-        let predicates = std::iter::repeat_n("instr(lower(body), ?) > 0", terms.len())
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let sql = format!(
-            "SELECT session_id, archive_id, revision, body FROM agent_session_search WHERE {predicates} ORDER BY revision DESC, archive_id = '' DESC LIMIT ?"
-        );
-        let mut parameters: Vec<turso::Value> =
-            terms.iter().cloned().map(turso::Value::from).collect();
-        parameters.push(turso::Value::from(
-            i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?,
-        ));
-        let mut rows = connection
-            .query(&sql, parameters)
-            .await
-            .map_err(database_failure)?;
-        let mut hits = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database_failure)? {
-            let session_id =
-                Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
-            let archive_id = row.get::<String>(1).map_err(storage)?;
-            let session_revision = u64::try_from(row.get::<i64>(2).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?;
-            let recovery = if archive_id.is_empty() {
-                None
-            } else {
-                Some(
-                    self.recovery_pointer(Uuid::parse_str(&archive_id).map_err(unavailable)?)
-                        .await?,
-                )
-            };
-            hits.push(SessionSearchHit {
-                session_id,
-                session_revision,
-                recovery,
-                excerpt: excerpt(&row.get::<String>(3).map_err(storage)?, &terms),
-            });
-        }
-        self.check_access()?;
-        Ok(hits)
-    }
-
-    pub async fn compact_session(
+    /// Compact a Manager history prefix by committing a Core checkpoint and
+    /// an immutable bounded archive manifest alongside the Session CAS. The
+    /// Core payloads remain physically retained in this milestone.
+    pub async fn compact_manager_session(
         &self,
         session_id: Uuid,
         expected_revision: u64,
@@ -128,18 +248,75 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::InvalidInput);
         }
         let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(database_failure)?;
+        let (guard, transaction) = self.journal_transaction(&mut connection).await?;
         let result = async {
-            let source = self.session_on(&transaction, session_id).await?;
-            if source.revision != expected_revision {
+            let mut session = self
+                .manager_session_shell_on(&transaction, session_id)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .ok_or(AgentFailure::UnsupportedVersion)?;
+            let binding = manager_session_binding_for_session_on(
+                &transaction,
+                self.person_id,
+                session_id,
+            )
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?
+            .ok_or(AgentFailure::UnsupportedVersion)?;
+
+            if let Some(existing) = manager_archive_manifest_on(
+                &transaction,
+                self.person_id,
+                session_id,
+                ManagerArchiveLookup::SourceRevision(expected_revision),
+            )
+            .await?
+            {
+                if existing.through_turn_id != through_turn_id || existing.summary != summary {
+                    return Err(AgentFailure::Conflict);
+                }
+                session.revision = expected_revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::Conflict)?;
+                let summary_coverage = read_context_dependency_coverage(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    existing.through_turn_id,
+                )
+                .await?;
+                return Ok(SessionCompactionResult {
+                    session,
+                    recovery: existing.recovery(),
+                    summary_coverage,
+                });
+            }
+            if session.revision != expected_revision
+                || session.active_turn.is_some()
+                || session.pending_output.is_some()
+            {
                 return Err(AgentFailure::Conflict);
             }
-            if source.active_turn.is_some() || source.pending_output.is_some() {
+
+            if let Some(marker) = session.continuation {
+                let current_run = RunId::from_uuid(marker.turn_id)
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                let run = self
+                    .conversation_run_on(&transaction, current_run)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if run.person_id != self.person_id
+                    || run.session_id != session_id
+                    || run.session_revision != session.revision
+                    || run.continuation_level != marker.level
+                    || !matches!(run.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked)
+                    || floe_conversation::project_run_receipt(run)?.continuation().is_none()
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 return Err(AgentFailure::Conflict);
             }
+
             let mut pending_resume = transaction
                 .query(
                     "SELECT 1 FROM agent_conversation_resume_requests WHERE person_id = ? AND session_id = ? AND state = 'pending' LIMIT 1",
@@ -147,329 +324,626 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 )
                 .await
                 .map_err(database_failure)?;
-            let has_pending_resume = pending_resume
-                .next()
-                .await
-                .map_err(database_failure)?
-                .is_some();
+            if pending_resume.next().await.map_err(database_failure)?.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
             drop(pending_resume);
-            if has_pending_resume {
-                // A compaction revision bump would make reconciliation
-                // supersede this durable user resume, even if its origin turn
-                // is outside the selected archive prefix. A New admission
-                // settles the slot as superseded in its own Immediate
-                // transaction before compaction may proceed.
-                return Err(AgentFailure::Conflict);
+
+            if table_present_on(&transaction, "agent_conversation_interactions")
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+            {
+                let mut origins = transaction
+                    .query(
+                        "SELECT DISTINCT origin_run_id FROM agent_conversation_interactions INDEXED BY agent_conversation_interactions_session WHERE person_id = ? AND session_id = ? AND state IN ('pending', 'resolving') LIMIT 65",
+                        (self.person_id.to_string(), session_id.to_string()),
+                    )
+                    .await
+                    .map_err(database_failure)?;
+                let mut live_open_interaction = false;
+                let mut checked = 0usize;
+                while let Some(row) = origins.next().await.map_err(database_failure)? {
+                    if checked == 64 {
+                        return Err(AgentFailure::BudgetExceeded);
+                    }
+                    checked += 1;
+                    let value = row.get::<String>(0).map_err(storage)?;
+                    let id = Uuid::parse_str(&value).map_err(unavailable)?;
+                    let origin_id = RunId::from_uuid(id).ok_or(AgentFailure::StorageUnavailable)?;
+                    let origin = self
+                        .conversation_run_on(&transaction, origin_id)
+                        .await?
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    if origin.person_id != self.person_id || origin.session_id != session_id {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    if origin.session_revision == session.revision {
+                        if !matches!(origin.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked)
+                            || floe_conversation::project_run_receipt(origin)?.resume().is_none()
+                        {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                        live_open_interaction = true;
+                    }
+                }
+                if live_open_interaction {
+                    return Err(AgentFailure::Conflict);
+                }
             }
 
-            if let Some(marker) = source.continuation.as_ref() {
-                let run_id = floe_kernel::RunId::from_uuid(marker.turn_id)
-                    .ok_or(AgentFailure::VaultUnavailable)?;
-                let run = self
-                    .conversation_run_on(&transaction, run_id)
-                    .await?
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if run.person_id != self.person_id || run.session_id != session_id {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                if run.session_revision != source.revision
-                    || run.continuation_level != marker.level
+            let scope = Scope::from_identity(
+                self.person_id,
+                &binding.identity,
+                binding.conversation_id,
+                binding.branch_id,
+            );
+            let head = load_head_on(&transaction, scope)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if super::conversation_core::active_recorder_on(&transaction, scope)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .is_some()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let prior_checkpoint = checkpoint_on(&transaction, scope)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?;
+            let previous_manifest = if let Some(checkpoint) = &prior_checkpoint {
+                let manifest = manager_archive_manifest_on(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    ManagerArchiveLookup::Checkpoint(checkpoint.through.sequence),
+                )
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+                if manifest.checkpoint().map_err(|_| AgentFailure::StorageUnavailable)? != *checkpoint
+                    || manifest.conversation_id != binding.conversation_id
+                    || manifest.branch_id != binding.branch_id
                 {
-                    // Session snapshots reject stale run revisions, while a
-                    // malformed marker/run linkage is corrupt owner evidence.
-                    // Do not advance the revision and leave that inconsistency
-                    // looking like a valid compacted Session.
                     return Err(AgentFailure::StorageUnavailable);
                 }
-                let receipt = floe_conversation::project_run_receipt(run)?;
-                if receipt.continuation().is_none() {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                // Session snapshots issue Continue only from this exact
-                // current Run receipt. Compaction would stale that capability
-                // by advancing the Session revision.
+                Some(manifest)
+            } else {
+                None
+            };
+            let start_sequence = prior_checkpoint
+                .as_ref()
+                .map_or(0, |checkpoint| checkpoint.through.sequence);
+
+            let turn_id = RunId::from_uuid(through_turn_id)
+                .ok_or(AgentFailure::NotFound)?;
+            let run = self
+                .conversation_run_on(&transaction, turn_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            if run.person_id != self.person_id
+                || run.session_id != session_id
+                || !matches!(run.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked | floe_conversation::RunState::Failed | floe_conversation::RunState::Cancelled | floe_conversation::RunState::TimedOut | floe_conversation::RunState::Interrupted)
+                || run.pending_terminal.is_some()
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let run_binding = owner_input_binding_on(&transaction, self.person_id, run.run_id)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let (owner, _, terminal_digest) = self
+                .verified_owner_evidence_on(
+                    &transaction,
+                    run.run_id,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                    run_binding.input,
+                    run_binding.executor_domain,
+                    run_binding.executor_generation,
+                )
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?;
+            if owner.state != floe_conversation_core::OwnerRunState::Terminal
+                || !owner.unresolved_effects.is_empty()
+                || terminal_digest.is_none()
+            {
                 return Err(AgentFailure::Conflict);
             }
 
-            let mut open_interaction_origins = transaction
+            let mut target_sequences = Vec::new();
+            let mut output_rows = transaction
                 .query(
-                    "SELECT DISTINCT origin_run_id FROM agent_conversation_interactions WHERE person_id = ? AND session_id = ? AND state IN ('pending', 'resolving') LIMIT ?",
+                    "SELECT MAX(sequence) FROM agent_conversation_owner_transcript_evidence_v1 WHERE person_id = ? AND session_id = ? AND first_recording_run_id = ?",
+                    (self.person_id.to_string(), session_id.to_string(), through_turn_id.to_string()),
+                )
+                .await
+                .map_err(database_failure)?;
+            if let Some(row) = output_rows.next().await.map_err(database_failure)?
+                && let Some(sequence) = row.get::<Option<i64>>(0).map_err(storage)?
+            {
+                target_sequences.push(u64::try_from(sequence).map_err(unavailable)?);
+            }
+            drop(output_rows);
+            let mut input_rows = transaction
+                .query(
+                    "SELECT input_sequence FROM agent_conversation_owner_transcript_inputs_v1 WHERE person_id = ? AND session_id = ? AND original_owner_run_id = ? LIMIT 2",
+                    (self.person_id.to_string(), session_id.to_string(), through_turn_id.to_string()),
+                )
+                .await
+                .map_err(database_failure)?;
+            if let Some(row) = input_rows.next().await.map_err(database_failure)? {
+                target_sequences.push(
+                    u64::try_from(row.get::<i64>(0).map_err(storage)?)
+                        .map_err(|_| AgentFailure::StorageUnavailable)?,
+                );
+                if input_rows.next().await.map_err(database_failure)?.is_some() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+            }
+            drop(input_rows);
+            let through_sequence = target_sequences
+                .into_iter()
+                .max()
+                .filter(|sequence| *sequence > start_sequence)
+                .ok_or(AgentFailure::NotFound)?;
+            if through_sequence > head.state.settled_prefix
+                || through_sequence > head.state.head_revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let through_entry = entry_on(&transaction, scope, through_sequence)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let target = ConversationReadTarget {
+                identity: binding.identity.clone(),
+                conversation_id: binding.conversation_id,
+                branch_id: binding.branch_id,
+            };
+            let mut newly_archived = Vec::new();
+            let mut projected_bytes = 2usize;
+            let mut summary_coverage = if let Some(manifest) = &previous_manifest {
+                let coverage_header = preflight_context_dependency_coverage_on(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    manifest.through_turn_id,
+                )
+                .await?;
+                let summary = ManagerMessage::Compaction {
+                    turn_id: manifest.through_turn_id,
+                    summary: manifest.summary.clone(),
+                    recovery: manifest.recovery(),
+                };
+                let summary_total_bytes = serde_json::to_vec(&summary)
+                    .map_err(storage)?
+                    .len()
+                    .checked_add(coverage_header.accounted_bytes()?)
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                projected_bytes = projected_bytes
+                    .checked_add(summary_total_bytes)
+                    .filter(|bytes| {
+                        *bytes <= floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES
+                    })
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                Some(
+                    hydrate_context_dependency_coverage_on(
+                        &transaction,
+                        self.person_id,
+                        session_id,
+                        manifest.through_turn_id,
+                        coverage_header,
+                        #[cfg(test)]
+                        &self.context_coverage_payload_hydrations,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
+            for sequence in (start_sequence + 1)..=through_sequence {
+                let entry = entry_on(&transaction, scope, sequence)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                self.validate_producing_task_reference_on(&transaction, &entry)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                let preflight = self
+                    .preflight_owner_entry_on(
+                        &transaction,
+                        &target,
+                        session_id,
+                        &entry,
+                        scope,
+                    )
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                let item_bytes = preflight.encoded_bytes();
+                let next_projected_bytes = projected_bytes
+                    .checked_add(item_bytes)
+                    .filter(|bytes| {
+                        item_bytes <= floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES
+                            && *bytes <= floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES
+                    })
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                let archived_so_far = newly_archived
+                    .len()
+                    .checked_add(usize::from(previous_manifest.is_some()))
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                if archived_so_far >= floe_agent_contract::MAX_ARCHIVE_PROJECTION_MESSAGES {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let message = self
+                    .resolve_manager_transcript_entry_preflighted_on(
+                        &transaction,
+                        session_id,
+                        entry,
+                        preflight,
+                    )
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                if message.encoded_bytes != item_bytes {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                projected_bytes = next_projected_bytes;
+                summary_coverage = Some(match summary_coverage {
+                    Some(existing) => existing
+                        .merge(&message.coverage)
+                        .map_err(|_| AgentFailure::StorageUnavailable)?,
+                    None => message.coverage.clone(),
+                });
+                newly_archived.push(message);
+            }
+            let through_message = newly_archived
+                .last()
+                .ok_or(AgentFailure::NotFound)?;
+            if through_message.message.turn_id() != through_turn_id {
+                return Err(AgentFailure::NotFound);
+            }
+            let archived_message_count = newly_archived
+                .len()
+                .checked_add(usize::from(previous_manifest.is_some()))
+                .ok_or(AgentFailure::BudgetExceeded)?;
+            if archived_message_count > floe_agent_contract::MAX_ARCHIVE_PROJECTION_MESSAGES {
+                return Err(AgentFailure::BudgetExceeded);
+            }
+            let summary_coverage = summary_coverage.ok_or(AgentFailure::StorageUnavailable)?;
+            let recovery = SessionRecoveryPointer {
+                archive_id: Uuid::new_v5(
+                    &session_id,
+                    format!(
+                        "floe.manager.archive.v3:{}:{}:{}",
+                        expected_revision,
+                        through_sequence,
+                        hex_digest(through_entry.prefix_digest),
+                    )
+                    .as_bytes(),
+                ),
+                source_revision: expected_revision,
+                through_turn_id,
+                archived_message_count,
+            };
+            if recovery.archive_id.is_nil() {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let summary_message = ManagerMessage::Compaction {
+                turn_id: through_turn_id,
+                summary: summary.clone(),
+                recovery: recovery.clone(),
+            };
+            let summary_alias_id = manager_session_message_alias(&summary_message);
+            if summary_alias_id.is_nil()
+                || manager_session_alias_on(
+                    &transaction,
+                    self.person_id,
+                    session_id,
+                    summary_alias_id,
+                )
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .is_some()
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let manifest = ManagerArchiveManifest {
+                person_id: self.person_id,
+                session_id,
+                archive_id: recovery.archive_id,
+                source_revision: expected_revision,
+                through_turn_id,
+                summary_alias_id,
+                message_count: archived_message_count,
+                conversation_id: binding.conversation_id,
+                branch_id: binding.branch_id,
+                start_sequence,
+                through_sequence,
+                through_message_id: through_entry.reference.message_id.as_uuid(),
+                prefix_digest: through_entry.prefix_digest,
+                previous_archive_id: previous_manifest.as_ref().map(|manifest| manifest.archive_id),
+                summary: summary.clone(),
+            };
+            let checkpoint = ConversationCheckpoint {
+                through: through_entry.reference,
+                prefix_digest: through_entry.prefix_digest,
+                summary: summary.clone(),
+            };
+            self.apply_conversation_checkpoint_on(
+                &transaction,
+                head.state.reference(),
+                checkpoint,
+            )
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?;
+            transaction
+                .execute(
+                    "INSERT INTO agent_conversation_manager_archives_v3 (person_id, session_id, archive_id, source_revision, through_turn_id, summary_alias_id, message_count, conversation_id, branch_id, start_sequence, through_sequence, through_message_id, prefix_digest, previous_archive_id, summary) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         self.person_id.to_string(),
                         session_id.to_string(),
-                        super::conversations::MAX_RUN_ROWS + 1,
+                        manifest.archive_id.to_string(),
+                        integer(manifest.source_revision)?,
+                        manifest.through_turn_id.to_string(),
+                        manifest.summary_alias_id.to_string(),
+                        i64::try_from(manifest.message_count).map_err(|_| AgentFailure::BudgetExceeded)?,
+                        manifest.conversation_id.as_uuid().to_string(),
+                        manifest.branch_id.as_uuid().to_string(),
+                        integer(manifest.start_sequence)?,
+                        integer(manifest.through_sequence)?,
+                        manifest.through_message_id.to_string(),
+                        hex_digest(manifest.prefix_digest),
+                        manifest.previous_archive_id.map(|id| id.to_string()),
+                        manifest.summary.clone(),
                     ),
                 )
                 .await
                 .map_err(database_failure)?;
-            let mut origin_ids = Vec::new();
-            while let Some(row) = open_interaction_origins
-                .next()
-                .await
-                .map_err(database_failure)?
-            {
-                let value = row.get::<String>(0).map_err(storage)?;
-                let uuid = Uuid::parse_str(&value).map_err(unavailable)?;
-                origin_ids.push(
-                    floe_kernel::RunId::from_uuid(uuid).ok_or(AgentFailure::VaultUnavailable)?,
-                );
-            }
-            drop(open_interaction_origins);
-            if i64::try_from(origin_ids.len()).map_err(|_| AgentFailure::VaultUnavailable)?
-                > super::conversations::MAX_RUN_ROWS
-            {
-                return Err(AgentFailure::VaultUnavailable);
-            }
-            for origin_id in origin_ids {
-                let origin = self
-                    .conversation_run_on(&transaction, origin_id)
-                    .await?
-                    .ok_or(AgentFailure::VaultUnavailable)?;
-                if origin.person_id != self.person_id || origin.session_id != session_id {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                let group = super::conversation_interactions::read_group_on(
-                    &transaction,
-                    self.person_id,
-                    origin_id,
-                )
-                .await?;
-                if group.iter().any(|interaction| {
-                    interaction.person_id != self.person_id
-                        || interaction.session_id != session_id
-                        || interaction.origin_run_id != origin.run_id
-                        || interaction.origin_turn_id != origin.run_id.as_uuid()
-                }) {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                if !group.iter().any(|interaction| {
-                    matches!(
-                        interaction.state,
-                        floe_conversation::InteractionState::Pending
-                            | floe_conversation::InteractionState::Resolving { .. }
-                    )
-                }) {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                if origin.session_revision != source.revision
-                    || !matches!(origin.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked)
-                    || floe_conversation::project_run_receipt(origin)?.resume().is_none()
-                {
-                    // New admission advances the Session revision, making
-                    // any later interaction-triggered child superseded. Keep
-                    // stale nonterminal history without holding compaction.
-                    continue;
-                }
-
-                // Pending and Resolving can still settle to a group containing
-                // a Resolved member. That is sufficient for a future linked
-                // child while this exact origin revision remains current.
-                return Err(AgentFailure::Conflict);
-            }
-
-            let split = source
-                .messages
-                .iter()
-                .rposition(|message| message.turn_id() == through_turn_id)
-                .map(|position| position + 1)
-                .ok_or(AgentFailure::NotFound)?;
-            if split > floe_agent_contract::MAX_AGENT_MESSAGES {
-                return Err(AgentFailure::BudgetExceeded);
-            }
-            let retained_turns: HashSet<_> = source.messages[split..]
-                .iter()
-                .map(AgentMessage::turn_id)
-                .collect();
-            if source.messages[..split]
-                .iter()
-                .any(|message| retained_turns.contains(&message.turn_id()))
-            {
-                return Err(AgentFailure::InvalidInput);
-            }
-            let archived_turns: HashSet<_> = source.messages[..split]
-                .iter()
-                .map(AgentMessage::turn_id)
-                .collect();
-            let mut archived_coverage: Option<floe_access::DependencyCoverage> = None;
-            for turn_id in &archived_turns {
-                let coverage = read_context_dependency_coverage(
-                    &transaction,
-                    self.person_id,
-                    session_id,
-                    *turn_id,
-                )
-                .await?;
-                archived_coverage = Some(match archived_coverage {
-                    Some(existing) => existing
-                        .merge(&coverage)
-                        .map_err(|_| AgentFailure::VaultUnavailable)?,
-                    None => coverage,
-                });
-            }
-            let archive_id = Uuid::new_v4();
-            let recovery = SessionRecoveryPointer {
-                archive_id,
-                source_revision: source.revision,
+            merge_context_dependency_coverage(
+                &transaction,
+                self.person_id,
+                session_id,
                 through_turn_id,
-                archived_message_count: split,
-            };
-            let archive_payload = serde_json::to_string(&source).map_err(storage)?;
-            transaction.execute(
-                "INSERT INTO agent_session_archives (id, session_id, source_revision, through_turn_id, message_count, payload) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    archive_id.to_string(),
-                    session_id.to_string(),
-                    integer(source.revision)?,
-                    through_turn_id.to_string(),
-                    i64::try_from(split).map_err(|_| AgentFailure::BudgetExceeded)?,
-                    archive_payload,
-                ),
-            ).await.map_err(database_failure)?;
-
-            let mut session = source.clone();
+                summary_coverage.clone(),
+            )
+            .await?;
             session.revision = session.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
-            session.messages = std::iter::once(AgentMessage::Compaction {
-                turn_id: through_turn_id,
-                summary,
-                recovery: recovery.clone(),
-            })
-            .chain(source.messages[split..].iter().cloned())
-            .collect();
-            let summary_coverage = archived_coverage.ok_or(AgentFailure::VaultUnavailable)?;
-            {
-                merge_context_dependency_coverage(
-                    &transaction,
-                    self.person_id,
-                    session_id,
-                    through_turn_id,
-                    summary_coverage.clone(),
-                )
-                .await?;
-            }
             let payload = self.payload(&session)?;
-            let changed = transaction.execute(
-                "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
-                (
-                    integer(session.revision)?,
-                    payload,
-                    session_id.to_string(),
-                    integer(expected_revision)?,
-                ),
-            ).await.map_err(database_failure)?;
+            let changed = transaction
+                .execute(
+                    "UPDATE agent_sessions SET revision = ?, payload = ? WHERE id = ? AND revision = ?",
+                    (
+                        integer(session.revision)?,
+                        payload,
+                        session_id.to_string(),
+                        integer(expected_revision)?,
+                    ),
+                )
+                .await
+                .map_err(database_failure)?;
             if changed != 1 {
                 return Err(AgentFailure::Conflict);
             }
-            transaction.execute(
-                "DELETE FROM agent_session_search WHERE session_id = ? AND archive_id = ''",
-                [session_id.to_string()],
-            ).await.map_err(database_failure)?;
-            self.index_session_on(&transaction, &session, "").await?;
-            self.index_session_on(&transaction, &source, &archive_id.to_string())
-                .await?;
-            self.check_access()?;
             Ok(SessionCompactionResult {
                 session,
                 recovery,
                 summary_coverage,
             })
-        }.await;
-        match result {
-            Ok(result) => {
-                transaction.commit().await.map_err(storage)?;
-                Ok(result)
-            }
-            Err(error) => {
-                let _ = transaction.rollback().await;
-                Err(error)
-            }
         }
+        .await;
+        let result = self
+            .finish_conversation_core_transaction(
+                guard,
+                transaction,
+                result.map_err(|failure| match failure {
+                    AgentFailure::BudgetExceeded => ConversationStoreFailure::PageItemExceedsBudget,
+                    failure => owner_error(failure),
+                }),
+            )
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?;
+        self.check_access()?;
+        Ok(result)
     }
 
-    pub async fn recover_session(
+    /// Read one immutable Manager archive by resolving its exact prefix from
+    /// Core. No Session vector or SessionArchive payload is loaded.
+    pub async fn read_manager_session_archive(
         &self,
-        recovery: &SessionRecoveryPointer,
-    ) -> Result<AgentSession, AgentFailure> {
-        Ok(self.recover_session_with_coverage(recovery).await?.session)
-    }
-
-    pub async fn recover_session_with_coverage(
-        &self,
-        recovery: &SessionRecoveryPointer,
-    ) -> Result<SessionArchiveSnapshot, AgentFailure> {
-        if recovery.archive_id.is_nil()
-            || recovery.source_revision == 0
-            || recovery.through_turn_id.is_nil()
-            || recovery.archived_message_count == 0
-            || recovery.archived_message_count > floe_agent_contract::MAX_AGENT_MESSAGES
-        {
-            return Err(AgentFailure::InvalidInput);
+        request: &ArchiveReadRequest,
+    ) -> Result<ArchiveSnapshot, AgentFailure> {
+        request.validate()?;
+        if request.person_id != self.person_id {
+            return Err(AgentFailure::CapabilityDenied);
         }
         let mut connection = self.connection()?;
         let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
             .map_err(database_failure)?;
         let result = async {
-            let mut rows = transaction.query(
-                "SELECT session_id, source_revision, through_turn_id, message_count, payload FROM agent_session_archives WHERE id = ?",
-                [recovery.archive_id.to_string()],
-            ).await.map_err(database_failure)?;
-            let row = rows
-                .next()
+            require_core_v3_on(&transaction)
                 .await
-                .map_err(database_failure)?
-                .ok_or(AgentFailure::NotFound)?;
-            let session: AgentSession = serde_json::from_str(
-                &row.get::<String>(4).map_err(storage)?,
+                .map_err(super::conversation_core::owner_store_failure)?;
+            let binding = manager_session_binding_for_session_on(
+                &transaction,
+                self.person_id,
+                request.session_id,
             )
-            .map_err(unavailable)?;
-            if session.id.to_string() != row.get::<String>(0).map_err(storage)?
-                || session.revision
-                    != u64::try_from(row.get::<i64>(1).map_err(storage)?).map_err(unavailable)?
-                || recovery.source_revision != session.revision
-                || recovery.through_turn_id.to_string() != row.get::<String>(2).map_err(storage)?
-                || recovery.archived_message_count
-                    != usize::try_from(row.get::<i64>(3).map_err(storage)?).map_err(unavailable)?
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?
+            .ok_or(AgentFailure::UnsupportedVersion)?;
+            let manifest = manager_archive_manifest_on(
+                &transaction,
+                self.person_id,
+                request.session_id,
+                ManagerArchiveLookup::Id(request.pointer.archive_id),
+            )
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+            if manifest.recovery().source_revision != request.pointer.source_revision
+                || manifest.recovery().through_turn_id != request.pointer.through_turn_id
+                || manifest.recovery().archived_message_count
+                    != request.pointer.archived_message_count
+                || manifest.conversation_id != binding.conversation_id
+                || manifest.branch_id != binding.branch_id
             {
-                return Err(AgentFailure::VaultUnavailable);
+                return Err(AgentFailure::Conflict);
             }
-            drop(rows);
-            self.payload(&session)?;
-            let archived = session
-                .messages
-                .get(..recovery.archived_message_count)
-                .ok_or(AgentFailure::VaultUnavailable)?;
-            if archived.last().map(AgentMessage::turn_id) != Some(recovery.through_turn_id) {
-                return Err(AgentFailure::VaultUnavailable);
+            if manifest.message_count > request.max_messages {
+                return Err(AgentFailure::BudgetExceeded);
             }
-            let mut coverage_by_turn = BTreeMap::new();
-            for turn_id in archived.iter().map(AgentMessage::turn_id) {
-                if coverage_by_turn.contains_key(&turn_id) {
-                    continue;
+            let target = ConversationReadTarget {
+                identity: binding.identity.clone(),
+                conversation_id: binding.conversation_id,
+                branch_id: binding.branch_id,
+            };
+            let mut messages = Vec::with_capacity(manifest.message_count);
+            let mut encoded_bytes = 2usize;
+            let scope = Scope::from_identity(
+                self.person_id,
+                &binding.identity,
+                binding.conversation_id,
+                binding.branch_id,
+            );
+            if let Some(previous_archive_id) = manifest.previous_archive_id {
+                let previous = manager_archive_manifest_on(
+                    &transaction,
+                    self.person_id,
+                    request.session_id,
+                    ManagerArchiveLookup::Id(previous_archive_id),
+                )
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+                if previous.through_sequence != manifest.start_sequence
+                    || previous.conversation_id != manifest.conversation_id
+                    || previous.branch_id != manifest.branch_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
                 }
-                coverage_by_turn.insert(
-                    turn_id,
-                    read_context_dependency_coverage(
-                        &transaction,
-                        self.person_id,
-                        session.id,
-                        turn_id,
-                    )
-                    .await?,
-                );
+                let coverage_header = preflight_context_dependency_coverage_on(
+                    &transaction,
+                    self.person_id,
+                    request.session_id,
+                    previous.through_turn_id,
+                )
+                .await?;
+                let summary = ManagerMessage::Compaction {
+                    turn_id: previous.through_turn_id,
+                    summary: previous.summary.clone(),
+                    recovery: previous.recovery(),
+                };
+                let message_id = previous.summary_alias_id;
+                let encoded = serde_json::to_vec(&summary).map_err(storage)?.len();
+                let summary_bytes = encoded
+                    .checked_add(coverage_header.accounted_bytes()?)
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                let next_bytes = encoded_bytes
+                    .checked_add(summary_bytes)
+                    .filter(|bytes| *bytes <= request.max_bytes)
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                let coverage = hydrate_context_dependency_coverage_on(
+                    &transaction,
+                    self.person_id,
+                    request.session_id,
+                    previous.through_turn_id,
+                    coverage_header,
+                    #[cfg(test)]
+                    &self.context_coverage_payload_hydrations,
+                )
+                .await?;
+                if coverage
+                    .as_persisted_bytes()
+                    .map_err(|_| AgentFailure::StorageUnavailable)?
+                    .len()
+                    > coverage_header.accounted_bytes()?
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                if next_bytes > request.max_bytes {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                encoded_bytes = next_bytes;
+                messages.push(ArchivedMessage {
+                    turn_id: previous.through_turn_id,
+                    message: floe_conversation::contract_message(&summary, message_id, coverage)?,
+                });
             }
-            self.check_access()?;
-            Ok(SessionArchiveSnapshot {
-                session,
-                recovery: recovery.clone(),
-                coverage_by_turn,
+            for sequence in (manifest.start_sequence + 1)..=manifest.through_sequence {
+                if messages.len() >= request.max_messages {
+                    return Err(AgentFailure::BudgetExceeded);
+                }
+                let entry = entry_on(&transaction, scope, sequence)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                self.validate_producing_task_reference_on(&transaction, &entry)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                let preflight = self
+                    .preflight_owner_entry_on(
+                        &transaction,
+                        &target,
+                        request.session_id,
+                        &entry,
+                        scope,
+                    )
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                let item_bytes = preflight.encoded_bytes();
+                let next_bytes = encoded_bytes
+                    .checked_add(item_bytes)
+                    .filter(|bytes| *bytes <= request.max_bytes)
+                    .ok_or(AgentFailure::BudgetExceeded)?;
+                let resolved = self
+                    .resolve_manager_transcript_entry_preflighted_on(
+                        &transaction,
+                        request.session_id,
+                        entry,
+                        preflight,
+                    )
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                if resolved.encoded_bytes != item_bytes {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                encoded_bytes = next_bytes;
+                let turn_id = resolved.message.turn_id();
+                let message = floe_conversation::contract_message(
+                    &resolved.message,
+                    resolved.alias_id,
+                    resolved.coverage,
+                )?;
+                messages.push(ArchivedMessage { turn_id, message });
+            }
+            if messages.len() != manifest.message_count
+                || messages.last().map(|message| message.turn_id) != Some(manifest.through_turn_id)
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let through = entry_on(&transaction, scope, manifest.through_sequence)
+                .await
+                .map_err(super::conversation_core::owner_store_failure)?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if through.reference.message_id.as_uuid() != manifest.through_message_id
+                || through.prefix_digest != manifest.prefix_digest
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            Ok(ArchiveSnapshot {
+                person_id: self.person_id,
+                session_id: request.session_id,
+                pointer: request.pointer.clone(),
+                messages,
             })
         }
         .await;
         match result {
-            Ok(result) => {
-                transaction.commit().await.map_err(storage)?;
-                Ok(result)
+            Ok(snapshot) => {
+                transaction.commit().await.map_err(database_failure)?;
+                self.check_access()?;
+                snapshot.validate(request)?;
+                Ok(snapshot)
             }
             Err(error) => {
                 let _ = transaction.rollback().await;
@@ -477,137 +951,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
         }
     }
-
-    async fn recovery_pointer(
-        &self,
-        archive_id: Uuid,
-    ) -> Result<SessionRecoveryPointer, AgentFailure> {
-        let connection = self.connection()?;
-        let mut rows = connection.query(
-            "SELECT source_revision, through_turn_id, message_count FROM agent_session_archives WHERE id = ?",
-            [archive_id.to_string()],
-        ).await.map_err(database_failure)?;
-        let row = rows
-            .next()
-            .await
-            .map_err(database_failure)?
-            .ok_or(AgentFailure::VaultUnavailable)?;
-        Ok(SessionRecoveryPointer {
-            archive_id,
-            source_revision: u64::try_from(row.get::<i64>(0).map_err(storage)?)
-                .map_err(unavailable)?,
-            through_turn_id: Uuid::parse_str(&row.get::<String>(1).map_err(storage)?)
-                .map_err(unavailable)?,
-            archived_message_count: usize::try_from(row.get::<i64>(2).map_err(storage)?)
-                .map_err(unavailable)?,
-        })
-    }
-
-    async fn rebuild_session_search(
-        &self,
-        connection: &turso::Connection,
-    ) -> Result<(), AgentFailure> {
-        connection
-            .execute("DELETE FROM agent_session_search", ())
-            .await
-            .map_err(database_failure)?;
-        let mut rows = connection
-            .query("SELECT payload FROM agent_sessions", ())
-            .await
-            .map_err(database_failure)?;
-        while let Some(row) = rows.next().await.map_err(database_failure)? {
-            let session: AgentSession =
-                serde_json::from_str(&row.get::<String>(0).map_err(storage)?)
-                    .map_err(unavailable)?;
-            self.index_session_on(connection, &session, "").await?;
-        }
-        drop(rows);
-        let mut rows = connection
-            .query("SELECT id, payload FROM agent_session_archives", ())
-            .await
-            .map_err(database_failure)?;
-        while let Some(row) = rows.next().await.map_err(database_failure)? {
-            let archive_id = row.get::<String>(0).map_err(storage)?;
-            let session: AgentSession =
-                serde_json::from_str(&row.get::<String>(1).map_err(storage)?)
-                    .map_err(unavailable)?;
-            self.index_session_on(connection, &session, &archive_id)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn index_session_on(
-        &self,
-        connection: &turso::Connection,
-        session: &AgentSession,
-        archive_id: &str,
-    ) -> Result<(), AgentFailure> {
-        let body = session
-            .messages
-            .iter()
-            .map(searchable_message)
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !body.is_empty() {
-            connection.execute(
-                "INSERT INTO agent_session_search (session_id, archive_id, revision, body) VALUES (?, ?, ?, ?)",
-                (session.id.to_string(), archive_id.to_owned(), integer(session.revision)?, body),
-            ).await.map_err(database_failure)?;
-        }
-        Ok(())
-    }
-}
-
-fn searchable_message(message: &AgentMessage) -> String {
-    match message {
-        AgentMessage::Compaction { summary, .. }
-        | AgentMessage::Preamble { text: summary, .. }
-        | AgentMessage::User { text: summary, .. }
-        | AgentMessage::Assistant { text: summary, .. } => summary.clone(),
-        AgentMessage::Capability {
-            capability_id,
-            input,
-            result,
-            ..
-        } => {
-            format!("{capability_id}\n{input}\n{result:?}")
-        }
-        AgentMessage::Delegation { task, .. } => serde_json::to_string(task).unwrap_or_default(),
-        // No searchable user text: the reference carries an opaque id only,
-        // and authoritative status loads from the interaction row.
-        AgentMessage::Interaction { .. } => String::new(),
-    }
-}
-
-fn search_terms(query: &str) -> Result<Vec<String>, AgentFailure> {
-    if query.trim().is_empty() || query.len() > MAX_SEARCH_QUERY_BYTES {
-        return Err(AgentFailure::InvalidInput);
-    }
-    let terms: Vec<_> = query
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .map(str::to_lowercase)
-        .collect();
-    if terms.is_empty() {
-        return Err(AgentFailure::InvalidInput);
-    }
-    Ok(terms)
-}
-
-fn excerpt(body: &str, terms: &[String]) -> String {
-    let matched_line = body
-        .lines()
-        .find(|line| {
-            let line = line.to_lowercase();
-            terms.iter().any(|term| line.contains(term))
-        })
-        .unwrap_or(body);
-    let mut excerpt: String = matched_line.chars().take(160).collect();
-    if matched_line.chars().count() > 160 {
-        excerpt.push_str(" …");
-    }
-    excerpt
 }
 
 fn integer(value: u64) -> Result<i64, AgentFailure> {

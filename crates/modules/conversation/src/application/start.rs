@@ -122,17 +122,18 @@ pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionSt
             {
                 return Err(AgentFailure::Conflict);
             }
-            let original = session
-                .messages
-                .iter()
-                .find_map(|message| match message {
-                    crate::AgentMessage::User {
-                        message_id, text, ..
-                    } if *message_id == source.user_message_id => Some(text),
+            let original = scope
+                .run(
+                    repository
+                        .read_session_user_message(request.session_id, source.user_message_id),
+                )
+                .await?
+                .and_then(|entry| match entry.message {
+                    crate::AgentMessage::User { text, .. } => Some(text),
                     _ => None,
                 })
                 .ok_or(AgentFailure::Conflict)?;
-            if *original != text {
+            if original != text {
                 return Err(AgentFailure::Conflict);
             }
             TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?)
@@ -186,7 +187,15 @@ pub async fn read_session_snapshot<R: ConversationRepository + ?Sized, S: Sessio
         }
         None => None,
     };
-    project_session_snapshot(session, continuation_ref, before_message_id)
+    let history_page = scope
+        .run(repository.read_session_history_page(
+            session_id,
+            before_message_id,
+            256,
+            2 * 1024 * 1024,
+        ))
+        .await?;
+    project_session_snapshot(session, continuation_ref, history_page)
 }
 
 fn validate_session(

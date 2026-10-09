@@ -191,6 +191,346 @@ fn text_turn_completes_and_persists_transcript_receipt_and_events() {
 }
 
 #[test]
+fn manager_normalized_history_pages_exactly_across_reopen() {
+    const TURN_COUNT: usize = 129;
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::RepeatedAnswers(TURN_COUNT),
+    );
+    let recorder = model.recorder();
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let session_id = start_session(&host);
+    let mut run_ids = std::collections::HashSet::new();
+    for _ in 0..TURN_COUNT {
+        let command = start_turn(&host, session_id, USER_TEXT);
+        assert!(run_ids.insert(command.run_id.as_uuid()));
+        assert_eq!(
+            wait_terminal_run(&host, command.run_id).state,
+            RunState::Completed
+        );
+    }
+
+    let latest = read_session(&host, session_id);
+    assert_eq!(latest.messages.len(), 256);
+    assert!(latest.has_earlier_messages);
+    let oldest_visible_id = match latest.messages.first().expect("bounded page is nonempty") {
+        SessionMessage::User { message_id, .. }
+        | SessionMessage::Assistant { message_id, .. }
+        | SessionMessage::Preamble { message_id, .. }
+        | SessionMessage::Compaction { message_id, .. }
+        | SessionMessage::Capability { message_id, .. }
+        | SessionMessage::Delegation { message_id, .. }
+        | SessionMessage::Interaction { message_id, .. } => *message_id,
+    };
+    let earlier = support::read_session_before(&host, session_id, oldest_visible_id);
+    assert_eq!(earlier.messages.len(), 2);
+    assert!(!earlier.has_earlier_messages);
+    let first_turn_id = match &earlier.messages[0] {
+        SessionMessage::User { turn_id, text, .. } if text == USER_TEXT => *turn_id,
+        other => panic!("expected the first retained User input, found {other:?}"),
+    };
+    assert!(matches!(
+        &earlier.messages[1],
+        SessionMessage::Assistant { turn_id, text, .. }
+            if *turn_id == first_turn_id && text == REPLY
+    ));
+
+    let mut all_ids = std::collections::HashSet::new();
+    let mut user_count = 0;
+    for message in earlier.messages.iter().chain(&latest.messages) {
+        let message_id = match message {
+            SessionMessage::User { message_id, .. }
+            | SessionMessage::Assistant { message_id, .. }
+            | SessionMessage::Preamble { message_id, .. }
+            | SessionMessage::Compaction { message_id, .. }
+            | SessionMessage::Capability { message_id, .. }
+            | SessionMessage::Delegation { message_id, .. }
+            | SessionMessage::Interaction { message_id, .. } => *message_id,
+        };
+        assert!(
+            all_ids.insert(message_id),
+            "cursor pages duplicated an alias"
+        );
+        user_count += usize::from(matches!(message, SessionMessage::User { .. }));
+    }
+    assert_eq!(all_ids.len(), 258);
+    assert_eq!(
+        user_count, TURN_COUNT,
+        "every New turn appends one User input"
+    );
+
+    let missing_cursor = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = floe_app::host_scope(
+            Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            Duration::from_secs(15),
+        );
+        services.execute_owner(async move {
+            owners
+                .conversation
+                .get_session(&actor, session_id, Some(Uuid::new_v4()), &scope)
+                .await
+        })
+    });
+    assert_eq!(missing_cursor, Err(AgentFailure::NotFound));
+
+    let scripted = assert_script_clean(&recorder);
+    assert_eq!(scripted.generated.len(), TURN_COUNT);
+    assert_eq!(scripted.plan_bindings.len(), TURN_COUNT * 2);
+    host.shutdown()
+        .expect("close Manager generation before reopen");
+    drop(host);
+
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    let reopened_latest = read_session(&reopened, session_id);
+    let reopened_earlier = support::read_session_before(&reopened, session_id, oldest_visible_id);
+    assert_eq!(reopened_latest.messages, latest.messages);
+    assert_eq!(
+        reopened_latest.has_earlier_messages,
+        latest.has_earlier_messages
+    );
+    assert_eq!(reopened_earlier.messages, earlier.messages);
+    assert_eq!(
+        reopened_earlier.has_earlier_messages,
+        earlier.has_earlier_messages
+    );
+    assert_eq!(assert_script_clean(&recorder).generated.len(), TURN_COUNT);
+    reopened
+        .shutdown()
+        .expect("close reopened Manager generation");
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn blocked_expert_binding_publishes_textless_manager_interaction_history() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleExpertFlow,
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Blocked);
+    assert!(receipt.output.is_none());
+
+    let session = read_session(&host, session_id);
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::Delegation { turn_id, task, .. }
+            if *turn_id == command.run_id.as_uuid()
+                && task.state == floe_agent_contract::TaskState::Blocked
+    )));
+    assert!(session.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::Interaction { turn_id, interaction_kind, .. }
+            if *turn_id == command.run_id.as_uuid()
+                && *interaction_kind == floe_agent_contract::UserInteractionKind::ExpertBinding
+    )));
+    let scripted = assert_script_clean(&recorder);
+    assert_eq!(scripted.generated.len(), 1);
+    host.shutdown().expect("close blocked Manager generation");
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleBlockedResumeFlow,
+    );
+    let recorder = model.recorder();
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_source_transport(&model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    let session_id = start_session(&host);
+    let origin = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    assert_eq!(
+        wait_terminal_run(&host, origin.run_id).state,
+        RunState::Blocked
+    );
+    let original_user_message_id = read_session(&host, session_id)
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            SessionMessage::User { message_id, .. } => Some(*message_id),
+            _ => None,
+        })
+        .expect("blocked origin has its exact normalized User input");
+
+    let interactions = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = floe_app::host_scope(
+            Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            Duration::from_secs(30),
+        );
+        services.execute_owner(async move {
+            owners
+                .conversation
+                .list_interactions(&actor, session_id, &scope)
+                .await
+        })
+    })
+    .expect("read exact blocked Manager interactions");
+    let [interaction] = interactions.as_slice() else {
+        panic!("expected one blocked Expert binding interaction, found {interactions:?}");
+    };
+    assert_eq!(
+        interaction.interaction_kind,
+        floe_agent_contract::UserInteractionKind::ExpertBinding
+    );
+    assert_eq!(interaction.origin_run_id, origin.run_id);
+    let floe_conversation::InteractionTarget::ExpertBinding { review } = &interaction.target else {
+        panic!("blocked binding interaction did not retain its exact review")
+    };
+    let candidate = review
+        .candidate_refs_and_labels
+        .iter()
+        .find(|candidate| {
+            candidate.label == "Synthetic QA Calendar"
+                && candidate.availability == floe_experts::CandidateAvailability::Available
+        })
+        .expect("the exact blocked Task review includes the configured Calendar candidate");
+    let review_ref = review.review_ref.clone();
+    let binding_revision = review.binding_revision;
+    let candidate_ref = candidate.candidate_ref;
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = floe_app::host_scope(
+            Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            Duration::from_secs(30),
+        );
+        services.execute_owner(async move {
+            owners
+                .experts
+                .replace_binding(
+                    &actor,
+                    floe_kernel::CommandId::from_uuid(Uuid::new_v4())
+                        .ok_or(AgentFailure::InvalidInput)?,
+                    review_ref,
+                    binding_revision,
+                    vec![candidate_ref],
+                    &scope,
+                )
+                .await
+                .map_err(floe_kernel::CommandFailure::into_failure)
+        })
+    })
+    .expect("bind the exact candidate from the blocked Task's review");
+    let refresh_command_id = Uuid::new_v4();
+    let deadline = Instant::now() + WAIT_TIMEOUT;
+    let linked = loop {
+        let interaction_id = interaction.interaction_id;
+        let expected_revision = interaction.revision;
+        let result = support::with_ready(&host, |services, caller, owners| {
+            let actor = caller.owner_actor();
+            let scope = floe_app::host_scope(
+                Uuid::new_v4(),
+                floe_execution::Cancellation::new(),
+                Duration::from_secs(30),
+            );
+            services.execute_owner(async move {
+                owners
+                    .conversation
+                    .refresh_interaction(
+                        &actor,
+                        floe_conversation::RefreshInteraction {
+                            command_id: refresh_command_id,
+                            interaction_id,
+                            session_id,
+                            expected_revision,
+                        },
+                        &scope,
+                    )
+                    .await
+            })
+        });
+        let result = match result {
+            Ok(result) => result,
+            // Keep the exact command ID: if admission committed before the
+            // transient storage error, the repository returns its durable
+            // receipt instead of scheduling a second Resume.
+            Err(floe_kernel::CommandFailure::Indeterminate(
+                floe_agent_contract::AgentFailure::StorageBusy,
+            )) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(failure) => panic!("refresh the durable linked Resume receipt: {failure:?}"),
+        };
+        assert_eq!(
+            result.interaction.state,
+            floe_conversation::InteractionStatus::Resolved
+        );
+        if let Some(linked) = result.linked {
+            break linked;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "linked Resume admission timed out"
+        );
+        std::thread::yield_now();
+    };
+    assert_ne!(linked.run_id, origin.run_id);
+    let resumed = wait_terminal_run(&host, linked.run_id);
+    assert_eq!(
+        resumed.state,
+        RunState::Completed,
+        "linked Resume terminal issue: {:?}; unresolved model attempts: {:?}",
+        resumed.issue,
+        resumed.unresolved_attempts
+    );
+    assert_eq!(resumed.resume_of, Some(origin.run_id));
+    assert_eq!(resumed.user_message_id, original_user_message_id);
+
+    let history = read_session(&host, session_id);
+    assert_eq!(
+        history
+            .messages
+            .iter()
+            .filter(|message| matches!(message, SessionMessage::User { .. }))
+            .count(),
+        1,
+        "linked Resume must not append another copy of the original User input"
+    );
+    assert!(matches!(
+        history.messages.first(),
+        Some(SessionMessage::User { message_id, .. })
+            if *message_id == original_user_message_id
+    ));
+    assert!(history.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::Delegation { turn_id, task, .. }
+            if *turn_id == origin.run_id.as_uuid()
+                && task.state == floe_agent_contract::TaskState::Blocked
+    )));
+    assert!(history.messages.iter().any(|message| matches!(
+        message,
+        SessionMessage::Assistant { turn_id, text, .. }
+            if *turn_id == linked.run_id.as_uuid()
+                && text == "I resumed with the original request and no new source result."
+    )));
+    let script = assert_script_clean(&recorder);
+    assert_eq!(script.generated.len(), 2);
+    assert!(script.generated_bindings.iter().all(|binding| {
+        binding.consumer == floe_conversation::CONVERSATION_CONSUMER && binding.task_id.is_none()
+    }));
+    host.shutdown()
+        .expect("close Manager generation after linked Resume");
+}
+
+#[test]
 fn typed_product_router_keeps_command_identity_and_observer_drop_does_not_cancel_run() {
     let (barrier, entered, _release) = GenerateBarrier::new();
     let model = ScriptedModel::new(

@@ -477,40 +477,6 @@ pub fn apply_terminal(
         return Err(AgentFailure::Interrupted);
     }
     let mut session = session.clone();
-    for message in terminal_messages(record.run_id, terminal)? {
-        if let AgentMessage::Delegation {
-            task,
-            execution_receipt,
-            ..
-        } = &message
-        {
-            let prior = session
-                .messages
-                .iter()
-                .filter_map(|stored| match stored {
-                    AgentMessage::Delegation {
-                        task: previous,
-                        execution_receipt: reference,
-                        ..
-                    } if previous.task_id == task.task_id => Some((previous, reference)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            if prior.len() > 1
-                || prior.first().is_some_and(|(previous, reference)| {
-                    *previous != task || *reference != execution_receipt
-                })
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            // A continued Run re-journals actual immutable Task evidence, but
-            // the causal Session transcript shows that same acknowledged Task once.
-            if !prior.is_empty() {
-                continue;
-            }
-        }
-        session.messages.push(message);
-    }
     session.usage = accounting.usage;
     session.active_turn = None;
     session.continuation = (terminal.output.is_none()

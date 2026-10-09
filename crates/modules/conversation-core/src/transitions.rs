@@ -79,6 +79,10 @@ pub struct OwnerRunEvidence {
     pub record_digest: [u8; 32],
     /// Owner record references whose effects are still unresolved.
     pub unresolved_effects: Vec<Uuid>,
+    /// Unresolved model attempts from the same owner accounting projection.
+    /// This lets narrowly scoped recovery distinguish a late Task result from
+    /// the separate model uncertainty that keeps its recorder open.
+    pub unresolved_model_attempts: Vec<Uuid>,
 }
 
 impl OwnerRunEvidence {
@@ -91,12 +95,26 @@ impl OwnerRunEvidence {
             || self.record_digest == [0; 32]
             || self.unresolved_effects.len() > 512
             || self.unresolved_effects.iter().any(Uuid::is_nil)
+            || self.unresolved_model_attempts.len() > self.unresolved_effects.len()
+            || self.unresolved_model_attempts.iter().any(Uuid::is_nil)
         {
             return Err(ConversationFailure::OwnerEvidenceMismatch);
         }
         self.input.validate()?;
-        let mut seen = HashSet::new();
-        if self.unresolved_effects.iter().any(|id| !seen.insert(*id)) {
+        let mut seen_effects = HashSet::new();
+        if self
+            .unresolved_effects
+            .iter()
+            .any(|id| !seen_effects.insert(*id))
+        {
+            return Err(ConversationFailure::OwnerEvidenceMismatch);
+        }
+        let mut seen_attempts = HashSet::new();
+        if self
+            .unresolved_model_attempts
+            .iter()
+            .any(|id| !seen_attempts.insert(*id) || !seen_effects.contains(id))
+        {
             return Err(ConversationFailure::OwnerEvidenceMismatch);
         }
         Ok(())
@@ -247,6 +265,19 @@ pub struct RecordingRequest {
     pub message: ConversationMessage,
     pub contribution_id: LogicalContributionId,
     pub producing_task: Option<TaskEvidenceReference>,
+}
+
+/// Neutral proof that an owner-authenticated Task result was first committed
+/// after the originating Run entered terminal recovery. The owner adapter
+/// derives `result_digest` from the exact Run journal receipt and supplies an
+/// admitted Task reference only when the actual Task owner receipt exists.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveredTaskContribution {
+    pub task_id: TaskId,
+    pub result_digest: [u8; 32],
+    pub producing_task: Option<TaskEvidenceReference>,
+    pub current_executor_generation: u64,
+    pub generation_fence: Option<OwnerGenerationFence>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -542,6 +573,76 @@ pub fn record_entry(
     request: RecordingRequest,
     facts: RecordingFacts,
 ) -> Result<RecordingTransition, ConversationFailure> {
+    record_entry_with_owner_state(request, facts, Some(OwnerRunState::Working))
+}
+
+/// Append an exact Task result discovered by owner recovery after a terminal
+/// request while the original recorder is still open. The caller must supply
+/// the owner-verified Task receipt reference; this path never grants general
+/// post-terminal output authority.
+pub fn record_task_recovery_entry(
+    request: RecordingRequest,
+    recovery: RecoveredTaskContribution,
+    facts: RecordingFacts,
+) -> Result<RecordingTransition, ConversationFailure> {
+    request.recorder.validate()?;
+    if let Some(receipt) = facts.stored_receipt {
+        return replay_recording_entry(request, receipt);
+    }
+    let owner = facts
+        .owner
+        .as_ref()
+        .ok_or(ConversationFailure::OwnerEvidenceMismatch)?;
+    if request.recorder.executor_domain != ExecutorDomain::HostRun
+        || !recovery.task_id.is_valid()
+        || recovery.result_digest == [0; 32]
+        || !matches!(
+            owner.state,
+            OwnerRunState::Terminal | OwnerRunState::PendingTerminal
+        )
+        || request.message.origin != MessageOrigin::Host
+        || request.message.evidence.is_none()
+        || owner
+            .unresolved_effects
+            .contains(&recovery.task_id.as_uuid())
+        || recovery.producing_task != request.producing_task
+    {
+        return Err(ConversationFailure::OwnerEvidenceMismatch);
+    }
+    match (
+        &recovery.generation_fence,
+        recovery.current_executor_generation,
+    ) {
+        (None, current) if current == request.recorder.executor_generation => {}
+        (Some(fence), current)
+            if current > request.recorder.executor_generation
+                && fence.domain == request.recorder.executor_domain
+                && fence.old_generation == request.recorder.executor_generation
+                && fence.current_generation == current
+                && fence.fence_revision == current
+                && fence.evidence_digest != [0; 32] => {}
+        _ => return Err(ConversationFailure::OwnerEvidenceMismatch),
+    }
+    match (
+        request.message.task_id,
+        request.producing_task.as_ref(),
+        facts.verified_task_reference.as_ref(),
+    ) {
+        (Some(message_task), Some(producing_task), Some(verified_task))
+            if message_task == recovery.task_id
+                && producing_task.task_id() == recovery.task_id
+                && verified_task == producing_task => {}
+        (None, None, None) if recovery.producing_task.is_none() => {}
+        _ => return Err(ConversationFailure::OwnerEvidenceMismatch),
+    }
+    record_entry_with_owner_state(request, facts, None)
+}
+
+fn record_entry_with_owner_state(
+    request: RecordingRequest,
+    facts: RecordingFacts,
+    required_state: Option<OwnerRunState>,
+) -> Result<RecordingTransition, ConversationFailure> {
     request.recorder.validate()?;
     if let Some(receipt) = facts.stored_receipt {
         return replay_recording_entry(request, receipt);
@@ -561,7 +662,21 @@ pub fn record_entry(
         .owner
         .as_ref()
         .ok_or(ConversationFailure::OwnerEvidenceMismatch)?;
-    validate_owner_for_recorder(owner, &request.recorder, OwnerRunState::Working)?;
+    owner.validate()?;
+    if owner.run_id != request.recorder.run_id
+        || owner.person_id != request.recorder.identity.person_id
+        || owner.input != request.recorder.input
+        || owner.executor_generation != request.recorder.executor_generation
+        || owner.domain != request.recorder.executor_domain
+        || required_state.is_some_and(|required| owner.state != required)
+        || (required_state.is_none()
+            && !matches!(
+                owner.state,
+                OwnerRunState::Terminal | OwnerRunState::PendingTerminal
+            ))
+    {
+        return Err(ConversationFailure::OwnerEvidenceMismatch);
+    }
     validate_head_scope(
         &facts.head,
         &request.recorder.identity,

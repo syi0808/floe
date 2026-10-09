@@ -13,21 +13,6 @@ pub(super) const CORE: &[SchemaObject] = &[
     ),
 ];
 
-pub(super) const ARCHIVE: &[SchemaObject] = &[
-    SchemaObject::table(
-        "agent_session_archives",
-        "CREATE TABLE agent_session_archives (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, source_revision INTEGER NOT NULL, through_turn_id TEXT NOT NULL, message_count INTEGER NOT NULL, payload TEXT NOT NULL)",
-    ),
-    SchemaObject::index(
-        "agent_session_archives_session",
-        "CREATE INDEX agent_session_archives_session ON agent_session_archives(session_id, source_revision)",
-    ),
-    SchemaObject::table(
-        "agent_session_search",
-        "CREATE TABLE agent_session_search (session_id TEXT NOT NULL, archive_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session_id, archive_id))",
-    ),
-];
-
 pub(super) const KNOWLEDGE: &[SchemaObject] = &[
     SchemaObject::marker(
         "knowledge_store_schema",
@@ -328,15 +313,15 @@ pub(super) const CONVERSATION_CORE_OUTPUTS_V2: &[SchemaObject] = &[
 /// Optional owner-defined typed Session evidence. This family is created only
 /// by an explicit typed-history write transaction, never by Vault creation or
 /// open/read inspection.
-pub(super) const TYPED_HISTORY_V1: &[SchemaObject] = &[
+pub(super) const TYPED_HISTORY_V2: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_typed_history_schema",
-        1,
-        "CREATE TABLE agent_conversation_typed_history_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+        2,
+        "CREATE TABLE agent_conversation_typed_history_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
     ),
     SchemaObject::table(
         "agent_conversation_typed_history_entries",
-        "CREATE TABLE agent_conversation_typed_history_entries (person_id TEXT NOT NULL, owner_namespace TEXT NOT NULL CHECK (owner_namespace = 'floe.conversation.session'), session_id TEXT NOT NULL, entry_id TEXT NOT NULL, turn_id TEXT NOT NULL, provenance TEXT NOT NULL CHECK (provenance IN ('owner_recorded', 'imported_legacy_unproven')), schema_id TEXT NOT NULL CHECK (length(schema_id) BETWEEN 1 AND 128), schema_version INTEGER NOT NULL CHECK (schema_version > 0), payload_byte_length INTEGER NOT NULL, digest TEXT NOT NULL CHECK (length(digest) = 64), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 2097152), PRIMARY KEY (person_id, owner_namespace, session_id, entry_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+        "CREATE TABLE agent_conversation_typed_history_entries (person_id TEXT NOT NULL, owner_namespace TEXT NOT NULL CHECK (owner_namespace = 'floe.conversation.session'), session_id TEXT NOT NULL, entry_id TEXT NOT NULL, turn_id TEXT NOT NULL, provenance TEXT NOT NULL CHECK (provenance = 'owner_recorded'), schema_id TEXT NOT NULL CHECK (length(schema_id) BETWEEN 1 AND 128), schema_version INTEGER NOT NULL CHECK (schema_version = 2), payload_byte_length INTEGER NOT NULL, digest TEXT NOT NULL CHECK (length(digest) = 64), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 2097152), PRIMARY KEY (person_id, owner_namespace, session_id, entry_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
     ),
     SchemaObject::index(
         "agent_conversation_typed_history_session_turn",
@@ -351,11 +336,27 @@ pub(super) const TYPED_HISTORY_V1: &[SchemaObject] = &[
 /// Optional immutable proofs joining owner Session evidence and exact Core
 /// transcript entries. The family has one stored meaning and is initialized
 /// only by an explicit composed owner/Core write.
-pub(super) const CONVERSATION_OWNER_CUSTODY_V1: &[SchemaObject] = &[
+pub(super) const CONVERSATION_OWNER_CUSTODY_V2: &[SchemaObject] = &[
     SchemaObject::marker(
-        "agent_conversation_owner_custody_schema",
-        1,
-        "CREATE TABLE agent_conversation_owner_custody_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+        "agent_conversation_owner_custody_schema_v2",
+        3,
+        "CREATE TABLE agent_conversation_owner_custody_schema_v2 (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 3))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_manager_session_bindings_v2",
+        "CREATE TABLE agent_conversation_manager_session_bindings_v2 (person_id TEXT NOT NULL, session_id TEXT NOT NULL, identity_json TEXT NOT NULL CHECK (length(CAST(identity_json AS BLOB)) BETWEEN 1 AND 4096), conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, binding_json TEXT NOT NULL CHECK (length(CAST(binding_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, session_id), UNIQUE (person_id, conversation_id, branch_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_manager_session_aliases_v2",
+        "CREATE TABLE agent_conversation_manager_session_aliases_v2 (person_id TEXT NOT NULL, session_id TEXT NOT NULL, alias_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, PRIMARY KEY (person_id, session_id, alias_id), UNIQUE (person_id, conversation_id, branch_id, sequence, message_id), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, message_id) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, message_id), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_manager_archives_v3",
+        "CREATE TABLE agent_conversation_manager_archives_v3 (person_id TEXT NOT NULL, session_id TEXT NOT NULL, archive_id TEXT NOT NULL, source_revision INTEGER NOT NULL CHECK (source_revision > 0), through_turn_id TEXT NOT NULL, summary_alias_id TEXT NOT NULL, message_count INTEGER NOT NULL CHECK (message_count BETWEEN 1 AND 256), conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0), through_sequence INTEGER NOT NULL CHECK (through_sequence > start_sequence), through_message_id TEXT NOT NULL, prefix_digest TEXT NOT NULL CHECK (length(prefix_digest) = 64), previous_archive_id TEXT, summary TEXT NOT NULL CHECK (length(CAST(summary AS BLOB)) BETWEEN 1 AND 16384), PRIMARY KEY (person_id, session_id, archive_id), UNIQUE (person_id, session_id, source_revision), UNIQUE (person_id, session_id, summary_alias_id), UNIQUE (person_id, conversation_id, branch_id, through_sequence), FOREIGN KEY (session_id) REFERENCES agent_sessions(id), FOREIGN KEY (person_id, conversation_id, branch_id, through_sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, through_message_id) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, message_id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_manager_archives_checkpoint_v3",
+        "CREATE INDEX agent_conversation_manager_archives_checkpoint_v3 ON agent_conversation_manager_archives_v3 (person_id, conversation_id, branch_id, through_sequence)",
     ),
     SchemaObject::table(
         "agent_conversation_owner_transcript_inputs_v1",
@@ -382,8 +383,8 @@ pub(super) const CONVERSATION_OWNER_CUSTODY_V1: &[SchemaObject] = &[
 pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_conversation_interaction_schema",
-        1,
-        "CREATE TABLE agent_conversation_interaction_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+        2,
+        "CREATE TABLE agent_conversation_interaction_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 2))",
     ),
     SchemaObject::table(
         "agent_conversation_interactions",
@@ -400,6 +401,10 @@ pub(super) const INTERACTIONS: &[SchemaObject] = &[
     SchemaObject::index(
         "agent_conversation_interactions_run",
         "CREATE INDEX agent_conversation_interactions_run ON agent_conversation_interactions (origin_run_id, state, interaction_id)",
+    ),
+    SchemaObject::index(
+        "agent_conversation_interactions_session",
+        "CREATE INDEX agent_conversation_interactions_session ON agent_conversation_interactions (person_id, session_id, created_at, interaction_id)",
     ),
 ];
 

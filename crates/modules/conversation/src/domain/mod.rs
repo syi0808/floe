@@ -89,6 +89,27 @@ pub struct SessionReceipt {
     pub session_revision: u64,
 }
 
+/// Bounded normalized history page for product Session reads and transient
+/// model-context projection. `alias_id` preserves the public cursor contract;
+/// `transcript_sequence` lets required old inputs be merged without reordering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionHistoryMessage {
+    pub alias_id: Uuid,
+    pub transcript_sequence: u64,
+    /// Exact encoded Core entry, typed evidence, and current coverage bytes
+    /// charged to the enclosing bounded page.
+    pub encoded_bytes: usize,
+    pub coverage: DependencyCoverage,
+    pub message: crate::turn::AgentMessage,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionHistoryPage {
+    pub messages: Vec<SessionHistoryMessage>,
+    pub has_earlier_messages: bool,
+    pub encoded_bytes: usize,
+}
+
 impl SessionReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         validate_principal(&self.principal).map_err(|_| AgentFailure::StorageUnavailable)?;

@@ -65,8 +65,6 @@ pub use service::{
     ResolveInteraction,
 };
 
-mod task_interactions;
-
 mod session_projection;
 pub use session_projection::{ArtifactSummary, SessionMessage, SessionSnapshot, TaskSummary};
 

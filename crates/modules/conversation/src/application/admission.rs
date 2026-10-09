@@ -62,7 +62,7 @@ where
     {
         return Err(AgentFailure::Conflict);
     }
-    let text = derive_origin_text(repository, &request, &session, &origin).await?;
+    let text = derive_origin_text(repository, &request, &origin).await?;
     Ok(PreparedResume {
         session,
         mode: TurnMode::Resume(request.resume),
@@ -74,21 +74,18 @@ where
 /// The original user text identified by durable admission. Resume children
 /// append no user message and retain this same identity across the lineage.
 async fn derive_origin_text<Repository: ConversationRepository>(
-    _repository: &Repository,
+    repository: &Repository,
     request: &ResumePreparationRequest,
-    session: &crate::turn::AgentSession,
     origin: &RunReceipt,
 ) -> Result<String, AgentFailure> {
     if origin.session_id != request.session_id || origin.principal != request.principal {
         return Err(AgentFailure::Conflict);
     }
-    session
-        .messages
-        .iter()
-        .find_map(|message| match message {
-            crate::turn::AgentMessage::User {
-                message_id, text, ..
-            } if *message_id == origin.user_message_id => Some(text.clone()),
+    repository
+        .read_session_user_message(request.session_id, origin.user_message_id)
+        .await?
+        .and_then(|entry| match entry.message {
+            crate::AgentMessage::User { text, .. } => Some(text),
             _ => None,
         })
         .ok_or(AgentFailure::Conflict)

@@ -65,113 +65,73 @@ external write or crash recovery behavior.
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.
 
-### Conversation Core custody (not connected to production callers)
+### Production Manager conversation custody
 
-`floe-conversation-contract` defines role-neutral Person/agent-assignment,
-Conversation/branch, Message, transcript, recorder and checkpoint values.
-`floe-conversation-core` supplies deterministic append, recorder open/output/
-close/retirement, replay/conflict and checkpoint transitions. The Host owns
-scheduling, command occupancy and dispatch authority. Core has no pending-input
-FIFO or queued-work selection: a recorder opens a fresh Run against an exact
-retained inbound reference, agent identity, recorder epoch and executor
-domain/generation. A fresh New Run appends one input; an exact owner replay
-returns its original binding and receipt. Continue may reuse the retained
-input without appending it again. Internal Core-composed linked Resume now
-calls the same transaction-scoped owner primitive as the public owner-only
-Resume wrapper. It requires the source Run's persisted Core binding and exact
-retained input receipt; it does not create a binding from caller-supplied
-digests. The child Run, resume-slot claim, child owner binding and fresh
-recorder receipt commit in the same Immediate Vault transaction, with no new
-transcript input. Exact claimed-child replay returns its stored Core and
-recorder receipts before mutable Session and executor-generation fences.
-Conflicting group, identity or binding evidence fails closed. The standalone
-owner-only API keeps its existing behavior and does not retrofit Core rows.
-This is an internal capability checkpoint only: Manager and Expert production
-callers remain on their existing paths until a later cutover.
-Inputs and generated outputs share a
-monotonic transcript sequence, but each output contribution is independently
-identified and may carry an owner-verified Task execution receipt. That receipt
-is separate from the recorder Run's execution-Task binding. Exact stored
-receipts replay before mutable owner-generation checks and do not rebind or
-redispatch. A reused Message ID with changed content, evidence or Task link
-conflicts.
+Conversation owns Manager product admission, Session compare-and-swap, Run
+lifecycle, interaction display/correlation, cancellation and recovery. Core
+owns role-neutral transcript integrity, recording receipts and checkpoint
+custody. Vault composes the owner transition, Run journal update, typed message,
+Core entry and evidence link in one transaction. Run journals remain the sole
+authority for model effects and Expert Task execution; Core is not a scheduler
+or a second effect journal.
 
-The Core close transition can advance only from verified owner settlement and
-protection evidence. Current Vault owner records do not yet expose settlement
-through the neutral transcript sequence, so the Vault adapter keeps the
-settled prefix unchanged. Stale retirement requires durable owner generation
-fencing plus terminal or pending-terminal evidence; unresolved effects remain
-uncertain and block retirement. `TaskExecution` recorder ownership remains
-unsupported until its executor-generation adapter exists. These transitions do
-not claim pending-batch takeover, dispatch authority or production cutover.
+The default Manager has a stable identity per Person: deterministic instance
+and assignment IDs, definition `manager-role`, and the current prompt-policy
+revision (`MANAGER_ROLE_REVISION`, currently 8). Run IDs, Task IDs and the
+mutable Expert registry revision do not define Manager identity. Vault stores
+the exact Session-to-Conversation/branch binding. If the pinned definition
+changes, Conversation selects a new identity-bound conversation instead of
+reinterpreting prior history.
 
-Vault stores Core revision 3 plus output-extension revision 2. The recorder
-tables are created only for a new family or explicit Core use in a supported
-Vault without Core, and owner/Core writes can compose in one Vault transaction
-through internal primitives. Owner revisions and transcript revisions remain
-separate. It reuses the recognized Core and output-extension marker names with
-values 3 and 2, so older binaries reject the changed meaning before reading
-normalized rows. A Core revision-2 or output-extension revision-1 marker is
-rejected before writes; the previous bytes remain untouched, with no silent reinterpretation,
-historical import or reset. Startup validates stored recorder receipts and
-transcript commitments. Transcript pages use stable sequence cursors and
-bounded entry and UTF-8 byte budgets.
+Manager Sessions retain a bounded owner metadata/CAS shell; the growing
+serialized `AgentSession.messages` vector is not a history authority. User and
+generated contributions live as normalized typed owner records linked to the
+neutral Core transcript. New appends exactly one User entry. Continue and
+linked Resume resolve and reuse that exact retained User entry, open a fresh
+Run and recorder, and append no User duplicate. Continue preserves a pending
+batch, cursor and model selection only while that work remains pending; a
+Continue without pending work and a linked Resume start fresh model work. The
+original Task producer remains distinct from the Manager recorder. Exact ACK
+retries return the durable receipt without dispatch.
 
-The optional owner-custody-v1 family is a separate stored meaning, initialized
-only by explicit composed owner/Core writes. Its named unique Core-input key
-maps a Person/conversation/branch/sequence/MessageId inbound record to the
-owner Session, retained User message and original New Run; later Continue and
-Resume Runs link to that same mapping. A distinct immutable output link binds
-the complete typed-message reference and digest to the exact generated Core
-entry, owner Session/turn, logical contribution, first recording Run, and
-original Task execution receipt when one exists. The owner writer derives the
-opaque Core digest and Task evidence from the typed payload plus the exact
-stored Task receipt and parent journal. Bounded reverse-input and transcript-
-link reads use explicit keys and never create or repair schema. Existing
-unbound rows are not backfilled, and inbound mapping alone does not fabricate
-typed evidence. The live composer supports Assistant, Capability, admitted
-Delegation, owner-validated Unadmitted Delegation, and Interaction. Interaction
-requires a current `read_interaction` result whose validated Person, Session,
-origin Run/turn and kind match; it creates a neutral Host transcript record
-with empty display text and preserves the exact typed reference. Historical
-Interaction output does not freeze status or grant a decision: current owner
-state remains authoritative on replay. An Unadmitted Delegation requires the
-exact producer Run's DelegationIntent/DelegationResult pair and a validated
-Unadmitted TaskReceipt matching its Task ID, principal, selected agent and
-definition, and snapshot, with no stored Task record. Its typed snapshot keeps
-the attempted Task ID and no execution receipt; Core has no producing-Task
-reference or task ID. Admitted Delegation retains the stronger actual Task
-snapshot, receipt and parent-journal checks. User, Preamble and Compaction
-remain outside this generated terminal-output slice. A review harness built
-from the exact c025 source rejected the new family as
-`catalog/unexpected_object` and returned UnsupportedVersion from Vault open.
-It ran against a disposable fixture after the writer and host lock were
-released; database bytes and the complete catalog were identical before and
-after. This remains an internal prerequisite: no Manager or Expert production
-caller uses the composer.
+Product head, reverse-page and exact-message reads resolve typed evidence from
+normalized storage. Public cursor aliases are persisted separately from Core
+Message IDs. Missing, ambiguous, stale or mismatched aliases return explicit
+errors; reverse-page byte budgets count Core envelopes, hydrated typed payloads
+and live coverage, and reads do not hydrate the whole transcript first.
+Textless Interaction entries retain their structured owner reference.
 
-Conversation also exposes an explicit pure preparation step for one bounded
-legacy `AgentSession` snapshot. It checks the exact source-byte SHA-256,
-expected Person/Session/revision, and the same owner-shell admission rules used
-by Vault. Typed messages retain their source order and current public cursor
-aliases, including Preamble/Compaction occurrence ordinals. The frozen archive
-namespace is separate from live owner-recorded history; prepared provenance is
-`ImportedLegacyUnproven`, coverage and external references remain unproven,
-and no execution authority is created. The caller supplies a prepared-record
-output byte budget, capped at 16 MiB for finite preparation bookkeeping; it is
-separate from the 2 MiB raw-source bound and is not a model, context, or history
-quota. The measured record JSON includes typed message data, source ordinal,
-alias, and unproven authority status; it excludes retained raw bytes, shell
-fields, archive identity, and in-memory overhead. This step retains raw source
-bytes and does not verify references or quiescence, write records or an import
-receipt, activate storage, migrate startup, or cut over production callers.
-Typed history transaction import and compaction remain later work.
+Supported Manager outputs, Tool results, Delegation results and Interaction
+evidence are recorded with deterministic contribution and alias identities in
+the same transaction as the corresponding owner journal/evidence. Admitted
+Delegation resolves the actual Task snapshot and execution receipt against the
+producer Run journal. Blocked publication commits the owner interaction and
+typed/Core evidence before terminal settlement and recorder close. During late
+recovery, a newly authenticated TaskResult can be recorded while the Run is
+terminal or pending-terminal and its original recorder remains open for an
+unresolved model attempt. Core grants this narrow recovered Task contribution
+under the existing custody fence only after Vault proves the exact TaskResult
+receipt; no Working state is fabricated and unresolved model accounting stays
+uncertain. Custody closes only after owner settlement proves no remaining
+uncertain work.
 
-This slice implements generic recorder custody only. The current
-Conversation/Manager and Expert production execution paths, Run journal
-integration, and stored Session history are not cut over. `MessageOrigin` is
-supplied only by a host-verified boundary; a model role or an agent identity is
-not authentication or an authority grant.
+Compaction commits an exact completed Core prefix, summary, merged current
+coverage, archive manifest and Session CAS together. Archive reads reconstruct
+the exact typed prefix from normalized Core entries. This milestone does not
+physically prune transcript payloads. Active turns, pending batches, open
+interactions, Continue origins, pending Resume slots, uncertain effects and
+archive references remain protected. Unknown coverage stays Unknown, and
+source revocation continues to apply to summaries.
+
+Fresh development profiles are the supported activation scope. There is no
+automatic legacy Session import, migration chain, dual read/write or reset.
+Existing incompatible profiles remain untouched and fail closed at the stored
+meaning/version check; no database or key is deleted. Manager production
+history does not fall back to serialized Session vectors. Persistent isolated
+Expert conversations and their Task-to-Run/history-pin cutover are the next
+functional milestone. Expert execution remains a genuine Task owner and source
+of Manager evidence; no Expert learning loop is added and A2A remains a mapping
+boundary.
 
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
@@ -215,7 +175,7 @@ Responsibilities do not collapse across this chain:
 - Access owns source processing permission and admission, consumption, revalidation and release fences.
 - Provider adapters resolve private credentials and execute transport.
 
-The Agent contract's `PromptAssembly` owns the stable-instruction limit: 9,216 UTF-8 bytes including rendered separators, accommodating the revision-7 Manager policy with a maximum-size Persona, with each component and Persona still bounded to 4,096 bytes. Rust device-reasoning and server transports use `MAX_STABLE_INSTRUCTIONS_BYTES`; the neutral DeviceModel request and Go `/v1/agent` enforce the same byte boundary before model I/O. This limit does not enlarge token budgets, response limits, deadlines, Foundation context reservation or transport-body limits.
+The Agent contract's `PromptAssembly` owns the stable-instruction limit: 9,216 UTF-8 bytes including rendered separators, accommodating the revision-8 Manager policy with a maximum-size Persona, with each component and Persona still bounded to 4,096 bytes. Rust device-reasoning and server transports use `MAX_STABLE_INSTRUCTIONS_BYTES`; the neutral DeviceModel request and Go `/v1/agent` enforce the same byte boundary before model I/O. This limit does not enlarge token budgets, response limits, deadlines, Foundation context reservation or transport-body limits.
 
 ### Gateway model budget profile (R3a)
 
@@ -287,7 +247,7 @@ Generic `ToolDescriptor`, `ToolPort`, `ModelStep::CallTool`, provider Tool wire 
 
 Manager orchestration guidance is owned by Conversation and remains independent of the installed Expert roster. Agent Cards describe purpose and capabilities; they do not grant source access or prescribe routing policy. Selection and evidence sufficiency remain model judgments, while existing host contracts continue to enforce identity, authorization, output shape, budgets and external effects.
 
-The revision-7 Manager policy permits factual claims about private, current or changing external state only with relevant user-supplied information, admitted current Context or a settled Expert result covering the claim's scope and time. When required support is missing, the Manager delegates to a suitable advertised Expert if allowed, otherwise states the limitation and answers only the supported remainder. Cards are discovery metadata, not observations or authority. Failed, blocked, unavailable or partial observations cannot be silently widened into success or full coverage; external-change success requires an observed successful result. This is model-visible production policy: `ManagerPayloadValidator` still validates structure, not arbitrary natural-language truth. The pre-cutover Foundation evaluation remains historical evidence, not qualification of the intended Gateway Primary; ADR 0034 defines the separate Primary/Fallback evaluation and defers typed-grounding follow-up until that evaluation.
+The revision-8 Manager policy permits factual claims about private, current or changing external state only with relevant user-supplied information, admitted current Context or a settled Expert result covering the claim's scope and time. When required support is missing, the Manager delegates to a suitable advertised Expert if allowed, otherwise states the limitation and answers only the supported remainder. Cards are discovery metadata, not observations or authority. Failed, blocked, unavailable or partial observations cannot be silently widened into success or full coverage; external-change success requires an observed successful result. This is model-visible production policy: `ManagerPayloadValidator` still validates structure, not arbitrary natural-language truth. The pre-cutover Foundation evaluation remains historical evidence, not qualification of the intended Gateway Primary; ADR 0034 defines the separate Primary/Fallback evaluation and defers typed-grounding follow-up until that evaluation.
 
 Provider adapters preserve the supplied instructions and catalog. They may describe native call mechanics, but do not append a separate delegation preference or infer tool visibility from user-language substrings. The assembled stable-instruction limit is 9216 UTF-8 bytes across Rust provider preparation, the native input contract and the server Agent endpoint; individual prompt-component, Persona and total transport limits remain separate.
 

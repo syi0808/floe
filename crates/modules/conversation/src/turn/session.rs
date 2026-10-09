@@ -75,10 +75,9 @@ impl AgentSession {
         }
     }
 
-    /// Validate the owner-level Session snapshot invariants shared by the
-    /// encrypted Vault read/write path and explicit frozen-snapshot
-    /// preparation. This is shape and owner admission only; it does not prove
-    /// historical coverage or resolve message references.
+    /// Validate the owner-level Session snapshot invariants used by the
+    /// encrypted Vault read/write path. This is shape and owner admission only;
+    /// it does not prove historical coverage or resolve message references.
     pub fn validate_owner_snapshot(
         &self,
         expected_person_id: PersonId,

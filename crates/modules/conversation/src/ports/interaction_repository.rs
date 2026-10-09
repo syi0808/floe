@@ -80,6 +80,15 @@ pub trait InteractionRepository: Send + Sync {
         origin_run_id: RunId,
     ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>>;
 
+    /// Bounded Session interaction query using the owner Session index and
+    /// current device. Implementations must not enumerate every Session Run.
+    fn list_session_interactions<'a>(
+        &'a self,
+        person_id: PersonId,
+        session_id: Uuid,
+        device_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>>;
+
     /// Persist decision intent and move the lifecycle forward. An identical
     /// command id rejoins the recorded decision before any revision check; a
     /// reused command id with a different digest conflicts, as do races on a

@@ -767,55 +767,25 @@ where
     ) -> BoxFuture<'a, Result<Vec<InteractionSnapshot>, AgentFailure>> {
         Box::pin(async move {
             self.inner.check(actor)?;
-            let session = scope
+            // Validate the exact product Session through a single normalized
+            // entry or its pristine header. Never hydrate AgentSession's
+            // growing messages vector to enumerate interaction owners.
+            scope
                 .run(
                     self.inner
                         .dependencies
-                        .sessions
-                        .load(actor.person_id, session_id),
+                        .repository
+                        .read_session_history_page(session_id, None, 1, crate::MAX_SESSION_BYTES),
                 )
                 .await?;
-            if session.person_id != actor.person_id
-                || session.id != session_id
-                || session.scope.is_some()
-            {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let mut runs = session
-                .messages
-                .iter()
-                .map(AgentMessage::turn_id)
-                .collect::<std::collections::BTreeSet<_>>();
-            if let Some(active) = session.active_turn {
-                runs.insert(active);
-            }
-            let mut records = Vec::new();
-            for id in runs {
-                let run_id = RunId::from_uuid(id).ok_or(AgentFailure::StorageUnavailable)?;
-                let Some(run) = self.read_run(actor, run_id, scope).await? else {
-                    continue;
-                };
-                if run.session_id != session_id || run.device_id != actor.device_id {
-                    continue;
-                }
-                let group = scope
-                    .run(
-                        self.inner
-                            .dependencies
-                            .repository
-                            .list_run_interactions(actor.person_id, run_id),
-                    )
-                    .await?;
-                for record in group {
-                    if record.session_id != session_id {
-                        return Err(AgentFailure::StorageUnavailable);
-                    }
-                    if records.len() >= 64 {
-                        return Err(AgentFailure::BudgetExceeded);
-                    }
-                    records.push(record);
-                }
-            }
+            let mut records = scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .list_session_interactions(actor.person_id, session_id, &actor.device_id),
+                )
+                .await?;
             records.sort_by_key(|record| (record.created_at_unix_ms, record.id));
             let mut snapshots = Vec::new();
             for record in records {

@@ -14,7 +14,7 @@ use super::session::{AgentMessage, MAX_SESSION_BYTES};
 
 pub const TYPED_AGENT_MESSAGE_OWNER_NAMESPACE: &str = "floe.conversation.session";
 pub const TYPED_AGENT_MESSAGE_SCHEMA_ID: &str = "floe.conversation.agent-message";
-pub const TYPED_AGENT_MESSAGE_SCHEMA_VERSION: u32 = 1;
+pub const TYPED_AGENT_MESSAGE_SCHEMA_VERSION: u32 = 2;
 
 /// Absolute ceiling on serialized AgentMessage payload bytes. The admissible
 /// payload is smaller when the measured serialized reference consumes part of
@@ -24,29 +24,25 @@ pub const MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES: usize = MAX_SESSION_BYTES;
 pub const MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES: usize = MAX_SESSION_BYTES;
 
 const TYPED_AGENT_MESSAGE_DIGEST_DOMAIN: &[u8] =
-    b"floe-conversation-typed-agent-message-envelope-v1\0";
+    b"floe-conversation-typed-agent-message-envelope-v2\0";
 
-/// Provenance class for the owner evidence row. Imported values are reserved
-/// for the future explicit snapshot-import gate; this module performs no import.
+/// Provenance class for an owner-authored Manager contribution.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TypedAgentMessageProvenance {
     OwnerRecorded,
-    ImportedLegacyUnproven,
 }
 
 impl TypedAgentMessageProvenance {
     pub fn as_storage_value(self) -> &'static str {
         match self {
             Self::OwnerRecorded => "owner_recorded",
-            Self::ImportedLegacyUnproven => "imported_legacy_unproven",
         }
     }
 
     pub fn from_storage_value(value: &str) -> Result<Self, AgentFailure> {
         match value {
             "owner_recorded" => Ok(Self::OwnerRecorded),
-            "imported_legacy_unproven" => Ok(Self::ImportedLegacyUnproven),
             _ => Err(AgentFailure::UnsupportedVersion),
         }
     }
