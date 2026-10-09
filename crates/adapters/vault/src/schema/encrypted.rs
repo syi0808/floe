@@ -436,6 +436,37 @@ pub(super) const TASKS: &[SchemaObject] = &[
     ),
 ];
 
+/// Optional Expert Task to neutral-Core custody. This family is initialized
+/// only by Task admission after proving that the profile has no legacy Task
+/// rows whose missing Run mapping would otherwise be ambiguous.
+pub(super) const EXPERT_TASK_CONVERSATIONS_V1: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_expert_task_conversation_schema_v1",
+        1,
+        "CREATE TABLE agent_expert_task_conversation_schema_v1 (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))",
+    ),
+    SchemaObject::table(
+        "agent_expert_task_conversation_bindings_v1",
+        "CREATE TABLE agent_expert_task_conversation_bindings_v1 (person_id TEXT NOT NULL, binding_key TEXT NOT NULL CHECK (length(binding_key) = 64), key_json TEXT NOT NULL CHECK (length(CAST(key_json AS BLOB)) BETWEEN 1 AND 4096), identity_json TEXT NOT NULL CHECK (length(CAST(identity_json AS BLOB)) BETWEEN 1 AND 4096), conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, PRIMARY KEY (person_id, binding_key), UNIQUE (person_id, conversation_id, branch_id))",
+    ),
+    SchemaObject::table(
+        "agent_expert_task_conversation_runs_v1",
+        "CREATE TABLE agent_expert_task_conversation_runs_v1 (person_id TEXT NOT NULL, task_id TEXT NOT NULL, execution_id TEXT NOT NULL, executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), binding_key TEXT NOT NULL CHECK (length(binding_key) = 64), conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, run_id TEXT NOT NULL, input_json TEXT NOT NULL CHECK (length(CAST(input_json AS BLOB)) BETWEEN 1 AND 262144), input_commitment TEXT NOT NULL CHECK (length(input_commitment) = 64), input_sequence INTEGER CHECK (input_sequence IS NULL OR input_sequence > 0), input_message_id TEXT, input_reference_json TEXT CHECK (input_reference_json IS NULL OR length(CAST(input_reference_json AS BLOB)) BETWEEN 1 AND 1024), open_receipt_json TEXT CHECK (open_receipt_json IS NULL OR length(CAST(open_receipt_json AS BLOB)) BETWEEN 1 AND 8192), close_receipt_json TEXT CHECK (close_receipt_json IS NULL OR length(CAST(close_receipt_json AS BLOB)) BETWEEN 1 AND 8192), retirement_receipt_json TEXT CHECK (retirement_receipt_json IS NULL OR length(CAST(retirement_receipt_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, task_id, execution_id, executor_generation), UNIQUE (person_id, run_id), UNIQUE (person_id, conversation_id, branch_id, input_sequence, input_message_id), FOREIGN KEY (person_id, binding_key) REFERENCES agent_expert_task_conversation_bindings_v1(person_id, binding_key))",
+    ),
+    SchemaObject::table(
+        "agent_expert_task_conversation_admissions_v1",
+        "CREATE TABLE agent_expert_task_conversation_admissions_v1 (person_id TEXT NOT NULL, task_id TEXT NOT NULL, execution_id TEXT NOT NULL, executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), input_commitment TEXT NOT NULL CHECK (length(input_commitment) = 64), reference_json TEXT NOT NULL CHECK (length(CAST(reference_json AS BLOB)) BETWEEN 1 AND 8192), PRIMARY KEY (person_id, task_id, execution_id, executor_generation), FOREIGN KEY (person_id, task_id, execution_id, executor_generation) REFERENCES agent_expert_task_conversation_runs_v1(person_id, task_id, execution_id, executor_generation))",
+    ),
+    SchemaObject::table(
+        "agent_expert_task_conversation_reservations_v1",
+        "CREATE TABLE agent_expert_task_conversation_reservations_v1 (person_id TEXT NOT NULL, binding_key TEXT NOT NULL CHECK (length(binding_key) = 64), task_id TEXT NOT NULL, execution_id TEXT NOT NULL, executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), PRIMARY KEY (person_id, binding_key), UNIQUE (person_id, task_id, execution_id, executor_generation), FOREIGN KEY (person_id, binding_key) REFERENCES agent_expert_task_conversation_bindings_v1(person_id, binding_key), FOREIGN KEY (person_id, task_id, execution_id, executor_generation) REFERENCES agent_expert_task_conversation_runs_v1(person_id, task_id, execution_id, executor_generation))",
+    ),
+    SchemaObject::table(
+        "agent_expert_task_conversation_entries_v1",
+        "CREATE TABLE agent_expert_task_conversation_entries_v1 (person_id TEXT NOT NULL, conversation_id TEXT NOT NULL, branch_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), task_id TEXT NOT NULL, execution_id TEXT NOT NULL, executor_generation INTEGER NOT NULL CHECK (executor_generation > 0), journal_revision INTEGER NOT NULL CHECK (journal_revision >= 0), event_digest TEXT NOT NULL CHECK (length(event_digest) = 64), coverage_json TEXT NOT NULL CHECK (length(CAST(coverage_json AS BLOB)) BETWEEN 1 AND 16384), evidence_json TEXT NOT NULL CHECK (length(CAST(evidence_json AS BLOB)) BETWEEN 1 AND 131072), evidence_bytes INTEGER NOT NULL CHECK (evidence_bytes BETWEEN 1 AND 131072), PRIMARY KEY (person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, conversation_id, branch_id, sequence) REFERENCES agent_conversation_core_v3_entries(person_id, conversation_id, branch_id, sequence), FOREIGN KEY (person_id, task_id, execution_id, executor_generation) REFERENCES agent_expert_task_conversation_runs_v1(person_id, task_id, execution_id, executor_generation))",
+    ),
+];
+
 pub(super) const CLEANUP: &[SchemaObject] = &[
     SchemaObject::marker(
         "agent_context_cleanup_schema",

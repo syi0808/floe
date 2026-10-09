@@ -51,6 +51,9 @@ pub struct ExpertProjectionRequest {
     pub actor: OwnerActor,
     pub execution: TaskExecutionKey,
     pub request: ModelProjectionRequest,
+    /// Coverage recorded with each historical typed message. Context rechecks
+    /// these records against current source/grant authority.
+    pub history_coverage: Vec<DependencyCoverage>,
     pub context: AgentContext,
     pub prompt: floe_agent_contract::prompts::PromptAssembly,
     pub package_data_class: floe_agent_contract::DataClass,

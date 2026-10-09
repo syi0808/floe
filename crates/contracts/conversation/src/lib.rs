@@ -11,6 +11,7 @@ pub use identity::{
     AgentIdentity, AgentInstanceId, AssignmentId, ConversationBranchId, ConversationId,
     ConversationReference, LogicalContributionId, MessageId, TranscriptReference,
 };
+pub use message::MAX_CONVERSATION_MESSAGE_BYTES;
 pub use message::{
     AdmissionDisposition, AdmissionReceipt, AdmissionResult, AdmissionTarget,
     ConversationCheckpoint, ConversationMessage, MessageAdmissionRequest, MessageEvidenceReference,

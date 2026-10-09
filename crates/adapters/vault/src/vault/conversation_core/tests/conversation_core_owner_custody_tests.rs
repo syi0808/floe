@@ -5,10 +5,288 @@ use crate::vault::owner_custody::{ConversationRunOutputReceipt, ConversationRunO
 use crate::vault::owner_transcript_reads::{
     OwnerResolvedTranscriptEntry, OwnerTranscriptPageBudget, OwnerTranscriptTypedEvidence,
 };
+use floe_agent_contract::ModelConversationEntry;
 use floe_conversation::TypedAgentMessageProvenance;
 use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
+
+fn expert_task_fixture(
+    person_id: floe_kernel::PersonId,
+    executor_generation: u64,
+    task_id: floe_kernel::TaskId,
+    assignment_id: Uuid,
+    definition_revision: u64,
+    package_version: &str,
+    message: &str,
+) -> (TaskRecord, floe_experts::ExpertTaskConversationDraft) {
+    let admission = ExpertAdmissionIdentity {
+        registry_instance_id: Uuid::new_v4(),
+        assignment_id,
+        installation_id: Uuid::new_v4(),
+        package: floe_agent_contract::PackageRef {
+            kind: PackageKind::Expert,
+            id: "fixture.expert".into(),
+            version: package_version.into(),
+        },
+        definition_revision,
+    };
+    let key = floe_experts::ExpertConversationKey::from_admission(person_id, &admission)
+        .expect("derive authenticated Expert assignment conversation key");
+    let snapshot = TaskSnapshot {
+        task_id,
+        parent_run_id: Some(Uuid::new_v4()),
+        principal: person_id.to_string(),
+        agent_id: "fixture.expert".into(),
+        definition_revision,
+        state: TaskState::Submitted,
+        result: None,
+        artifacts: vec![],
+        coverage: DependencyCoverage::Unknown,
+        issue: None,
+        blockage: None,
+    };
+    let record = TaskRecord {
+        snapshot,
+        admission,
+        selection: ExpertExecutionSelection::without_requirements(1)
+            .expect("valid empty source selection"),
+        invocation_key: floe_agent_contract::InvocationKey::new(),
+        request_digest: [33; 32],
+        aggregate_revision: 1,
+        executor_generation,
+        execution_id: Uuid::new_v4(),
+        device_id: "device-expert-history-test".into(),
+        catalog_revision: definition_revision,
+        model_allowance: floe_execution::budget::ModelReservationCeiling {
+            tokens: 128,
+            cost_micros: 128,
+        },
+        maximum_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+        journal_revision: 0,
+        journal_digest: Sha256::digest(
+            serde_json::to_vec(&(
+                "floe.execution-journal.sha256.v1",
+                Vec::<floe_agent_contract::JournalEntry>::new(),
+            ))
+            .expect("encode empty Task journal"),
+        )
+        .into(),
+        receipt: None,
+    };
+    let draft = floe_experts::ExpertTaskConversationDraft {
+        key,
+        run_id: floe_kernel::RunId::new(),
+        input_message_id: MessageId::new(),
+        input_command_id: CommandId::new(),
+        delegated_message: message.into(),
+        input_coverage: DependencyCoverage::Independent,
+    };
+    (record, draft)
+}
+
+async fn start_expert_task(scenario: &Scenario, record: &TaskRecord) -> TaskRecord {
+    let expert_input = scenario
+        .vault()
+        .expert_task_admission_reference(record.execution())
+        .await
+        .expect("read the durable Expert admission reference");
+    scenario
+        .vault()
+        .compare_and_swap_task(
+            record.snapshot.task_id,
+            record.aggregate_revision,
+            record.executor_generation,
+            TaskSnapshot {
+                state: TaskState::Working,
+                ..record.snapshot.clone()
+            },
+            expert_input,
+        )
+        .await
+        .expect("start exact admitted Expert Task and append its pinned input")
+}
+
+async fn append_scripted_expert_answer(
+    scenario: &Scenario,
+    working: &TaskRecord,
+    output: &str,
+    lose_output_ack: bool,
+) -> Result<(), AgentFailure> {
+    append_scripted_expert_answer_with_coverage(
+        scenario,
+        working,
+        output,
+        lose_output_ack,
+        DependencyCoverage::Independent,
+    )
+    .await
+}
+
+async fn append_scripted_expert_answer_with_coverage(
+    scenario: &Scenario,
+    working: &TaskRecord,
+    output: &str,
+    lose_output_ack: bool,
+    coverage: DependencyCoverage,
+) -> Result<(), AgentFailure> {
+    use floe_agent_contract::{
+        BatchCursor, JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelStep, ModelUsage, PreparedModelPlan, ProcessingBoundary,
+        ProjectionRef, ValidatedModelBatch,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let vault = scenario.vault();
+    vault
+        .append_task_journal(
+            working.execution(),
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: Some(working.snapshot.task_id),
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: working.snapshot.principal.clone(),
+                    device_id: working.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([61; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: working.execution_id,
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::Answer {
+                        text: output.into(),
+                        artifacts: vec![],
+                    }],
+                    catalog_revision: working.catalog_revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![],
+                    projection_coverage: coverage,
+                    delegation_context: None,
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await?;
+    if lose_output_ack {
+        vault
+            .registry_transaction_ack_loss
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    vault
+        .append_task_journal(
+            working.execution(),
+            "output",
+            JournalEvent::Output {
+                text: output.into(),
+                artifacts: vec![],
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+fn next_expert_task_for(
+    template: &TaskRecord,
+    person_id: floe_kernel::PersonId,
+    admission: floe_experts::ExpertAdmissionIdentity,
+    definition_revision: u64,
+    message: &str,
+) -> (TaskRecord, floe_experts::ExpertTaskConversationDraft) {
+    let task_id = TaskId::new();
+    let mut record = template.clone();
+    record.snapshot = TaskSnapshot {
+        task_id,
+        parent_run_id: Some(Uuid::new_v4()),
+        principal: person_id.to_string(),
+        agent_id: admission.package.id.clone(),
+        definition_revision,
+        state: TaskState::Submitted,
+        result: None,
+        artifacts: vec![],
+        coverage: DependencyCoverage::Unknown,
+        issue: None,
+        blockage: None,
+    };
+    record.admission = admission.clone();
+    record.selection = ExpertExecutionSelection::without_requirements(definition_revision)
+        .expect("derive a valid empty Expert selection");
+    record.invocation_key = floe_agent_contract::InvocationKey::new();
+    record.request_digest = [definition_revision as u8 | 1; 32];
+    record.aggregate_revision = 1;
+    record.execution_id = Uuid::new_v4();
+    record.catalog_revision = definition_revision;
+    record.journal_revision = 0;
+    record.journal_digest = Sha256::digest(
+        serde_json::to_vec(&(
+            "floe.execution-journal.sha256.v1",
+            Vec::<floe_agent_contract::JournalEntry>::new(),
+        ))
+        .expect("encode empty Task journal"),
+    )
+    .into();
+    record.receipt = None;
+    let draft = floe_experts::ExpertTaskConversationDraft {
+        key: floe_experts::ExpertConversationKey::from_admission(person_id, &admission)
+            .expect("derive verified Expert assignment key"),
+        run_id: floe_kernel::RunId::new(),
+        input_message_id: MessageId::new(),
+        input_command_id: CommandId::new(),
+        delegated_message: message.into(),
+        input_coverage: DependencyCoverage::Independent,
+    };
+    (record, draft)
+}
 
 async fn complete_manager_turn_with_output(
     scenario: &mut Scenario,
@@ -295,8 +573,20 @@ async fn run_settlement_counts(
         .vault()
         .connection()
         .expect("connect for settlement counts");
-    let closes = table_count(&connection, "agent_conversation_core_v3_close_receipts").await;
-    let active = table_count(&connection, "agent_conversation_core_v3_active_recorders").await;
+    let closes = run_table_count(
+        &connection,
+        "agent_conversation_core_v3_close_receipts",
+        scenario.person_id,
+        run,
+    )
+    .await;
+    let active = run_table_count(
+        &connection,
+        "agent_conversation_core_v3_active_recorders",
+        scenario.person_id,
+        run,
+    )
+    .await;
     let audits = table_count(&connection, "agent_conversation_review_audits").await;
     let interactions = table_count(&connection, "agent_conversation_interactions").await;
     let terminal_receipts = table_count(&connection, "agent_conversation_terminal_receipts").await;
@@ -334,6 +624,27 @@ async fn run_settlement_counts(
         resume_requests,
         coverage,
     )
+}
+
+async fn run_table_count(
+    connection: &turso::Connection,
+    table: &str,
+    person_id: floe_kernel::PersonId,
+    run: RunId,
+) -> i64 {
+    connection
+        .query(
+            &format!("SELECT count(*) FROM {table} WHERE person_id = ? AND run_id = ?"),
+            (person_id.to_string(), run.as_uuid().to_string()),
+        )
+        .await
+        .expect("count owner rows scoped to the exact Run")
+        .next()
+        .await
+        .expect("read exact Run row count")
+        .expect("one count row")
+        .get::<i64>(0)
+        .expect("read Run row count")
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -7187,4 +7498,1477 @@ async fn concurrent_composed_new_admissions_on_one_transcript_commit_at_most_one
         .commit()
         .await
         .expect("finish loser-evidence read transaction");
+}
+
+#[tokio::test]
+async fn expert_task_runs_continue_the_pinned_assignment_conversation() {
+    use floe_agent_contract::ModelConversationEntry;
+
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate the Task owner");
+    let assignment_id = Uuid::new_v4();
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "first delegated request",
+    );
+    let first_conversation_key = first_draft.key.clone();
+    let first_replay_draft = first_draft.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("admit one fresh Task with a pinned Expert history head")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let first_working = start_expert_task(&scenario, &first).await;
+    let first_view = scenario
+        .vault()
+        .expert_task_conversation(first_working.execution())
+        .await
+        .expect("hydrate the empty pinned Expert history");
+    assert!(first_view.conversation.history.is_empty());
+    assert!(matches!(
+        first_view.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }] if text == "first delegated request"
+    ));
+
+    append_scripted_expert_answer(&scenario, &first_working, "first answer", false)
+        .await
+        .expect("compose Task output, journal and typed/Core contribution");
+    let working = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read the exact Working Task")
+        .expect("Task remains present");
+    let terminal = TaskSnapshot {
+        state: TaskState::Completed,
+        result: Some("first answer".into()),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+        blockage: None,
+        ..working.snapshot.clone()
+    };
+    let terminal_commit = TaskExecutionCommit {
+        execution: working.execution(),
+        expected_task_revision: working.aggregate_revision,
+        expected_journal_revision: working.journal_revision,
+        terminal,
+        settlement: None,
+    };
+    scenario
+        .vault()
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        scenario
+            .vault()
+            .settle_task_execution(terminal_commit.clone())
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "the terminal Task receipt and Core close commit before their acknowledgement is lost"
+    );
+    scenario.reopen().await;
+    let recovered_generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("advance the durable Task generation after terminal acknowledgement loss");
+    let first_receipt = scenario
+        .vault()
+        .settle_task_execution(terminal_commit)
+        .await
+        .expect("terminal replay returns the immutable committed receipt");
+    let first_journal = scenario
+        .vault()
+        .load_task_journal(first.execution())
+        .await
+        .expect("read terminal Task journal after generation fence");
+    let output_event = first_journal
+        .iter()
+        .find_map(|entry| match &entry.event {
+            JournalEvent::Output { .. } => Some(entry.event.clone()),
+            _ => None,
+        })
+        .expect("first Task has its committed output event");
+    let output_revision = first_journal
+        .iter()
+        .find(|entry| matches!(&entry.event, JournalEvent::Output { .. }))
+        .expect("find committed output revision")
+        .revision;
+    assert_eq!(
+        scenario
+            .vault()
+            .append_task_journal(first.execution(), "output", output_event.clone())
+            .await
+            .expect("exact output replay verifies its Core and typed proof after fence"),
+        output_revision
+    );
+    let JournalEvent::Output { text, artifacts } = output_event else {
+        unreachable!()
+    };
+    assert_eq!(
+        scenario
+            .vault()
+            .append_task_journal(
+                first.execution(),
+                "output",
+                JournalEvent::Output {
+                    text: format!("{text} altered"),
+                    artifacts,
+                },
+            )
+            .await,
+        Err(AgentFailure::Conflict),
+        "an event identity cannot be rebound to a different terminal payload"
+    );
+
+    let (mut second, mut second_draft) = expert_task_fixture(
+        scenario.person_id,
+        recovered_generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "second delegated request",
+    );
+    second.admission = first.admission.clone();
+    second_draft.key = first_conversation_key;
+    let second = match scenario
+        .vault()
+        .admit_task(second, second_draft)
+        .await
+        .expect("admit a later Task for the same assignment")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected continuation admission: {other:?}"),
+    };
+    let second_working = start_expert_task(&scenario, &second).await;
+    let second_view = scenario
+        .vault()
+        .expert_task_conversation(second_working.execution())
+        .await
+        .expect("resolve the second Task's exact pinned prefix");
+    assert_eq!(second_view.conversation.history.len(), 2);
+    assert!(matches!(
+        &second_view.conversation.history[0],
+        ModelConversationEntry::User { text, .. } if text == "first delegated request"
+    ));
+    assert!(matches!(
+        &second_view.conversation.history[1],
+        ModelConversationEntry::Assistant { text, .. } if text == "first answer"
+    ));
+    assert!(matches!(
+        second_view.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }] if text == "second delegated request"
+    ));
+    let replayed_first = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("replay exact Task after the conversation head advanced")
+        .expect("first Task remains immutable");
+    assert_eq!(replayed_first.receipt.as_ref(), Some(&first_receipt));
+    assert_eq!(first_receipt.reference.execution, first.execution());
+    let exact_replay = scenario
+        .vault()
+        .admit_task(first.clone(), first_replay_draft)
+        .await
+        .expect("exact Task replay remains available after its head advances");
+    let floe_experts::TaskAdmission::Existing {
+        record: exact_replay,
+        ..
+    } = exact_replay
+    else {
+        panic!("exact Task replay cannot create or repin a second execution")
+    };
+    assert_eq!(exact_replay.receipt.as_ref(), Some(&first_receipt));
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("inspect immutable first Task history pin");
+    let mut rows = connection
+        .query(
+            "SELECT input_json FROM agent_expert_task_conversation_runs_v1 WHERE person_id = ? AND task_id = ?",
+            (
+                scenario.person_id.to_string(),
+                first.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("read exact persisted history pin");
+    let input: floe_experts::ExpertTaskConversationInput = serde_json::from_str(
+        &rows
+            .next()
+            .await
+            .expect("read pinned history row")
+            .expect("first Task mapping remains present")
+            .get::<String>(0)
+            .expect("read canonical Task input"),
+    )
+    .expect("decode canonical Task input");
+    assert_eq!(input.history_pin.head_revision, 0);
+    assert_eq!(input.input_reference.unwrap().sequence, 1);
+    drop(rows);
+    connection
+        .execute(
+            "UPDATE agent_expert_task_conversation_entries_v1 SET evidence_json = ?, evidence_bytes = ? WHERE person_id = ? AND task_id = ? AND execution_id = ? AND executor_generation = ?",
+            (
+                "{",
+                floe_agent_contract::MAX_MODEL_CONVERSATION_BYTES as i64,
+                scenario.person_id.to_string(),
+                first.snapshot.task_id.as_uuid().to_string(),
+                first.execution_id.to_string(),
+                first.executor_generation as i64,
+            ),
+        )
+        .await
+        .expect("make the old typed payload exceed the next request's byte budget");
+    assert_eq!(
+        scenario
+            .vault()
+            .expert_task_conversation(second_working.execution())
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "SQL rejects incorrect byte metadata before typed payload hydration"
+    );
+}
+
+#[tokio::test]
+async fn expert_admission_receipt_rejects_mutable_input_coverage_and_pin_changes() {
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate the Task owner");
+    let (proposed, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "immutable committed host input",
+    );
+    let draft_for_replay = draft.clone();
+    let (record, receipt) = match scenario
+        .vault()
+        .admit_task(proposed.clone(), draft)
+        .await
+        .expect("admit Task with immutable owner input evidence")
+    {
+        floe_experts::TaskAdmission::Created {
+            record,
+            expert_input,
+        } => (record, expert_input),
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    assert_eq!(receipt.execution, record.execution());
+    assert_eq!(
+        scenario
+            .vault()
+            .expert_task_admission_reference(record.execution())
+            .await
+            .expect("lost-ACK readback returns the canonical owner receipt"),
+        receipt
+    );
+
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("inspect admission evidence");
+    let mut rows = connection
+        .query(
+            "SELECT reference_json FROM agent_expert_task_conversation_admissions_v1 WHERE person_id = ? AND task_id = ?",
+            (
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("read immutable owner admission receipt");
+    let owner_receipt = rows
+        .next()
+        .await
+        .expect("read admission receipt row")
+        .expect("canonical receipt exists")
+        .get::<String>(0)
+        .expect("read canonical owner evidence");
+    drop(rows);
+    let mut rows = connection
+        .query(
+            "SELECT input_json FROM agent_expert_task_conversation_runs_v1 WHERE person_id = ? AND task_id = ?",
+            (
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("read mutable input projection");
+    let input_json = rows
+        .next()
+        .await
+        .expect("read Task input row")
+        .expect("Task input exists")
+        .get::<String>(0)
+        .expect("read input JSON");
+    drop(rows);
+    let input: floe_experts::ExpertTaskConversationInput =
+        serde_json::from_str(&input_json).expect("decode Task input");
+
+    let mut changed_coverage = input.clone();
+    changed_coverage.input_coverage = DependencyCoverage::Unknown;
+    connection
+        .execute(
+            "UPDATE agent_expert_task_conversation_runs_v1 SET input_json = ? WHERE person_id = ? AND task_id = ?",
+            (
+                serde_json::to_string(&changed_coverage).expect("encode changed coverage"),
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("tamper only the mutable input coverage copy");
+    assert_eq!(
+        scenario
+            .vault()
+            .compare_and_swap_task(
+                record.snapshot.task_id,
+                record.aggregate_revision,
+                record.executor_generation,
+                TaskSnapshot {
+                    state: TaskState::Working,
+                    ..record.snapshot.clone()
+                },
+                receipt.clone(),
+            )
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "tampered coverage cannot activate the exact Task"
+    );
+    let mut rows = connection
+        .query(
+            "SELECT reference_json FROM agent_expert_task_conversation_admissions_v1 WHERE person_id = ? AND task_id = ?",
+            (
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("verify owner receipt remains unchanged");
+    assert_eq!(
+        rows.next()
+            .await
+            .expect("read owner evidence")
+            .expect("owner receipt remains present")
+            .get::<String>(0)
+            .expect("read canonical owner evidence"),
+        owner_receipt
+    );
+    drop(rows);
+
+    connection
+        .execute(
+            "UPDATE agent_expert_task_conversation_runs_v1 SET input_json = ? WHERE person_id = ? AND task_id = ?",
+            (
+                input_json,
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("restore the original committed input before the pin regression");
+    drop(connection);
+    scenario.reopen().await;
+
+    let mut changed_pin = input;
+    changed_pin.history_pin.head_revision = 1;
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("tamper the mutable history pin copy");
+    connection
+        .execute(
+            "UPDATE agent_expert_task_conversation_runs_v1 SET input_json = ? WHERE person_id = ? AND task_id = ?",
+            (
+                serde_json::to_string(&changed_pin).expect("encode changed history pin"),
+                scenario.person_id.to_string(),
+                record.snapshot.task_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("tamper only the mutable history pin copy");
+    assert_eq!(
+        scenario
+            .vault()
+            .expert_task_admission_reference(record.execution())
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "the canonical receipt never repins to a changed history head"
+    );
+    drop(connection);
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .admit_task(proposed, draft_for_replay)
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "exact Task replay fails closed when its stored history pin changes"
+    );
+}
+
+#[tokio::test]
+async fn expert_history_rejects_typed_coverage_that_disagrees_with_terminal_task() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor");
+    let assignment_id = Uuid::new_v4();
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "source-backed request",
+    );
+    let conversation_key = first_draft.key.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft.clone())
+        .await
+        .expect("admit first Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    append_scripted_expert_answer(&scenario, &working, "source-backed answer", false)
+        .await
+        .expect("record owner-projected answer with independent coverage");
+    let current = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read first Task")
+        .expect("first Task exists");
+    let terminal = TaskSnapshot {
+        state: TaskState::Completed,
+        result: Some("source-backed answer".into()),
+        artifacts: vec![],
+        coverage: DependencyCoverage::Independent,
+        issue: None,
+        blockage: None,
+        ..current.snapshot.clone()
+    };
+    scenario
+        .vault()
+        .settle_task_execution(TaskExecutionCommit {
+            execution: current.execution(),
+            expected_task_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
+            terminal,
+            settlement: None,
+        })
+        .await
+        .expect("settle the source-backed Expert Task");
+
+    let (mut second, mut second_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "follow-up request",
+    );
+    second.admission = first.admission.clone();
+    second_draft.key = conversation_key;
+    let second = match scenario
+        .vault()
+        .admit_task(second, second_draft)
+        .await
+        .expect("admit later Task for same assignment")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let second_working = start_expert_task(&scenario, &second).await;
+    let valid = scenario
+        .vault()
+        .expert_task_conversation(second_working.execution())
+        .await
+        .expect("valid owner-projected dependent history is readable");
+    assert_eq!(valid.history_coverage.len(), 2);
+    assert_eq!(valid.history_coverage[1], DependencyCoverage::Independent);
+
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("tamper the typed projection independently of Task journal");
+    let mut rows = connection
+        .query(
+            "SELECT sequence, evidence_json FROM agent_expert_task_conversation_entries_v1 WHERE person_id = ? AND task_id = ? AND executor_generation = ?",
+            (
+                scenario.person_id.to_string(),
+                first.snapshot.task_id.as_uuid().to_string(),
+                first.executor_generation as i64,
+            ),
+        )
+        .await
+        .expect("read source-backed typed evidence");
+    let row = rows
+        .next()
+        .await
+        .expect("read typed row")
+        .expect("source-backed output row exists");
+    let sequence = row.get::<i64>(0).expect("read transcript sequence");
+    let evidence: floe_experts::ExpertConversationEvidence =
+        serde_json::from_str(&row.get::<String>(1).expect("read typed evidence"))
+            .expect("decode original typed evidence");
+    drop(rows);
+    let changed_evidence = match evidence {
+        floe_experts::ExpertConversationEvidence::ModelEntry { entry, .. } => {
+            floe_experts::ExpertConversationEvidence::ModelEntry {
+                entry,
+                coverage: DependencyCoverage::Unknown,
+            }
+        }
+        other => panic!("expected model evidence, got {other:?}"),
+    };
+    let changed_evidence_json =
+        serde_json::to_string(&changed_evidence).expect("encode changed coverage");
+    let changed_coverage_json =
+        serde_json::to_string(&DependencyCoverage::Unknown).expect("encode changed owner coverage");
+    connection
+        .execute(
+            "UPDATE agent_expert_task_conversation_entries_v1 SET evidence_json = ?, evidence_bytes = ?, coverage_json = ? WHERE person_id = ? AND task_id = ? AND sequence = ?",
+            (
+                changed_evidence_json.clone(),
+                changed_evidence_json.len() as i64,
+                changed_coverage_json,
+                scenario.person_id.to_string(),
+                first.snapshot.task_id.as_uuid().to_string(),
+                sequence,
+            ),
+        )
+        .await
+        .expect("tamper both mutable typed coverage copies");
+    assert_eq!(
+        scenario
+            .vault()
+            .expert_task_conversation(second_working.execution())
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "matching typed-row copies cannot override the terminal Task's journaled coverage"
+    );
+}
+
+#[tokio::test]
+async fn expert_history_uses_the_longest_newest_suffix_within_the_byte_budget() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor");
+    let assignment_id = Uuid::new_v4();
+    let large_input = "u".repeat(58_000);
+    let large_output = "a".repeat(58_000);
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        &large_input,
+    );
+    let key = first_draft.key.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("admit large first Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let first_working = start_expert_task(&scenario, &first).await;
+    append_scripted_expert_answer(&scenario, &first_working, &large_output, false)
+        .await
+        .expect("commit large but individually bounded output");
+    let current = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read first Task")
+        .expect("first Task exists");
+    scenario
+        .vault()
+        .settle_task_execution(TaskExecutionCommit {
+            execution: current.execution(),
+            expected_task_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
+            terminal: TaskSnapshot {
+                state: TaskState::Completed,
+                result: Some(large_output.clone()),
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                blockage: None,
+                ..current.snapshot.clone()
+            },
+            settlement: None,
+        })
+        .await
+        .expect("settle first Task");
+
+    let (mut second, mut second_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "small follow-up",
+    );
+    second.admission = first.admission.clone();
+    second_draft.key = key;
+    let second = match scenario
+        .vault()
+        .admit_task(second, second_draft)
+        .await
+        .expect("admit follow-up Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let second_working = start_expert_task(&scenario, &second).await;
+    let conversation = scenario
+        .vault()
+        .expert_task_conversation(second_working.execution())
+        .await
+        .expect("load the maximal newest suffix that fits both bounds");
+    assert!(matches!(
+        conversation.conversation.history.as_slice(),
+        [ModelConversationEntry::Assistant { text, .. }] if text == &large_output
+    ));
+    assert!(matches!(
+        conversation.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }] if text == "small follow-up"
+    ));
+}
+
+#[tokio::test]
+async fn unstarted_expert_task_recovery_releases_only_its_reservation() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate the Task owner");
+    let assignment_id = Uuid::new_v4();
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "never started",
+    );
+    let first_key = first_draft.key.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("reserve the exact assignment conversation")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let (mut competing, mut competing_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "concurrent request",
+    );
+    competing.admission = first.admission.clone();
+    competing_draft.key = first_key.clone();
+    assert_eq!(
+        scenario
+            .vault()
+            .admit_task(competing.clone(), competing_draft.clone())
+            .await,
+        Err(AgentFailure::Conflict),
+        "one Submitted or Working Task reserves the assignment's writer slot"
+    );
+
+    let recovered = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("fence the previous executor and release its never-started reservation");
+    assert_eq!(recovered.interrupted.len(), 1);
+    assert_eq!(
+        recovered.interrupted[0].snapshot.state,
+        TaskState::Interrupted
+    );
+    assert!(recovered.interrupted[0].receipt.is_some());
+    assert_eq!(
+        table_count(
+            &scenario
+                .vault()
+                .connection()
+                .expect("read untouched Core history"),
+            "agent_conversation_core_v3_entries"
+        )
+        .await,
+        0,
+        "recovery of Submitted work must not append a Core input or output"
+    );
+
+    competing.executor_generation = recovered.executor_generation;
+    competing_draft.run_id = floe_kernel::RunId::new();
+    competing_draft.input_message_id = MessageId::new();
+    competing_draft.input_command_id = CommandId::new();
+    let competing = match scenario
+        .vault()
+        .admit_task(competing, competing_draft)
+        .await
+        .expect("new Task can reserve the assignment after proven unstarted recovery")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected post-recovery Task admission: {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &competing).await;
+    let view = scenario
+        .vault()
+        .expert_task_conversation(working.execution())
+        .await
+        .expect("the new run begins from the unchanged empty prefix");
+    assert!(view.conversation.history.is_empty());
+    assert!(matches!(
+        view.conversation.current_turn.first(),
+        Some(ModelConversationEntry::User { text, .. }) if text == "concurrent request"
+    ));
+    let original = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read original interrupted Task")
+        .expect("original Task stays terminal");
+    assert_eq!(original.snapshot.state, TaskState::Interrupted);
+}
+
+#[tokio::test]
+async fn lost_expert_task_admission_ack_replays_the_stored_pin_before_recovery() {
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor");
+    let (proposed, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "admission acknowledgement loss",
+    );
+    scenario
+        .vault()
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        scenario
+            .vault()
+            .admit_task(proposed.clone(), draft.clone())
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "the test fault loses the acknowledgement after admission commits"
+    );
+
+    scenario.reopen().await;
+    let recovery = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("fence the possibly admitted Submitted execution");
+    assert_eq!(recovery.interrupted.len(), 1);
+    assert_eq!(
+        recovery.interrupted[0].snapshot.state,
+        TaskState::Interrupted
+    );
+    assert_eq!(recovery.interrupted[0].journal_revision, 0);
+    let replay = scenario
+        .vault()
+        .admit_task(proposed, draft)
+        .await
+        .expect("exact retry reads the stored immutable Task admission");
+    let floe_experts::TaskAdmission::Existing { record: replay, .. } = replay else {
+        panic!("a lost admission acknowledgement cannot admit a second Task")
+    };
+    assert_eq!(replay.snapshot.state, TaskState::Interrupted);
+    assert_eq!(replay.receipt, recovery.interrupted[0].receipt);
+    assert_eq!(
+        table_count(
+            &scenario.vault().connection().expect("read Core transcript"),
+            "agent_conversation_core_v3_entries"
+        )
+        .await,
+        0,
+        "unstarted recovery appends no input or output"
+    );
+}
+
+#[tokio::test]
+async fn lost_expert_task_working_ack_fences_before_any_dispatch_or_continuation() {
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor");
+    let (first, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "working acknowledgement loss",
+    );
+    let key = draft.key.clone();
+    let admission = first.admission.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, draft)
+        .await
+        .expect("admit the Submitted Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let expert_input = scenario
+        .vault()
+        .expert_task_admission_reference(first.execution())
+        .await
+        .expect("read the durable Expert admission reference");
+    scenario
+        .vault()
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        scenario
+            .vault()
+            .compare_and_swap_task(
+                first.snapshot.task_id,
+                first.aggregate_revision,
+                first.executor_generation,
+                TaskSnapshot {
+                    state: TaskState::Working,
+                    ..first.snapshot.clone()
+                },
+                expert_input,
+            )
+            .await,
+        Err(AgentFailure::StorageUnavailable),
+        "the Working input/open commits before its acknowledgement is lost"
+    );
+
+    scenario.reopen().await;
+    let recovery = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("generation fence settles the uncertain Working owner");
+    assert_eq!(recovery.interrupted.len(), 1);
+    let interrupted = &recovery.interrupted[0];
+    assert_eq!(interrupted.snapshot.state, TaskState::Interrupted);
+    assert_eq!(interrupted.journal_revision, 0);
+    assert_eq!(
+        table_count(
+            &scenario.vault().connection().expect("read Core transcript"),
+            "agent_conversation_core_v3_entries"
+        )
+        .await,
+        1,
+        "the acknowledged owner transition contains one delegated input only"
+    );
+
+    let (mut later, mut later_draft) = expert_task_fixture(
+        scenario.person_id,
+        recovery.executor_generation,
+        TaskId::new(),
+        admission.assignment_id,
+        1,
+        "1.0.0",
+        "later request after fence",
+    );
+    later.admission = admission;
+    later_draft.key = key;
+    let later = match scenario
+        .vault()
+        .admit_task(later, later_draft)
+        .await
+        .expect("new Task may continue only after the old generation is fenced")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected continuation admission: {other:?}"),
+    };
+    let later_working = start_expert_task(&scenario, &later).await;
+    let conversation = scenario
+        .vault()
+        .expert_task_conversation(later_working.execution())
+        .await
+        .expect("hydrate the exact prior Person input after fence settlement");
+    assert!(matches!(
+        conversation.conversation.history.as_slice(),
+        [ModelConversationEntry::User { text, .. }]
+            if text == "working acknowledgement loss"
+    ));
+    assert!(matches!(
+        conversation.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }]
+            if text == "later request after fence"
+    ));
+}
+
+#[tokio::test]
+async fn lost_expert_task_output_ack_recovers_one_typed_contribution_after_fence() {
+    use floe_agent_contract::ModelConversationEntry;
+
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor");
+    let assignment_id = Uuid::new_v4();
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "output acknowledgement loss",
+    );
+    let key = first_draft.key.clone();
+    let admission = first.admission.clone();
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("admit the first Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    assert_eq!(
+        append_scripted_expert_answer(&scenario, &working, "one committed answer", true).await,
+        Err(AgentFailure::StorageUnavailable),
+        "the output's Task journal, typed evidence and Core contribution commit atomically"
+    );
+
+    scenario.reopen().await;
+    let recovery = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("generation-fenced recovery settles the uncertain output owner");
+    assert_eq!(recovery.interrupted.len(), 1);
+    let recovered = &recovery.interrupted[0];
+    assert_eq!(recovered.snapshot.state, TaskState::Interrupted);
+    assert_eq!(recovered.journal_revision, 5);
+    assert_eq!(
+        recovered
+            .receipt
+            .as_ref()
+            .unwrap()
+            .reference
+            .journal_revision,
+        5
+    );
+
+    let (mut later, mut later_draft) = expert_task_fixture(
+        scenario.person_id,
+        recovery.executor_generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "request after uncertain output",
+    );
+    later.admission = admission;
+    later_draft.key = key;
+    let later = match scenario
+        .vault()
+        .admit_task(later, later_draft)
+        .await
+        .expect("continue only after generation-fenced settlement")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected continuation admission: {other:?}"),
+    };
+    let later_working = start_expert_task(&scenario, &later).await;
+    let conversation = scenario
+        .vault()
+        .expert_task_conversation(later_working.execution())
+        .await
+        .expect("read one authenticated output contribution after recovery");
+    assert!(matches!(
+        conversation.conversation.history.as_slice(),
+        [
+            ModelConversationEntry::User { text: user, .. },
+            ModelConversationEntry::Assistant { text: answer, .. }
+        ] if user == "output acknowledgement loss" && answer == "one committed answer"
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_expert_task_admissions_claim_one_assignment_slot() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor")
+        .executor_generation;
+    let assignment_id = Uuid::new_v4();
+    let (left, left_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "concurrent left",
+    );
+    let (mut right, mut right_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "concurrent right",
+    );
+    right.admission = left.admission.clone();
+    right_draft.key = left_draft.key.clone();
+
+    let vault = scenario.vault();
+    let (left_result, right_result) = tokio::join!(
+        vault.admit_task(left, left_draft),
+        vault.admit_task(right, right_draft),
+    );
+    let results = [left_result, right_result];
+    let admitted = results
+        .iter()
+        .filter(|result| matches!(result, Ok(floe_experts::TaskAdmission::Created { .. })))
+        .count();
+    assert_eq!(admitted, 1, "only one Task pins the assignment head");
+    for result in results {
+        if let Err(failure) = result {
+            assert_eq!(failure, AgentFailure::Conflict);
+        }
+    }
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("inspect exact assignment reservation");
+    assert_eq!(table_count(&connection, "agent_tasks").await, 1);
+    assert_eq!(
+        table_count(
+            &connection,
+            "agent_expert_task_conversation_reservations_v1"
+        )
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn expert_conversation_bindings_isolate_assignment_person_and_definition() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor")
+        .executor_generation;
+    let (base, base_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "base definition",
+    );
+    let base_key = base_draft.key.clone();
+    let base = match scenario
+        .vault()
+        .admit_task(base.clone(), base_draft)
+        .await
+        .expect("admit base assignment")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected base Task admission: {other:?}"),
+    };
+
+    let mut another_assignment = base.admission.clone();
+    another_assignment.assignment_id = Uuid::new_v4();
+    let (assignment_task, assignment_draft) = next_expert_task_for(
+        &base,
+        scenario.person_id,
+        another_assignment,
+        1,
+        "different assignment",
+    );
+    let assignment_task = scenario
+        .vault()
+        .admit_task(assignment_task, assignment_draft)
+        .await
+        .expect("separate assignment admits independently");
+    assert!(matches!(
+        assignment_task,
+        floe_experts::TaskAdmission::Created { .. }
+    ));
+
+    let mut changed_definition = base.admission.clone();
+    changed_definition.installation_id = Uuid::new_v4();
+    changed_definition.package.version = "2.0.0".into();
+    changed_definition.definition_revision = 2;
+    let (definition_task, definition_draft) = next_expert_task_for(
+        &base,
+        scenario.person_id,
+        changed_definition,
+        2,
+        "changed definition",
+    );
+    let definition_task = scenario
+        .vault()
+        .admit_task(definition_task, definition_draft)
+        .await
+        .expect("changed installed definition admits into separate custody");
+    assert!(matches!(
+        definition_task,
+        floe_experts::TaskAdmission::Created { .. }
+    ));
+
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("inspect isolated assignment bindings");
+    let mut rows = connection
+        .query(
+            "SELECT conversation_id FROM agent_expert_task_conversation_runs_v1 WHERE person_id = ? ORDER BY task_id",
+            [scenario.person_id.to_string()],
+        )
+        .await
+        .expect("read all three distinct conversations");
+    let mut conversation_ids = Vec::new();
+    while let Some(row) = rows.next().await.expect("read conversation row") {
+        conversation_ids.push(row.get::<String>(0).expect("read ConversationId"));
+    }
+    assert_eq!(conversation_ids.len(), 3);
+    conversation_ids.sort();
+    conversation_ids.dedup();
+    assert_eq!(conversation_ids.len(), 3);
+
+    let other_person = Scenario::new().await;
+    let other_generation = other_person
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate another Person's Task executor")
+        .executor_generation;
+    let (mut other_task, mut other_draft) = expert_task_fixture(
+        other_person.person_id,
+        other_generation,
+        TaskId::new(),
+        base.admission.assignment_id,
+        1,
+        "1.0.0",
+        "same installed Expert, other Person",
+    );
+    other_task.admission = base.admission.clone();
+    other_draft.key = floe_experts::ExpertConversationKey::from_admission(
+        other_person.person_id,
+        &base.admission,
+    )
+    .expect("derive the same installation under another Person scope");
+    assert_ne!(base_key, other_draft.key);
+    assert_ne!(
+        base_key.core_identity().expect("base Core identity"),
+        other_draft
+            .key
+            .core_identity()
+            .expect("other Person Core identity")
+    );
+    let other_task = other_person
+        .vault()
+        .admit_task(other_task, other_draft)
+        .await
+        .expect("same assignment ID under another Person remains isolated");
+    assert!(matches!(
+        other_task,
+        floe_experts::TaskAdmission::Created { .. }
+    ));
+}
+
+#[tokio::test]
+async fn blocked_expert_task_stays_terminal_and_a_later_task_opens_a_fresh_run() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor")
+        .executor_generation;
+    let (mut first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "request blocked on source binding",
+    );
+    let requirement = floe_experts::AdmittedRequirementSelection {
+        key: "calendar.read".into(),
+        capability: "calendar.read".into(),
+        contract_version: 1,
+        minimum_sources: 1,
+        maximum_sources: 1,
+        selected: vec![],
+    };
+    let requirements = vec![requirement];
+    let digest = Sha256::digest(
+        serde_json::to_vec(&(
+            "floe.expert-execution-selection.sha256.v1",
+            1_u64,
+            &requirements,
+        ))
+        .expect("encode missing-source selection"),
+    )
+    .into();
+    first.selection = ExpertExecutionSelection {
+        schema_version: floe_experts::EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION,
+        binding_revision: 1,
+        requirements,
+        digest,
+    };
+    let first_key = first_draft.key.clone();
+    let first_run_id = first_draft.run_id;
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("admit the assignment Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    let terminal = scenario
+        .vault()
+        .settle_task_execution(TaskExecutionCommit {
+            execution: working.execution(),
+            expected_task_revision: working.aggregate_revision,
+            expected_journal_revision: working.journal_revision,
+            terminal: TaskSnapshot {
+                state: TaskState::Blocked,
+                result: None,
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                blockage: Some(floe_agent_contract::TaskBlockage::Binding {
+                    requirement_keys: vec!["calendar.read".into()],
+                }),
+                ..working.snapshot.clone()
+            },
+            settlement: None,
+        })
+        .await
+        .expect("persist Blocked receipt, typed evidence, close and release atomically");
+    assert_eq!(terminal.snapshot.state, TaskState::Blocked);
+
+    let (mut later, mut later_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        first.admission.assignment_id,
+        1,
+        "1.0.0",
+        "later request after blocked Task",
+    );
+    later.admission = first.admission.clone();
+    later.selection = first.selection.clone();
+    later_draft.key = first_key;
+    let later_run_id = later_draft.run_id;
+    let later = match scenario
+        .vault()
+        .admit_task(later, later_draft)
+        .await
+        .expect("new Task continues assignment after the Blocked receipt")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected continuation admission: {other:?}"),
+    };
+    let later_working = start_expert_task(&scenario, &later).await;
+    let view = scenario
+        .vault()
+        .expert_task_conversation(later_working.execution())
+        .await
+        .expect("resolve later Task's pinned assignment history");
+    assert_ne!(first_run_id, later_run_id);
+    assert_eq!(view.conversation.history.len(), 1);
+    assert!(matches!(
+        &view.conversation.history[0],
+        ModelConversationEntry::User { text, .. } if text == "request blocked on source binding"
+    ));
+    assert!(matches!(
+        view.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }] if text == "later request after blocked Task"
+    ));
+    let persisted = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read terminal Blocked Task after continuation")
+        .expect("Blocked Task remains immutable");
+    assert_eq!(persisted.snapshot.state, TaskState::Blocked);
+    assert_eq!(persisted.receipt, Some(terminal));
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("verify Experts did not write Manager learning records");
+    assert_eq!(table_count(&connection, "learner_journal_heads").await, 0);
+}
+
+#[tokio::test]
+async fn cancelled_expert_task_closes_its_run_and_later_task_starts_a_fresh_run() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate Task executor")
+        .executor_generation;
+    let assignment_id = Uuid::new_v4();
+    let (first, first_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "request cancelled while working",
+    );
+    let first_key = first_draft.key.clone();
+    let first_run_id = first_draft.run_id;
+    let first = match scenario
+        .vault()
+        .admit_task(first, first_draft)
+        .await
+        .expect("admit the assignment Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected Task admission: {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    let cancelled = scenario
+        .vault()
+        .settle_task_execution(TaskExecutionCommit {
+            execution: working.execution(),
+            expected_task_revision: working.aggregate_revision,
+            expected_journal_revision: working.journal_revision,
+            terminal: TaskSnapshot {
+                state: TaskState::Cancelled,
+                result: None,
+                artifacts: vec![],
+                coverage: DependencyCoverage::Unknown,
+                issue: Some(AgentFailure::Cancelled),
+                blockage: None,
+                ..working.snapshot.clone()
+            },
+            settlement: None,
+        })
+        .await
+        .expect("compose cancelled Task receipt and Core close at the owner boundary");
+    assert_eq!(cancelled.snapshot.state, TaskState::Cancelled);
+    assert!(cancelled.snapshot.result.is_none());
+
+    let (mut later, mut later_draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        assignment_id,
+        1,
+        "1.0.0",
+        "request after cancellation",
+    );
+    later.admission = first.admission.clone();
+    later_draft.key = first_key;
+    let later_run_id = later_draft.run_id;
+    let later = match scenario
+        .vault()
+        .admit_task(later, later_draft)
+        .await
+        .expect("new Task continues the settled assignment")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected continuation admission: {other:?}"),
+    };
+    let later_working = start_expert_task(&scenario, &later).await;
+    let view = scenario
+        .vault()
+        .expert_task_conversation(later_working.execution())
+        .await
+        .expect("resolve the later Task's pinned conversation head");
+    assert_ne!(first_run_id, later_run_id);
+    assert_eq!(view.conversation.history.len(), 1);
+    assert!(matches!(
+        &view.conversation.history[0],
+        ModelConversationEntry::User { text, .. } if text == "request cancelled while working"
+    ));
+    assert!(matches!(
+        view.conversation.current_turn.as_slice(),
+        [ModelConversationEntry::User { text, .. }] if text == "request after cancellation"
+    ));
+    let persisted = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .expect("read terminal cancelled Task after continuation")
+        .expect("cancelled Task remains present");
+    assert_eq!(persisted.snapshot.state, TaskState::Cancelled);
+    assert_eq!(persisted.receipt, Some(cancelled));
 }

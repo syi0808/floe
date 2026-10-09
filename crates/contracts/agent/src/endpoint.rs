@@ -51,6 +51,12 @@ pub struct EndpointInvocation {
     pub request: DelegationRequest,
     pub request_digest: [u8; 32],
     pub execution: crate::TaskExecutionKey,
+    /// Exact host-owned, pinned Expert conversation resolved after the Task
+    /// becomes Working. A parent/A2A request cannot supply this history.
+    pub conversation: crate::ModelConversation,
+    /// Historical coverage aligned with `conversation.history`; Context must
+    /// reauthorize it before retaining derived entries.
+    pub history_coverage: Vec<crate::DependencyCoverage>,
     pub journal: std::sync::Arc<dyn crate::ExecutionJournal>,
     pub resources: std::sync::Arc<EndpointResources>,
 }

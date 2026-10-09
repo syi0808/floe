@@ -42,15 +42,16 @@ use floe_conversation_core::{
     RecordingRequest, RecoveredTaskContribution, TranscriptEntry, TranscriptEntryKind,
     advance_core_prefix_digest, append_input_transition, apply_checkpoint_transition,
     close_recording_transition, open_recording_transition, record_entry_transition,
-    record_task_recovery_entry_transition, recording_content_digest, replay_close_recording,
-    replay_open_recording, replay_recording_entry, replay_retirement,
-    retire_stale_recording_transition,
+    record_task_recovery_entry_transition, record_terminal_entry_transition,
+    recording_content_digest, replay_close_recording, replay_open_recording,
+    replay_recording_entry, replay_retirement, retire_stale_recording_transition,
 };
 #[cfg(test)]
 use floe_conversation_core::{
     MAX_TRANSCRIPT_PAGE_BYTES, RecorderRecoveryObservation, RecorderRecoveryState, TranscriptPage,
     TranscriptPageBudget, validate_reference_target,
 };
+use floe_experts::ExpertHistoryPin;
 use floe_kernel::{AgentFailure, CommandFailure, CommandId, PersonId, RunId};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -469,6 +470,54 @@ pub(super) async fn ensure_core_v3_on(
         .map_err(schema_error)
 }
 
+/// Read the exact Expert Core head and digest under the caller's admission
+/// snapshot. A missing head is the canonical empty prefix.
+pub(super) async fn pin_expert_history_on(
+    transaction: &Transaction<'_>,
+    identity: &AgentIdentity,
+    conversation_id: ConversationId,
+    branch_id: ConversationBranchId,
+) -> Result<ExpertHistoryPin, AgentFailure> {
+    ensure_core_v3_on(transaction)
+        .await
+        .map_err(owner_store_failure)?;
+    let scope = Scope::from_identity(identity.person_id, identity, conversation_id, branch_id);
+    let Some(head) = load_head_on(transaction, scope)
+        .await
+        .map_err(owner_store_failure)?
+    else {
+        return Ok(ExpertHistoryPin {
+            head_revision: 0,
+            head_reference: None,
+            prefix_digest: [0; 32],
+        });
+    };
+    if head.state.identity != *identity {
+        return Err(AgentFailure::Conflict);
+    }
+    if head.state.head_revision == 0 {
+        return Ok(ExpertHistoryPin {
+            head_revision: 0,
+            head_reference: None,
+            prefix_digest: [0; 32],
+        });
+    }
+    let entry = entry_on(transaction, scope, head.state.head_revision)
+        .await
+        .map_err(owner_store_failure)?
+        .ok_or(AgentFailure::StorageUnavailable)?;
+    if entry.reference.sequence != head.state.head_revision {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let pin = ExpertHistoryPin {
+        head_revision: head.state.head_revision,
+        head_reference: Some(entry.reference),
+        prefix_digest: entry.prefix_digest,
+    };
+    pin.validate(conversation_id, branch_id)?;
+    Ok(pin)
+}
+
 pub(super) async fn require_core_v3_on(
     transaction: &Transaction<'_>,
 ) -> Result<(), ConversationStoreFailure> {
@@ -847,7 +896,7 @@ async fn transcript_has_message_id_on(
     Ok(rows.next().await.map_err(database_error)?.is_some())
 }
 
-async fn tail_prefix_digest_on(
+pub(super) async fn tail_prefix_digest_on(
     transaction: &Transaction<'_>,
     scope: Scope,
     head: &ConversationHead,
@@ -2633,9 +2682,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map(|transition| transition.receipt)
                 .map_err(ConversationStoreFailure::Transition);
         }
-        if request.executor_domain == ExecutorDomain::TaskExecution {
-            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
-        }
         let scope = Scope::from_identity(
             self.person_id,
             &request.identity,
@@ -2648,27 +2694,51 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(ConversationStoreFailure::Transition(
                     ConversationFailure::ConversationMismatch,
                 ))?;
-        let current_generation = self
-            .active_conversation_executor_generation(transaction)
-            .await
-            .map_err(owner_error)?;
+        let current_generation = match request.executor_domain {
+            ExecutorDomain::HostRun => self
+                .active_conversation_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+            ExecutorDomain::TaskExecution => self
+                .active_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+        };
         if current_generation != request.executor_generation {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::OwnerEvidenceMismatch,
             ));
         }
-        let (owner, _, _) = self
-            .verified_owner_evidence_on(
-                transaction,
-                request.run_id,
-                &request.identity,
-                request.conversation_id,
-                request.branch_id,
-                request.input,
-                request.executor_domain,
-                request.executor_generation,
-            )
-            .await?;
+        let owner = match request.executor_domain {
+            ExecutorDomain::HostRun => {
+                self.verified_owner_evidence_on(
+                    transaction,
+                    request.run_id,
+                    &request.identity,
+                    request.conversation_id,
+                    request.branch_id,
+                    request.input,
+                    request.executor_domain,
+                    request.executor_generation,
+                )
+                .await?
+                .0
+            }
+            ExecutorDomain::TaskExecution => {
+                self.verified_expert_task_owner_evidence_on(
+                    transaction,
+                    request.run_id,
+                    &request.identity,
+                    request.conversation_id,
+                    request.branch_id,
+                    request.input,
+                    request.executor_generation,
+                )
+                .await
+                .map_err(owner_error)?
+                .0
+            }
+        };
         let active_recorder = active_recorder_on(transaction, scope).await?;
         let input_entry = entry_on(transaction, scope, request.input.sequence)
             .await?
@@ -2716,8 +2786,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         request: RecordingRequest,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
-        self.record_conversation_entry_on_with_policy(transaction, request, None)
+        self.record_conversation_entry_on_with_policy(transaction, request, None, None)
             .await
+    }
+
+    /// Compose a terminal Task output with Core and typed evidence. Unlike a
+    /// recovery append, this requires the exact Task receipt to be terminal
+    /// and the Task executor generation to remain current.
+    pub(super) async fn record_terminal_conversation_entry_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: RecordingRequest,
+    ) -> Result<RecordingReceipt, ConversationStoreFailure> {
+        if request.recorder.executor_domain != ExecutorDomain::TaskExecution {
+            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+        }
+        self.record_conversation_entry_on_with_policy(
+            transaction,
+            request,
+            None,
+            Some(OwnerRunState::Terminal),
+        )
+        .await
     }
 
     pub(super) async fn record_task_recovery_entry_on(
@@ -2726,7 +2816,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         request: RecordingRequest,
         recovery: RecoveredTaskContribution,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
-        self.record_conversation_entry_on_with_policy(transaction, request, Some(recovery))
+        self.record_conversation_entry_on_with_policy(transaction, request, Some(recovery), None)
             .await
     }
 
@@ -2735,6 +2825,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         request: RecordingRequest,
         task_recovery: Option<RecoveredTaskContribution>,
+        required_owner_state: Option<OwnerRunState>,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
         ensure_core_v3_on(transaction).await?;
         if let Some(receipt) =
@@ -2749,10 +2840,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::AgentMismatch,
             ));
         }
-        if request.recorder.executor_domain == ExecutorDomain::TaskExecution {
-            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
-        }
         if let Some(recovery) = task_recovery.as_ref() {
+            if request.recorder.executor_domain != ExecutorDomain::HostRun {
+                return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
+            }
             if !recovery.task_id.is_valid() {
                 return Err(owner_evidence_mismatch());
             }
@@ -2803,10 +2894,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationFailure::ConversationMismatch,
                 ))?;
         let active_recorder = active_recorder_on(transaction, scope).await?;
-        let current_generation = self
-            .active_conversation_executor_generation(transaction)
-            .await
-            .map_err(owner_error)?;
+        let current_generation = match request.recorder.executor_domain {
+            ExecutorDomain::HostRun => self
+                .active_conversation_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+            ExecutorDomain::TaskExecution => self
+                .active_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+        };
         if current_generation < request.recorder.executor_generation {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::WrongWriter,
@@ -2836,19 +2933,50 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ));
             }
         }
-        let (owner, _, _) = self
-            .verified_owner_evidence_on(
-                transaction,
-                request.recorder.run_id,
-                &request.recorder.identity,
-                request.recorder.conversation_id,
-                request.recorder.branch_id,
-                request.recorder.input,
-                request.recorder.executor_domain,
-                request.recorder.executor_generation,
-            )
-            .await?;
+        let owner = match request.recorder.executor_domain {
+            ExecutorDomain::HostRun => {
+                self.verified_owner_evidence_on(
+                    transaction,
+                    request.recorder.run_id,
+                    &request.recorder.identity,
+                    request.recorder.conversation_id,
+                    request.recorder.branch_id,
+                    request.recorder.input,
+                    request.recorder.executor_domain,
+                    request.recorder.executor_generation,
+                )
+                .await?
+                .0
+            }
+            ExecutorDomain::TaskExecution => {
+                self.verified_expert_task_owner_evidence_on(
+                    transaction,
+                    request.recorder.run_id,
+                    &request.recorder.identity,
+                    request.recorder.conversation_id,
+                    request.recorder.branch_id,
+                    request.recorder.input,
+                    request.recorder.executor_generation,
+                )
+                .await
+                .map_err(owner_error)?
+                .0
+            }
+        };
         let verified_task_reference = match request.producing_task.as_ref() {
+            Some(reference)
+                if request.recorder.executor_domain == ExecutorDomain::TaskExecution =>
+            {
+                Some(
+                    self.verified_expert_task_reference_on(
+                        transaction,
+                        request.recorder.run_id,
+                        reference,
+                    )
+                    .await
+                    .map_err(owner_error)?,
+                )
+            }
             Some(reference) => Some(
                 self.verified_task_reference_on(transaction, request.recorder.run_id, reference)
                     .await?,
@@ -2870,6 +2998,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         let transition = if let Some(recovery) = task_recovery {
             record_task_recovery_entry_transition(request, recovery, facts)
+        } else if required_owner_state == Some(OwnerRunState::Terminal) {
+            record_terminal_entry_transition(request, facts)
         } else {
             record_entry_transition(request, facts)
         }
@@ -3779,9 +3909,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::AgentMismatch,
             ));
         }
-        if fence.executor_domain == ExecutorDomain::TaskExecution {
-            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
-        }
         let scope = Scope::from_identity(
             self.person_id,
             &fence.identity,
@@ -3794,37 +3921,66 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(ConversationStoreFailure::Transition(
                     ConversationFailure::ConversationMismatch,
                 ))?;
-        let current_generation = self
-            .active_conversation_executor_generation(transaction)
-            .await
-            .map_err(owner_error)?;
+        let current_generation = match fence.executor_domain {
+            ExecutorDomain::HostRun => self
+                .active_conversation_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+            ExecutorDomain::TaskExecution => self
+                .active_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+        };
         if current_generation != fence.executor_generation {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::WrongWriter,
             ));
         }
         let active_recorder = active_recorder_on(transaction, scope).await?;
-        let (owner, record, terminal_digest) = self
-            .verified_owner_evidence_on(
-                transaction,
-                fence.run_id,
-                &fence.identity,
-                fence.conversation_id,
-                fence.branch_id,
-                fence.input,
-                fence.executor_domain,
-                fence.executor_generation,
-            )
-            .await?;
+        let (owner, terminal_digest, manager_binding) = match fence.executor_domain {
+            ExecutorDomain::HostRun => {
+                let (owner, record, terminal_digest) = self
+                    .verified_owner_evidence_on(
+                        transaction,
+                        fence.run_id,
+                        &fence.identity,
+                        fence.conversation_id,
+                        fence.branch_id,
+                        fence.input,
+                        fence.executor_domain,
+                        fence.executor_generation,
+                    )
+                    .await?;
+                let binding = manager_session_binding_for_session_on(
+                    transaction,
+                    self.person_id,
+                    record.session_id,
+                )
+                .await?;
+                (owner, terminal_digest, binding)
+            }
+            ExecutorDomain::TaskExecution => {
+                let (owner, terminal_digest) = self
+                    .verified_expert_task_owner_evidence_on(
+                        transaction,
+                        fence.run_id,
+                        &fence.identity,
+                        fence.conversation_id,
+                        fence.branch_id,
+                        fence.input,
+                        fence.executor_generation,
+                    )
+                    .await
+                    .map_err(owner_error)?;
+                (owner, terminal_digest, None)
+            }
+        };
         if owner.state != OwnerRunState::Terminal || terminal_digest.is_none() {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::OwnerEvidenceMismatch,
             ));
         }
         let terminal_digest = terminal_digest.ok_or_else(unavailable)?;
-        let manager_binding =
-            manager_session_binding_for_session_on(transaction, self.person_id, record.session_id)
-                .await?;
         let (settled_through, protection_roots, settlement_prefix_verified) =
             if let Some(binding) = manager_binding {
                 if binding.identity != fence.identity
@@ -3860,7 +4016,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             insert_close_receipt_on(transaction, scope, &transition.receipt).await?;
             delete_active_recorder_on(transaction, scope, &fence).await?;
         }
-        let _ = record;
         Ok(transition.receipt)
     }
 
@@ -3912,9 +4067,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::AgentMismatch,
             ));
         }
-        if fence.executor_domain == ExecutorDomain::TaskExecution {
-            return Err(ConversationStoreFailure::UnsupportedOwnerDomain);
-        }
         let scope = Scope::from_identity(
             self.person_id,
             &fence.identity,
@@ -3928,28 +4080,52 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationFailure::ConversationMismatch,
                 ))?;
         let active_recorder = active_recorder_on(transaction, scope).await?;
-        let current_generation = self
-            .active_conversation_executor_generation(transaction)
-            .await
-            .map_err(owner_error)?;
+        let current_generation = match fence.executor_domain {
+            ExecutorDomain::HostRun => self
+                .active_conversation_executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+            // Task activation has advanced the durable generation inside
+            // this transaction, while the cache is updated only after commit.
+            ExecutorDomain::TaskExecution => super::tasks::executor_generation(transaction)
+                .await
+                .map_err(owner_error)?,
+        };
         let generation_fence = owner_generation_fence(
             fence.executor_domain,
             fence.run_id,
             fence.executor_generation,
             current_generation,
         )?;
-        let (owner, _, terminal_digest) = self
-            .verified_owner_evidence_on(
-                transaction,
-                fence.run_id,
-                &fence.identity,
-                fence.conversation_id,
-                fence.branch_id,
-                fence.input,
-                fence.executor_domain,
-                fence.executor_generation,
-            )
-            .await?;
+        let (owner, terminal_digest) = match fence.executor_domain {
+            ExecutorDomain::HostRun => {
+                let (owner, _, digest) = self
+                    .verified_owner_evidence_on(
+                        transaction,
+                        fence.run_id,
+                        &fence.identity,
+                        fence.conversation_id,
+                        fence.branch_id,
+                        fence.input,
+                        fence.executor_domain,
+                        fence.executor_generation,
+                    )
+                    .await?;
+                (owner, digest)
+            }
+            ExecutorDomain::TaskExecution => self
+                .verified_expert_task_owner_evidence_on(
+                    transaction,
+                    fence.run_id,
+                    &fence.identity,
+                    fence.conversation_id,
+                    fence.branch_id,
+                    fence.input,
+                    fence.executor_generation,
+                )
+                .await
+                .map_err(owner_error)?,
+        };
         if owner.state == OwnerRunState::Terminal && terminal_digest.is_none() {
             return Err(unavailable());
         }
@@ -4375,8 +4551,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         reference.validate().map_err(|_| {
             ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
         })?;
-        let actual = self
-            .read_execution_receipt_on(transaction, reference)
+        // Task receipts now verify the immutable Expert run pin and admission
+        // reference as well as the Task journal. Keep that transaction-scoped
+        // resolver behind a heap-backed future so Manager result projection
+        // does not multiply its frame with the typed transcript recorder on
+        // ordinary test/runtime stacks.
+        let actual = Box::pin(self.read_execution_receipt_on(transaction, reference))
             .await
             .map_err(owner_error)?;
         if actual.reference != *reference {
@@ -4551,8 +4731,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(ConversationStoreFailure::Transition(
                     ConversationFailure::OwnerEvidenceMismatch,
                 ))?;
-            self.verified_task_reference_on(transaction, run_id, reference)
-                .await?;
+            let open = open_receipt_on(transaction, self.person_id, run_id)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            match open.fence.executor_domain {
+                ExecutorDomain::HostRun => {
+                    self.verified_task_reference_on(transaction, run_id, reference)
+                        .await?;
+                }
+                ExecutorDomain::TaskExecution => {
+                    self.verified_expert_task_reference_on(transaction, run_id, reference)
+                        .await
+                        .map_err(owner_error)?;
+                }
+            }
         }
         Ok(())
     }
@@ -4780,9 +4974,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await?
                 .ok_or_else(unavailable)?;
             let fence = open.fence;
-            if fence.executor_domain != ExecutorDomain::HostRun {
-                return Err(unavailable());
-            }
             let scope = Scope::from_identity(
                 self.person_id,
                 &fence.identity,
@@ -4798,18 +4989,47 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if input.reference != fence.input || input.kind != TranscriptEntryKind::Inbound {
                 return Err(unavailable());
             }
-            let (owner, record, terminal_digest) = self
-                .verified_owner_evidence_on(
-                    transaction,
-                    run_id,
-                    &fence.identity,
-                    fence.conversation_id,
-                    fence.branch_id,
-                    fence.input,
-                    fence.executor_domain,
-                    fence.executor_generation,
-                )
-                .await?;
+            let (owner, aggregate_revision, terminal_digest) = match fence.executor_domain {
+                ExecutorDomain::HostRun => {
+                    let (owner, record, terminal_digest) = self
+                        .verified_owner_evidence_on(
+                            transaction,
+                            run_id,
+                            &fence.identity,
+                            fence.conversation_id,
+                            fence.branch_id,
+                            fence.input,
+                            fence.executor_domain,
+                            fence.executor_generation,
+                        )
+                        .await?;
+                    (owner, record.aggregate_revision, terminal_digest)
+                }
+                ExecutorDomain::TaskExecution => {
+                    let input = self
+                        .expert_task_owner_for_run_on(transaction, run_id)
+                        .await
+                        .map_err(owner_error)?;
+                    let record = self
+                        .task_on(transaction, input.execution.task_id)
+                        .await
+                        .map_err(owner_error)?
+                        .ok_or_else(unavailable)?;
+                    let (owner, terminal_digest) = self
+                        .verified_expert_task_owner_evidence_on(
+                            transaction,
+                            run_id,
+                            &fence.identity,
+                            fence.conversation_id,
+                            fence.branch_id,
+                            fence.input,
+                            fence.executor_generation,
+                        )
+                        .await
+                        .map_err(owner_error)?;
+                    (owner, record.aggregate_revision, terminal_digest)
+                }
+            };
             let active = active_recorder_on(transaction, scope).await?;
             let close = close_receipt_on(transaction, self.person_id, run_id).await?;
             let retired = retirement_receipt_on(transaction, self.person_id, run_id).await?;
@@ -4825,7 +5045,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if owner.state != OwnerRunState::Terminal
                         || !owner.unresolved_effects.is_empty()
                         || terminal_digest != Some(receipt.terminal_receipt_digest)
-                        || record.aggregate_revision != receipt.owner_aggregate_revision
+                        || aggregate_revision != receipt.owner_aggregate_revision
                     {
                         return Err(unavailable());
                     }
@@ -6371,10 +6591,27 @@ mod tests {
                     journal_digest: empty_journal_digest,
                     receipt: None,
                 };
-                self.vault()
-                    .admit_task(proposed.clone())
+                let conversation_draft = floe_experts::ExpertTaskConversationDraft {
+                    key: floe_experts::ExpertConversationKey::from_admission(
+                        self.person_id,
+                        &proposed.admission,
+                    )
+                    .expect("derive the Task's installed Expert assignment identity"),
+                    run_id: floe_kernel::RunId::new(),
+                    input_message_id: floe_conversation_contract::MessageId::new(),
+                    input_command_id: floe_kernel::CommandId::new(),
+                    delegated_message: request.message.clone(),
+                    input_coverage: DependencyCoverage::Unknown,
+                };
+                let admission = self
+                    .vault()
+                    .admit_task(proposed.clone(), conversation_draft)
                     .await
                     .expect("admit Task for evidence fixture");
+                let expert_input = match admission {
+                    floe_experts::TaskAdmission::Created { expert_input, .. }
+                    | floe_experts::TaskAdmission::Existing { expert_input, .. } => expert_input,
+                };
                 let mut working = self
                     .vault()
                     .compare_and_swap_task(
@@ -6385,6 +6622,7 @@ mod tests {
                             state: TaskState::Working,
                             ..proposed.snapshot.clone()
                         },
+                        expert_input,
                     )
                     .await
                     .expect("start Task execution fixture");

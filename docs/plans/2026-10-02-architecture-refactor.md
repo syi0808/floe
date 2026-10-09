@@ -20,6 +20,57 @@ Compaction is an exact committed prefix and summary with live coverage; it must 
 
 **Acceptance gate for this slice:** run real App/Conversation/Engine/Vault integration with scripted external model/source seams for a text turn, normalized multi-turn history across reopen, New/Continue/Resume input reuse, delegated Task result, blocked textless interaction, cancellation/uncertain recovery, exact ACK replay, bounded cursors and the combined first-insertion late Task result with unresolved model accounting. Follow with Rust/App/FFI and architecture checks, residual searches proving old Manager history routes are gone, and one final aggregate build/test gate. Report GUI, macOS, provider and native QA limits plainly; no premium model or real-provider dispatch. Keep exact base/candidate trees, complete patch, raw logs, manifest and SHA-256 hashes in the reviewable Library archive. No commit or push before root review.
 
+### R5 — persistent isolated Expert Task conversations
+
+**Owner and identity contract:** Experts remains the sole Task lifecycle and execution owner. One admitted `TaskExecutionKey` opens exactly one fresh logical Expert Run segment in Conversation Core; Task's existing journal, terminal receipt, executor generation and recovery remain the only execution authority. Core records transcript custody only. It does not create a second Task/Run journal, scheduler, cancellation authority or dispatch route. Persist a unique mapping from the complete `TaskExecutionKey` (Task ID, execution ID and Task executor generation) to its Core `RunId`, exact Person, Expert Core identity, Conversation/branch and input reference. A different Task ID for the same verified Person, registry instance, installation, assignment, package kind/ID/version and definition revision continues that assignment's exact conversation after prior custody settles. A changed identity field, package/version or definition revision selects new conversation custody. Task ID, Manager Run ID, A2A peer ID, mutable registry revision and model environment digest never select or merge conversation identity. Package version must be checked against the admitted installation and included in the definition identity. Existing Tasks keep their recorded identity and pin.
+
+**Admission and history pin:** store the canonical host Expert execution input with the immutable Task record: exact `TaskExecutionKey`, original `request_digest`, delegated message, input coverage/provenance, Expert conversation identity, Task-to-Run mapping, input message/command IDs, and the exact pre-input Core head (empty head is revision zero plus the Core empty-prefix digest; otherwise exact `TranscriptReference`, head revision and prefix digest). Vault issues a separate immutable `ExpertTaskAdmissionReference` from a domain-separated commitment over that complete local input and persists its canonical receipt atomically with Task admission. The reference binds the exact Task execution, request digest, logical Run, conversation/branch, pin and host-input commitment; it is not part of `delegation_request_digest`, so parent/A2A requests do not fabricate local transcript state. `TaskAdmission::Created` and `Existing` return the unchanged TaskRecord plus that owner-issued reference. Lost admission acknowledgement readback returns the stored canonical reference, never a reconstruction from mutable input JSON or today's head. Working CAS requires the exact reference. Replay, history and terminal receipt verification resolve the same canonical owner evidence and fail closed for missing/mismatched evidence. For a Task ID already stored, resolve its immutable record, owner admission receipt and terminal receipt before consulting today's Directory, conversation head, binding or enable state; exact replay returns that receipt and never repins. For a new Task, one Vault transaction verifies/creates the assignment binding, checks there is no competing reservation for that conversation, pins the current head, reserves the conversation, and admits `Submitted`. The reservation prevents a second Task from pinning the same head until the first Task's Core custody has settled. Do not reopen a terminal Task, including `Blocked`; a later Task ID starts one fresh Core Run segment and may continue the settled assignment transcript.
+
+**Working and output custody:** preserve `Submitted -> Working`. The existing Working CAS transaction verifies the supplied reference against the canonical admission receipt, request digest and current input commitment; it then revalidates the stored reservation and pinned prefix, appends the exact delegated input as `Host` provenance with the host-input commitment linked in Core evidence, and opens its `TaskExecution` recorder atomically before any endpoint/model dispatch. Output, successful or failed ToolResult, typed payload, Core entry/receipt, Task journal watermark and contribution link are one Vault owner transaction. Exact journal replay may return its original revision after terminal state or generation fencing only after verifying the existing typed/Core proof; changed payload or missing proof fails without repair. Blocked terminal state, Task receipt, any textless blocked evidence, recorder close/retirement and reservation release compose in the terminal owner transaction. Task proof is resolved from the actual Task record, canonical admission receipt, complete bounded Task journal, terminal receipt and durable Task executor generation in that transaction; never infer it from caller digests. `HostRun` proof guards remain unchanged. A never-started Submitted Task recovery releases only its exact proven reservation and does not append input, open a recorder or invent output. Unknown Task/model outcomes keep their Task receipt accounting and conversation custody until an authentic owner settlement or Task-generation fence proves the old writer cannot act; timeout, observer cancellation and screen disposal are not proof.
+
+**Bounded history and authorization:** read only the exact pinned prefix under one Vault snapshot. The owner/Core resolver verifies the chained prefix and performs entry-count plus cumulative byte accounting over Core envelopes, typed references, typed payloads and current owner coverage before payload hydration. Enforce both `MAX_AGENT_MESSAGES` and `MAX_MODEL_CONVERSATION_BYTES`; never build an unbounded message vector first. The Engine receives the bounded typed history for its own assignment only. Context reauthorizes every historical coverage record against current source/grant/processing authority before projection; revoked or `Unknown` derived evidence is omitted and cannot be converted to `Independent`. Person-originated historical input may remain. Do not import the Manager transcript, another Expert's history, or Manager-only learning. A2A remains a request/receipt transport and identifier mapper, not a Task/Conversation lifecycle owner.
+
+```mermaid
+flowchart LR
+  Host[Verified host Task input] -->|new Task: exact identity + message| Admission[Vault admission transaction]
+  Admission -->|canonical admission receipt + pinned head + reservation| Submitted[Task Submitted]
+  Submitted -->|Working CAS requires exact receipt| Working[Task Working]
+  Working -->|same transaction: Core input + TaskExecution recorder| Engine[Expert Engine]
+  Engine -->|bounded pinned typed history| Context[Context live coverage reauthorization]
+  Context --> Engine
+  Engine -->|tool/output journal + typed/Core receipt| Vault[Vault Task owner transaction]
+  Vault -->|terminal Task receipt + close/fence + release| Settled[Settled assignment transcript]
+  Settled -->|new Task ID, same verified assignment/definition| Admission
+  A2A[A2A mapping] -. request/receipt only .-> Host
+  Manager[Manager Run] -. authenticated Task receipt only .-> Host
+```
+
+```mermaid
+sequenceDiagram
+  participant T as Experts TaskCoordinator
+  participant V as Vault Task owner
+  participant C as Conversation Core
+  participant E as Expert Engine
+  T->>V: Admit(TaskRecord proposal, host input)
+  V->>V: Exact Task replay lookup before mutable identity/head checks
+  V->>C: Pin bounded head/prefix and reserve exact assignment
+  V->>V: Persist canonical admission receipt with request and host-input commitment
+  V-->>T: Unchanged Submitted TaskRecord + owner-issued input reference
+  T->>V: Submitted -> Working CAS with exact input reference
+  V->>C: Append committed Host input + open mapped TaskExecution Run
+  V-->>T: Working Task and recorder fence
+  T->>V: Resolve bounded history at stored pin
+  T->>E: Execute once with that history
+  E->>V: Journal events; typed/Core writes share each owner transaction
+  T->>V: Settle terminal Task and immutable receipt
+  V->>C: Verify Task proof; close or retain/retire custody by owner evidence
+  V-->>T: Stored immutable Task receipt
+```
+
+**Cutover and deletion gate:** add the Experts-owned history/input/recovery ports over the existing Task owner; add the Task-specific Core proof path without routing through `floe-conversation`; compose admission/reservation, Working/input/open, journal/typed/Core and terminal/custody changes at the encrypted Vault transaction boundary; then replace the Engine's empty history with the exact bounded assignment history. Migrate real App wiring and owner tests, then delete any unpinned/empty-history fallback. Keep Manager Session/learning callers and A2A mapping unchanged. Fresh development profiles are the supported scope; incompatible stored Task/profile meaning is untouched and fails closed, with no automatic reset or migration.
+
+**Required behavior evidence:** two terminal Tasks on one assignment see the correct prior history; different Person, assignment, installation, package/version or definition is isolated; exact Task replay after head advance preserves its original pin/receipt; duplicate and concurrent admissions cannot reserve one head twice; lost admission, Working, journal-output and terminal acknowledgements recover without duplicate dispatch/contribution; cancellation and old-generation recovery preserve uncertainty; a Blocked Task remains terminal and a later Task starts a new Run; revocation/Unknown history is filtered and byte/count limits reject before hydration; no Expert learning is invoked. Use real App/Experts/Engine/Task/Vault paths with scripted model/source seams only. Preserve Manager integration cases. Do not invoke premium models, real providers, deployment or native GUI QA in this executor.
+
 **Current checkpoint — verified 2026-10-07:** P1a's five owner-path Conversation cases now run alongside real Schedule Expert/tool-source and Day refresh/query cases over the opt-in Linux Calendar fixture: 7 passed, 0 failed in the final focused target. External model/acquisition facts are synthetic; Connections, Access, Context, Inference, owner journals and encrypted storage are real. The shared-grant consumer bug, repeated full model-budget reservation, and divergent acquisition/commit Calendar inventory were corrected at their owning contracts. This closes the bounded T1 fixture happy path, not the entire P1/P6 matrix. Process-crash recovery, full owner-level denial/race cases, T2 cross-process client/server transport, real LLM and native-platform qualification remain open.
 
 ### R0 — integrated session-payload and model-catalog changes (2026-10-08)

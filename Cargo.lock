@@ -880,6 +880,7 @@ dependencies = [
  "floe-agent-contract",
  "floe-agent-runtime",
  "floe-context-contract",
+ "floe-conversation-contract",
  "floe-execution",
  "floe-kernel",
  "serde",

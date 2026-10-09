@@ -7,10 +7,9 @@ use crate::{
 use floe_agent_contract::{
     AgentEndpoint, AgentFailure, AllowedCatalog, BoxFuture, DelegationPort, DelegationRequest,
     DependencyCoverage, EndpointInvocation, EndpointSettlement, EngineRequest, ExpertBlockReport,
-    ExpertExecutionOutcome, ExpertReport, ModelConversation, ModelConversationEntry, ModelPort,
-    ModelProjectionOutcome, ModelProjectionPort, ModelProjectionRequest, OwnerActor, RoleSpec,
-    TaskBlockage, TaskReceipt, ToolCall, ToolDescriptor, ToolInvocationOutcome, ToolPort,
-    ToolResult,
+    ExpertExecutionOutcome, ExpertReport, ModelPort, ModelProjectionOutcome, ModelProjectionPort,
+    ModelProjectionRequest, OwnerActor, RoleSpec, TaskBlockage, TaskReceipt, ToolCall,
+    ToolDescriptor, ToolInvocationOutcome, ToolPort, ToolResult,
 };
 use floe_agent_runtime::{
     Engine, EngineBlockage, EngineOutcome, EnginePorts, FinalPayloadValidator,
@@ -328,6 +327,7 @@ impl ModelProjectionPort for ExpertProjection<'_> {
                             .agent_context
                             .clone(),
                         prompt: self.spec.prompt.clone(),
+                        history_coverage: self.invocation.history_coverage.clone(),
                         observations: self.evidence.observations()?,
                         package_data_class: self.endpoint.manifest.data_class,
                         inherited_coverage: self
@@ -513,13 +513,7 @@ impl AgentEndpoint for EngineExpertEndpoint {
                             output_format: floe_agent_contract::ModelOutputFormat::Text,
                         },
                         scope: scope.clone(),
-                        conversation: ModelConversation {
-                            history: vec![],
-                            current_turn: vec![ModelConversationEntry::User {
-                                message_id: request.invocation_key.as_uuid(),
-                                text: request.message.clone(),
-                            }],
-                        },
+                        conversation: invocation.conversation.clone(),
                         allowed_catalog: AllowedCatalog {
                             cards: vec![],
                             tools,

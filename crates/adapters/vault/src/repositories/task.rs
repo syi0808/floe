@@ -6,7 +6,8 @@ use floe_agent_contract::{
     TaskExecutionKey, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskId,
 };
 use floe_experts::{
-    ExpertSettlement, TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRecord,
+    ExpertSettlement, ExpertTaskAdmissionReference, ExpertTaskConversation,
+    ExpertTaskConversationDraft, TaskActivation, TaskAdmission, TaskExecutionCommit, TaskRecord,
     TaskRepository,
 };
 
@@ -28,8 +29,23 @@ impl<Keys: VaultKeyProvider + 'static> TaskRepository for VaultTaskRepository<Ke
     fn admit<'a>(
         &'a self,
         proposed: TaskRecord,
+        conversation: ExpertTaskConversationDraft,
     ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>> {
-        Box::pin(async move { self.vault.admit_task(proposed).await })
+        Box::pin(async move { self.vault.admit_task(proposed, conversation).await })
+    }
+
+    fn load_conversation<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<ExpertTaskConversation, AgentFailure>> {
+        Box::pin(async move { self.vault.expert_task_conversation(execution).await })
+    }
+
+    fn expert_admission_reference<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<ExpertTaskAdmissionReference, AgentFailure>> {
+        Box::pin(async move { self.vault.expert_task_admission_reference(execution).await })
     }
 
     fn compare_and_swap<'a>(
@@ -38,6 +54,7 @@ impl<Keys: VaultKeyProvider + 'static> TaskRepository for VaultTaskRepository<Ke
         expected_aggregate_revision: u64,
         executor_generation: u64,
         snapshot: floe_agent_contract::TaskSnapshot,
+        expert_input: ExpertTaskAdmissionReference,
     ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>> {
         Box::pin(async move {
             self.vault
@@ -46,6 +63,7 @@ impl<Keys: VaultKeyProvider + 'static> TaskRepository for VaultTaskRepository<Ke
                     expected_aggregate_revision,
                     executor_generation,
                     snapshot,
+                    expert_input,
                 )
                 .await
         })

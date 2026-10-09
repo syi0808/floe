@@ -65,6 +65,7 @@ pub(crate) enum Family {
     ConversationOwnerCustodyV2,
     Interactions,
     Tasks,
+    ExpertTaskConversationsV1,
     Cleanup,
     Registry,
     Gateway,
@@ -87,6 +88,7 @@ impl Family {
             Self::ConversationOwnerCustodyV2 => encrypted::CONVERSATION_OWNER_CUSTODY_V2,
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
+            Self::ExpertTaskConversationsV1 => encrypted::EXPERT_TASK_CONVERSATIONS_V1,
             Self::Cleanup => encrypted::CLEANUP,
             Self::Registry => encrypted::REGISTRY,
             Self::Gateway => gateway::GATEWAY_OBJECTS,
@@ -221,6 +223,7 @@ fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
         validate_family_declarations(Family::ConversationCoreV3, &mut names)?;
         validate_family_declarations(Family::ConversationCoreOutputsV2, &mut names)?;
         validate_family_declarations(Family::ConversationOwnerCustodyV2, &mut names)?;
+        validate_family_declarations(Family::ExpertTaskConversationsV1, &mut names)?;
     }
     Ok(())
 }
@@ -324,10 +327,17 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ExpertTaskConversationsV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
         validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
         validate_optional_family_presence(&stored, Family::TypedHistoryV2)?;
         validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV2)?;
+        validate_optional_family_presence(&stored, Family::ExpertTaskConversationsV1)?;
         if family_present(&stored, Family::ConversationCoreOutputsV2)
             && !family_present(&stored, Family::ConversationCoreV3)
         {
@@ -349,6 +359,15 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
         }
         if family_present(&stored, Family::ConversationOwnerCustodyV2) {
             inspect_declared(connection, Family::ConversationOwnerCustodyV2, &stored).await?;
+        }
+        if family_present(&stored, Family::ExpertTaskConversationsV1) {
+            if !family_present(&stored, Family::ConversationCoreV3) {
+                return Err(unsupported(
+                    "agent_expert_task_conversation_schema_v1",
+                    "extension_without_core_v3",
+                ));
+            }
+            inspect_declared(connection, Family::ExpertTaskConversationsV1, &stored).await?;
         }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {
@@ -556,6 +575,41 @@ pub(crate) async fn ensure_conversation_owner_custody_family_v2(
     inspect_declared(connection, Family::ConversationOwnerCustodyV2, &stored).await
 }
 
+pub(crate) async fn expert_task_conversations_family_v1_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    let stored = inventory(connection).await?;
+    validate_conversation_core_marker_versions(connection, &stored).await?;
+    validate_optional_family_presence(&stored, Family::ExpertTaskConversationsV1)?;
+    if family_present(&stored, Family::ExpertTaskConversationsV1) {
+        if !family_present(&stored, Family::ConversationCoreV3) {
+            return Err(unsupported(
+                "agent_expert_task_conversation_schema_v1",
+                "extension_without_core_v3",
+            ));
+        }
+        inspect_declared(connection, Family::ExpertTaskConversationsV1, &stored).await?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Create the optional Expert conversation family only from a Task admission
+/// after the owner has established that no legacy Task data needs reinterpretation.
+pub(crate) async fn ensure_expert_task_conversations_family_v1(
+    connection: &Connection,
+) -> Result<(), SchemaFailure> {
+    let mut names = BTreeSet::new();
+    validate_family_declarations(Family::ExpertTaskConversationsV1, &mut names)?;
+    if expert_task_conversations_family_v1_present(connection).await? {
+        return Ok(());
+    }
+    create_family(connection, Family::ExpertTaskConversationsV1).await?;
+    let stored = inventory(connection).await?;
+    inspect_declared(connection, Family::ExpertTaskConversationsV1, &stored).await
+}
+
 pub(crate) async fn inspect_family(
     connection: &Connection,
     family: Family,
@@ -599,13 +653,29 @@ pub(crate) async fn inspect_family(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ExpertTaskConversationsV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::TypedHistoryV2)?;
         validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV2)?;
+        validate_optional_family_presence(&stored, Family::ExpertTaskConversationsV1)?;
         if family_present(&stored, Family::TypedHistoryV2) {
             inspect_declared(connection, Family::TypedHistoryV2, &stored).await?;
         }
         if family_present(&stored, Family::ConversationOwnerCustodyV2) {
             inspect_declared(connection, Family::ConversationOwnerCustodyV2, &stored).await?;
+        }
+        if family_present(&stored, Family::ExpertTaskConversationsV1) {
+            if !family_present(&stored, Family::ConversationCoreV3) {
+                return Err(unsupported(
+                    "agent_expert_task_conversation_schema_v1",
+                    "extension_without_core_v3",
+                ));
+            }
+            inspect_declared(connection, Family::ExpertTaskConversationsV1, &stored).await?;
         }
     }
     if stored.keys().any(|name| !expected.contains(name.as_str())) {

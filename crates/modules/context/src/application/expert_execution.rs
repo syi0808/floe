@@ -14,8 +14,7 @@ use floe_agent_contract::{
 };
 use floe_connections::{ConnectionsRepository, SourceConnection};
 use floe_context_contract::{
-    ContextDependency, GrantConsumer, GrantPurpose, PersonId, SourceReadOutcome,
-    SourceSelectionReference,
+    ContextDependency, GrantConsumer, GrantPurpose, SourceReadOutcome, SourceSelectionReference,
 };
 use floe_experts::{ExpertManifest, ExpertSourcePort, ExpertSourceRead, ExpertSourceRequest};
 use serde_json::Value;
@@ -23,12 +22,41 @@ use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    CalendarConnectionReader, CalendarObserveRequest, CalendarSource, DeclaredSourceRequirement,
-    DependencyResolver, EvidenceReader, ExpertSourceTransport, LocalExpertSource,
-    LocalExpertSourceDriver, NativeCalendarGrantReader, PersonalConnectionReader,
-    PersonalSourceDriver, SelectedSourceReader, SourceLeaseRegistry, SourceLeaseReservation,
-    SourceRead, SourceReadRequest, SourceView,
+    DeclaredSourceRequirement, DependencyResolver, EvidenceReader, ExpertSourceTransport,
+    LocalExpertSource, LocalExpertSourceDriver, PersonalSourceDriver, SelectedSourceReader,
+    SourceLeaseRegistry, SourceLeaseReservation, SourceRead, SourceReadRequest, SourceView,
 };
+
+fn retain_history_entry_after_authorization(
+    entry: floe_agent_contract::ModelConversationEntry,
+    history_coverage: DependencyCoverage,
+    authorization: Result<(), AgentFailure>,
+    inherited_coverage: &mut DependencyCoverage,
+) -> Result<
+    Option<(
+        floe_agent_contract::ModelConversationEntry,
+        DependencyCoverage,
+    )>,
+    AgentFailure,
+> {
+    if history_coverage == DependencyCoverage::Unknown {
+        return Ok(None);
+    }
+    match authorization {
+        Ok(()) => {
+            *inherited_coverage = inherited_coverage
+                .merge(&history_coverage)
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+            Ok(Some((entry, history_coverage)))
+        }
+        Err(
+            AgentFailure::PolicyDenied
+            | AgentFailure::AccessReviewRequired
+            | AgentFailure::StaleContext,
+        ) => Ok(None),
+        Err(failure) => Err(failure),
+    }
+}
 
 /// These handles belong to one opened profile generation. Host-lifetime Day
 /// acquisition remains independently usable without these encrypted readers.
@@ -119,14 +147,14 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             dependencies.authorize_task(&input.actor, input.execution, scope)?;
             input.request.validate()?;
             input.prompt.validate()?;
-            let request = &input.request;
+            let request = &mut input.request;
             if request.principal != input.actor.person_id.to_string()
                 || request.plan.device_id != input.actor.device_id
                 || request.plan.consumer != floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER
                 || request.plan.purpose != "everyday_assistance"
                 || request.role.instructions != input.prompt.render()
                 || !request.catalog.cards.is_empty()
-                || !request.conversation.history.is_empty()
+                || input.history_coverage.len() != request.conversation.history.len()
                 || input.observations.len() > 32
                 || matches!(
                     input.package_data_class,
@@ -157,6 +185,28 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             }
             authorize_coverage(dependencies, &input.inherited_coverage, scope).await?;
             let mut coverage = input.inherited_coverage.clone();
+            let mut retained_history = Vec::with_capacity(request.conversation.history.len());
+            for (entry, history_coverage) in request
+                .conversation
+                .history
+                .drain(..)
+                .zip(input.history_coverage.drain(..))
+            {
+                if history_coverage == DependencyCoverage::Unknown {
+                    continue;
+                }
+                let authorization =
+                    authorize_coverage(dependencies, &history_coverage, scope).await;
+                if let Some((entry, _)) = retain_history_entry_after_authorization(
+                    entry,
+                    history_coverage,
+                    authorization,
+                    &mut coverage,
+                )? {
+                    retained_history.push(entry);
+                }
+            }
+            request.conversation.history = retained_history;
             let mut seen = HashSet::new();
             let mut seen_calls = HashSet::new();
             let mut captured_issues = std::collections::BTreeMap::new();
@@ -340,6 +390,100 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
                 max_output_bytes: request.max_output_bytes,
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod expert_history_authorization_tests {
+    use super::retain_history_entry_after_authorization;
+    use floe_access::{
+        ConnectionId, ContextDependency, ExecutionOwnerId, GrantAuthority, GrantConsumer,
+        GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantSourceBinding,
+        ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+    use floe_agent_contract::{AgentFailure, DependencyCoverage, ModelConversationEntry};
+    use floe_kernel::PersonId;
+    use uuid::Uuid;
+
+    fn dependency(person_id: PersonId) -> ContextDependency {
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("fixture.connection").expect("valid connection"),
+            floe_access::ConnectorId::try_new("fixture.connector").expect("valid connector"),
+            ExecutionOwnerId::try_new("fixture.owner").expect("valid execution owner"),
+        )
+        .expect("valid dependency source");
+        let now = chrono::Utc::now();
+        ContextDependency::try_new(
+            person_id,
+            GrantId::new(),
+            GrantAuthority::new(),
+            source,
+            vec![ResourceHandle::try_new("fixture.resource").expect("valid resource")],
+            SourceAuthority::new(),
+            vec![
+                ResourceHandle::try_new("fixture.source-resource").expect("valid source resource"),
+            ],
+            vec![GrantDataCategory::Content],
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("fixture.expert").expect("valid Expert consumer"),
+            ProcessingRestriction::DeviceOnly,
+            Uuid::new_v4(),
+            vec![b'x'; 16],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now,
+            now + chrono::Duration::minutes(5),
+        )
+        .expect("valid source dependency")
+    }
+
+    #[test]
+    fn revoked_and_unknown_history_is_dropped_without_becoming_independent() {
+        let person_id = PersonId::new();
+        let old_user = ModelConversationEntry::User {
+            message_id: Uuid::new_v4(),
+            text: "old user input".into(),
+        };
+        let revoked_answer = ModelConversationEntry::Assistant {
+            message_id: Uuid::new_v4(),
+            text: "revoked source answer".into(),
+        };
+        let unknown_answer = ModelConversationEntry::Assistant {
+            message_id: Uuid::new_v4(),
+            text: "unknown source answer".into(),
+        };
+        let dependent = DependencyCoverage::Dependent {
+            dependencies: vec![dependency(person_id)],
+        };
+        let mut current = DependencyCoverage::Independent;
+
+        let retained_user = retain_history_entry_after_authorization(
+            old_user,
+            DependencyCoverage::Independent,
+            Ok(()),
+            &mut current,
+        )
+        .expect("independent user input remains visible");
+        assert!(retained_user.is_some());
+        let revoked = retain_history_entry_after_authorization(
+            revoked_answer,
+            dependent,
+            Err(AgentFailure::PolicyDenied),
+            &mut current,
+        )
+        .expect("revoked dependency removes only its derived entry");
+        assert!(revoked.is_none());
+        let unknown = retain_history_entry_after_authorization(
+            unknown_answer,
+            DependencyCoverage::Unknown,
+            Ok(()),
+            &mut current,
+        )
+        .expect("Unknown evidence is never promoted by a permissive result");
+        assert!(unknown.is_none());
+        assert_eq!(current, DependencyCoverage::Independent);
     }
 }
 

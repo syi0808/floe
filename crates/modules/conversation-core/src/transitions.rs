@@ -576,6 +576,16 @@ pub fn record_entry(
     record_entry_with_owner_state(request, facts, Some(OwnerRunState::Working))
 }
 
+/// Append a Task-owned terminal contribution whose proof is already present in
+/// the same owner transaction. This is used for a typed Blocked outcome that
+/// has no journal Output event of its own.
+pub fn record_terminal_entry(
+    request: RecordingRequest,
+    facts: RecordingFacts,
+) -> Result<RecordingTransition, ConversationFailure> {
+    record_entry_with_owner_state(request, facts, Some(OwnerRunState::Terminal))
+}
+
 /// Append an exact Task result discovered by owner recovery after a terminal
 /// request while the original recorder is still open. The caller must supply
 /// the owner-verified Task receipt reference; this path never grants general

@@ -55,6 +55,8 @@ pub enum ModelOutput {
     UnsupportedManagerToolCall,
     WaitForCancellation(Arc<GenerateBarrier>),
     ScheduleExpertFlow,
+    ScheduleExpertContinuationFlow,
+    ScheduleExpertRevocationFlow,
     ScheduleBlockedResumeFlow,
     ScheduleFinalizationFlow,
 }
@@ -316,6 +318,24 @@ impl ScriptedModel {
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
                 CONVERSATION_CONSUMER.into(),
             ],
+            ModelOutput::ScheduleExpertContinuationFlow => vec![
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+            ],
+            ModelOutput::ScheduleExpertRevocationFlow => vec![
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                CONVERSATION_CONSUMER.into(),
+            ],
             ModelOutput::ScheduleBlockedResumeFlow => {
                 vec![CONVERSATION_CONSUMER.into(), CONVERSATION_CONSUMER.into()]
             }
@@ -379,6 +399,8 @@ impl ScriptedModel {
         let schedule_flow = matches!(
             &self.output,
             ModelOutput::ScheduleExpertFlow
+                | ModelOutput::ScheduleExpertContinuationFlow
+                | ModelOutput::ScheduleExpertRevocationFlow
                 | ModelOutput::ScheduleBlockedResumeFlow
                 | ModelOutput::ScheduleFinalizationFlow
         );
@@ -436,6 +458,11 @@ impl ScriptedModel {
         call_index: usize,
         request: &InferenceRequest,
     ) -> Result<CanonicalModelResponse, AgentFailure> {
+        let call_index = if matches!(&self.output, ModelOutput::ScheduleExpertRevocationFlow) {
+            call_index % 4
+        } else {
+            call_index
+        };
         match call_index {
             0 => {
                 if request.catalog.tools.is_empty() {
@@ -467,7 +494,10 @@ impl ScriptedModel {
                     artifacts: vec![],
                 }]))
             }
-            1 => {
+            1 | 4
+                if call_index == 1
+                    || matches!(&self.output, ModelOutput::ScheduleExpertContinuationFlow) =>
+            {
                 let [calendar] = request.catalog.tools.as_slice() else {
                     self.recorder.record_violation(format!(
                         "Schedule script expected one source tool at generation {call_index}; tools={:?}",
@@ -512,7 +542,7 @@ impl ScriptedModel {
                     input: serde_json::to_string(&input).map_err(|_| AgentFailure::InvalidInput)?,
                 }]))
             }
-            2 => Ok(response(vec![ModelStep::Answer {
+            2 | 5 => Ok(response(vec![ModelStep::Answer {
                 text:
                     "The selected synthetic calendar has one planning event in the requested range."
                         .into(),
@@ -523,10 +553,36 @@ impl ScriptedModel {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],
                 }])),
+                ModelOutput::ScheduleExpertRevocationFlow => {
+                    Ok(response(vec![ModelStep::Answer {
+                        text: SCRIPTED_REPLY.into(),
+                        artifacts: vec![],
+                    }]))
+                }
+                ModelOutput::ScheduleExpertContinuationFlow => {
+                    let schedule = request
+                        .catalog
+                        .cards
+                        .iter()
+                        .find(|definition| definition.card.id == "floe.builtin.schedule")
+                        .ok_or(AgentFailure::InvalidInput)?;
+                    Ok(response(vec![ModelStep::Delegate {
+                        agent_id: schedule.card.id.clone(),
+                        definition_revision: schedule.definition_revision,
+                        message: self.expected_input.clone(),
+                        context_refs: vec![],
+                    }]))
+                }
                 ModelOutput::ScheduleBlockedResumeFlow => Err(AgentFailure::InvalidInput),
                 ModelOutput::ScheduleFinalizationFlow => Err(AgentFailure::BudgetExceeded),
                 _ => Err(AgentFailure::InvalidInput),
             },
+            6 if matches!(&self.output, ModelOutput::ScheduleExpertContinuationFlow) => {
+                Ok(response(vec![ModelStep::Answer {
+                    text: SCRIPTED_REPLY.into(),
+                    artifacts: vec![],
+                }]))
+            }
             4 if matches!(&self.output, ModelOutput::ScheduleFinalizationFlow) => {
                 self.finalization_answer(request)
             }
@@ -737,6 +793,12 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::ScheduleExpertFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
+                }
+                ModelOutput::ScheduleExpertContinuationFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
+                }
+                ModelOutput::ScheduleExpertRevocationFlow => {
                     self.model.schedule_flow_response(call_index, &request)
                 }
                 ModelOutput::ScheduleBlockedResumeFlow => {
@@ -1056,6 +1118,33 @@ pub fn configure_fixture_calendar(
                     .map_err(|failure| failure.into_failure())
             })
             .expect("configure synthetic Calendar through real Connections and Access owners")
+    })
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+pub fn disconnect_fixture_calendar(
+    host: &AppHost<AppComposition>,
+    source: &floe_connections::SourceSummary,
+) -> floe_connections::ConnectionOperationSnapshot {
+    let source_ref = source.source_ref;
+    let revision = source.revision;
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                owners
+                    .connections
+                    .disconnect(
+                        &actor,
+                        Uuid::new_v4(),
+                        source_ref,
+                        revision,
+                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
+                    )
+                    .await
+                    .map_err(|failure| failure.into_failure())
+            })
+            .expect("revoke the fixture calendar's Access grants through Connections/Access")
     })
 }
 

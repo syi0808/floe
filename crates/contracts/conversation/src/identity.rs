@@ -63,7 +63,7 @@ impl AgentIdentity {
             || !self.agent_instance_id.is_valid()
             || !self.assignment_id.is_valid()
             || self.definition_id.trim().is_empty()
-            || self.definition_id.len() > 128
+            || self.definition_id.len() > 512
             || self.definition_id.chars().any(char::is_control)
             || self.definition_revision == 0
         {

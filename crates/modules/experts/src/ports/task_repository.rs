@@ -8,11 +8,18 @@ use floe_agent_contract::{
 };
 
 use crate::task_record::TaskRecord;
+use crate::{ExpertTaskAdmissionReference, ExpertTaskConversation, ExpertTaskConversationDraft};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskAdmission {
-    Created(TaskRecord),
-    Existing(TaskRecord),
+    Created {
+        record: TaskRecord,
+        expert_input: ExpertTaskAdmissionReference,
+    },
+    Existing {
+        record: TaskRecord,
+        expert_input: ExpertTaskAdmissionReference,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -42,7 +49,23 @@ pub trait TaskRepository: Send + Sync {
     fn admit<'a>(
         &'a self,
         proposed: TaskRecord,
+        conversation: ExpertTaskConversationDraft,
     ) -> BoxFuture<'a, Result<TaskAdmission, AgentFailure>>;
+
+    /// Resolve only the immutable Task-pinned Expert prefix, with typed
+    /// coverage attached to each model-history entry. The owner adapter must
+    /// bound and validate the complete snapshot before hydrating payloads.
+    fn load_conversation<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<ExpertTaskConversation, AgentFailure>>;
+
+    /// Resolve the durable owner-issued input reference after an uncertain
+    /// admission acknowledgement. This never computes or advances the pin.
+    fn expert_admission_reference<'a>(
+        &'a self,
+        execution: TaskExecutionKey,
+    ) -> BoxFuture<'a, Result<ExpertTaskAdmissionReference, AgentFailure>>;
 
     /// Only Submitted -> Working. Terminal state requires journal-bound settlement.
     /// The owner retains this future past observer cancellation and may rejoin
@@ -53,6 +76,7 @@ pub trait TaskRepository: Send + Sync {
         expected_aggregate_revision: u64,
         executor_generation: u64,
         snapshot: TaskSnapshot,
+        expert_input: ExpertTaskAdmissionReference,
     ) -> BoxFuture<'a, Result<TaskRecord, AgentFailure>>;
 
     /// Every append checks the exact Task/execution/generation and current active fence.

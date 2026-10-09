@@ -128,10 +128,18 @@ automatic legacy Session import, migration chain, dual read/write or reset.
 Existing incompatible profiles remain untouched and fail closed at the stored
 meaning/version check; no database or key is deleted. Manager production
 history does not fall back to serialized Session vectors. Persistent isolated
-Expert conversations and their Task-to-Run/history-pin cutover are the next
-functional milestone. Expert execution remains a genuine Task owner and source
-of Manager evidence; no Expert learning loop is added and A2A remains a mapping
-boundary.
+Expert conversations now use bounded history pinned by canonical Task
+admission. Each Task execution maps to one fresh Core Run segment; a later Task
+continues the transcript only when its verified Person, registry instance,
+installation, assignment, package/version and definition match. The existing
+Task owner remains the sole lifecycle authority. Vault returns an immutable
+Expert admission reference separately from the unchanged Task record; its
+canonical receipt binds the original Task request digest and a commitment over
+the complete host input and history pin. Working activation, exact replay,
+history resolution and terminal receipt verification resolve that same receipt
+and fail closed if mutable input JSON no longer matches it. The admitted input
+is recorded as Host provenance with the commitment linked into Core. No Expert
+learning loop is added and A2A remains a mapping boundary.
 
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
@@ -264,15 +272,22 @@ Conversation Run admission
   -> Manager catalog and DelegationPort
   -> validated Delegate batch with exact projection coverage
   -> DelegationIntent
-  -> TaskCoordinator admission and Task-owned execution journal
+  -> TaskCoordinator admission, exact Expert history pin and assignment reservation
+  -> Task-owned execution journal
+  -> Submitted -> Working CAS appends delegated input and opens TaskExecution Core recorder
+  -> bounded pinned history with live Context coverage reauthorization
   -> EngineExpertEndpoint + retained pure ExpertProgram
   -> Context source/projection ports + common Engine/ModelPort
-  -> atomic Task terminal state, journal head and execution receipt
+  -> atomic Task/Core output, journal head, terminal state and execution receipt
   -> parent DelegationResult references the exact receipt
   -> Manager synthesis or typed Conversation blockage
 ```
 
 Experts owns Task identity, admission, lifecycle, persistence and cancellation. `RunExpertEnvironment` retains the principal and exact Directory snapshot for a Run. The Engine binds `DelegationContextInput` to the actual authorized projection, producing `DelegationExecutionContext` with inherited coverage. The canonical request digest covers principal, original parent, selected definition, context references, session/device, output bound and projection coverage; Task and invocation IDs are checked separately, and Task admission pins the exact assignment and source selection. `EndpointInvocation` carries the real Task execution key and its sole canonical journal. The common `EngineExpertEndpoint` runs under the Task's bounded child scope and uses the same prepared ModelPort as the Manager.
+
+The host Task input separately stores the canonical delegated message, Expert conversation identity and exact pre-input history head/reference/prefix digest; that local pin is not part of the external DelegationRequest digest. Exact Task replay resolves this immutable input and terminal receipt before consulting today's Directory or conversation head. New admissions reserve one assignment conversation and pin its current head atomically. The existing Working CAS appends that exact input and opens one TaskExecution recorder. A terminal Task, including Blocked, never reopens; only a later Task ID may continue a settled assignment with a new Run. Changed Person, registry instance, installation, assignment, package/version or definition selects separate custody.
+
+History resolution reads the exact pinned prefix under one Vault snapshot and checks entry count plus cumulative serialized/reference/typed-evidence/coverage bytes before hydrating payloads. Context reauthorizes each historical coverage record against current source and processing authority; revoked or Unknown derived entries are omitted. Person-originated historical input may remain. Manager private transcript and other Expert conversations are not included in this path.
 
 Directory publication replaces one owner's complete endpoint set under one write lock, preserving unrelated registrations and rejecting cross-owner collisions before mutation. Run admission samples the exact Directory revision, sorted eligible definitions, admission identities, execution selections and endpoints under one read lock. The environment's SHA-256 digest binds configuration only, never endpoint pointers or live authority. Its catalog preserves revision zero for an intentionally empty initial environment. Delegation resolves only this snapshot, including before Task admission; a later publication cannot reroute the active Run, and the next Run samples the changed Directory. Task replay must match the pinned admission and selection.
 

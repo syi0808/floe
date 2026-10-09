@@ -1697,6 +1697,122 @@ fn schedule_expert_reads_only_the_selected_synthetic_calendar_and_persists_evide
 
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 #[test]
+fn schedule_expert_continues_its_pinned_history_across_two_tasks() {
+    const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
+
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleExpertContinuationFlow,
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    support::bind_schedule_expert(&host);
+
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(receipt.output.as_deref(), Some(REPLY));
+    assert_eq!(receipt.task_refs.len(), 2);
+    assert_ne!(receipt.task_refs[0], receipt.task_refs[1]);
+
+    let script = assert_script_clean(&recorder);
+    assert_eq!(script.generated.len(), 7);
+    let first_task = script.generated_bindings[1]
+        .task_id
+        .expect("first Schedule generation is bound to its Task");
+    let second_task = script.generated_bindings[4]
+        .task_id
+        .expect("second Schedule generation is bound to its Task");
+    assert_ne!(first_task, second_task);
+    assert_eq!(script.generated_bindings[2].task_id, Some(first_task));
+    assert_eq!(script.generated_bindings[5].task_id, Some(second_task));
+
+    let continued = &script.generated[4].envelope.conversation;
+    assert!(continued.history.iter().any(|entry| matches!(
+        entry,
+        floe_agent_contract::ModelConversationEntry::User { text, .. }
+            if text == SCHEDULE_REQUEST
+    )));
+    assert!(continued.history.iter().any(|entry| matches!(
+        entry,
+        floe_agent_contract::ModelConversationEntry::Assistant { text, .. }
+            if text == "The selected synthetic calendar has one planning event in the requested range."
+    )));
+    assert!(matches!(
+        continued.current_turn.as_slice(),
+        [floe_agent_contract::ModelConversationEntry::User { text, .. }]
+            if text == SCHEDULE_REQUEST
+    ));
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn revoked_calendar_grant_removes_derived_expert_history_in_context() {
+    const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
+
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleExpertRevocationFlow,
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    let calendar = support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    support::bind_schedule_expert(&host);
+
+    let session_id = start_session(&host);
+    let first_command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let first_receipt = wait_terminal_run(&host, first_command.run_id);
+    assert_eq!(first_receipt.state, RunState::Completed);
+    assert_eq!(first_receipt.task_refs.len(), 1);
+
+    let revoked = support::disconnect_fixture_calendar(&host, &calendar);
+    assert_eq!(
+        revoked.state,
+        floe_connections::ConnectionOperationState::Completed,
+        "the real Connections/Access owner committed grant revocation"
+    );
+
+    let second_command = start_turn(&host, session_id, SCHEDULE_REQUEST);
+    let _second_receipt = wait_terminal_run(&host, second_command.run_id);
+    let script = assert_script_clean(&recorder);
+    let second_expert_projection = script
+        .generated
+        .get(5)
+        .expect("the second Task reaches Context projection before its source read");
+    assert!(
+        second_expert_projection
+            .envelope
+            .conversation
+            .history
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                floe_agent_contract::ModelConversationEntry::User { text, .. }
+                    if text == SCHEDULE_REQUEST
+            )),
+        "independent delegated input remains in assignment history"
+    );
+    assert!(
+        !second_expert_projection
+            .envelope
+            .conversation
+            .history
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                floe_agent_contract::ModelConversationEntry::Assistant { text, .. }
+                    if text == "The selected synthetic calendar has one planning event in the requested range."
+            )),
+        "derived answer is removed after Access revoked its grant"
+    );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
 fn manager_rejects_same_budget_model_change_before_second_dispatch() {
     const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-10-31.";
 

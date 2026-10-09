@@ -52,11 +52,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 if transaction.commit().await.is_err() {
                     self.unavailable.store(true, Ordering::Release);
                     Err(AgentFailure::StorageUnavailable)
-                } else if let Err(failure) = self.check_access() {
-                    self.unavailable.store(true, Ordering::Release);
-                    Err(failure)
                 } else {
-                    Ok(value)
+                    #[cfg(test)]
+                    if self
+                        .registry_transaction_ack_loss
+                        .swap(false, Ordering::AcqRel)
+                    {
+                        self.unavailable.store(true, Ordering::Release);
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    if let Err(failure) = self.check_access() {
+                        self.unavailable.store(true, Ordering::Release);
+                        Err(failure)
+                    } else {
+                        Ok(value)
+                    }
                 }
             }
             Err(failure) => {

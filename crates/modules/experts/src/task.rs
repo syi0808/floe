@@ -12,7 +12,9 @@ use floe_agent_contract::{
     TaskExecutionEvidence, TaskExecutionReceipt, TaskExecutionReceiptRef, TaskId, TaskReceipt,
     TaskSnapshot, TaskState, delegation_request_digest,
 };
+use floe_conversation_contract::MessageId;
 use floe_execution::budget::ModelReservationCeiling;
+use floe_kernel::{CommandId, PersonId, RunId};
 use tokio::sync::watch;
 
 use crate::task_record::{
@@ -20,6 +22,7 @@ use crate::task_record::{
 };
 use crate::task_repository::{TaskAdmission, TaskExecutionCommit, TaskRepository};
 use crate::{Directory, DirectoryQuery};
+use crate::{ExpertConversationKey, ExpertTaskConversationDraft};
 
 const CANCEL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 type TaskOutcome = Result<TaskExecutionReceipt, AgentFailure>;
@@ -107,6 +110,68 @@ impl<Repository> RunExpertEnvironment<Repository> {
 }
 
 impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
+    /// Resolve exact Task replays before consulting the mutable Directory.
+    /// The Task row and its receipt already pin the original installation,
+    /// definition, logical Run, and history boundary.
+    async fn replay_if_known(
+        &self,
+        request: &DelegationRequest,
+        scope: &ExecutionScope,
+    ) -> Result<Option<TaskReceipt>, AgentFailure> {
+        validate_request(request, scope)?;
+        let digest = delegation_request_digest(request);
+        if let Some(active) = self.active_task(request.task_id)? {
+            validate_replay(request, digest, &active.proposed)?;
+            // ActiveTask registration precedes the retained driver's durable
+            // admission. Join that owner before reading its admission proof;
+            // a transient NotFound here would incorrectly split one admitted
+            // invocation into success and storage failure for duplicate callers.
+            let execution = wait_for_execution(&active, scope).await?;
+            let input = scope
+                .run(
+                    self.repository
+                        .expert_admission_reference(active.proposed.execution()),
+                )
+                .await?;
+            input.validate()?;
+            if input.execution != active.proposed.execution()
+                || input.request_digest != active.proposed.request_digest
+                || execution.reference.execution != input.execution
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            return Ok(Some(receipt(execution, self.maximum_output_bytes)?));
+        }
+        let Some(record) = scope.run(self.repository.get(request.task_id)).await? else {
+            return Ok(None);
+        };
+        validate_replay(request, digest, &record)?;
+        record.validate(self.maximum_output_bytes)?;
+        if !terminal(record.snapshot.state) {
+            // An unfinished Task without its retained driver is recovered by
+            // executor activation and is never dispatched a second time.
+            return Err(AgentFailure::Conflict);
+        }
+        let input = scope
+            .run(
+                self.repository
+                    .expert_admission_reference(record.execution()),
+            )
+            .await?;
+        input.validate()?;
+        if input.execution != record.execution() {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let execution = scope
+            .run(verified_receipt(
+                self.repository.as_ref(),
+                &record,
+                self.maximum_output_bytes,
+            ))
+            .await?;
+        Ok(Some(receipt(execution, self.maximum_output_bytes)?))
+    }
+
     pub async fn activate(
         directory: Directory,
         repository: Arc<Repository>,
@@ -453,6 +518,19 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
             drop(admission_guard);
             return self.existing(record, &request, &endpoint, scope).await;
         }
+        let person_id = uuid::Uuid::parse_str(&request.principal)
+            .ok()
+            .and_then(PersonId::from_uuid)
+            .ok_or(AgentFailure::CapabilityDenied)?;
+        let conversation = ExpertTaskConversationDraft {
+            key: ExpertConversationKey::from_admission(person_id, &endpoint.admission)?,
+            run_id: RunId::new(),
+            input_message_id: MessageId::new(),
+            input_command_id: CommandId::new(),
+            delegated_message: request.message.clone(),
+            input_coverage: request.execution_context.projection_coverage.clone(),
+        };
+        conversation.validate()?;
         let proposed = TaskRecord {
             snapshot: snapshot(&request, TaskState::Submitted, None),
             admission: endpoint.admission.clone(),
@@ -515,7 +593,7 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
             // first storage mutation runs only after this driver owns it.
             tokio::spawn(async move {
                 let result = coordinator
-                    .admit_and_drive(proposed, request, endpoint, run_scope)
+                    .admit_and_drive(proposed, conversation, request, endpoint, run_scope)
                     .await;
                 completion.finish(result);
             });
@@ -530,6 +608,7 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
     async fn admit_and_drive(
         &self,
         proposed: TaskRecord,
+        conversation: ExpertTaskConversationDraft,
         request: DelegationRequest,
         endpoint: crate::directory::ResolvedDirectoryEntry,
         scope: ExecutionScope,
@@ -537,38 +616,63 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
         if let Some(failure) = running_failure(&scope) {
             return Err(failure);
         }
-        let admitted = match self.repository.admit(proposed.clone()).await {
-            Ok(TaskAdmission::Created(record)) => {
-                if record != proposed {
-                    return Err(AgentFailure::StorageUnavailable);
+        let (admitted, expert_input) =
+            match self.repository.admit(proposed.clone(), conversation).await {
+                Ok(TaskAdmission::Created {
+                    record,
+                    expert_input,
+                }) => {
+                    if record != proposed {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    expert_input.validate()?;
+                    if expert_input.execution != record.execution() {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    (record, expert_input)
                 }
-                record
-            }
-            Ok(TaskAdmission::Existing(record)) => {
-                validate_replay(&request, proposed.request_digest, &record)?;
-                validate_endpoint(&record, &endpoint)?;
-                record.validate(self.maximum_output_bytes)?;
-                if terminal(record.snapshot.state) {
-                    return verified_receipt(
-                        self.repository.as_ref(),
-                        &record,
-                        self.maximum_output_bytes,
-                    )
-                    .await;
+                Ok(TaskAdmission::Existing {
+                    record,
+                    expert_input,
+                }) => {
+                    validate_replay(&request, proposed.request_digest, &record)?;
+                    validate_endpoint(&record, &endpoint)?;
+                    record.validate(self.maximum_output_bytes)?;
+                    if terminal(record.snapshot.state) {
+                        return verified_receipt(
+                            self.repository.as_ref(),
+                            &record,
+                            self.maximum_output_bytes,
+                        )
+                        .await;
+                    }
+                    // A competing or abandoned execution is never dispatched by
+                    // this reservation, even when it has the same public Task ID.
+                    if record != proposed {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    expert_input.validate()?;
+                    if expert_input.execution != record.execution() {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    (record, expert_input)
                 }
-                // A competing or abandoned execution is never dispatched by
-                // this reservation, even when it has the same public Task ID.
-                if record != proposed {
-                    return Err(AgentFailure::Conflict);
-                }
-                record
-            }
-            Err(failure) => match self.repository.get(proposed.snapshot.task_id).await? {
-                Some(record) if record == proposed => record,
-                Some(_) => return Err(AgentFailure::Conflict),
-                None => return Err(failure),
-            },
-        };
+                Err(failure) => match self.repository.get(proposed.snapshot.task_id).await? {
+                    Some(record) if record == proposed => {
+                        let expert_input = self
+                            .repository
+                            .expert_admission_reference(record.execution())
+                            .await?;
+                        expert_input.validate()?;
+                        if expert_input.execution != record.execution() {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                        (record, expert_input)
+                    }
+                    Some(_) => return Err(AgentFailure::Conflict),
+                    None => return Err(failure),
+                },
+            };
         admitted.validate_initial(self.maximum_output_bytes)?;
         let expected_working = admitted.transition(
             admitted.aggregate_revision,
@@ -585,6 +689,7 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
                     admitted.aggregate_revision,
                     admitted.executor_generation,
                     expected_working.snapshot.clone(),
+                    expert_input,
                 )
                 .await
             {
@@ -617,14 +722,88 @@ impl<Repository: TaskRepository + 'static> TaskCoordinator<Repository> {
             }
         }
         let working = working.ok_or(AgentFailure::StorageUnavailable)?;
+        let conversation = match scope
+            .run(self.repository.load_conversation(working.execution()))
+            .await
+        {
+            Ok(conversation) => conversation,
+            Err(failure) => return self.settle_failure(working, request, failure).await,
+        };
+        if let Err(failure) = conversation.validate() {
+            return self.settle_failure(working, request, failure).await;
+        }
         let invocation = EndpointInvocation {
             request,
             request_digest: working.request_digest,
             execution: working.execution(),
+            conversation: conversation.conversation,
+            history_coverage: conversation.history_coverage,
             journal: self.repository.journal(working.execution())?,
             resources: Arc::new(floe_agent_contract::EndpointResources::default()),
         };
         self.drive(working, invocation, endpoint, scope).await
+    }
+
+    async fn settle_failure(
+        &self,
+        working: TaskRecord,
+        request: DelegationRequest,
+        failure: AgentFailure,
+    ) -> TaskOutcome {
+        let current = self
+            .repository
+            .get(working.snapshot.task_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let mut expected_working = working.clone();
+        expected_working.journal_revision = current.journal_revision;
+        expected_working.journal_digest = current.journal_digest;
+        if current != expected_working {
+            return Err(AgentFailure::Conflict);
+        }
+        let journal = self.repository.load_journal(current.execution()).await?;
+        let commit = TaskExecutionCommit {
+            execution: current.execution(),
+            expected_task_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
+            terminal: snapshot(&request, failure_state(failure), Some(failure)),
+            settlement: None,
+        };
+        let expected =
+            settle_task_execution(&current, &commit, &journal, self.maximum_output_bytes)?;
+        let expected_receipt = expected
+            .receipt
+            .as_ref()
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let saved = match self.repository.settle_execution(commit.clone()).await {
+            Ok(value) if value == *expected_receipt => value,
+            Ok(_) => return Err(AgentFailure::StorageUnavailable),
+            Err(failure) => {
+                let readback = self
+                    .repository
+                    .get(current.snapshot.task_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if readback != expected {
+                    return Err(failure);
+                }
+                verified_receipt(
+                    self.repository.as_ref(),
+                    &readback,
+                    self.maximum_output_bytes,
+                )
+                .await?
+            }
+        };
+        if self
+            .repository
+            .read_execution_receipt(saved.reference.clone())
+            .await?
+            != saved
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(saved)
     }
 
     async fn drive(
@@ -1010,6 +1189,9 @@ impl<Repository: TaskRepository + 'static> DelegationPort for RunExpertEnvironme
                 return Err(AgentFailure::CapabilityDenied);
             }
             validate_request(&request, scope)?;
+            if let Some(receipt) = self.coordinator.replay_if_known(&request, scope).await? {
+                return Ok(receipt);
+            }
             let endpoint = self.snapshot.resolve(
                 &request.selected_agent_id,
                 request.selected_definition_revision,
@@ -1018,3 +1200,7 @@ impl<Repository: TaskRepository + 'static> DelegationPort for RunExpertEnvironme
         })
     }
 }
+
+#[cfg(test)]
+#[path = "task/active_replay_tests.rs"]
+mod active_replay_tests;

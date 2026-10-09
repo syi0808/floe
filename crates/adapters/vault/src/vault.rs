@@ -105,6 +105,8 @@ pub struct EncryptedAgentVault<Keys> {
     conversation_executor_generation: AtomicU64,
     task_executor_generation: AtomicU64,
     #[cfg(test)]
+    registry_transaction_ack_loss: AtomicBool,
+    #[cfg(test)]
     conversation_core_ack_loss: AtomicBool,
     #[cfg(test)]
     conversation_core_failure_before_pending: AtomicBool,
@@ -242,6 +244,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
             #[cfg(test)]
+            registry_transaction_ack_loss: AtomicBool::new(false),
+            #[cfg(test)]
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_failure_before_pending: AtomicBool::new(false),
@@ -318,6 +322,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             journal_writes: tokio::sync::Mutex::new(()),
             conversation_executor_generation: AtomicU64::new(0),
             task_executor_generation: AtomicU64::new(0),
+            #[cfg(test)]
+            registry_transaction_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]

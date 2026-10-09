@@ -24,6 +24,8 @@ mod registry;
 mod selection;
 mod settlement;
 mod task;
+#[path = "domain/task_conversation.rs"]
+mod task_conversation;
 #[path = "domain/task_record.rs"]
 mod task_record;
 #[path = "ports/task_repository.rs"]
@@ -85,6 +87,11 @@ pub use selection::{
 };
 pub use settlement::{ExpertSettlement, prepare_expert_completion};
 pub use task::{RunExpertEnvironment, TaskCoordinator};
+pub use task_conversation::{
+    ExpertConversationEvidence, ExpertConversationKey, ExpertHistoryPin,
+    ExpertTaskAdmissionReference, ExpertTaskConversation, ExpertTaskConversationDraft,
+    ExpertTaskConversationInput,
+};
 pub use task_record::{
     MAX_TASK_RECORD_BYTES, MAX_TASK_TERMINAL_RESERVE_BYTES, TaskArtifactEvidence, TaskRecord,
     advance_task_journal, interrupt_task_execution, settle_task_execution, validate_task_artifact,
