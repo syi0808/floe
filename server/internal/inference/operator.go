@@ -10,6 +10,7 @@ import (
 )
 
 type RouteUpdate struct {
+	OperationID     string
 	Purpose         string
 	Enabled         bool
 	Target          string
@@ -17,6 +18,7 @@ type RouteUpdate struct {
 }
 
 type TargetUpdate struct {
+	OperationID    string
 	ID             string
 	Provider       string
 	BaseURL        string
@@ -27,10 +29,11 @@ type TargetUpdate struct {
 }
 
 type ProviderUpdate struct {
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Purposes map[string]PurposeModel
+	OperationID string
+	Provider    string
+	BaseURL     string
+	APIKey      string
+	Purposes    map[string]PurposeModel
 }
 
 type OperatorPurposeProfile struct {
@@ -59,13 +62,19 @@ type OperatorSnapshot struct {
 // locks for every configuration mutation.
 func (c *Configuration) UpdateRoute(ctx context.Context, operator trust.OperatorPrincipal, input RouteUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
-		if !ValidPurpose(input.Purpose) || !ValidEffort(input.ReasoningEffort) {
+		if !trust.ValidID(input.OperationID) {
 			return operation.Reject(operation.Invalid, "validation")
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if result, found := c.operationStatus(ctx, input.OperationID, operationFingerprint(input)); found {
+			return result
+		}
 		if c.configUnavailable {
 			return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		}
+		if !ValidPurpose(input.Purpose) || !ValidEffort(input.ReasoningEffort) {
+			return operation.Reject(operation.Invalid, "validation")
 		}
 		next := cloneConfigurationState(c.state)
 		purpose := Purpose(input.Purpose)
@@ -77,19 +86,26 @@ func (c *Configuration) UpdateRoute(ctx context.Context, operator trust.Operator
 			}
 			next.Routes[purpose] = PurposeRoute{TargetID: input.Target, ReasoningEffort: input.ReasoningEffort, Enabled: input.Enabled}
 		}
-		return c.commitConfiguration(ctx, next)
+		return c.commitOperation(ctx, input.OperationID, operationFingerprint(input), configurationContent(next))
 	})
 }
 
 func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.OperatorPrincipal, input TargetUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
-		if !ValidAlias(input.ID) || strings.HasPrefix(input.ID, "managed_") || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+		if !trust.ValidID(input.OperationID) {
 			return operation.Reject(operation.Invalid, "validation")
 		}
+		fingerprint := operationFingerprint(input)
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if result, found := c.operationStatus(ctx, input.OperationID, fingerprint); found {
+			return result
+		}
 		if c.configUnavailable {
 			return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		}
+		if !ValidAlias(input.ID) || strings.HasPrefix(input.ID, "managed_") || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+			return operation.Reject(operation.Invalid, "validation")
 		}
 		old := c.state.Targets[input.ID]
 		providerName, baseURL, apiKey := input.Provider, input.BaseURL, input.APIKey
@@ -98,9 +114,7 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 			apiKey = ""
 		}
 		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, Capabilities: append([]string(nil), input.Capabilities...), BudgetOverride: cloneModelBudgetOverride(input.BudgetOverride)}
-		if apiKey != "" {
-			target.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(trust.Token())
-		} else if old.Provider == target.Provider && old.BaseURL == target.BaseURL {
+		if apiKey == "" && old.Provider == target.Provider && old.BaseURL == target.BaseURL {
 			target.APIKeyEnv = old.APIKeyEnv
 		}
 		if target.BudgetOverride != nil && target.BudgetOverride.Validate() != nil || c.factory.ValidateTarget(target) != nil {
@@ -111,22 +125,36 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 		if len(next.Targets) > 32 {
 			return operation.Reject(operation.Limited, "target_limit")
 		}
-		if apiKey != "" && c.credentials.StoreProviderCredential(ctx, target.APIKeyEnv, apiKey) != nil {
-			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		content := configurationContent(next)
+		if apiKey != "" {
+			slot, err := c.freshCredentialSlot(ctx)
+			if err != nil {
+				return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+			}
+			target.APIKeyEnv = slot
+			content.Targets[input.ID] = target
+			return c.beginCredentialTransition(ctx, input.OperationID, fingerprint, slot, apiKey, content)
 		}
-		return c.commitConfiguration(ctx, next)
+		return c.commitOperation(ctx, input.OperationID, fingerprint, content)
 	})
 }
 
 func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.OperatorPrincipal, input ProviderUpdate) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
-		if input.Purposes == nil || input.Provider != "codex_oauth" && input.Provider != "openai_compatible" || len(input.Purposes) > 3 || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+		if !trust.ValidID(input.OperationID) {
 			return operation.Reject(operation.Invalid, "validation")
 		}
+		fingerprint := operationFingerprint(input)
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if result, found := c.operationStatus(ctx, input.OperationID, fingerprint); found {
+			return result
+		}
 		if c.configUnavailable {
 			return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		}
+		if input.Purposes == nil || input.Provider != "codex_oauth" && input.Provider != "openai_compatible" || len(input.Purposes) > 3 || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+			return operation.Reject(operation.Invalid, "validation")
 		}
 		next := cloneConfigurationState(c.state)
 		for purpose, route := range next.Routes {
@@ -136,7 +164,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 		}
 		if len(input.Purposes) == 0 {
 			delete(next.Providers, input.Provider)
-			return c.commitConfiguration(ctx, next)
+			return c.commitOperation(ctx, input.OperationID, fingerprint, configurationContent(next))
 		}
 		baseURL, apiKey := input.BaseURL, input.APIKey
 		if input.Provider == "codex_oauth" {
@@ -145,9 +173,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 		}
 		profile := ProviderProfile{BaseURL: baseURL, Purposes: clonePurposeModels(input.Purposes)}
 		old := next.Providers[input.Provider]
-		if apiKey != "" {
-			profile.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(trust.Token())
-		} else if old.BaseURL == profile.BaseURL {
+		if apiKey == "" && old.BaseURL == profile.BaseURL {
 			profile.APIKeyEnv = old.APIKeyEnv
 		}
 		for purpose, configured := range profile.Purposes {
@@ -156,20 +182,38 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 			}
 			next.Routes[Purpose(purpose)] = PurposeRoute{TargetID: profileTargetID(input.Provider, purpose), ReasoningEffort: configured.ReasoningEffort, Enabled: true}
 		}
-		next.Providers[input.Provider] = profile
-		if apiKey != "" && c.credentials.StoreProviderCredential(ctx, profile.APIKeyEnv, apiKey) != nil {
-			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		if apiKey != "" {
+			slot, err := c.freshCredentialSlot(ctx)
+			if err != nil {
+				return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+			}
+			profile.APIKeyEnv = slot
+			next.Providers[input.Provider] = profile
+			return c.beginCredentialTransition(ctx, input.OperationID, fingerprint, slot, apiKey, configurationContent(next))
 		}
-		return c.commitConfiguration(ctx, next)
+		next.Providers[input.Provider] = profile
+		return c.commitOperation(ctx, input.OperationID, fingerprint, configurationContent(next))
 	})
 }
 
-func (c *Configuration) DeleteTarget(ctx context.Context, operator trust.OperatorPrincipal, id string) operation.Result {
+func (c *Configuration) DeleteTarget(ctx context.Context, operator trust.OperatorPrincipal, id, operationID string) operation.Result {
 	return c.withCurrentOperator(operator, func() operation.Result {
+		if !trust.ValidID(operationID) {
+			return operation.Reject(operation.Invalid, "validation")
+		}
+		fingerprint := operationFingerprint(struct {
+			ID string `json:"id"`
+		}{id})
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		if result, found := c.operationStatus(ctx, operationID, fingerprint); found {
+			return result
+		}
 		if c.configUnavailable {
 			return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		}
+		if !ValidAlias(id) {
+			return operation.Reject(operation.Invalid, "validation")
 		}
 		next := cloneConfigurationState(c.state)
 		delete(next.Targets, id)
@@ -178,7 +222,7 @@ func (c *Configuration) DeleteTarget(ctx context.Context, operator trust.Operato
 				delete(next.Routes, purpose)
 			}
 		}
-		return c.commitConfiguration(ctx, next)
+		return c.commitOperation(ctx, operationID, fingerprint, configurationContent(next))
 	})
 }
 
@@ -234,29 +278,6 @@ func (c *Configuration) withCurrentOperator(operator trust.OperatorPrincipal, ap
 		return trust.Result(err)
 	}
 	return result
-}
-
-func (c *Configuration) commitConfiguration(ctx context.Context, state ConfigState) operation.Result {
-	if ctx.Err() != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
-	}
-	if c.configUnavailable {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
-	}
-	config, accounts, executor, err := c.prepare(ctx, state)
-	if err != nil || ctx.Err() != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
-	}
-	if c.save(state) != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
-	}
-	c.state = cloneConfigurationState(state)
-	if err = c.engine.Configure(config, accounts, executor); err != nil {
-		c.configUnavailable = true
-		c.engine.DenyConfiguration()
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
-	}
-	return operation.Accept(map[string]bool{"ok": true})
 }
 
 func configuredTarget(state ConfigState, id string) (ProviderTarget, bool) {

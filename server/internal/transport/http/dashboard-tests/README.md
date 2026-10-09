@@ -14,6 +14,7 @@ pnpm test
 
 The suite checks dashboard DOM state and event-handler behavior, including
 login/session handling, pairing action visibility, request identity and CSRF,
+provider-operation recovery across response loss and reload, draft retention,
 refresh coalescing, and stale response fencing. This is not browser cookie,
 layout, visual, or end-to-end qualification.
 

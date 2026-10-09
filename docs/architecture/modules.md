@@ -119,13 +119,27 @@ read-only adapter operation.
 
 Inference owns its typed complete-snapshot contract, configuration validation,
 provider-target preparation, and engine adoption after a confirmed commit. The
-storage adapter retains the existing bounded JSON shape and encrypted atomic
-replacement. The credential adapter accepts a separate `FLOE_KEY_*` reference
-for Inference provider-key reads and writes; runtime connection credential reads
-remain scoped to the exact binding. Provider-key writes still precede the
-Inference snapshot commit, while target/provider removal leaves its old
-credential slot. That cross-store recovery lifecycle remains a bounded follow-up
-for parent design review. No secret values enter owner snapshots.
+storage adapter owns the bounded strict JSON codec and encrypted atomic
+replacement. Credential replacement is a bounded transition in that same full
+Inference snapshot: a stable operation identity, candidate config, exact
+immutable `FLOE_KEY_*` slot and key digest are persisted before create-only
+credential storage. Exact-slot readback decides whether to commit the candidate
+and cleanup metadata before adopting the prepared engine. Raw key values never
+enter snapshots or logs. An ambiguous read or commit denies inference until
+authoritative recovery; confirmed absence aborts the exact pending transition
+and retains prior config. A schema-2 snapshot fails closed on older incompatible
+state; profile data and keys are not automatically reset or replaced.
+
+Only slots in Inference's durable owner-created set may be deleted. Removal
+first commits config without the slot plus exact cleanup bookkeeping. Cleanup
+waits for the retired engine generation's local call leases to drain, then
+deletes and reads back that exact slot before settling the bookkeeping. Request
+cancellation does not release a lease; the executor call must return. Shared or
+legacy references not recorded as owner-created are never deleted. Startup
+resolves pending transitions and cleanup before configuring/admitting inference;
+after restart there are no surviving in-process generation leases. These
+ordered stores are not one cross-store transaction; persisted intent and exact
+readback define the recovery truth at each cut point.
 
 Logical file purpose and root identity are AEAD-bound. Trust, Integrations and
 Inference retain their schema, validation, transitions and indeterminate-write

@@ -37,10 +37,10 @@ func TestInferenceConfigRepositoryLoadsAbsentStrictSnapshotAndCorruption(t *test
 	}
 
 	state := inference.ConfigState{
-		SchemaVersion: 1,
-		Targets:       map[string]inference.ProviderTarget{},
-		Routes:        map[inference.Purpose]inference.PurposeRoute{},
-		Providers:     map[string]inference.ProviderProfile{},
+		SchemaVersion: 2, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
+		Targets:   map[string]inference.ProviderTarget{},
+		Routes:    map[inference.Purpose]inference.PurposeRoute{},
+		Providers: map[string]inference.ProviderProfile{},
 	}
 	if outcome := repository.SaveConfig(state); outcome.Disposition != inference.ConfigWriteCommitted {
 		t.Fatalf("typed config snapshot did not commit: %#v", outcome)
@@ -50,21 +50,21 @@ func TestInferenceConfigRepositoryLoadsAbsentStrictSnapshotAndCorruption(t *test
 		t.Fatalf("typed config snapshot did not round-trip: %#v", loaded)
 	}
 
-	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":1,"schema_version":1}`)); err != nil {
+	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":2,"schema_version":2}`)); err != nil {
 		t.Fatal(err)
 	}
 	if outcome := repository.LoadConfig(); outcome.Disposition != inference.ConfigReadInvalid {
 		t.Fatalf("duplicate JSON fields were accepted: %#v", outcome)
 	}
 
-	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":1,"targets":{},"routes":{},"providers":{},"unknown":true}`)); err != nil {
+	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":2,"targets":{},"routes":{},"providers":{},"unknown":true}`)); err != nil {
 		t.Fatal(err)
 	}
 	if outcome := repository.LoadConfig(); outcome.Disposition != inference.ConfigReadInvalid {
 		t.Fatalf("unknown JSON fields were accepted: %#v", outcome)
 	}
 
-	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":1,"targets":{},"routes":{},"providers":{}}`)); err != nil {
+	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":2,"targets":{},"routes":{},"providers":{},"owned_slots":[],"cleanup":[],"receipts":[]}`)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(rootPath, "inference", inferenceConfigurationFile), []byte("not an encrypted file"), 0600); err != nil {
@@ -99,7 +99,7 @@ func TestInferenceConfigRepositoryJSONRetainsExistingFileShape(t *testing.T) {
 	files, _ := inferenceTestFiles(t)
 	repository := NewInferenceConfigRepository(files)
 	state := inference.ConfigState{
-		SchemaVersion: 1,
+		SchemaVersion: 2, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
 		Targets: map[string]inference.ProviderTarget{
 			"test-target": {Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model", APIKeyEnv: "FLOE_KEY_SYNTHETIC", Capabilities: []string{inference.ChatCapability}},
 		},

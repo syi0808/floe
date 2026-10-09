@@ -20,6 +20,7 @@ type Service struct {
 	secret      [32]byte
 	config      InferenceConfig
 	generation  uint64
+	leases      map[uint64]int
 	accounts    map[string]ModelAccount
 	executor    ModelExecutor
 	active      chan struct{}
@@ -30,7 +31,7 @@ func NewService(t Trust) (*Service, error) {
 	if t == nil {
 		return nil, errors.New("trust required")
 	}
-	s := &Service{trust: t, config: InferenceConfig{Routes: map[Purpose]PurposeRoute{}}, accounts: map[string]ModelAccount{}, generation: 1, active: make(chan struct{}, 4), audit: newAuditLog(256)}
+	s := &Service{trust: t, config: InferenceConfig{Routes: map[Purpose]PurposeRoute{}}, accounts: map[string]ModelAccount{}, generation: 1, leases: map[uint64]int{}, active: make(chan struct{}, 4), audit: newAuditLog(256)}
 	if _, err := rand.Read(s.secret[:]); err != nil {
 		return nil, err
 	}
@@ -62,44 +63,91 @@ func (s *Service) Configure(config InferenceConfig, accounts map[string]ModelAcc
 	s.generation++
 	return nil
 }
-func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, string, ModelExecutor, error) {
-	s.mu.RLock()
+
+// RecoverConfiguration reopens the engine only after the owner has re-read
+// and validated its authoritative durable snapshot.
+func (s *Service) RecoverConfiguration(config InferenceConfig, accounts map[string]ModelAccount, executor ModelExecutor) error {
+	if ValidateConfig(config) != nil || executor == nil {
+		return errors.New("invalid inference configuration")
+	}
+	routes := make(map[Purpose]PurposeRoute, len(config.Routes))
+	for purpose, route := range config.Routes {
+		if accounts[route.TargetID] == nil || !ValidCapabilities(accounts[route.TargetID].Capabilities()) {
+			return errors.New("configured target missing")
+		}
+		routes[purpose] = route
+	}
+	copied := make(map[string]ModelAccount, len(accounts))
+	for id, account := range accounts {
+		copied[id] = account
+	}
+	s.mu.Lock()
+	s.config = InferenceConfig{Routes: routes}
+	s.accounts = copied
+	s.executor = executor
+	s.generation++
+	s.unavailable = false
+	s.mu.Unlock()
+	return nil
+}
+func (s *Service) currentLeased(ctx context.Context, p Purpose) (ResolvedModelTarget, string, ModelExecutor, func(), error) {
+	s.mu.Lock()
 	if s.unavailable {
-		s.mu.RUnlock()
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+		s.mu.Unlock()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
 	r, exists := s.config.Routes[p]
 	generation := s.generation
 	account := s.accounts[r.TargetID]
 	executor := s.executor
-	s.mu.RUnlock()
+	if exists && r.Enabled && account != nil && executor != nil {
+		s.leases[generation]++
+	}
+	s.mu.Unlock()
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if s.leases[generation] <= 1 {
+				delete(s.leases, generation)
+			} else {
+				s.leases[generation]--
+			}
+			s.mu.Unlock()
+		})
+	}
 	if !exists {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: PurposeNotConfigured}
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: PurposeNotConfigured}
 	}
 	if !r.Enabled {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: PurposeDisabled}
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: PurposeDisabled}
 	}
 	if account == nil || executor == nil {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
 	if err := account.Ready(ctx); err != nil {
-		return ResolvedModelTarget{}, "", nil, normalizeFailure(err)
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, normalizeFailure(err)
 	}
 	identity := account.ReplayIdentity()
 	if identity == "" {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ProviderCredentialsUnavailable}
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ProviderCredentialsUnavailable}
 	}
 	capabilities := account.Capabilities()
 	if !ValidCapabilities(capabilities) {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
 	modelIdentity := account.ModelIdentity()
 	if !validModelIdentity(modelIdentity) {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
 	budgetProfile := ResolveModelBudgetProfile(account.BudgetOverride())
 	if budgetProfile.Validate() != nil {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: ModelUnavailable}
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
 	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...), modelIdentity: modelIdentity, budgetProfile: budgetProfile}
 	material, _ := json.Marshal(struct {
@@ -116,9 +164,18 @@ func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, 
 	unchanged := s.generation == generation && s.config.Routes[p] == r
 	s.mu.RUnlock()
 	if !unchanged {
-		return ResolvedModelTarget{}, "", nil, Failure{Code: CapabilityChanged}
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: CapabilityChanged}
 	}
-	return target, revision, executor, nil
+	return target, revision, executor, release, nil
+}
+
+func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, string, ModelExecutor, error) {
+	target, revision, executor, release, err := s.currentLeased(ctx, p)
+	if release != nil {
+		release()
+	}
+	return target, revision, executor, err
 }
 func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 	var out PurposeInventory
@@ -165,10 +222,11 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 	if _, err = s.trust.ActiveIssuer(p); err != nil {
 		return out, Failure{Code: Unauthorized}
 	}
-	target, revision, executor, err := s.current(ctx, in.Purpose)
+	target, revision, executor, release, err := s.currentLeased(ctx, in.Purpose)
 	if err != nil {
 		return out, err
 	}
+	defer release()
 	if revision != in.CapabilityRevision {
 		return out, Failure{Code: CapabilityChanged}
 	}
@@ -243,10 +301,11 @@ func (s *Service) InvokeStructured(ctx context.Context, p trust.OperatorPrincipa
 	if err = s.trust.WithCurrentOperator(p, func() error { return nil }); err != nil {
 		return out, Failure{Code: Unauthorized}
 	}
-	target, revision, executor, err := s.current(ctx, in.Purpose)
+	target, revision, executor, release, err := s.currentLeased(ctx, in.Purpose)
 	if err != nil {
 		return out, err
 	}
+	defer release()
 	if revision != in.CapabilityRevision {
 		return out, Failure{Code: CapabilityChanged}
 	}
@@ -339,3 +398,17 @@ func (s *Service) Trace(p trust.OperatorPrincipal, id string) (AuditRecord, erro
 }
 
 func (s *Service) DenyConfiguration() { s.mu.Lock(); defer s.mu.Unlock(); s.unavailable = true }
+
+// GenerationDrained is true only after every call captured from this exact
+// engine generation has returned. Cancellation alone does not release a lease.
+func (s *Service) GenerationDrained(generation uint64) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.leases[generation] == 0
+}
+
+func (s *Service) Generation() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generation
+}

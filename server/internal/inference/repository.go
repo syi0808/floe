@@ -1,5 +1,11 @@
 package inference
 
+import "errors"
+
+const MaxConfigSnapshotBytes = 65_536
+
+var ErrConfigSnapshotCapacity = errors.New("inference configuration snapshot capacity exceeded")
+
 // ConfigReadDisposition distinguishes an absent first-run snapshot from
 // unavailable storage and malformed persisted configuration.
 type ConfigReadDisposition uint8

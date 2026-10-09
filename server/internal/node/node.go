@@ -195,6 +195,7 @@ func (n *Node) Close() {
 		}
 		n.handler.Inference.Service.DenyConfiguration()
 		n.active.Wait()
+		n.handler.Configuration.Close()
 		n.handler.Mirror.Close()
 		n.handler.Sources.Close()
 		n.clients.Close()

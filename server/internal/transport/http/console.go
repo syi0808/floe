@@ -16,12 +16,14 @@ import (
 )
 
 type RouteRequest struct {
+	OperationID     string `json:"operation_id"`
 	Purpose         string `json:"purpose"`
 	Enabled         bool   `json:"enabled"`
 	Target          string `json:"target"`
 	ReasoningEffort string `json:"reasoning_effort"`
 }
 type TargetRequest struct {
+	OperationID    string                         `json:"operation_id"`
 	ID             string                         `json:"id"`
 	Provider       string                         `json:"provider"`
 	BaseURL        string                         `json:"base_url"`
@@ -31,10 +33,11 @@ type TargetRequest struct {
 	BudgetOverride *inference.ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 type ProviderRequest struct {
-	Provider string                            `json:"provider"`
-	BaseURL  string                            `json:"base_url"`
-	APIKey   string                            `json:"api_key"`
-	Purposes map[string]inference.PurposeModel `json:"purposes"`
+	OperationID string                            `json:"operation_id"`
+	Provider    string                            `json:"provider"`
+	BaseURL     string                            `json:"base_url"`
+	APIKey      string                            `json:"api_key"`
+	Purposes    map[string]inference.PurposeModel `json:"purposes"`
 }
 type TestRequest struct {
 	ID string `json:"id"`
@@ -221,15 +224,21 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		})
 	case "/manage/api/route":
 		dispatch(writer, request, func(in RouteRequest) operation.Result {
-			return handler.Configuration.UpdateRoute(request.Context(), operator, inference.RouteUpdate{Purpose: in.Purpose, Enabled: in.Enabled, Target: in.Target, ReasoningEffort: in.ReasoningEffort})
+			return handler.Configuration.UpdateRoute(request.Context(), operator, inference.RouteUpdate{OperationID: in.OperationID, Purpose: in.Purpose, Enabled: in.Enabled, Target: in.Target, ReasoningEffort: in.ReasoningEffort})
 		})
 	case "/manage/api/target":
 		dispatch(writer, request, func(in TargetRequest) operation.Result {
-			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities, BudgetOverride: in.BudgetOverride})
+			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{OperationID: in.OperationID, ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities, BudgetOverride: in.BudgetOverride})
 		})
 	case "/manage/api/provider":
 		dispatch(writer, request, func(in ProviderRequest) operation.Result {
-			return handler.Configuration.UpdateProvider(request.Context(), operator, inference.ProviderUpdate{Provider: in.Provider, BaseURL: in.BaseURL, APIKey: in.APIKey, Purposes: in.Purposes})
+			return handler.Configuration.UpdateProvider(request.Context(), operator, inference.ProviderUpdate{OperationID: in.OperationID, Provider: in.Provider, BaseURL: in.BaseURL, APIKey: in.APIKey, Purposes: in.Purposes})
+		})
+	case "/manage/api/inference/recover":
+		dispatch(writer, request, func(in struct {
+			OperationID string `json:"operation_id"`
+		}) operation.Result {
+			return handler.Configuration.RecoverOperation(request.Context(), operator, in.OperationID)
 		})
 	case "/manage/api/test":
 		dispatch(writer, request, func(input TestRequest) operation.Result {
@@ -241,7 +250,8 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		})
 	case "/manage/api/client/delete", "/manage/api/target/delete":
 		var input struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			OperationID string `json:"operation_id"`
 		}
 		if !decode(writer, request, &input) {
 			failure(writer, http.StatusBadRequest, "validation")
@@ -250,7 +260,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		if request.URL.Path == "/manage/api/client/delete" {
 			writeResult(writer, handler.Clients.Revoke(request.Context(), operator, input.ID))
 		} else {
-			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(), operator, input.ID))
+			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(), operator, input.ID, input.OperationID))
 		}
 	default:
 		if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") {

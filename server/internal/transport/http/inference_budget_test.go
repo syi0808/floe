@@ -53,9 +53,10 @@ func TestSchema3GatewayBudgetPreflightAndMockProviderPath(t *testing.T) {
 	configure := func(override *inference.ModelBudgetOverride) {
 		t.Helper()
 		result := fixture.handler.Configuration.UpdateProvider(context.Background(), operator, inference.ProviderUpdate{
-			Provider: "openai_compatible",
-			BaseURL:  provider.URL,
-			APIKey:   "synthetic-test-key",
+			OperationID: trust.NewID(),
+			Provider:    "openai_compatible",
+			BaseURL:     provider.URL,
+			APIKey:      "synthetic-test-key",
 			Purposes: map[string]inference.PurposeModel{
 				string(inference.QuickResponse): {
 					Model: "synthetic-budget-model", ReasoningEffort: "", Capabilities: []string{inference.ChatCapability, inference.StructuredOutputCapability},
@@ -216,7 +217,8 @@ func TestProviderTargetChangeClearsPersistedBudgetOverride(t *testing.T) {
 	update := func(endpoint, model, key string, override *inference.ModelBudgetOverride) {
 		t.Helper()
 		result := fixture.handler.Configuration.UpdateProvider(context.Background(), operator, inference.ProviderUpdate{
-			Provider: "openai_compatible", BaseURL: endpoint, APIKey: key,
+			OperationID: trust.NewID(),
+			Provider:    "openai_compatible", BaseURL: endpoint, APIKey: key,
 			Purposes: map[string]inference.PurposeModel{
 				string(inference.QuickResponse): {
 					Model: model, Capabilities: []string{inference.ChatCapability}, BudgetOverride: override,

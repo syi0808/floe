@@ -29,6 +29,51 @@ App bearers cannot operate the dashboard, structured operator inference or trace
 
 Trust state, source lifecycle and operator inference configuration have separate private files: `trust.json`, `integrations.json` and `inference.json`. Producer identity is retained separately. File/key read errors never replace identities or reset data. Post-rename durability uncertainty latches the affected owner closed. This cutover requires a deliberately selected clean development profile; there is no old-format decoder or automatic reset.
 
+Inference configuration snapshot schema 2 adds bounded operation receipts, one
+pending credential transition, exact owner-created slot references, and cleanup
+bookkeeping. Schema-1 inference snapshots are incompatible and fail closed; use
+a deliberately selected fresh development profile for this development-format
+change. No real profile, old snapshot, or key is reset, migrated, replaced, or
+deleted automatically. Older untracked `FLOE_KEY_*` references remain
+unowned and are never deleted by target/provider removal.
+
+`/manage/api/target`, `/manage/api/provider`, `/manage/api/route`, and
+`/manage/api/target/delete` require a stable UUID `operation_id`. An exact retry
+returns its bounded receipt; reuse with a changed body conflicts. A new command
+cannot replace a pending credential transition, and receipt/cleanup/snapshot
+capacity exhaustion rejects without eviction. Provider-key replacement first validates
+the full candidate, confirms a newly issued exact slot is absent, then persists
+the transition identity, candidate, and key digest. Credential storage uses a
+create-only operation; Inference reads back that exact slot even after a write
+error. Confirmed absence aborts the operation and preserves old config; matching
+readback permits an atomic candidate/cleanup snapshot commit, followed by live
+engine adoption. Read errors, digest mismatch, or ambiguous persistence remain
+pending/denied until operator recovery re-reads the authoritative snapshot and
+exact slot. The recovery endpoint is POST `/manage/api/inference/recover` with
+`{"operation_id":"..."}`; it reports settlement without returning key data.
+`status: "no_record"` means no durable receipt or transition was visible at that
+read; it does not cancel an earlier request or prove that the operation did not
+later arrive. The dashboard retains that ID and same-page immutable request,
+replaying the exact body after `no_record`. After reload it retains only the ID
+and non-secret request context; if a key is needed for replay, the operator must
+re-enter it. A completed/aborted receipt is distinct from `no_record` and an
+unresolved recovery error.
+
+Removing a configuration commits the new config and exact cleanup reference
+first. A slot is eligible for deletion only if it was created by this Inference
+owner, no active config refers to it, and its retired engine generation has no
+calls left. A canceled request does not prove provider execution has returned.
+Deletion is idempotent and exact-slot readback settles cleanup; shared legacy or
+caller-managed references are retained. Restart resolves durable pending work
+and cleanup before configuring the engine, because no in-process generation
+survives restart. The repository and credential store remain separate stores;
+this protocol provides explicit recovery truth at each cut point, not
+cross-store atomicity. Provider key bytes are not stored in configuration,
+operation receipts, UI storage, or logs; the dashboard keeps an in-progress
+command body only in page memory and stores its operation ID plus non-secret
+recovery context in session storage. Successful recovery refreshes authoritative
+state without replacing newer unsent form edits.
+
 ## Sources
 
 Product setup starts with a stable operation UUID and reviewed scope. Product responses contain only an operation ID, revision, setup state and `/manage/setup/<operation_id>` reference. The admitted Gateway operator completes provider OAuth or enters the provider secret on that hosted page; raw provider URLs, user codes and secrets never appear in the paired product setup response. Cancellation checks the exact remote operation revision.

@@ -14,8 +14,213 @@ let codexPending = false;
 let editing = false;
 let state = {providers: {}, clients: [], model_catalog: null};
 let selectedProvider = 'openai_compatible';
+let pendingProviderCommand = null;
+const providerOperationStorage = 'floe-inference-provider-operation';
+let providerStorageUnavailable = false;
+let providerOperationContext = readProviderOperationContext();
+let providerDraftGeneration = 0;
+let providerSubmitBusy = false;
+let providerRecoveryBusy = false;
+let providerOperationStatus = providerStorageUnavailable
+  ? {kind: 'storage_unavailable', message: 'Browser session storage is unavailable. No provider operation will be sent until this tab can retain its operation ID.'}
+  : providerOperationContext
+    ? {kind: 'unresolved', message: initialProviderOperationMessage(providerOperationContext)}
+    : {kind: 'idle', message: ''};
 
 function notice(message) { element('notice').textContent = message; }
+function readProviderOperationContext() {
+  let raw;
+  try { raw = sessionStorage.getItem(providerOperationStorage); }
+  catch { providerStorageUnavailable = true; return null; }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.operation_id === 'string') return parsed;
+    if (typeof parsed === 'string') return {schema: 0, operation_id: parsed, kind: 'unknown', has_api_key: true};
+  } catch {
+    // Preserve the prior dashboard's raw operation ID without assuming its body.
+    if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(raw)) return {schema: 0, operation_id: raw, kind: 'unknown', has_api_key: true};
+    providerStorageUnavailable = true;
+  }
+  return null;
+}
+function initialProviderOperationMessage(context) {
+  if (context?.schema !== 1) return 'A prior provider operation ID is saved, but its request details are unavailable. Check its status before starting another provider change.';
+  const action = context.kind === 'remove' ? 'removal' : 'update';
+  return `A prior provider ${action} for ${context.provider} needs a status check. Raw API keys are never saved in the recovery context; if a retry is needed, re-enter the same key.`;
+}
+function cloneJSON(value) { return JSON.parse(JSON.stringify(value)); }
+function freezeJSON(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeJSON(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+function makeProviderOperation(payload, context, draftGeneration = null) {
+  return Object.freeze({payload: freezeJSON(cloneJSON(payload)), context, draftGeneration});
+}
+function contextForProviderPayload(payload, kind = 'update', draftGeneration = null) {
+  const context = {
+    schema: 1,
+    operation_id: payload.operation_id,
+    kind,
+    provider: payload.provider,
+    has_api_key: Boolean(payload.api_key),
+  };
+  if (kind === 'update') {
+    context.base_url = payload.base_url;
+    context.purposes = cloneJSON(payload.purposes);
+    context.draft_generation = draftGeneration;
+  }
+  return context;
+}
+function rememberProviderOperation(payload, kind = 'update', draftGeneration = null) {
+  const context = contextForProviderPayload(payload, kind, draftGeneration);
+  try { sessionStorage.setItem(providerOperationStorage, JSON.stringify(context)); }
+  catch {
+    providerStorageUnavailable = true;
+    setProviderOperationStatus('storage_unavailable', 'Browser session storage could not retain this operation ID. No provider request was sent; retry after session storage is available.');
+    return null;
+  }
+  providerStorageUnavailable = false;
+  providerOperationContext = context;
+  pendingProviderCommand = makeProviderOperation(payload, context, draftGeneration);
+  return pendingProviderCommand;
+}
+function providerPayloadFromContext(context, apiKey = '') {
+  if (context?.schema !== 1 || typeof context.operation_id !== 'string' || typeof context.provider !== 'string') return null;
+  if (context.kind === 'remove') {
+    return {operation_id: context.operation_id, provider: context.provider, base_url: '', api_key: '', purposes: {}};
+  }
+  if (context.kind !== 'update' || typeof context.base_url !== 'string' || !context.purposes || typeof context.purposes !== 'object') return null;
+  return {
+    operation_id: context.operation_id,
+    provider: context.provider,
+    base_url: context.base_url,
+    api_key: apiKey,
+    purposes: cloneJSON(context.purposes),
+  };
+}
+function setProviderOperationStatus(kind, message, needsKey = false) {
+  providerOperationStatus = {kind, message, needsKey};
+  renderProviderOperationStatus();
+}
+function renderProviderOperationStatus() {
+  const region = element('provider-operation-recovery');
+  if (!region) return;
+  const context = providerOperationContext;
+  region.hidden = !context && !providerOperationStatus.message && !providerStorageUnavailable;
+  element('provider-operation-status').textContent = providerOperationStatus.message;
+  element('provider-operation-check').hidden = !context || !context.operation_id;
+  element('provider-recovery-key-row').hidden = !providerOperationStatus.needsKey;
+  element('provider-operation-retry').hidden = !providerOperationStatus.needsKey;
+}
+function clearProviderOperationContext() {
+  try { sessionStorage.removeItem(providerOperationStorage); }
+  catch {
+    setProviderOperationStatus('storage_unavailable', 'The operation settled, but this tab could not clear its recovery marker. Check the saved operation again before starting another change.');
+    return false;
+  }
+  providerOperationContext = null;
+  pendingProviderCommand = null;
+  return true;
+}
+function currentProviderOperation(command) {
+  return Boolean(command && providerOperationContext?.operation_id === command.context.operation_id);
+}
+function preserveProviderDraft(command) {
+  return editing && (command.draftGeneration === null || providerDraftGeneration !== command.draftGeneration);
+}
+async function settleProviderOperation(command, outcome) {
+  if (!currentProviderOperation(command)) return;
+  const keepDraft = preserveProviderDraft(command);
+  if (!clearProviderOperationContext()) return;
+  if (outcome === 'completed' && !keepDraft) editing = false;
+  if (outcome === 'aborted' && command.context.kind === 'update' && command.draftGeneration !== null) editing = true;
+  if (outcome === 'aborted' && (command.context.kind === 'remove' || command.draftGeneration === null) && !keepDraft) editing = false;
+  providerSubmitBusy = false;
+  if (outcome === 'completed') {
+    setProviderOperationStatus('completed', keepDraft
+      ? 'The saved provider operation completed. Your newer form edits remain on screen and have not been submitted.'
+      : 'The saved provider operation completed. Current provider settings were refreshed.');
+  } else {
+    setProviderOperationStatus('aborted', 'The saved provider operation was not applied; the prior provider configuration remains active. Review the form and submit again to start a new operation.');
+  }
+  try { await refresh(); } catch { /* The operation result remains authoritative if dashboard refresh fails. */ }
+}
+async function postProviderOperation(command) {
+  if (!currentProviderOperation(command)) return;
+  setProviderOperationStatus('pending', 'The provider request is being submitted. Its operation ID and saved recovery context will remain until the result is confirmed.');
+  try {
+    const result = await api('provider', command.payload);
+    if (!currentProviderOperation(command)) return;
+    if (result?.ok === true) {
+      await settleProviderOperation(command, 'completed');
+    } else {
+      setProviderOperationStatus('pending', 'The provider response did not confirm completion. The operation ID is retained; check its status before starting another change.');
+    }
+  } catch (error) {
+    if (!currentProviderOperation(command)) return;
+    if (error.message === 'operation_id_reused') {
+      setProviderOperationStatus('pending', 'The saved request body did not match the operation already recorded. Checking the original operation status; its ID is retained.');
+      await reconcileProviderOperation();
+      return;
+    }
+    if (error.status === 400) {
+      if (!clearProviderOperationContext()) return;
+      setProviderOperationStatus('rejected', `The provider request was rejected (${error.message}) and was not applied. Correct or review the form, then submit again to create a new operation.`);
+      return;
+    }
+    setProviderOperationStatus('pending', `The provider response was not confirmed (${error.message}). The operation ID is retained; check its status or retry the saved request.`);
+  }
+}
+async function reconcileProviderOperation() {
+  const context = providerOperationContext;
+  if (!context?.operation_id || providerRecoveryBusy) return;
+  providerRecoveryBusy = true;
+  setProviderOperationStatus('checking', `Checking saved provider operation ${context.operation_id}.`);
+  try {
+    const result = await api('inference/recover', {operation_id: context.operation_id});
+    if (result?.status === 'no_record') {
+      const command = pendingProviderCommand;
+      if (command) {
+        setProviderOperationStatus('no_record', 'No durable record is visible yet. The earlier request may still arrive; replaying its exact saved payload with the same operation ID.');
+        await postProviderOperation(command);
+      } else if (context.schema === 1 && !context.has_api_key) {
+        const payload = providerPayloadFromContext(context);
+        if (payload) {
+          const replay = makeProviderOperation(payload, context, null);
+          pendingProviderCommand = replay;
+          setProviderOperationStatus('no_record', 'No durable record is visible yet. The earlier request may still arrive; replaying the saved non-secret request with the same operation ID.');
+          await postProviderOperation(replay);
+        } else {
+          setProviderOperationStatus('no_record', 'No durable record is visible at this check. The operation ID is retained, but its saved request details cannot be reconstructed.');
+        }
+      } else if (context.schema === 1 && context.has_api_key) {
+        setProviderOperationStatus('no_record', 'No durable record is visible at this check; the earlier request may still arrive. The operation ID and non-secret request details are retained. Re-enter the same API key below to retry those saved settings.', true);
+      } else {
+        setProviderOperationStatus('no_record', 'No durable record is visible at this check; the earlier request may still arrive. The operation ID is retained, but request details were not saved.');
+      }
+      return;
+    }
+    if (result?.recovered === true && !result.category) {
+      const command = pendingProviderCommand || makeProviderOperation({}, context, null);
+      await settleProviderOperation(command, 'completed');
+      return;
+    }
+    if (result?.recovered === true && result.category === 'unavailable' && result.code === 'credential_store_unavailable') {
+      const command = pendingProviderCommand || makeProviderOperation({}, context, null);
+      await settleProviderOperation(command, 'aborted');
+      return;
+    }
+    setProviderOperationStatus('pending', 'Recovery did not confirm completion or abortion. The operation ID is retained; check again before starting another change.');
+  } catch (error) {
+    setProviderOperationStatus('pending', `Recovery could not confirm the provider operation (${error.message}). Its operation ID and recovery context are retained.`);
+  } finally {
+    providerRecoveryBusy = false;
+  }
+}
 async function api(path, body) {
   const generation = sessionGeneration;
   const response = await fetch(`/manage/api/${path}`, {
@@ -111,6 +316,11 @@ function renderProvider() {
   }
   if (isClaude) return;
   const form = element('provider-form');
+  if (editing) {
+    renderModelCatalogSuggestions();
+    renderProviderOperationStatus();
+    return;
+  }
   const profile = state.providers?.[selectedProvider] || {purposes: {}};
   form.elements.provider.value = selectedProvider;
   element('provider-heading').replaceChildren(
@@ -135,6 +345,7 @@ function renderProvider() {
   }
   renderModelCatalogSuggestions();
   element('remove-provider').disabled = !state.providers?.[selectedProvider];
+  renderProviderOperationStatus();
 }
 
 function refresh() {
@@ -213,6 +424,7 @@ function renderState() {
   element('pair-fingerprint').textContent = pairing
     ? `Issuer fingerprint: ${pairing.issuer_fingerprint || 'unavailable'} · Producer fingerprint: ${pairing.producer_fingerprint || 'unavailable'}` : '';
   renderProvider();
+  renderProviderOperationStatus();
   const clients = element('clients'); clients.replaceChildren();
   if (!state.clients.length) clients.append(text('p', 'No apps paired yet.'));
   for (const identifier of state.clients) {
@@ -242,37 +454,92 @@ element('login-form').addEventListener('submit', async (event) => {
   } finally { loginPending = false; }
 });
 for (const option of document.querySelectorAll('.provider-option')) {
-  option.addEventListener('click', () => { selectedProvider = option.dataset.provider; editing = false; renderProvider(); });
+  option.addEventListener('click', () => {
+    const nextProvider = option.dataset.provider;
+    if (nextProvider === selectedProvider) return;
+    if (editing && !confirm('Discard the unsaved provider form edits before switching providers?')) return;
+    selectedProvider = nextProvider;
+    providerDraftGeneration++;
+    editing = false;
+    renderProvider();
+  });
 }
-element('provider-form').addEventListener('input', () => { editing = true; });
-element('provider-form').addEventListener('submit', (event) => {
-  event.preventDefault(); action(event.submitter, async () => {
-    const form = event.target; const configured = {}; let clearedBudgetOverride = false;
-    const baseURL = form.elements.base_url.value;
-    for (const purpose of purposes) {
-      const model = form.elements[`${purpose}_model`].value.trim();
-      const capabilities = ['chat'];
-      if (form.elements[`${purpose}_structured_output`].checked) capabilities.push('structured_output');
-      if (form.elements[`${purpose}_tool_proposals`].checked) capabilities.push('tool_proposals');
-      if (model) {
-        configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
-        const targetBudget = budgetOverrideForTarget(state.providers?.[selectedProvider], purpose, model, baseURL);
-        if (targetBudget.budgetOverride) configured[purpose].budget_override = targetBudget.budgetOverride;
-        clearedBudgetOverride ||= targetBudget.cleared;
-      }
+element('provider-form').addEventListener('input', () => { editing = true; providerDraftGeneration++; });
+function providerPayloadFromForm(form) {
+  const configured = {};
+  const baseURL = form.elements.base_url.value;
+  for (const purpose of purposes) {
+    const model = form.elements[`${purpose}_model`].value.trim();
+    const capabilities = ['chat'];
+    if (form.elements[`${purpose}_structured_output`].checked) capabilities.push('structured_output');
+    if (form.elements[`${purpose}_tool_proposals`].checked) capabilities.push('tool_proposals');
+    if (model) {
+      configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
+      const targetBudget = budgetOverrideForTarget(state.providers?.[selectedProvider], purpose, model, baseURL);
+      if (targetBudget.budgetOverride) configured[purpose].budget_override = targetBudget.budgetOverride;
     }
-    const input = {provider: selectedProvider, base_url: baseURL, api_key: form.elements.api_key.value, purposes: configured};
-    form.elements.api_key.value = '';
-    await api('provider', input); editing = false; await refresh();
-    notice(clearedBudgetOverride
-      ? 'Provider configuration saved. Measured limits were cleared because the model or endpoint changed.'
-      : 'Provider configuration saved and active purposes updated.');
+  }
+  return {
+    operation_id: crypto.randomUUID(),
+    provider: selectedProvider,
+    base_url: baseURL,
+    api_key: form.elements.api_key.value,
+    purposes: configured,
+  };
+}
+async function submitProviderForm() {
+  if (providerStorageUnavailable) {
+    setProviderOperationStatus('storage_unavailable', 'Browser session storage is unavailable. No provider operation was sent because its ID could not be retained.');
+    return;
+  }
+  if (providerOperationContext) {
+    await reconcileProviderOperation();
+    return;
+  }
+  const payload = providerPayloadFromForm(element('provider-form'));
+  const command = rememberProviderOperation(payload, 'update', providerDraftGeneration);
+  if (!command) return;
+  await postProviderOperation(command);
+}
+element('provider-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (providerSubmitBusy) return;
+  providerSubmitBusy = true;
+  action(event.submitter || event.target.querySelector('button[type="submit"], button:not([type])'), async () => {
+    try { await submitProviderForm(); }
+    finally { providerSubmitBusy = false; }
   });
 });
+element('provider-operation-check').addEventListener('click', () => action(element('provider-operation-check'), reconcileProviderOperation));
+element('provider-operation-retry').addEventListener('click', () => action(element('provider-operation-retry'), async () => {
+  const context = providerOperationContext;
+  const key = element('provider-recovery-key').value;
+  if (!context || context.schema !== 1 || !context.has_api_key || !key) {
+    setProviderOperationStatus('no_record', 'Re-enter the API key for the saved provider operation before replaying it.', true);
+    return;
+  }
+  const payload = providerPayloadFromContext(context, key);
+  if (!payload) {
+    setProviderOperationStatus('no_record', 'The saved request details are unavailable. The operation ID remains retained; do not submit a different request under it.');
+    return;
+  }
+  pendingProviderCommand = makeProviderOperation(payload, context, null);
+  element('provider-recovery-key').value = '';
+  await postProviderOperation(pendingProviderCommand);
+}));
 element('remove-provider').addEventListener('click', () => action(element('remove-provider'), async () => {
+  if (providerStorageUnavailable) {
+    setProviderOperationStatus('storage_unavailable', 'Browser session storage is unavailable. No provider removal was sent because its operation ID could not be retained.');
+    return;
+  }
+  if (providerOperationContext) {
+    await reconcileProviderOperation();
+    return;
+  }
   if (!confirm('Remove this provider configuration and its active class routes?')) return;
-  await api('provider', {provider: selectedProvider, base_url: '', api_key: '', purposes: {}});
-  editing = false; await refresh(); notice('Provider configuration removed.');
+  const payload = {operation_id: crypto.randomUUID(), provider: selectedProvider, base_url: '', api_key: '', purposes: {}};
+  const command = rememberProviderOperation(payload, 'remove', providerDraftGeneration);
+  if (command) await postProviderOperation(command);
 }));
 for (const testButton of document.querySelectorAll('.test-class')) {
   testButton.addEventListener('click', () => action(testButton, async () => {

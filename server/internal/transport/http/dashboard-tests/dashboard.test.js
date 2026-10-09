@@ -22,16 +22,18 @@ function jsonResponse(status, body) {
 
 function deferred() {
   let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return {promise, resolve};
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return {promise, resolve, reject};
 }
 
-function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:00.000Z')} = {}) {
+function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:00.000Z'), storageSeed = {}, confirm = () => true} = {}) {
   const dom = new JSDOM(html, {
     url: `${origin}/manage/`,
     runScripts: 'outside-only',
   });
   const {window} = dom;
+  for (const [key, value] of Object.entries(storageSeed)) window.sessionStorage.setItem(key, value);
   const expectations = [...initialExpectations];
   const requests = [];
   const unexpected = [];
@@ -41,7 +43,12 @@ function makeDashboard(initialExpectations, {now = Date.parse('2026-10-07T12:00:
   Object.defineProperty(window.Date, 'now', {configurable: true, value: () => currentTime});
   window.setInterval = () => 0;
   window.clearInterval = () => {};
-  window.confirm = () => true;
+  window.confirm = confirm;
+  let operationSequence = 0;
+  Object.defineProperty(window.crypto, 'randomUUID', {
+    configurable: true,
+    value: () => `00000000-0000-4000-8000-${String(++operationSequence).padStart(12, '0')}`,
+  });
   Object.defineProperty(window.AbortSignal, 'timeout', {
     configurable: true,
     value: () => new window.AbortController().signal,
@@ -159,14 +166,38 @@ test('catalog suggestions preserve a removed selected model and leave entry open
   env.assertDrained();
 });
 
-async function startSignedIn(env, initialPairing = null) {
+async function startSignedIn(env, initialPairing = null, providers = {}) {
   env.expect('login', 'POST', jsonResponse(200, {ok: true}));
-  env.expect('state', 'GET', jsonResponse(200, state({pairing: initialPairing})));
+  env.expect('state', 'GET', jsonResponse(200, state({pairing: initialPairing, providers})));
   const token = element(env.window, 'admin-token');
   token.value = 'synthetic-admin-token';
   element(env.window, 'login-form').dispatchEvent(new env.window.Event('submit', {bubbles: true, cancelable: true}));
   await env.settle();
 }
+
+function editProviderForm(env, {model = 'synthetic-model', apiKey = 'synthetic-test-key'} = {}) {
+  const form = element(env.window, 'provider-form');
+  form.elements.quick_response_model.value = model;
+  form.elements.api_key.value = apiKey;
+  form.elements.quick_response_model.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+  return form;
+}
+
+function submitProviderForm(env) {
+  return element(env.window, 'provider-form').dispatchEvent(new env.window.Event('submit', {bubbles: true, cancelable: true}));
+}
+
+const providerOperationStorage = 'floe-inference-provider-operation';
+const savedProviderContext = (operationId, {hasApiKey = false, model = 'saved-model'} = {}) => JSON.stringify({
+  schema: 1,
+  operation_id: operationId,
+  kind: 'update',
+  provider: 'openai_compatible',
+  has_api_key: hasApiKey,
+  base_url: 'https://api.openai.com/v1',
+  purposes: {quick_response: {model, reasoning_effort: 'medium', capabilities: ['chat']}},
+  draft_generation: 1,
+});
 
 test('initial 401 leaves the dashboard locked on the login view', async (t) => {
   const env = makeDashboard([
@@ -358,4 +389,241 @@ test('duplicate login submits and stale prior-session success or 401 cannot repl
     assert.doesNotMatch(element(env.window, 'pair-fingerprint').textContent, /d{64}/);
     env.assertDrained();
   }
+});
+
+test('lost provider response recovers no_record then replays the exact saved command ID and body', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+
+  editProviderForm(env, {model: 'submitted-model', apiKey: 'synthetic-only-key'});
+  const firstPost = env.expectDeferred('provider', 'POST');
+  submitProviderForm(env);
+  await env.settle();
+  const initialRequest = env.requests.find((request) => request.path === '/manage/api/provider');
+  const originalBody = JSON.parse(initialRequest.body);
+  const storedContext = env.window.sessionStorage.getItem(providerOperationStorage);
+  assert.ok(storedContext);
+  assert.doesNotMatch(storedContext, /synthetic-only-key/);
+  assert.equal(JSON.parse(storedContext).operation_id, originalBody.operation_id);
+
+  firstPost.reject(new TypeError('synthetic network response loss'));
+  await env.settle();
+  env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true, status: 'no_record'}));
+  env.expect('provider', 'POST', jsonResponse(200, {ok: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'submitted-model'}}}}})));
+  element(env.window, 'provider-operation-check').click();
+  await env.settle();
+
+  const posts = env.requests.filter((request) => request.path === '/manage/api/provider');
+  assert.equal(posts.length, 2);
+  assert.deepEqual(JSON.parse(posts[1].body), originalBody);
+  assert.equal(JSON.parse(posts[1].body).operation_id, originalBody.operation_id);
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
+  assert.match(element(env.window, 'provider-operation-status').textContent, /completed/i);
+  env.assertDrained();
+});
+
+test('a delayed original provider request and no_record observation replay with one ID', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+
+  const form = editProviderForm(env, {model: 'delayed-model', apiKey: 'synthetic-delayed-key'});
+  const delayedPost = env.expectDeferred('provider', 'POST');
+  submitProviderForm(env);
+  await env.settle();
+  const originalBody = JSON.parse(env.requests.find((request) => request.path === '/manage/api/provider').body);
+  form.elements.quick_response_model.value = 'newer-draft-model';
+  form.elements.quick_response_model.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+  env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true, status: 'no_record'}));
+  env.expect('provider', 'POST', jsonResponse(200, {ok: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'delayed-model'}}}}})));
+  element(env.window, 'provider-operation-check').click();
+  await env.settle();
+  assert.equal(env.requests.filter((request) => request.path === '/manage/api/provider').length, 2);
+  assert.deepEqual(JSON.parse(env.requests.filter((request) => request.path === '/manage/api/provider')[1].body), originalBody);
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
+  assert.equal(form.elements.quick_response_model.value, 'newer-draft-model');
+
+  // The late response belongs to the already settled exact command and must not replace current UI state.
+  delayedPost.resolve(jsonResponse(200, {ok: true}));
+  await env.settle();
+  assert.match(element(env.window, 'provider-operation-status').textContent, /completed/i);
+  env.assertDrained();
+});
+
+test('completion after a pending submit preserves newer unsent provider edits', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+
+  const form = editProviderForm(env, {model: 'submitted-model', apiKey: 'synthetic-first-key'});
+  const delayedPost = env.expectDeferred('provider', 'POST');
+  submitProviderForm(env);
+  await env.settle();
+  form.elements.quick_response_model.value = 'newer-unsent-model';
+  form.elements.quick_response_model.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+
+  env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'submitted-model'}}}}})));
+  element(env.window, 'provider-operation-check').click();
+  await env.settle();
+  assert.equal(form.elements.quick_response_model.value, 'newer-unsent-model');
+  assert.match(element(env.window, 'provider-operation-status').textContent, /newer form edits remain on screen/i);
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
+
+  delayedPost.resolve(jsonResponse(200, {ok: true}));
+  await env.settle();
+  assert.equal(form.elements.quick_response_model.value, 'newer-unsent-model');
+  env.assertDrained();
+});
+
+test('reload retains only recovery context and requires API-key re-entry for a no_record retry', async (t) => {
+  const first = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => first.close());
+  await first.settle();
+  await startSignedIn(first);
+  editProviderForm(first, {model: 'saved-before-reload', apiKey: 'synthetic-reload-key'});
+  const firstPost = first.expectDeferred('provider', 'POST');
+  submitProviderForm(first);
+  await first.settle();
+  firstPost.reject(new TypeError('synthetic connection loss'));
+  await first.settle();
+  const savedContext = first.window.sessionStorage.getItem(providerOperationStorage);
+  assert.ok(savedContext);
+  assert.doesNotMatch(savedContext, /synthetic-reload-key/);
+  first.close();
+
+  const operationId = JSON.parse(savedContext).operation_id;
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ], {storageSeed: {[providerOperationStorage]: savedContext}});
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+  assert.equal(element(env.window, 'provider-form').elements.api_key.value, '');
+
+  env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true, status: 'no_record'}));
+  element(env.window, 'provider-operation-check').click();
+  await env.settle();
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), savedContext);
+  assert.equal(element(env.window, 'provider-recovery-key-row').hidden, false);
+  assert.match(element(env.window, 'provider-operation-status').textContent, /earlier request may still arrive/i);
+  assert.equal(env.requests.filter((request) => request.path === '/manage/api/provider').length, 0);
+
+  const form = element(env.window, 'provider-form');
+  form.elements.quick_response_model.value = 'newer-unsent-after-reload';
+  form.elements.quick_response_model.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+  element(env.window, 'provider-recovery-key').value = 'synthetic-reload-key';
+  env.expect('provider', 'POST', jsonResponse(200, {ok: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'saved-before-reload'}}}}})));
+  element(env.window, 'provider-operation-retry').click();
+  await env.settle();
+
+  const replay = env.requests.find((request) => request.path === '/manage/api/provider');
+  const body = JSON.parse(replay.body);
+  assert.equal(body.operation_id, operationId);
+  assert.equal(body.api_key, 'synthetic-reload-key');
+  assert.equal(body.purposes.quick_response.model, 'saved-before-reload');
+  assert.notEqual(body.purposes.quick_response.model, form.elements.quick_response_model.value);
+  assert.equal(form.elements.quick_response_model.value, 'newer-unsent-after-reload');
+  assert.equal(element(env.window, 'provider-recovery-key').value, '');
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
+  env.assertDrained();
+});
+
+test('recovery distinguishes completed, aborted, pending, and no_record states', async (t) => {
+  const cases = [
+    {name: 'completed', result: jsonResponse(200, {ok: true, recovered: true}), status: /completed/i, retained: false, stateRefresh: true},
+    {name: 'aborted', result: jsonResponse(200, {ok: true, recovered: true, category: 'unavailable', code: 'credential_store_unavailable'}), status: /not applied/i, retained: false, stateRefresh: true},
+    {name: 'pending', result: jsonResponse(503, {error: {code: 'configuration_unavailable'}}), status: /could not confirm/i, retained: true, stateRefresh: false},
+    {name: 'no_record', result: jsonResponse(200, {ok: true, recovered: true, status: 'no_record'}), status: /earlier request may still arrive/i, retained: true, stateRefresh: false},
+  ];
+  for (const scenario of cases) {
+    const context = savedProviderContext('00000000-0000-4000-8000-000000000091', {hasApiKey: true});
+    const env = makeDashboard([
+      {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+    ], {storageSeed: {[providerOperationStorage]: context}});
+    t.after(() => env.close());
+    await env.settle();
+    await startSignedIn(env);
+    env.expect('inference/recover', 'POST', scenario.result);
+    if (scenario.stateRefresh) env.expect('state', 'GET', jsonResponse(200, state()));
+    element(env.window, 'provider-operation-check').click();
+    await env.settle();
+    assert.match(element(env.window, 'provider-operation-status').textContent, scenario.status, scenario.name);
+    assert.equal(env.window.sessionStorage.getItem(providerOperationStorage) !== null, scenario.retained, scenario.name);
+    if (scenario.name === 'no_record') assert.equal(element(env.window, 'provider-recovery-key-row').hidden, false);
+    if (scenario.name === 'pending') assert.equal(element(env.window, 'provider-recovery-key-row').hidden, true);
+    env.assertDrained();
+  }
+});
+
+test('provider navigation does not rebind a pending command', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+
+  editProviderForm(env, {model: 'original-provider-model', apiKey: 'synthetic-navigation-key'});
+  const originalPost = env.expectDeferred('provider', 'POST');
+  submitProviderForm(env);
+  await env.settle();
+  assert.equal(env.requests.filter((request) => request.path === '/manage/api/provider').length, 1);
+  const originalBody = JSON.parse(env.requests.find((request) => request.path === '/manage/api/provider').body);
+
+  env.window.document.querySelector('.provider-option[data-provider="codex_oauth"]').click();
+  assert.equal(element(env.window, 'provider-form').elements.provider.value, 'codex_oauth');
+  originalPost.reject(new TypeError('synthetic network failure'));
+  await env.settle();
+  env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true, status: 'no_record'}));
+  env.expect('provider', 'POST', jsonResponse(200, {ok: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {
+    openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'original-provider-model'}}},
+    codex_oauth: {purposes: {}},
+  }})));
+  element(env.window, 'provider-operation-check').click();
+  await env.settle();
+  const posts = env.requests.filter((request) => request.path === '/manage/api/provider');
+  assert.equal(posts.length, 2);
+  assert.deepEqual(JSON.parse(posts[1].body), originalBody);
+  assert.equal(element(env.window, 'provider-form').elements.provider.value, 'codex_oauth');
+  env.assertDrained();
+});
+
+test('double submit uses one provider request and settles only after its response', async (t) => {
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(401, {error: {code: 'unauthorized'}}))},
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+  await startSignedIn(env);
+
+  editProviderForm(env, {model: 'one-submit-model', apiKey: 'synthetic-double-submit-key'});
+  const response = env.expectDeferred('provider', 'POST');
+  submitProviderForm(env);
+  submitProviderForm(env);
+  await env.settle();
+  assert.equal(env.requests.filter((request) => request.path === '/manage/api/provider').length, 1);
+  const operationId = JSON.parse(env.requests.find((request) => request.path === '/manage/api/provider').body).operation_id;
+  assert.equal(JSON.parse(env.window.sessionStorage.getItem(providerOperationStorage)).operation_id, operationId);
+  env.expect('state', 'GET', jsonResponse(200, state()));
+  response.resolve(jsonResponse(200, {ok: true}));
+  await env.settle();
+  assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
+  env.assertDrained();
 });

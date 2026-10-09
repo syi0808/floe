@@ -24,7 +24,7 @@ func (repository *InferenceConfigRepository) LoadConfig() inference.ConfigReadOu
 	if repository == nil || repository.files == nil {
 		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadUnavailable}
 	}
-	data, err := repository.files.Read(inferenceConfigurationFile, 65536)
+	data, err := repository.files.Read(inferenceConfigurationFile, inference.MaxConfigSnapshotBytes)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadAbsent}
@@ -34,7 +34,7 @@ func (repository *InferenceConfigRepository) LoadConfig() inference.ConfigReadOu
 		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadUnavailable, Cause: err}
 	}
 	var state inference.ConfigState
-	if trust.DecodeStrict(data, &state, 65536, 32) != nil {
+	if trust.DecodeStrict(data, &state, inference.MaxConfigSnapshotBytes, 32) != nil {
 		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadInvalid}
 	}
 	return inference.ConfigReadOutcome{Disposition: inference.ConfigReadPresent, State: state}
@@ -45,6 +45,9 @@ func (repository *InferenceConfigRepository) SaveConfig(state inference.ConfigSt
 		return inference.ConfigWriteOutcome{Disposition: inference.ConfigWriteRejected, Cause: privatefiles.ErrUnavailable}
 	}
 	data, err := json.Marshal(state)
+	if err == nil && len(data) > inference.MaxConfigSnapshotBytes {
+		err = inference.ErrConfigSnapshotCapacity
+	}
 	if err == nil {
 		err = repository.files.Write(inferenceConfigurationFile, data)
 	}

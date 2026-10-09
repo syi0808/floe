@@ -62,6 +62,22 @@ func (store *memoryCredentialStore) Put(ctx context.Context, name, value string)
 	return nil
 }
 
+func (store *memoryCredentialStore) Create(ctx context.Context, name, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if name == "" || len(name) > 256 || value == "" || len(value) > 131072 {
+		return credentials.ErrUnavailable
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.values[name]; exists {
+		return credentials.ErrUnavailable
+	}
+	store.values[name] = value
+	return nil
+}
+
 func (store *memoryCredentialStore) Delete(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -122,6 +138,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	if err != nil {
 		t.Fatalf("open inference configuration owner: %v", err)
 	}
+	t.Cleanup(configuration.Close)
 	pairingOperations := pairing.NewOperations(trustService, credentialsStore, nil)
 	catalog, err := modelcatalog.Open("")
 	if err != nil {

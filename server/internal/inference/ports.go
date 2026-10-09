@@ -12,12 +12,13 @@ type Trust interface {
 	ActiveIssuer(trust.Principal) (trust.IssuerSnapshot, error)
 }
 
-// ProviderCredentialAccess exposes only read and write operations for
-// Inference provider credentials. References are generated and persisted by
-// Inference; this capability does not permit arbitrary credential deletion.
+// ProviderCredentialAccess exposes exact-slot operations for Inference-owned
+// provider credentials. Creation is immutable and deletion is used only by
+// durable owner cleanup state.
 type ProviderCredentialAccess interface {
 	ReadProviderCredential(context.Context, string) (string, error)
-	StoreProviderCredential(context.Context, string, string) error
+	CreateProviderCredential(context.Context, string, string) error
+	DeleteProviderCredential(context.Context, string) error
 }
 
 type PurposeCatalog interface {

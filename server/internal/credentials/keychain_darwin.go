@@ -52,6 +52,12 @@ static int floe_keychain(const char *name, const char *value, int operation, cha
 			CFRelease(update);
 		}
         CFRelease(data);
+	} else if (operation == 3) {
+		CFDataRef data = CFDataCreate(NULL, (const UInt8 *)value, strlen(value));
+		CFDictionarySetValue(query, kSecValueData, data);
+		CFDictionarySetValue(query, kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly);
+		status = SecItemAdd(query, NULL);
+		CFRelease(data);
     } else {
         status = SecItemDelete(query);
         if (status == errSecItemNotFound) status = errSecSuccess;

@@ -16,3 +16,10 @@ type Store interface {
 	Put(context.Context, string, string) error
 	Delete(context.Context, string) error
 }
+
+// Creator is the create-only capability used when an owner issues an
+// immutable credential slot. It must fail if the slot already exists and
+// must not report settled absence until any write attempt has completed.
+type Creator interface {
+	Create(context.Context, string, string) error
+}

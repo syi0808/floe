@@ -31,6 +31,10 @@ type Configuration struct {
 	factory           ProviderFactory
 	state             ConfigState
 	configUnavailable bool
+	cleanupWake       chan struct{}
+	cleanupStop       chan struct{}
+	cleanupDone       chan struct{}
+	cleanupCloseOnce  sync.Once
 }
 
 func OpenConfiguration(ctx context.Context, repository ConfigRepository, engine *Service, authority Trust, credentials ProviderCredentialAccess, factory ProviderFactory) (*Configuration, error) {
@@ -46,6 +50,9 @@ func OpenConfiguration(ctx context.Context, repository ConfigRepository, engine 
 		if err := validateConfigurationState(read.State, factory); err != nil {
 			return nil, err
 		}
+		if !configurationStateFitsBound(read.State) {
+			return nil, ErrConfigSnapshotCapacity
+		}
 		state = cloneConfigurationState(read.State)
 	default:
 		return nil, errors.New("inference configuration unavailable")
@@ -57,14 +64,26 @@ func OpenConfiguration(ctx context.Context, repository ConfigRepository, engine 
 		credentials: credentials,
 		factory:     factory,
 		state:       state,
+		cleanupWake: make(chan struct{}, 1),
+		cleanupStop: make(chan struct{}),
+		cleanupDone: make(chan struct{}),
 	}
-	config, accounts, executor, err := configuration.prepare(ctx, state)
+	if state.Pending != nil {
+		if err := configuration.resolvePending(ctx, true); err != nil {
+			return nil, errors.New("inference configuration unavailable")
+		}
+	}
+	if err := configuration.cleanupDurable(ctx, true); err != nil {
+		return nil, errors.New("inference configuration unavailable")
+	}
+	config, accounts, executor, err := configuration.prepare(ctx, configuration.state)
 	if err != nil {
 		return nil, errors.New("inference configuration unavailable")
 	}
 	if err = engine.Configure(config, accounts, executor); err != nil {
 		return nil, errors.New("inference configuration unavailable")
 	}
+	go configuration.cleanupLoop()
 	return configuration, nil
 }
 
@@ -138,6 +157,12 @@ func (c *Configuration) RequiredError() error {
 }
 
 func (c *Configuration) save(state ConfigState) error {
+	if err := validateConfigurationState(state, c.factory); err != nil {
+		return err
+	}
+	if !configurationStateFitsBound(state) {
+		return ErrConfigSnapshotCapacity
+	}
 	outcome := c.repository.SaveConfig(cloneConfigurationState(state))
 	switch outcome.Disposition {
 	case ConfigWriteCommitted:

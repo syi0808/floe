@@ -137,6 +137,40 @@ func (s *DevelopmentFileStore) Put(ctx context.Context, name, value string) erro
 	return ctx.Err()
 }
 
+// Create installs a new immutable slot without replacing an existing value.
+func (s *DevelopmentFileStore) Create(ctx context.Context, name, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.path(ctx, name)
+	if err != nil || value == "" || len(value) > 131072 || strings.ContainsRune(value, 0) {
+		return ErrUnavailable
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	if err != nil {
+		return ErrUnavailable
+	}
+	_, writeErr := io.WriteString(f, value)
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if writeErr != nil || syncErr != nil || closeErr != nil {
+		return ErrUnavailable
+	}
+	directory, err := os.Open(s.root)
+	if err != nil {
+		return ErrUnavailable
+	}
+	syncErr = directory.Sync()
+	closeErr = directory.Close()
+	if syncErr != nil || closeErr != nil {
+		return ErrUnavailable
+	}
+	observed, err := readDevelopmentSecret(path)
+	if err != nil || observed != value {
+		return ErrUnavailable
+	}
+	return ctx.Err()
+}
+
 func (s *DevelopmentFileStore) Delete(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

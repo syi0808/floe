@@ -35,6 +35,20 @@ func (store *inferenceCredentialStore) Put(ctx context.Context, name, value stri
 	return nil
 }
 
+func (store *inferenceCredentialStore) Create(ctx context.Context, name, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if store.putErr != nil {
+		return store.putErr
+	}
+	if _, exists := store.values[name]; exists {
+		return credentials.ErrUnavailable
+	}
+	store.values[name] = value
+	return nil
+}
+
 func (*inferenceCredentialStore) Delete(context.Context, string) error { return nil }
 
 func TestInferenceProviderAccessScopesProviderCredentialIO(t *testing.T) {
@@ -42,8 +56,11 @@ func TestInferenceProviderAccessScopesProviderCredentialIO(t *testing.T) {
 	access := NewInferenceProviderAccess(store)
 	ctx := context.Background()
 	const reference = "FLOE_KEY_SYNTHETIC_123"
-	if err := access.StoreProviderCredential(ctx, reference, "synthetic-key"); err != nil {
+	if err := access.CreateProviderCredential(ctx, reference, "synthetic-key"); err != nil {
 		t.Fatal(err)
+	}
+	if err := access.CreateProviderCredential(ctx, reference, "replacement-key"); !errors.Is(err, credentials.ErrUnavailable) {
+		t.Fatalf("create-only adapter replaced an existing slot: %v", err)
 	}
 	value, err := access.ReadProviderCredential(ctx, reference)
 	if err != nil || value != "synthetic-key" {
@@ -52,7 +69,7 @@ func TestInferenceProviderAccessScopesProviderCredentialIO(t *testing.T) {
 	if _, err = access.ReadProviderCredential(ctx, "FLOE_GMAIL_OAUTH"); !errors.Is(err, credentials.ErrUnavailable) {
 		t.Fatalf("adapter accepted a non-Inference credential reference: %v", err)
 	}
-	if err = access.StoreProviderCredential(ctx, reference, "bad\nkey"); !errors.Is(err, credentials.ErrUnavailable) {
+	if err = access.CreateProviderCredential(ctx, reference, "bad\nkey"); !errors.Is(err, credentials.ErrUnavailable) {
 		t.Fatalf("adapter accepted an invalid provider credential value: %v", err)
 	}
 	store.getErr = credentials.ErrUnavailable

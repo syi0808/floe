@@ -9,7 +9,8 @@ import (
 )
 
 // InferenceProviderAccess is limited to the generated FLOE_KEY_* references
-// owned by Inference. It deliberately has no delete operation.
+// owned by Inference. Creation is immutable; deletion is limited to exact
+// owner-issued references in durable cleanup state.
 type InferenceProviderAccess struct{ store credentials.Store }
 
 func NewInferenceProviderAccess(store credentials.Store) *InferenceProviderAccess {
@@ -23,11 +24,22 @@ func (access *InferenceProviderAccess) ReadProviderCredential(ctx context.Contex
 	return access.store.Get(ctx, reference)
 }
 
-func (access *InferenceProviderAccess) StoreProviderCredential(ctx context.Context, reference, value string) error {
+func (access *InferenceProviderAccess) CreateProviderCredential(ctx context.Context, reference, value string) error {
 	if access == nil || access.store == nil || !validInferenceProviderReference(reference) || value == "" || len(value) > 8192 || strings.ContainsAny(value, "\r\n\x00") {
 		return credentials.ErrUnavailable
 	}
-	return access.store.Put(ctx, reference, value)
+	creator, ok := access.store.(credentials.Creator)
+	if !ok {
+		return credentials.ErrUnavailable
+	}
+	return creator.Create(ctx, reference, value)
+}
+
+func (access *InferenceProviderAccess) DeleteProviderCredential(ctx context.Context, reference string) error {
+	if access == nil || access.store == nil || !validInferenceProviderReference(reference) {
+		return credentials.ErrUnavailable
+	}
+	return access.store.Delete(ctx, reference)
 }
 
 func validInferenceProviderReference(reference string) bool {

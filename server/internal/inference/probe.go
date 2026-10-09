@@ -25,18 +25,30 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 	if err := s.trust.WithCurrentOperator(operator, func() error { return nil }); err != nil {
 		return ProbeResult{}, Failure{Code: Unauthorized}
 	}
-	s.mu.RLock()
+	s.mu.Lock()
 	account := s.accounts[targetID]
 	executor := s.executor
 	generation := s.generation
 	denied := s.unavailable
-	s.mu.RUnlock()
+	if !denied && executor != nil && account != nil {
+		s.leases[generation]++
+	}
+	s.mu.Unlock()
 	if denied || executor == nil {
 		return ProbeResult{}, Failure{Code: ModelUnavailable}
 	}
 	if account == nil {
 		return ProbeResult{}, Failure{Code: NotFound}
 	}
+	defer func() {
+		s.mu.Lock()
+		if s.leases[generation] <= 1 {
+			delete(s.leases, generation)
+		} else {
+			s.leases[generation]--
+		}
+		s.mu.Unlock()
+	}()
 	if err := account.Ready(ctx); err != nil {
 		return ProbeResult{}, normalizeFailure(err)
 	}

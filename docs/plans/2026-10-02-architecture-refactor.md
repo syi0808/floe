@@ -562,9 +562,9 @@ cleanup reference, drains the retired provider generation, performs idempotent
 exact-slot deletion, then commits cleanup completion. Tests should crash/reopen
 after each commit/write/adoption boundary, cover present/absent/unavailable
 readback and retryable deletion, assert old live config is retained or denied
-until settlement, and prove no secret values enter durable state or logs. This
-design is recorded for review only; no lifecycle journal or key deletion was
-added in this slice.
+until settlement. At that earlier port checkpoint this design was recorded for
+review only. The bounded lifecycle implementation is recorded below; it uses
+the existing complete snapshot rather than a generic new journal.
 
 Focused Inference/storage/credential adapter and Node/HTTP tests passed. The
 final server gate passed `go test -race ./...`, `go vet ./...`, `go build ./...`,
@@ -572,6 +572,61 @@ gofmt on changed Go files, and the Go graph gate with one positive and 15
 negative fixtures. `git diff --check` passed. This remains one bounded P5
 candidate; HTTP/model typed-result migration, authority/View expansion, and
 connector/model/OAuth relocations remain later work. No commit or push was made.
+
+**Bounded Inference credential lifecycle follow-on (2026-10-09):** implemented
+on the exact requested base `e97027a483f154ba7a4141996f2fbd887aca0dad` (tree
+`98022b1c2ed29927fed7f42b0bb8ebbf7afdfc0a`, parent
+`d702d09c0018f3f226100eebe44e5b4e68a2d9ea`). Inference's existing complete
+snapshot now carries schema-2 bounded transition intent, candidate, receipt,
+owner-created slot and cleanup state. It persists intent before a create-only
+credential operation, verifies exact-slot readback, commits candidate plus
+cleanup metadata before engine adoption, and refuses changed command retries or
+capacity eviction. Recovery distinguishes confirmed absence, matching value,
+read failure, digest mismatch and ambiguous persistence. No key bytes enter
+snapshot state or diagnostics. Generation leases span provider readiness and
+the synchronous executor call; canceled requests retain their lease until the
+call returns. Cleanup deletes only an exact retired owner-created slot after
+durable reference removal and generation drain. Startup resolves pending work
+and cleanup before engine configuration. Schema-1 inference snapshots fail
+closed without reset or automatic credential replacement. HTTP update/delete
+commands now require stable UUID operation IDs; the dashboard stores the ID and
+non-secret recovery context across page recovery and retains an in-flight key
+only in page memory. A `no_record` observation keeps the ID because a delayed
+request may still arrive; same-page recovery replays the immutable payload, and
+reload recovery requires explicit key re-entry when the saved command used one.
+Recovery refreshes preserve newer unsent form edits.
+
+Fault evidence covers intent/write/candidate-commit acknowledgement outcomes,
+recovery and reopen, engine adoption failure, unavailable/mismatched exact
+readback, exact retries and changed-body conflicts, pending-operation exclusion,
+receipt capacity, invalid config before writes, shared legacy references,
+cancel-versus-drain, and exact cleanup/reopen. All credential values and model
+executors used by these tests are synthetic. Final validation passed
+`go test -race ./...`, `go vet ./...`, `go build -buildvcs=false ./...`,
+`go test -tags=floe_dev ./internal/credentials ./internal/adapters/credentials ./internal/inference`,
+`GOFLAGS=-buildvcs=false python3 tools/check_import_graph.py`, changed-Go
+`gofmt -d`, `node --check` for the dashboard, and `git diff --check`. Plain
+`go build ./...` could not obtain Git VCS status in this worktree and exited
+with Go's documented `-buildvcs=false` hint; the build passed with that
+stamping option disabled. Raw command output is saved in
+`/tmp/floe-inference-lifecycle-e970-logs`. This is a bounded follow-on, not P5
+completion. HTTP/model typed-result migration,
+authority/View expansion, and connector/model/OAuth relocations remain later
+work. No commit or push was made.
+
+**Dashboard recovery/draft follow-on (2026-10-09):** the management console now
+treats `no_record` as an unresolved observation, retains the operation ID and
+non-secret command context in session storage, and keeps the immutable original
+payload only in page memory. Same-page recovery replays that exact ID/body after
+`no_record`; after reload, a key-bearing command requires explicit re-entry of
+the same key. Completion refresh preserves newer unsent form edits, provider
+navigation asks before discarding a draft, and double submit is guarded. The
+headless dashboard suite passes all 19 tests; `node --check`, the HTTP Go tests,
+`go test -race ./...`, `go vet ./...`, `go build -buildvcs=false ./...`, and
+`git diff --check` pass. Plain `go build ./...` still fails only while obtaining
+Git VCS status (`exit status 128`, with Go's `-buildvcs=false` hint); no Git
+security setting was changed. Raw command output is saved in
+`/tmp/floe-inference-lifecycle-dashboard-e970-logs`. No commit or push was made.
 
 - **의존 DAG 먼저:** Trust는 identity/principal/custody port, Authority는 signed enforcement, Views는 parse/read/validate workflow. 공유되는 SourceReference/Snapshot/Bounds 등 순수 값만 contracts/source로 옮긴다. authority는 views application을 import하지 않고 Views가 자신의 Authority port로 협력한다.
 - **첫 View:** authority.SourceService의 Preview/Admit/Read/Release orchestration을 views/application으로 이관한다. Engine의 issue/claim/stage/release 검증은 authority에 남긴다. canonical query bytes·proof binding·one-use release·fence를 그대로 보존한다.

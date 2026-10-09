@@ -28,13 +28,17 @@ func (Keychain) Put(ctx context.Context, name, value string) error {
 	_, err := observeNative(ctx, name, value, 1)
 	return err
 }
+func (Keychain) Create(ctx context.Context, name, value string) error {
+	_, err := observeNative(ctx, name, value, 3)
+	return err
+}
 func (Keychain) Delete(ctx context.Context, name string) error {
 	_, err := observeNative(ctx, name, "", 2)
 	return err
 }
 
 func observeNative(parent context.Context, name, value string, operation int) (string, error) {
-	if parent == nil || operation < 0 || operation > 2 || (operation == 1 && value == "") || name == "" || len(name) > 256 || len(value) > 131072 || strings.ContainsRune(name+value, 0) {
+	if parent == nil || operation < 0 || operation > 3 || ((operation == 1 || operation == 3) && value == "") || name == "" || len(name) > 256 || len(value) > 131072 || strings.ContainsRune(name+value, 0) {
 		return "", ErrUnavailable
 	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
@@ -67,7 +71,7 @@ func observeNative(parent context.Context, name, value string, operation int) (s
 		actual, err := nativeKeychain(name, value, operation)
 		if err == nil && operation != 0 {
 			actual, err = nativeKeychain(name, "", 0)
-			if err == nil && (operation == 1 && actual != value || operation == 2 && actual != "") {
+			if err == nil && ((operation == 1 || operation == 3) && actual != value || operation == 2 && actual != "") {
 				err = ErrUnavailable
 			}
 		}
