@@ -84,8 +84,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   ConversationController? agentController;
   bool assistantOpen = false;
   SourceRef? selectedConnectionSource;
-  AgentExpertBindingTarget? expertBindingTarget;
-  Future<void> Function()? onBindingReplaced;
+  AgentAssistantFeatureSourceTarget? assistantFeatureSourceTarget;
+  Future<void> Function()? onAssistantFeatureConfigured;
   final assistantEntryFocus = FocusNode();
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
@@ -244,10 +244,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         connectionsController: widget.connectionsController,
         operationPolicyController: operationPolicyController,
         runtime: widget.ownerGateways.runtime,
-        registryController: widget.ownerGateways.registry,
+        assistantFeatureController: widget.ownerGateways.assistantFeatures,
         memoryController: widget.ownerGateways.memory,
-        expertBindingTarget: expertBindingTarget,
-        onBindingReplaced: onBindingReplaced,
+        assistantFeatureSourceTarget: assistantFeatureSourceTarget,
+        onAssistantFeatureConfigured: onAssistantFeatureConfigured,
         platform: defaultTargetPlatform,
       );
     }
@@ -325,7 +325,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
-    final calendarChangesAvailable = widget.ownerGateways.runtime?.ready == true;
+    final calendarChangesAvailable =
+        widget.ownerGateways.runtime?.ready == true;
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
@@ -375,7 +376,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               onOpenConnections: () =>
                   _selectDestination(_DestinationView.connections),
               onOpenSourceReview: _openAgentSourceReview,
-              onOpenExpertSettings: _openExpertSettings,
+              onOpenAssistantFeatureSettings: _openAssistantFeatureSettings,
               onClose: _closeAssistant,
             );
           }
@@ -405,7 +406,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                       onOpenConnections: () =>
                           _selectDestination(_DestinationView.connections),
                       onOpenSourceReview: _openAgentSourceReview,
-                      onOpenExpertSettings: _openExpertSettings,
+                      onOpenAssistantFeatureSettings:
+                          _openAssistantFeatureSettings,
                       onClose: _closeAssistant,
                     )
                   : SingleChildScrollView(child: rail),
@@ -427,6 +429,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       selectedConnectionSource = sourceRef;
       destination = value;
       selectedTaskId = null;
+      if (value != _DestinationView.settings) {
+        assistantFeatureSourceTarget = null;
+        onAssistantFeatureConfigured = null;
+      }
     });
     _updateRefreshVisibility();
   }
@@ -449,7 +455,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           onOpenConnections: () =>
               _selectDestination(_DestinationView.connections),
           onOpenSourceReview: _openAgentSourceReview,
-          onOpenExpertSettings: _openExpertSettings,
+          onOpenAssistantFeatureSettings: _openAssistantFeatureSettings,
           onClose: () {
             agent.detachView();
             Navigator.pop(context);
@@ -473,16 +479,28 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  void _openExpertSettings(
-    AgentExpertBindingTarget target,
-    Future<void> Function() onReplaced,
+  void _openAssistantFeatureSettings(
+    AgentAssistantFeatureSourceTarget target,
+    Future<void> Function() onConfigured,
   ) {
     if (MediaQuery.sizeOf(context).width <= 960) {
       Navigator.of(context).maybePop();
     }
     setState(() {
-      expertBindingTarget = target;
-      onBindingReplaced = onReplaced;
+      assistantFeatureSourceTarget = target;
+      onAssistantFeatureConfigured = () async {
+        await onConfigured();
+        if (!mounted) return;
+        final current = assistantFeatureSourceTarget;
+        if (current?.review.reviewRef.matches(target.review.reviewRef) !=
+            true) {
+          return;
+        }
+        setState(() {
+          assistantFeatureSourceTarget = null;
+          onAssistantFeatureConfigured = null;
+        });
+      };
     });
     _selectDestination(_DestinationView.settings);
   }
@@ -550,16 +568,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           expectedRevision: target.expectedRevision,
           title: event.title,
           startsAt: start.toUtc(),
-          endsAt: start
-              .toUtc()
-              .add(event.endsAt.difference(event.startsAt)),
+          endsAt: start.toUtc().add(event.endsAt.difference(event.startsAt)),
           timezone:
               event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
         ),
       );
       _showManualCalendarOperationOutcome(result, success: 'Event moved');
-      if (mounted &&
-          result.status == ManualCalendarOperationStatus.succeeded) {
+      if (mounted && result.status == ManualCalendarOperationStatus.succeeded) {
         await controller.load();
       }
     } on Object {
@@ -572,27 +587,27 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final confirmed = await showFloeDialog<bool>(
       context,
       (dialogContext) => FloeDetailDialog(
-          title: 'Delete event?',
-          children: [
-            Text(
-              '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
-            ),
-            const SizedBox(height: FloeSpace.base),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                FloeButton.text(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: FloeSpace.md),
-                FloeButton.filled(
-                  onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('Delete event'),
-                ),
-              ],
-            ),
-          ],
+        title: 'Delete event?',
+        children: [
+          Text(
+            '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
+          ),
+          const SizedBox(height: FloeSpace.base),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              FloeButton.text(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: FloeSpace.md),
+              FloeButton.filled(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Delete event'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
     if (confirmed == true && mounted) {
@@ -622,9 +637,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }) {
     if (!mounted) return;
     final title = switch (operation?.status) {
-      ManualCalendarOperationStatus.succeeded => operation!.collectionPending
-          ? '$success. Day update is pending.'
-          : success,
+      ManualCalendarOperationStatus.succeeded =>
+        operation!.collectionPending
+            ? '$success. Day update is pending.'
+            : success,
       ManualCalendarOperationStatus.pending =>
         '$success request accepted. Check Activity for updates.',
       ManualCalendarOperationStatus.executing =>
@@ -633,8 +649,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         'Calendar change was blocked before dispatch.',
       ManualCalendarOperationStatus.notApplied =>
         'Calendar change was not applied.',
-      ManualCalendarOperationStatus.unknown =>
-        'Calendar outcome is unknown. Reconcile it in Activity before retrying.',
+      ManualCalendarOperationStatus.unknown => 'Calendar outcome is unknown. Reconcile it in Activity before retrying.',
       null =>
         'Calendar outcome was not confirmed. Check Activity before retrying.',
     };

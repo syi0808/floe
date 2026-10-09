@@ -13,10 +13,10 @@ import 'package:floe_client/app/floe_loading.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
-import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
+import 'package:floe_client/features/conversation/assistant_features/application/assistant_feature_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
-import 'package:floe_client/features/experts/presentation/agent_registry_dialog.dart';
+import 'package:floe_client/features/settings/presentation/assistant_feature_settings.dart';
 import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
@@ -25,7 +25,13 @@ part 'data_privacy.dart';
 part 'operation_policy_settings.dart';
 part 'navigation.dart';
 
-enum _SettingsPage { operationPolicy, dataPrivacy, experts, memory, remoteServer }
+enum _SettingsPage {
+  operationPolicy,
+  dataPrivacy,
+  assistantFeatures,
+  memory,
+  remoteServer,
+}
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -33,20 +39,20 @@ class SettingsScreen extends StatefulWidget {
     required this.connectionsController,
     this.operationPolicyController,
     this.runtime,
-    this.registryController,
+    this.assistantFeatureController,
     this.memoryController,
-    this.expertBindingTarget,
-    this.onBindingReplaced,
+    this.assistantFeatureSourceTarget,
+    this.onAssistantFeatureConfigured,
     this.platform,
   });
 
   final ConnectionsController? connectionsController;
   final OperationPolicyController? operationPolicyController;
   final RuntimeController? runtime;
-  final AgentRegistryController? registryController;
+  final AssistantFeatureController? assistantFeatureController;
   final AgentMemoryController? memoryController;
-  final AgentExpertBindingTarget? expertBindingTarget;
-  final Future<void> Function()? onBindingReplaced;
+  final AgentAssistantFeatureSourceTarget? assistantFeatureSourceTarget;
+  final Future<void> Function()? onAssistantFeatureConfigured;
   final TargetPlatform? platform;
 
   @override
@@ -54,9 +60,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late _SettingsPage selectedPage = widget.expertBindingTarget == null
+  late _SettingsPage selectedPage = widget.assistantFeatureSourceTarget == null
       ? _availablePages.first
-      : _SettingsPage.experts;
+      : _SettingsPage.assistantFeatures;
   final navigationScrollController = ScrollController();
   final contentScrollController = ScrollController();
 
@@ -64,17 +70,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (widget.operationPolicyController != null) _SettingsPage.operationPolicy,
     if (widget.memoryController != null && widget.runtime != null)
       _SettingsPage.dataPrivacy,
-    if (widget.registryController != null && widget.runtime != null)
-      _SettingsPage.experts,
+    if (widget.assistantFeatureController != null && widget.runtime != null)
+      _SettingsPage.assistantFeatures,
     _SettingsPage.remoteServer,
   ];
 
   @override
   void didUpdateWidget(SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.expertBindingTarget != oldWidget.expertBindingTarget &&
-        widget.expertBindingTarget != null) {
-      selectedPage = _SettingsPage.experts;
+    if (widget.assistantFeatureSourceTarget !=
+            oldWidget.assistantFeatureSourceTarget &&
+        widget.assistantFeatureSourceTarget != null) {
+      selectedPage = _SettingsPage.assistantFeatures;
     }
     if (!_availablePages.contains(selectedPage) &&
         !(selectedPage == _SettingsPage.memory &&
@@ -100,11 +107,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       platform: widget.platform,
       onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
     ),
-    _SettingsPage.experts => AgentRegistrySettings(
-      controller: widget.registryController!,
+    _SettingsPage.assistantFeatures => AssistantFeatureSettings(
+      controller: widget.assistantFeatureController!,
       runtime: widget.runtime!,
-      focus: widget.expertBindingTarget,
-      onBindingReplaced: widget.onBindingReplaced,
+      focus: widget.assistantFeatureSourceTarget,
+      onConfigured: widget.onAssistantFeatureConfigured,
     ),
     _SettingsPage.memory => AgentMemorySettings(
       controller: widget.memoryController!,

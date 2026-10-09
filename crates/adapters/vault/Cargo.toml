@@ -41,6 +41,9 @@ turso.workspace = true
 uuid.workspace = true
 zeroize = "1.9.0"
 
+[dev-dependencies]
+floe-experts-builtin = { path = "../../experts/builtin" }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.177"
 

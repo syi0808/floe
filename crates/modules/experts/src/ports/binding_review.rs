@@ -65,6 +65,8 @@ pub struct BindingReplacementReceipt {
     pub review_ref: BindingReviewRef,
     pub registry: crate::RegistryCommitReceipt,
     pub committed_at_unix_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_feature_configuration: Option<crate::AssistantFeatureConfiguration>,
 }
 
 pub struct ReviewedBindingReplacement {

@@ -21,7 +21,7 @@ final class AgentInteractionCard extends StatefulWidget {
     required this.interactionId,
     this.onOpenSourceReview,
     this.onOpenConnections,
-    this.onOpenExpertSettings,
+    this.onOpenAssistantFeatureSettings,
   });
 
   final ConversationController controller;
@@ -29,10 +29,10 @@ final class AgentInteractionCard extends StatefulWidget {
   final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
-    AgentExpertBindingTarget target,
+    AgentAssistantFeatureSourceTarget target,
     Future<void> Function() reconcileAfterReplacement,
   )?
-  onOpenExpertSettings;
+  onOpenAssistantFeatureSettings;
 
   @override
   State<AgentInteractionCard> createState() => _AgentInteractionCardState();
@@ -68,9 +68,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
       final controller = widget.controller;
       final snapshot = controller.interactionFor(widget.interactionId);
       final busy = controller.interactionBusyFor(widget.interactionId);
-      final failure = controller.interactionFailureFor(
-        widget.interactionId,
-      );
+      final failure = controller.interactionFailureFor(widget.interactionId);
       if (snapshot == null) {
         return FloeSquircle(
           size: FloeSquircleSize.md,
@@ -122,8 +120,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
                   child: Text(switch (snapshot.kind) {
                     AgentInteractionKind.sourceAccess =>
                       strings.agentInteractionSourceTitle,
-                    AgentInteractionKind.expertBinding =>
-                      strings.agentInteractionExpertBindingTitle,
+                    AgentInteractionKind.assistantFeatureSources =>
+                      strings.agentInteractionAssistantFeatureSourcesTitle,
                     AgentInteractionKind.operationApproval =>
                       'Calendar change approval',
                   }, style: FloeType.label),
@@ -201,8 +199,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
     AgentNavigationTarget(:final sourceLabel) => [
       _row(strings.agentInteractionSource, sourceLabel),
     ],
-    AgentExpertBindingTarget(:final review) => [
-      _row(strings.agentInteractionNextStep, review.requirementRef),
+    AgentAssistantFeatureSourceTarget(:final review) => [
+      _row(strings.agentInteractionNextStep, review.sourceRequirementRef),
       _row(
         'Selected sources',
         review.candidates
@@ -260,8 +258,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
         strings.agentInteractionReviewSource,
       AgentInteractionAction.requestPermission =>
         strings.agentInteractionRequestPermission,
-      AgentInteractionAction.openExpertSettings =>
-        strings.agentInteractionOpenExpertSettings,
+      AgentInteractionAction.openAssistantFeatureSettings =>
+        strings.agentInteractionOpenAssistantFeatureSettings,
     };
     final VoidCallback? onPressed = busy
         ? null
@@ -292,10 +290,10 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
             AgentInteractionAction.requestPermission => () {
               widget.onOpenSourceReview?.call(snapshot.target);
             },
-            AgentInteractionAction.openExpertSettings => () {
+            AgentInteractionAction.openAssistantFeatureSettings => () {
               final target = snapshot.target;
-              if (target is AgentExpertBindingTarget) {
-                widget.onOpenExpertSettings?.call(
+              if (target is AgentAssistantFeatureSourceTarget) {
+                widget.onOpenAssistantFeatureSettings?.call(
                   target,
                   () => controller.refreshInteraction(snapshot),
                 );

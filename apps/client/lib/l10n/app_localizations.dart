@@ -316,65 +316,65 @@ abstract class AppLocalizations {
   /// **'Open settings'**
   String get agentInteractionOpenConnection;
 
-  /// No description provided for @agentInteractionOpenExpertSettings.
+  /// No description provided for @agentInteractionOpenAssistantFeatureSettings.
   ///
   /// In en, this message translates to:
-  /// **'Open Expert settings'**
-  String get agentInteractionOpenExpertSettings;
+  /// **'Open assistant features'**
+  String get agentInteractionOpenAssistantFeatureSettings;
 
-  /// No description provided for @agentInteractionExpertBindingTitle.
+  /// No description provided for @agentInteractionAssistantFeatureSourcesTitle.
   ///
   /// In en, this message translates to:
-  /// **'Expert setup needed'**
-  String get agentInteractionExpertBindingTitle;
+  /// **'Assistant source setup'**
+  String get agentInteractionAssistantFeatureSourcesTitle;
 
-  /// No description provided for @expertSourceOptional.
+  /// No description provided for @assistantFeatureSourceOptional.
   ///
   /// In en, this message translates to:
   /// **'Optional source'**
-  String get expertSourceOptional;
+  String get assistantFeatureSourceOptional;
 
-  /// No description provided for @expertSourceRequired.
+  /// No description provided for @assistantFeatureSourceRequired.
   ///
   /// In en, this message translates to:
   /// **'Required source'**
-  String get expertSourceRequired;
+  String get assistantFeatureSourceRequired;
 
-  /// No description provided for @expertSourceSelected.
+  /// No description provided for @assistantFeatureSourceSelected.
   ///
   /// In en, this message translates to:
   /// **'selected'**
-  String get expertSourceSelected;
+  String get assistantFeatureSourceSelected;
 
-  /// No description provided for @expertSourceSelectionBoundary.
+  /// No description provided for @assistantFeatureSourceBoundary.
   ///
   /// In en, this message translates to:
   /// **'Choosing a source does not grant access. Permissions are reviewed separately when needed.'**
-  String get expertSourceSelectionBoundary;
+  String get assistantFeatureSourceBoundary;
 
-  /// No description provided for @expertSourceNoCompatible.
+  /// No description provided for @assistantFeatureNoSourceSettings.
   ///
   /// In en, this message translates to:
-  /// **'No compatible source is connected.'**
-  String get expertSourceNoCompatible;
+  /// **'No source settings are needed for this feature.'**
+  String get assistantFeatureNoSourceSettings;
 
-  /// No description provided for @expertSourceUnavailable.
+  /// No description provided for @assistantFeatureSourceUnavailable.
   ///
   /// In en, this message translates to:
   /// **'Saved source unavailable'**
-  String get expertSourceUnavailable;
+  String get assistantFeatureSourceUnavailable;
 
-  /// No description provided for @expertSourceSave.
+  /// No description provided for @assistantFeatureSaveSources.
   ///
   /// In en, this message translates to:
   /// **'Save sources'**
-  String get expertSourceSave;
+  String get assistantFeatureSaveSources;
 
-  /// No description provided for @expertSourceRemove.
+  /// No description provided for @assistantFeatureRemoveSelection.
   ///
   /// In en, this message translates to:
   /// **'Remove selection'**
-  String get expertSourceRemove;
+  String get assistantFeatureRemoveSelection;
 
   /// No description provided for @agentInteractionRequestPermission.
   ///
@@ -2224,23 +2224,23 @@ abstract class AppLocalizations {
   /// **'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.'**
   String get agentStorageUnavailable;
 
-  /// No description provided for @agentRegistryTitle.
+  /// No description provided for @assistantFeatureTitle.
   ///
   /// In en, this message translates to:
-  /// **'Conversation abilities'**
-  String get agentRegistryTitle;
+  /// **'Assistant features'**
+  String get assistantFeatureTitle;
 
-  /// No description provided for @agentRegistryBoundary.
+  /// No description provided for @assistantFeatureBoundary.
   ///
   /// In en, this message translates to:
-  /// **'Choose the kinds of help Floe may provide in your conversations.'**
-  String get agentRegistryBoundary;
+  /// **'Choose which assistant features Floe may use in your conversations and review their connected sources.'**
+  String get assistantFeatureBoundary;
 
-  /// No description provided for @agentRegistryEmpty.
+  /// No description provided for @assistantFeatureEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No additional abilities are available yet. Add calendars below to get started.'**
-  String get agentRegistryEmpty;
+  /// **'No additional assistant features are available.'**
+  String get assistantFeatureEmpty;
 
   /// No description provided for @agentCalendarTitle.
   ///
@@ -2362,17 +2362,35 @@ abstract class AppLocalizations {
   /// **'A previously selected calendar'**
   String get agentCalendarMissingName;
 
-  /// No description provided for @agentRegistryFailure.
+  /// No description provided for @assistantFeatureFailure.
   ///
   /// In en, this message translates to:
   /// **'Floe could not confirm these settings. Refresh before making another change.'**
-  String get agentRegistryFailure;
+  String get assistantFeatureFailure;
 
-  /// No description provided for @agentRegistryRefresh.
+  /// No description provided for @assistantFeatureRefresh.
   ///
   /// In en, this message translates to:
   /// **'Refresh settings'**
-  String get agentRegistryRefresh;
+  String get assistantFeatureRefresh;
+
+  /// No description provided for @assistantFeatureSaveChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Save changes'**
+  String get assistantFeatureSaveChanges;
+
+  /// No description provided for @assistantFeatureLoadSources.
+  ///
+  /// In en, this message translates to:
+  /// **'Review sources'**
+  String get assistantFeatureLoadSources;
+
+  /// No description provided for @assistantFeatureRetryPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry pending assistant feature change'**
+  String get assistantFeatureRetryPending;
 
   /// No description provided for @agentProposalTitle.
   ///

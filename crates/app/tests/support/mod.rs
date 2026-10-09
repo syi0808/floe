@@ -1556,27 +1556,31 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
             .execute_owner(async move {
                 let scope =
                     || host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
-                let directory = owners.experts.directory(&actor, &scope()).await?;
-                let assignment = directory
-                    .assignments
+                let snapshot = owners.experts.assistant_features(&actor, &scope()).await?;
+                let feature = snapshot
+                    .features
                     .iter()
-                    .find(|assignment| {
-                        assignment.display_name == "Schedule Expert" && assignment.enabled
-                    })
+                    .find(|feature| feature.display_name == "Schedule Expert" && feature.enabled)
                     .ok_or(AgentFailure::NotFound)?;
-                let requirement = assignment
+                let source_group = feature
+                    .source_groups
+                    .iter()
+                    .find(|group| group.display_name == "Schedule Expert" && group.enabled)
+                    .ok_or(AgentFailure::NotFound)?;
+                let requirement = source_group
                     .requirements
                     .iter()
                     .find(|requirement| requirement.requirement_ref == "floe.source.calendar")
                     .ok_or(AgentFailure::NotFound)?;
                 let review = owners
                     .experts
-                    .prepare_binding_review(
+                    .prepare_assistant_feature_source_review(
                         &actor,
                         CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
-                        assignment.assignment_ref,
+                        feature.feature_ref,
+                        source_group.source_scope_ref,
                         requirement.requirement_ref.clone(),
-                        assignment.binding_revision,
+                        source_group.binding_revision,
                         &scope(),
                     )
                     .await
@@ -1592,12 +1596,19 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
                     .ok_or(AgentFailure::NotFound)?;
                 owners
                     .experts
-                    .replace_binding(
+                    .configure_assistant_feature(
                         &actor,
                         CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
-                        review.review_ref,
-                        review.binding_revision,
-                        vec![candidate.candidate_ref],
+                        feature.feature_ref,
+                        snapshot.revision,
+                        feature.enabled,
+                        vec![floe_experts::AssistantFeatureSourceSelection {
+                            source_scope_ref: source_group.source_scope_ref,
+                            requirement_ref: requirement.requirement_ref.clone(),
+                            review_ref: review.review_ref,
+                            expected_binding_revision: review.binding_revision,
+                            candidate_refs: vec![candidate.candidate_ref],
+                        }],
                         &scope(),
                     )
                     .await

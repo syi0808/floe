@@ -100,16 +100,11 @@ pub enum AppProductQueryDto {
     ConnectionsSourceInspectReview { review_ref: ReviewRefDto },
     #[serde(rename = "connections.observe.inspect_review")]
     ConnectionsObserveInspectReview { review_ref: ReviewRefDto },
-    #[serde(rename = "conversation.experts.directory")]
-    ExpertsDirectory {},
-    #[serde(rename = "conversation.experts.binding.inspect")]
-    ExpertsInspectBinding {
-        assignment_ref: super::AssignmentRefDto,
-        requirement_ref: String,
-    },
-    #[serde(rename = "conversation.experts.binding.inspect_review")]
-    ExpertsInspectBindingReview {
-        review_ref: super::BindingReviewRefDto,
+    #[serde(rename = "conversation.assistant_features.snapshot")]
+    AssistantFeatureSnapshot {},
+    #[serde(rename = "conversation.assistant_features.source.inspect_review")]
+    AssistantFeatureSourceReviewInspect {
+        review_ref: super::AssistantFeatureSourceReviewRefDto,
     },
     #[serde(rename = "conversation.session.get")]
     ConversationSessionGet {
@@ -156,21 +151,10 @@ impl AppProductQueryDto {
             Self::ConnectionsIntegrationInspectReview { review_ref }
             | Self::ConnectionsSourceInspectReview { review_ref }
             | Self::ConnectionsObserveInspectReview { review_ref } => return review_ref.validate(),
-            Self::ExpertsDirectory {} => return Ok(()),
-            Self::ExpertsInspectBinding {
-                requirement_ref, ..
-            } => {
-                return if requirement_ref.is_empty()
-                    || requirement_ref.len() > 128
-                    || requirement_ref.trim() != requirement_ref
-                    || requirement_ref.chars().any(char::is_control)
-                {
-                    Err("query.requirement_ref")
-                } else {
-                    Ok(())
-                };
+            Self::AssistantFeatureSnapshot {} => return Ok(()),
+            Self::AssistantFeatureSourceReviewInspect { review_ref } => {
+                return review_ref.validate();
             }
-            Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
             Self::ConversationCalendarPolicy {} => return Ok(()),
@@ -265,17 +249,13 @@ pub enum AppQueryResultDto {
     ConnectionsLaunch {
         launch_action: super::LaunchActionDto,
     },
-    #[serde(rename = "conversation.experts.directory")]
-    ExpertsDirectory {
-        directory: super::ExpertDirectorySnapshotDto,
+    #[serde(rename = "conversation.assistant_features.snapshot")]
+    AssistantFeatureSnapshot {
+        snapshot: super::AssistantFeatureSnapshotDto,
     },
-    #[serde(rename = "conversation.experts.binding")]
-    ExpertsBinding {
-        binding: super::BindingInspectionDto,
-    },
-    #[serde(rename = "conversation.experts.binding_review")]
-    ExpertsBindingReview {
-        review: super::BindingReviewDto,
+    #[serde(rename = "conversation.assistant_features.source_review")]
+    AssistantFeatureSourceReview {
+        review: super::AssistantFeatureSourceReviewDto,
     },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,

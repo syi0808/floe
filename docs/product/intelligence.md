@@ -22,7 +22,7 @@ These are accepted product requirements under [ADR 0034](../decisions/0034-gatew
 
 Experts are not connector wrappers or provider-specific Tools. They receive bounded context and apply an independent domain perspective through the A2A Task lifecycle.
 
-Experts declare semantic source needs and users configure compatible source choices in generic Expert settings. A required source may remain unconfigured without hiding the Expert; a durable binding interaction links to settings instead of pretending a permission grant is missing. Context acquires only the Task's selected targets, and Access authorizes the actual consumer against current source authority. A blocked selected source produces a typed no-conclusion result and durable review interaction, never a fallback to another connected account. Source choice and source processing approval remain separate from Expert identity and Action authority; a concrete model recipient is not another user approval identity.
+Experts declare semantic source needs and users configure compatible source choices in Assistant feature settings. A required source may remain unconfigured without hiding the feature; a durable source review links to those settings instead of pretending a permission grant is missing. Context acquires only the Task's selected targets, and Access authorizes the actual consumer against current source authority. A blocked selected source produces a typed no-conclusion result and durable review interaction, never a fallback to another connected account. Source choice and source processing approval remain separate from the feature setting and Action authority; a concrete model recipient is not another user approval identity.
 
 Representative judgment domains are:
 

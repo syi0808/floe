@@ -81,59 +81,47 @@ fn route_command(
                 };
                 let service = owners.conversation.as_ref();
                 let outcome = match command {
-                    ConversationCommand::Expert(command) => {
+                    ConversationCommand::AssistantFeature(command) => {
                         let outcome = match command {
-                            ExpertCommand::SetInstallationEnabled {
-                                installation_ref,
-                                expected_revision,
-                                enabled,
-                            } => owners
-                                .experts
-                                .set_installation_enabled(
-                                    &actor,
-                                    command_id,
-                                    installation_ref,
-                                    expected_revision,
-                                    enabled,
-                                    &scope,
-                                )
-                                .await
-                                .map(ExpertCommandResult::Directory),
-                            ExpertCommand::PrepareBindingReview {
-                                assignment_ref,
+                            AssistantFeatureCommand::PrepareSourceReview {
+                                feature_ref,
+                                source_scope_ref,
                                 requirement_ref,
                                 expected_binding_revision,
                             } => owners
                                 .experts
-                                .prepare_binding_review(
+                                .prepare_assistant_feature_source_review(
                                     &actor,
                                     command_id,
-                                    assignment_ref,
+                                    feature_ref,
+                                    source_scope_ref,
                                     requirement_ref,
                                     expected_binding_revision,
                                     &scope,
                                 )
                                 .await
-                                .map(ExpertCommandResult::BindingReview),
-                            ExpertCommand::ReplaceBinding {
-                                review_ref,
-                                expected_binding_revision,
-                                candidate_refs,
+                                .map(AssistantFeatureCommandResult::SourceReview),
+                            AssistantFeatureCommand::Configure {
+                                feature_ref,
+                                expected_revision,
+                                enabled,
+                                source_selections,
                             } => owners
                                 .experts
-                                .replace_binding(
+                                .configure_assistant_feature(
                                     &actor,
                                     command_id,
-                                    review_ref,
-                                    expected_binding_revision,
-                                    candidate_refs,
+                                    feature_ref,
+                                    expected_revision,
+                                    enabled,
+                                    source_selections,
                                     &scope,
                                 )
                                 .await
-                                .map(ExpertCommandResult::Directory),
+                                .map(AssistantFeatureCommandResult::Snapshot),
                         };
                         outcome
-                            .map(ConversationCommandOutcome::Expert)
+                            .map(ConversationCommandOutcome::AssistantFeature)
                             .map_err(|failure| {
                                 owner_command_failure(failure, ProductFailure::Conversation)
                             })?
@@ -599,28 +587,20 @@ fn route_query(
             app.execute_owner(async move {
                 let service = owners.conversation.as_ref();
                 let outcome = match query {
-                    ConversationQuery::Expert(query) => {
+                    ConversationQuery::AssistantFeature(query) => {
                         let outcome = match query {
-                            ExpertQuery::Directory => owners
+                            AssistantFeatureQuery::Snapshot => owners
                                 .experts
-                                .directory(&actor, &scope)
+                                .assistant_features(&actor, &scope)
                                 .await
-                                .map(ExpertQueryResult::Directory),
-                            ExpertQuery::InspectBinding {
-                                assignment_ref,
-                                requirement_ref,
-                            } => owners
-                                .experts
-                                .inspect_binding(&actor, assignment_ref, requirement_ref, &scope)
-                                .await
-                                .map(ExpertQueryResult::Binding),
-                            ExpertQuery::InspectBindingReview { review_ref } => owners
+                                .map(AssistantFeatureQueryResult::Snapshot),
+                            AssistantFeatureQuery::InspectSourceReview { review_ref } => owners
                                 .experts
                                 .inspect_binding_review(&actor, review_ref, &scope)
                                 .await
-                                .map(ExpertQueryResult::BindingReview),
+                                .map(AssistantFeatureQueryResult::SourceReview),
                         };
-                        outcome.map(ConversationQueryOutcome::Expert)
+                        outcome.map(ConversationQueryOutcome::AssistantFeature)
                     }
                     ConversationQuery::CalendarOperationPolicy => service
                         .calendar_operation_policy(&actor, &scope)

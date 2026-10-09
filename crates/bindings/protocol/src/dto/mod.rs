@@ -16,12 +16,12 @@ pub use day_operation::{
     ManualCalendarDestinationDto, ManualCalendarOperationDto, ManualCalendarOperationReceiptDto,
     ManualCalendarOperationStatusDto, ManualCalendarOperationsDto,
 };
+mod assistant_features;
 mod envelope;
 mod errors;
 mod events;
-mod experts;
 mod interactions;
-pub use experts::*;
+pub use assistant_features::*;
 mod local_context;
 mod native_host;
 mod refs;

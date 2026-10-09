@@ -487,6 +487,7 @@ impl<Keys: VaultKeyProvider> BindingReviewRepository for VaultExpertBindingRevie
                             snapshot: replacement.registry.next.clone(),
                         },
                         committed_at_unix_ms: replacement.committed_at_unix_ms,
+                        assistant_feature_configuration: None,
                     };
                     floe_experts::project_binding_mutation_receipt(&receipt, &descriptor)
                         .map_err(|_| AgentFailure::InvalidInput)?;

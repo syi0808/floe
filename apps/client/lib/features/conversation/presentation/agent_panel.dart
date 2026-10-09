@@ -18,7 +18,6 @@ import 'package:floe_client/features/conversation/domain/agent_interaction.dart'
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
-import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 
 class AgentPanel extends StatefulWidget {
@@ -29,7 +28,7 @@ class AgentPanel extends StatefulWidget {
     required this.onClose,
     this.onOpenSourceReview,
     this.onOpenConnections,
-    this.onOpenExpertSettings,
+    this.onOpenAssistantFeatureSettings,
   });
 
   final ConversationController controller;
@@ -38,10 +37,10 @@ class AgentPanel extends StatefulWidget {
   final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
-    AgentExpertBindingTarget target,
+    AgentAssistantFeatureSourceTarget target,
     Future<void> Function() onBindingReplaced,
   )?
-  onOpenExpertSettings;
+  onOpenAssistantFeatureSettings;
 
   @override
   State<AgentPanel> createState() => _AgentPanelState();
@@ -289,12 +288,19 @@ class _AgentPanelState extends State<AgentPanel> {
                             return _message(strings, messages[contentIndex]);
                           }
                           return AgentInteractionCard(
-                            key: ValueKey(extraInteractions[contentIndex - messages.length].id),
+                            key: ValueKey(
+                              extraInteractions[contentIndex - messages.length]
+                                  .id,
+                            ),
                             controller: controller,
-                            interactionId: extraInteractions[contentIndex - messages.length].id,
+                            interactionId:
+                                extraInteractions[contentIndex -
+                                        messages.length]
+                                    .id,
                             onOpenSourceReview: widget.onOpenSourceReview,
                             onOpenConnections: widget.onOpenConnections,
-                            onOpenExpertSettings: widget.onOpenExpertSettings,
+                            onOpenAssistantFeatureSettings:
+                                widget.onOpenAssistantFeatureSettings,
                           );
                         },
                       );
@@ -356,7 +362,7 @@ class _AgentPanelState extends State<AgentPanel> {
       interactionId: interactionId,
       onOpenSourceReview: widget.onOpenSourceReview,
       onOpenConnections: widget.onOpenConnections,
-      onOpenExpertSettings: widget.onOpenExpertSettings,
+      onOpenAssistantFeatureSettings: widget.onOpenAssistantFeatureSettings,
     ),
     AgentCapabilityMessage() => ExpansionTile(
       tilePadding: EdgeInsets.zero,

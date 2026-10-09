@@ -2,7 +2,7 @@ import 'package:floe_client/infrastructure/native/calendar_system_access_gateway
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/app_wire_runtime_gateway.dart';
-import 'package:floe_client/features/experts/application/agent_registry_controller.dart';
+import 'package:floe_client/features/conversation/assistant_features/application/assistant_feature_controller.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
 import 'package:floe_client/features/connections/infrastructure/app_wire_connections_gateway.dart';
 
@@ -12,7 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/actions/application/operation_authorization_facade.dart';
-import 'package:floe_client/features/experts/infrastructure/app_wire_registry_gateway.dart';
+import 'package:floe_client/features/conversation/assistant_features/infrastructure/app_wire_assistant_feature_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
@@ -68,7 +68,7 @@ final class AppRuntime {
     runtimeClient: client,
     readModel: readModel,
   );
-  late final registry = AppWireRegistryGateway(_transport);
+  late final assistantFeatures = AppWireAssistantFeatureGateway(_transport);
   late final memory = AppWireMemoryGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
   late final operationAuthorization = OperationAuthorizationFacade(this);
@@ -81,8 +81,8 @@ final class AppRuntime {
     gateway: runtimeGateway,
     personId: personId,
   )..addListener(_readinessChanged);
-  late final registryController = AgentRegistryController(
-    gateway: registry,
+  late final assistantFeatureController = AssistantFeatureController(
+    gateway: assistantFeatures,
     canOperate: () => runtimeController.ready,
     onFatalFailure: runtimeController.reportFailure,
   );
@@ -97,7 +97,7 @@ final class AppRuntime {
   void _readinessChanged() {
     final ready = runtimeController.ready;
     if (_wasReady != ready) {
-      registryController.clear();
+      assistantFeatureController.clear();
       memoryController.clear();
     }
     _wasReady = ready;
@@ -105,7 +105,7 @@ final class AppRuntime {
 
   late final owners = LocalOwnerGateways(
     runtime: runtimeController,
-    registry: registryController,
+    assistantFeatures: assistantFeatureController,
     memory: memoryController,
     operationAuthorization: operationAuthorization,
   );
@@ -177,7 +177,7 @@ final class AppRuntime {
       await _transport.close();
     } finally {
       connectionsController.dispose();
-      registryController.dispose();
+      assistantFeatureController.dispose();
       memoryController.dispose();
       runtimeController.removeListener(_readinessChanged);
       runtimeController.dispose();

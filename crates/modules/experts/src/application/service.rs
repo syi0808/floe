@@ -161,6 +161,7 @@ impl<Tasks: TaskRepository + 'static> ExpertsService<Tasks> {
                             command_id,
                             request_digest,
                             expected_revision: snapshot.revision,
+                            intent: crate::RegistryCommitIntent::Install,
                             next: next.clone(),
                         },
                         scope,

@@ -24,14 +24,14 @@ class _SettingsNavigation extends StatelessWidget {
           icon: switch (page) {
             _SettingsPage.operationPolicy => LucideIcons.slidersHorizontal,
             _SettingsPage.dataPrivacy => LucideIcons.shieldCheck,
-            _SettingsPage.experts => LucideIcons.sparkles,
+            _SettingsPage.assistantFeatures => LucideIcons.sparkles,
             _SettingsPage.memory => LucideIcons.brain,
             _SettingsPage.remoteServer => LucideIcons.server,
           },
           label: switch (page) {
             _SettingsPage.operationPolicy => 'Expert Calendar policy',
             _SettingsPage.dataPrivacy => 'Data & privacy',
-            _SettingsPage.experts => 'Experts',
+            _SettingsPage.assistantFeatures => 'Assistant features',
             _SettingsPage.memory => 'Memory',
             _SettingsPage.remoteServer => 'Remote server',
           },

@@ -6,6 +6,7 @@
 
 mod abi;
 mod app_wire;
+mod assistant_feature_wire;
 mod bridge;
 mod calendar_operations_wire;
 mod connections_wire;
@@ -14,7 +15,6 @@ mod conversation_wire;
 pub mod conversion;
 mod day_wire;
 mod diagnostics;
-mod experts_wire;
 mod memory_wire;
 mod native_lane;
 mod product_wire;

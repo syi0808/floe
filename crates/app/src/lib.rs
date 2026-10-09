@@ -51,18 +51,18 @@ pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 #[cfg(unix)]
-pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
-#[cfg(unix)]
 pub use api::{
-    ConnectionsCommand, ConnectionsCommandOutcome, ConnectionsQuery, ConnectionsQueryOutcome,
-    ConversationCommand, ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome,
-    DayCommand, DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertCommand,
-    ExpertCommandResult, ExpertQuery, ExpertQueryResult, MemoryCommand, MemoryQuery,
-    MemoryQueryResult, OperationAuthorizationPolicy, OperationPolicyMode, ProductCommand,
-    ProductCommandDisposition, ProductCommandFailure, ProductCommandOutcome, ProductCommandRequest,
-    ProductFailure, ProductObservation, ProductObservationOutcome, ProductQuery,
-    ProductQueryOutcome,
+    AssistantFeatureCommand, AssistantFeatureCommandResult, AssistantFeatureQuery,
+    AssistantFeatureQueryResult, ConnectionsCommand, ConnectionsCommandOutcome, ConnectionsQuery,
+    ConnectionsQueryOutcome, ConversationCommand, ConversationCommandOutcome, ConversationQuery,
+    ConversationQueryOutcome, DayCommand, DayCommandOutcome, DayProductQuery, DayQueryOutcome,
+    MemoryCommand, MemoryQuery, MemoryQueryResult, OperationAuthorizationPolicy,
+    OperationPolicyMode, ProductCommand, ProductCommandDisposition, ProductCommandFailure,
+    ProductCommandOutcome, ProductCommandRequest, ProductFailure, ProductObservation,
+    ProductObservationOutcome, ProductQuery, ProductQueryOutcome,
 };
+#[cfg(unix)]
+pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{
     AppComposition, AppOpenError, AppOpenOptions, AppStorageFailure, ModelProviderFactory, open,

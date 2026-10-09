@@ -83,10 +83,11 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
             session_id: session_id.get(),
             expected_revision,
         },
-        command @ (AppProductCommandDto::ExpertsSetInstallationEnabled { .. }
-        | AppProductCommandDto::ExpertsPrepareBindingReview { .. }
-        | AppProductCommandDto::ExpertsBindingReplace { .. }) => {
-            ConversationCommand::Expert(crate::experts_wire::command_in(command)?)
+        command @ (AppProductCommandDto::AssistantFeatureSourcePrepareReview { .. }
+        | AppProductCommandDto::AssistantFeatureConfigure { .. }) => {
+            ConversationCommand::AssistantFeature(crate::assistant_feature_wire::command_in(
+                command,
+            )?)
         }
         _ => return Err(validation("command.kind")),
     })
@@ -113,8 +114,11 @@ pub(crate) fn command_out(
         ) => AppCommandResultDto::ConversationCalendarPolicy {
             policy: crate::calendar_operations_wire::authority_out(value, caller)?,
         },
-        (ConversationCommand::Expert(command), ConversationCommandOutcome::Expert(value)) => {
-            return crate::experts_wire::command_out(command, value);
+        (
+            ConversationCommand::AssistantFeature(command),
+            ConversationCommandOutcome::AssistantFeature(value),
+        ) => {
+            return crate::assistant_feature_wire::command_out(command, value);
         }
         (ConversationCommand::StartTurn { .. }, ConversationCommandOutcome::Turn(receipt)) => {
             if receipt.command_id.as_uuid() != command_id {
@@ -203,10 +207,9 @@ pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQ
         AppProductQueryDto::ConversationCalendarPolicy {} => {
             ConversationQuery::CalendarOperationPolicy
         }
-        query @ (AppProductQueryDto::ExpertsDirectory { .. }
-        | AppProductQueryDto::ExpertsInspectBinding { .. }
-        | AppProductQueryDto::ExpertsInspectBindingReview { .. }) => {
-            ConversationQuery::Expert(crate::experts_wire::query_in(query)?)
+        query @ (AppProductQueryDto::AssistantFeatureSnapshot { .. }
+        | AppProductQueryDto::AssistantFeatureSourceReviewInspect { .. }) => {
+            ConversationQuery::AssistantFeature(crate::assistant_feature_wire::query_in(query)?)
         }
         AppProductQueryDto::ConversationSessionGet {
             session_id,
@@ -255,8 +258,11 @@ pub(crate) fn query_out(
         ) => AppQueryResultDto::ConversationCalendarPolicy {
             policy: crate::calendar_operations_wire::authority_out(value, caller)?,
         },
-        (ConversationQuery::Expert(query), ConversationQueryOutcome::Expert(value)) => {
-            return crate::experts_wire::query_out(query, value);
+        (
+            ConversationQuery::AssistantFeature(query),
+            ConversationQueryOutcome::AssistantFeature(value),
+        ) => {
+            return crate::assistant_feature_wire::query_out(query, value);
         }
         (ConversationQuery::ResumeSession, ConversationQueryOutcome::Session(Some(session))) => {
             if session.person_id.0 != caller.person_id() {
@@ -580,7 +586,7 @@ fn interaction_kind_dto(kind: floe_agent_contract::UserInteractionKind) -> AppIn
             AppInteractionKindDto::SourceAccess
         }
         floe_agent_contract::UserInteractionKind::ExpertBinding => {
-            AppInteractionKindDto::ExpertBinding
+            AppInteractionKindDto::AssistantFeatureSources
         }
         floe_agent_contract::UserInteractionKind::OperationApproval => {
             AppInteractionKindDto::OperationApproval
@@ -657,13 +663,12 @@ fn interaction_snapshot(
                 inline,
             },
             floe_conversation::InteractionRequirement::ExpertBinding {
-                consumer,
                 requirement_key,
                 review,
-            } => AppInteractionRequirementDto::ExpertBinding {
-                consumer,
-                requirement_key,
-                review_ref: crate::experts_wire::binding_review_ref_to_dto(review)?,
+                ..
+            } => AppInteractionRequirementDto::AssistantFeatureSourceReview {
+                source_requirement_ref: requirement_key,
+                review_ref: crate::assistant_feature_wire::source_review_ref_to_dto(review)?,
             },
             floe_conversation::InteractionRequirement::OperationApproval { review } => {
                 AppInteractionRequirementDto::OperationApproval {
@@ -699,8 +704,8 @@ fn interaction_snapshot(
                     }
                 },
             },
-            T::ExpertBinding { review } => AppInteractionTargetDto::ExpertBinding {
-                review: crate::experts_wire::binding_review_to_dto(review)?,
+            T::ExpertBinding { review } => AppInteractionTargetDto::AssistantFeatureSourceReview {
+                review: crate::assistant_feature_wire::source_review_to_dto(review)?,
             },
             T::OperationApproval { operation } => AppInteractionTargetDto::OperationApproval {
                 operation: crate::calendar_operations_wire::snapshot_out(operation)?,
@@ -717,7 +722,7 @@ fn interaction_snapshot(
                 A::OpenConnection => AppInteractionActionDto::OpenConnection,
                 A::ReviewSource => AppInteractionActionDto::ReviewSource,
                 A::RequestPermission => AppInteractionActionDto::RequestPermission,
-                A::OpenExpertSettings => AppInteractionActionDto::OpenExpertSettings,
+                A::OpenExpertSettings => AppInteractionActionDto::OpenAssistantFeatureSettings,
             })
             .collect(),
     };

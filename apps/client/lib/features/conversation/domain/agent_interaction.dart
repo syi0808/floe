@@ -1,10 +1,14 @@
 import 'dart:convert';
 
 import 'package:floe_client/features/connections/domain/connection_models.dart';
-import 'package:floe_client/features/experts/domain/agent_registry.dart';
+import 'package:floe_client/features/conversation/assistant_features/domain/assistant_feature.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
-enum AgentInteractionKind { sourceAccess, expertBinding, operationApproval }
+enum AgentInteractionKind {
+  sourceAccess,
+  assistantFeatureSources,
+  operationApproval,
+}
 
 enum AgentInteractionState {
   pending,
@@ -26,7 +30,7 @@ enum AgentInteractionAction {
   openConnection,
   reviewSource,
   requestPermission,
-  openExpertSettings,
+  openAssistantFeatureSettings,
 }
 
 enum AgentInteractionDecision { approve, deny, dismiss }
@@ -67,7 +71,8 @@ sealed class AgentInteractionRequirement {
           'purpose',
           'inline',
         };
-        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
+        if (json.length != keys.length ||
+            !json.keys.toSet().containsAll(keys)) {
           throw const FormatException('Invalid source access requirement.');
         }
         final connection = json['connection_id'];
@@ -78,7 +83,8 @@ sealed class AgentInteractionRequirement {
         return AgentSourceAccessRequirement(
           reason: switch (json['reason']) {
             'enable_observe' => AgentSourceAccessReason.enableObserve,
-            'review_changed_source' => AgentSourceAccessReason.reviewChangedSource,
+            'review_changed_source' =>
+              AgentSourceAccessReason.reviewChangedSource,
             'request_system_permission' =>
               AgentSourceAccessReason.requestSystemPermission,
             'reconnect' => AgentSourceAccessReason.reconnect,
@@ -94,26 +100,33 @@ sealed class AgentInteractionRequirement {
           purpose: text('purpose', 64),
           inline: inline,
         );
-      case 'expert_binding':
-        const keys = {'kind', 'consumer', 'requirement_key', 'review_ref'};
-        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
-          throw const FormatException('Invalid Expert binding requirement.');
+      case 'assistant_feature_source_review':
+        const keys = {'kind', 'source_requirement_ref', 'review_ref'};
+        if (json.length != keys.length ||
+            !json.keys.toSet().containsAll(keys)) {
+          throw const FormatException(
+            'Invalid assistant feature source requirement.',
+          );
         }
         final review = json['review_ref'];
         if (review is! Map || review.keys.any((key) => key is! String)) {
-          throw const FormatException('Invalid Expert binding review reference.');
+          throw const FormatException(
+            'Invalid assistant feature source review reference.',
+          );
         }
-        return AgentExpertBindingRequirement(
-          consumer: text('consumer', 256),
-          requirementKey: text('requirement_key', 256),
-          reviewRef: AgentBindingReviewRef.fromJson(
+        return AgentAssistantFeatureSourceRequirement(
+          sourceRequirementRef: text('source_requirement_ref', 128),
+          reviewRef: AssistantFeatureSourceReviewRef.fromJson(
             Map<String, dynamic>.from(review),
           ),
         );
       case 'operation_approval':
         const keys = {'kind', 'review_ref'};
-        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
-          throw const FormatException('Invalid operation approval requirement.');
+        if (json.length != keys.length ||
+            !json.keys.toSet().containsAll(keys)) {
+          throw const FormatException(
+            'Invalid operation approval requirement.',
+          );
         }
         final review = json['review_ref'];
         if (review is! Map || review.keys.any((key) => key is! String)) {
@@ -148,19 +161,19 @@ final class AgentSourceAccessRequirement extends AgentInteractionRequirement {
   final bool inline;
 }
 
-final class AgentExpertBindingRequirement extends AgentInteractionRequirement {
-  const AgentExpertBindingRequirement({
-    required this.consumer,
-    required this.requirementKey,
+final class AgentAssistantFeatureSourceRequirement
+    extends AgentInteractionRequirement {
+  const AgentAssistantFeatureSourceRequirement({
+    required this.sourceRequirementRef,
     required this.reviewRef,
   });
 
-  final String consumer;
-  final String requirementKey;
-  final AgentBindingReviewRef reviewRef;
+  final String sourceRequirementRef;
+  final AssistantFeatureSourceReviewRef reviewRef;
 }
 
-final class AgentOperationApprovalRequirement extends AgentInteractionRequirement {
+final class AgentOperationApprovalRequirement
+    extends AgentInteractionRequirement {
   const AgentOperationApprovalRequirement({required this.reviewRef});
 
   final ActionReviewReference reviewRef;
@@ -227,16 +240,20 @@ sealed class AgentInteractionTarget {
               ? null
               : SourceRef(field('source_ref')),
         );
-      case 'expert_binding':
+      case 'assistant_feature_source_review':
         if (json.length != 2 || !json.containsKey('review'))
-          throw const FormatException('Invalid Expert binding target.');
+          throw const FormatException(
+            'Invalid assistant feature source target.',
+          );
         final reviewJson = json['review'];
         if (reviewJson is! Map ||
             reviewJson.keys.any((key) => key is! String)) {
-          throw const FormatException('Invalid Expert binding review.');
+          throw const FormatException(
+            'Invalid assistant feature source review.',
+          );
         }
-        return AgentExpertBindingTarget(
-          review: AgentBindingReview.fromJson(
+        return AgentAssistantFeatureSourceTarget(
+          review: AssistantFeatureSourceReview.fromJson(
             Map<String, dynamic>.from(reviewJson),
           ),
         );
@@ -249,7 +266,9 @@ sealed class AgentInteractionTarget {
           throw const FormatException('Invalid Calendar operation snapshot.');
         }
         return AgentOperationApprovalTarget(
-          operation: CalendarAction.fromJson(Map<String, dynamic>.from(operation)),
+          operation: CalendarAction.fromJson(
+            Map<String, dynamic>.from(operation),
+          ),
         );
       default:
         throw const FormatException('Unknown interaction target.');
@@ -273,10 +292,10 @@ final class AgentNavigationTarget extends AgentInteractionTarget {
   final SourceRef? sourceRef;
 }
 
-final class AgentExpertBindingTarget extends AgentInteractionTarget {
-  const AgentExpertBindingTarget({required this.review});
+final class AgentAssistantFeatureSourceTarget extends AgentInteractionTarget {
+  const AgentAssistantFeatureSourceTarget({required this.review});
 
-  final AgentBindingReview review;
+  final AssistantFeatureSourceReview review;
 }
 
 final class AgentOperationApprovalTarget extends AgentInteractionTarget {
@@ -379,37 +398,49 @@ final class AgentInteractionSnapshot {
         !expires.isAfter(created) ||
         json['interaction_kind'] == 'source_access' &&
             !{'source_review', 'navigation_only'}.contains(target['kind']) ||
-        json['interaction_kind'] == 'expert_binding' &&
-            target['kind'] != 'expert_binding' ||
+        json['interaction_kind'] == 'assistant_feature_sources' &&
+            target['kind'] != 'assistant_feature_source_review' ||
         json['interaction_kind'] == 'operation_approval' &&
             target['kind'] != 'operation_approval' ||
         json['interaction_kind'] == 'source_access' &&
             typedRequirement is! AgentSourceAccessRequirement ||
-        json['interaction_kind'] == 'expert_binding' &&
-            typedRequirement is! AgentExpertBindingRequirement ||
+        json['interaction_kind'] == 'assistant_feature_sources' &&
+            typedRequirement is! AgentAssistantFeatureSourceRequirement ||
         json['interaction_kind'] == 'operation_approval' &&
             typedRequirement is! AgentOperationApprovalRequirement) {
       throw const FormatException('Invalid interaction owner projection.');
     }
-    if (typedRequirement case AgentExpertBindingRequirement(:final reviewRef)) {
-      if (typedTarget is! AgentExpertBindingTarget ||
+    if (typedRequirement case AgentAssistantFeatureSourceRequirement(
+      :final reviewRef,
+    )) {
+      if (typedTarget is! AgentAssistantFeatureSourceTarget ||
           !typedTarget.review.reviewRef.matches(reviewRef) ||
-          typedTarget.review.requirementRef != typedRequirement.requirementKey) {
-        throw const FormatException('Mismatched Expert binding requirement.');
+          typedTarget.review.sourceRequirementRef !=
+              typedRequirement.sourceRequirementRef) {
+        throw const FormatException(
+          'Mismatched assistant feature source requirement.',
+        );
       }
     }
-    if (typedRequirement case AgentOperationApprovalRequirement(:final reviewRef)) {
+    if (typedRequirement case AgentOperationApprovalRequirement(
+      :final reviewRef,
+    )) {
       if (typedTarget is! AgentOperationApprovalTarget ||
           typedTarget.operation.reviewRef.id != reviewRef.id ||
-          typedTarget.operation.reviewRef.operationId != reviewRef.operationId ||
-          typedTarget.operation.reviewRef.effectDigest != reviewRef.effectDigest ||
-          typedTarget.operation.reviewRef.sourceDigest != reviewRef.sourceDigest ||
+          typedTarget.operation.reviewRef.operationId !=
+              reviewRef.operationId ||
+          typedTarget.operation.reviewRef.effectDigest !=
+              reviewRef.effectDigest ||
+          typedTarget.operation.reviewRef.sourceDigest !=
+              reviewRef.sourceDigest ||
           typedTarget.operation.reviewRef.personId != reviewRef.personId ||
           typedTarget.operation.reviewRef.deviceId != reviewRef.deviceId ||
           typedTarget.operation.reviewRef.authorityRevision !=
               reviewRef.authorityRevision ||
           typedTarget.operation.reviewRef.expiresAt != reviewRef.expiresAt) {
-        throw const FormatException('Mismatched Calendar operation requirement.');
+        throw const FormatException(
+          'Mismatched Calendar operation requirement.',
+        );
       }
     }
     return AgentInteractionSnapshot(
@@ -418,7 +449,8 @@ final class AgentInteractionSnapshot {
       originRunId: id('origin_run_id'),
       kind: switch (json['interaction_kind']) {
         'source_access' => AgentInteractionKind.sourceAccess,
-        'expert_binding' => AgentInteractionKind.expertBinding,
+        'assistant_feature_sources' =>
+          AgentInteractionKind.assistantFeatureSources,
         'operation_approval' => AgentInteractionKind.operationApproval,
         _ => throw const FormatException('Unknown interaction kind.'),
       },
@@ -450,7 +482,8 @@ final class AgentInteractionSnapshot {
             'open_connection' => AgentInteractionAction.openConnection,
             'review_source' => AgentInteractionAction.reviewSource,
             'request_permission' => AgentInteractionAction.requestPermission,
-            'open_expert_settings' => AgentInteractionAction.openExpertSettings,
+            'open_assistant_feature_settings' =>
+              AgentInteractionAction.openAssistantFeatureSettings,
             _ => throw const FormatException('Unknown interaction action.'),
           },
         ),
@@ -625,6 +658,7 @@ Map<String, dynamic> _map(Object? value, String message) {
   if (value is! Map) throw FormatException(message);
   return Map<String, dynamic>.from(value);
 }
+
 String _validateInteractionIdentifier(Object? value, String field) {
   if (value is! String ||
       value.isEmpty ||

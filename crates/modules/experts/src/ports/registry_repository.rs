@@ -17,6 +17,7 @@ pub struct RegistryCommit {
     pub command_id: CommandId,
     pub request_digest: [u8; 32],
     pub expected_revision: u64,
+    pub intent: crate::RegistryCommitIntent,
     pub next: crate::RegistrySnapshot,
 }
 

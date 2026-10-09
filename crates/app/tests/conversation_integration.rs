@@ -3,12 +3,13 @@ mod support;
 use std::time::{Duration, Instant};
 
 use floe_app::{
-    AppComposition, AppHost, ConnectionsCommand, ConversationCommand, ConversationCommandOutcome,
-    ConversationQuery, ConversationQueryOutcome, DayCommand, DayCommandOutcome, DayProductQuery,
-    DayQueryOutcome, ExpertCommand, ExpertCommandResult, ExpertQuery, ExpertQueryResult,
-    MemoryCommand, MemoryQuery, MemoryQueryResult, OperationPolicyMode, ProductCommand,
-    ProductCommandDisposition, ProductCommandOutcome, ProductCommandRequest, ProductFailure,
-    ProductObservation, ProductQuery, ProductQueryOutcome, RuntimeReadinessState,
+    AppComposition, AppHost, AssistantFeatureCommand, AssistantFeatureCommandResult,
+    AssistantFeatureQuery, AssistantFeatureQueryResult, ConnectionsCommand, ConversationCommand,
+    ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome, DayCommand,
+    DayCommandOutcome, DayProductQuery, DayQueryOutcome, MemoryCommand, MemoryQuery,
+    MemoryQueryResult, OperationPolicyMode, ProductCommand, ProductCommandDisposition,
+    ProductCommandOutcome, ProductCommandRequest, ProductFailure, ProductObservation, ProductQuery,
+    ProductQueryOutcome, RuntimeReadinessState, host_scope,
 };
 use floe_conversation::{RunState, SessionMessage};
 use floe_inference::ModelObservationError;
@@ -409,6 +410,8 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
         })
         .expect("the exact blocked Task review includes the configured Calendar candidate");
     let review_ref = review.review_ref.clone();
+    let assignment_ref = review.assignment_ref;
+    let requirement_ref = review.requirement_ref.clone();
     let binding_revision = review.binding_revision;
     let candidate_ref = candidate.candidate_ref;
     support::with_ready(&host, |services, caller, owners| {
@@ -419,15 +422,36 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
             Duration::from_secs(30),
         );
         services.execute_owner(async move {
+            let snapshot = owners.experts.assistant_features(&actor, &scope).await?;
+            let feature = snapshot
+                .features
+                .iter()
+                .find(|feature| {
+                    feature.source_groups.iter().any(|group| {
+                        group.source_scope_ref == assignment_ref
+                            && group
+                                .requirements
+                                .iter()
+                                .any(|requirement| requirement.requirement_ref == requirement_ref)
+                    })
+                })
+                .ok_or(AgentFailure::NotFound)?;
             owners
                 .experts
-                .replace_binding(
+                .configure_assistant_feature(
                     &actor,
                     floe_kernel::CommandId::from_uuid(Uuid::new_v4())
                         .ok_or(AgentFailure::InvalidInput)?,
-                    review_ref,
-                    binding_revision,
-                    vec![candidate_ref],
+                    feature.feature_ref,
+                    snapshot.revision,
+                    feature.enabled,
+                    vec![floe_experts::AssistantFeatureSourceSelection {
+                        source_scope_ref: assignment_ref,
+                        requirement_ref,
+                        review_ref,
+                        expected_binding_revision: binding_revision,
+                        candidate_refs: vec![candidate_ref],
+                    }],
                     &scope,
                 )
                 .await
@@ -811,17 +835,17 @@ fn typed_product_router_projects_calendar_policy_with_conversation() {
         ProductQueryOutcome::Conversation(ConversationQueryOutcome::CalendarOperationPolicy(_))
     ));
 
-    let experts = host
+    let assistant_features = host
         .request(Uuid::new_v4())
-        .expect("admit Conversation expert-feature query")
-        .product_query(ProductQuery::Conversation(ConversationQuery::Expert(
-            ExpertQuery::Directory,
-        )))
-        .expect("route assistant Expert settings query");
+        .expect("admit Conversation assistant-feature query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::AssistantFeature(AssistantFeatureQuery::Snapshot),
+        ))
+        .expect("route assistant-feature settings query");
     assert!(matches!(
-        experts,
-        ProductQueryOutcome::Conversation(ConversationQueryOutcome::Expert(
-            ExpertQueryResult::Directory(_)
+        assistant_features,
+        ProductQueryOutcome::Conversation(ConversationQueryOutcome::AssistantFeature(
+            AssistantFeatureQueryResult::Snapshot(_)
         ))
     ));
 
@@ -837,74 +861,413 @@ fn typed_product_router_projects_calendar_policy_with_conversation() {
 }
 
 #[test]
-fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
+fn assistant_feature_configuration_conflict_and_replay_keep_owner_dispositions() {
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let (_profile, host) = create_ready_app(&model);
-    let directory = host
+    let query_result = host
         .request(Uuid::new_v4())
-        .expect("admit Experts directory query")
-        .product_query(ProductQuery::Conversation(ConversationQuery::Expert(
-            ExpertQuery::Directory,
-        )))
-        .expect("read Experts directory");
-    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Expert(
-        ExpertQueryResult::Directory(directory),
-    )) = directory
+        .expect("admit assistant-feature snapshot query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::AssistantFeature(AssistantFeatureQuery::Snapshot),
+        ))
+        .expect("read assistant-feature settings");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::AssistantFeature(
+        AssistantFeatureQueryResult::Snapshot(snapshot),
+    )) = query_result
     else {
-        panic!("Experts directory query returned another result")
+        panic!("assistant-feature query returned another result")
     };
-    let installation_ref = directory
-        .installations
+    let feature_ref = snapshot
+        .features
         .first()
-        .expect("built-in Experts installation exists")
-        .installation_ref;
+        .expect("built-in assistant feature exists")
+        .feature_ref;
 
-    let send = |command_id, expected_revision, enabled| {
+    let send = |command_id, expected_revision, enabled, source_selections| {
         host.request(Uuid::new_v4())
-            .expect("admit Experts product request")
+            .expect("admit assistant-feature product request")
             .product_command(ProductCommandRequest {
                 command_id,
-                command: ProductCommand::Conversation(ConversationCommand::Expert(
-                    ExpertCommand::SetInstallationEnabled {
-                        installation_ref,
+                command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
+                    AssistantFeatureCommand::Configure {
+                        feature_ref,
                         expected_revision,
                         enabled,
+                        source_selections,
                     },
                 )),
             })
     };
 
     let rejected_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
-    let rejected = send(rejected_id, directory.revision + 1, false)
+    let rejected = send(rejected_id, snapshot.revision + 1, false, Vec::new())
         .expect_err("a stale registry revision is rejected before admission");
     assert_eq!(rejected.disposition, ProductCommandDisposition::NotApplied);
 
     let command_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
-    let admitted =
-        send(command_id, directory.revision, false).expect("admit Expert installation change");
-    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Expert(
-        ExpertCommandResult::Directory(updated),
+    let admitted = send(command_id, snapshot.revision, false, Vec::new())
+        .expect("admit assistant feature configuration");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
+        AssistantFeatureCommandResult::Snapshot(updated),
     )) = admitted
     else {
-        panic!("Experts command returned another outcome")
+        panic!("assistant-feature command returned another outcome")
     };
 
-    let replay = send(command_id, directory.revision, false)
-        .expect("recover the exact Expert command receipt after registry revision advanced");
+    let replay = send(command_id, snapshot.revision, false, Vec::new())
+        .expect("recover the exact assistant-feature receipt after registry revision advanced");
     assert!(matches!(
         replay,
-        ProductCommandOutcome::Conversation(ConversationCommandOutcome::Expert(
-            ExpertCommandResult::Directory(ref value)
+        ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
+            AssistantFeatureCommandResult::Snapshot(ref value)
         ))
             if value.revision == updated.revision
     ));
 
-    let changed_body = send(command_id, directory.revision, true)
-        .expect_err("an Expert receipt cannot be rebound to a changed body");
+    let changed_body = send(command_id, snapshot.revision, true, Vec::new())
+        .expect_err("an assistant-feature receipt cannot be rebound to a changed body");
     assert_eq!(
         changed_body.disposition,
         ProductCommandDisposition::Indeterminate
     );
+
+    let duplicate_candidate = Uuid::new_v4();
+    let duplicate_selection = floe_experts::AssistantFeatureSourceSelection {
+        source_scope_ref: Uuid::new_v4(),
+        requirement_ref: "floe.source.calendar".into(),
+        review_ref: floe_experts::BindingReviewRef {
+            id: Uuid::new_v4(),
+            digest: [0x42; 32],
+        },
+        expected_binding_revision: 1,
+        candidate_refs: vec![duplicate_candidate, duplicate_candidate],
+    };
+    let invalid_duplicate = send(
+        command_id,
+        snapshot.revision,
+        false,
+        vec![duplicate_selection],
+    )
+    .expect_err("an invalid retry body cannot be classified as not applied");
+    assert_eq!(
+        invalid_duplicate.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let oversized_selections = (0..129)
+        .map(|_| floe_experts::AssistantFeatureSourceSelection {
+            source_scope_ref: Uuid::new_v4(),
+            requirement_ref: "floe.source.calendar".into(),
+            review_ref: floe_experts::BindingReviewRef {
+                id: Uuid::new_v4(),
+                digest: [0x24; 32],
+            },
+            expected_binding_revision: 1,
+            candidate_refs: Vec::new(),
+        })
+        .collect();
+    let invalid_oversized = send(command_id, snapshot.revision, false, oversized_selections)
+        .expect_err("an oversized retry body cannot be classified as not applied");
+    assert_eq!(
+        invalid_oversized.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let confirmed = host
+        .request(Uuid::new_v4())
+        .expect("admit snapshot after rejected changed-body replays")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::AssistantFeature(AssistantFeatureQuery::Snapshot),
+        ))
+        .expect("read current feature state");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::AssistantFeature(
+        AssistantFeatureQueryResult::Snapshot(confirmed),
+    )) = confirmed
+    else {
+        panic!("assistant-feature query returned another result")
+    };
+    assert_eq!(confirmed.revision, updated.revision);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn assistant_feature_source_and_enablement_changes_share_one_owner_commit() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_source_transport(&model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+
+    let query_result = host
+        .request(Uuid::new_v4())
+        .expect("admit assistant-feature settings query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::AssistantFeature(AssistantFeatureQuery::Snapshot),
+        ))
+        .expect("read assistant-feature settings");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::AssistantFeature(
+        AssistantFeatureQueryResult::Snapshot(snapshot),
+    )) = query_result
+    else {
+        panic!("assistant-feature query returned another result")
+    };
+    let (feature, group, requirement) = snapshot
+        .features
+        .iter()
+        .filter(|feature| feature.display_name == "Schedule Expert")
+        .find_map(|feature| {
+            feature.source_groups.iter().find_map(|group| {
+                group
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.requirement_ref == "floe.source.calendar")
+                    .map(|requirement| (feature, group, requirement))
+            })
+        })
+        .expect("a built-in assistant feature has a reviewed source requirement");
+    let feature_ref = feature.feature_ref;
+    let source_scope_ref = group.source_scope_ref;
+    let requirement_ref = requirement.requirement_ref.clone();
+    let expected_binding_revision = group.binding_revision;
+
+    let prepared = host
+        .request(Uuid::new_v4())
+        .expect("admit source review command")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+            command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
+                AssistantFeatureCommand::PrepareSourceReview {
+                    feature_ref,
+                    source_scope_ref,
+                    requirement_ref: requirement_ref.clone(),
+                    expected_binding_revision,
+                },
+            )),
+        })
+        .expect("prepare source choices for the selected feature");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
+        AssistantFeatureCommandResult::SourceReview(review),
+    )) = prepared
+    else {
+        panic!("source review returned another outcome")
+    };
+    let candidate_ref = review
+        .candidate_refs_and_labels
+        .iter()
+        .find(|candidate| {
+            candidate.label == "Synthetic QA Calendar"
+                && candidate.availability == floe_experts::CandidateAvailability::Available
+        })
+        .expect("source review contains the configured Calendar candidate")
+        .candidate_ref;
+
+    let configured = host
+        .request(Uuid::new_v4())
+        .expect("admit one assistant-feature configuration command")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+            command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
+                AssistantFeatureCommand::Configure {
+                    feature_ref,
+                    expected_revision: snapshot.revision,
+                    enabled: !feature.enabled,
+                    source_selections: vec![floe_experts::AssistantFeatureSourceSelection {
+                        source_scope_ref,
+                        requirement_ref: requirement_ref.clone(),
+                        review_ref: review.review_ref,
+                        expected_binding_revision,
+                        candidate_refs: vec![candidate_ref],
+                    }],
+                },
+            )),
+        })
+        .expect("commit enablement and source selection together");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
+        AssistantFeatureCommandResult::Snapshot(updated),
+    )) = configured
+    else {
+        panic!("assistant-feature configuration returned another outcome")
+    };
+    let updated_feature = updated
+        .features
+        .iter()
+        .find(|feature| feature.feature_ref == feature_ref)
+        .expect("configured feature remains projected");
+    assert_eq!(updated_feature.enabled, !feature.enabled);
+    assert_eq!(updated.revision, snapshot.revision + 1);
+    let updated_group = updated_feature
+        .source_groups
+        .iter()
+        .find(|group| group.source_scope_ref == source_scope_ref)
+        .expect("configured source group remains projected");
+    assert_eq!(
+        updated_group.binding_revision,
+        expected_binding_revision + 1
+    );
+    assert_eq!(
+        updated_group
+            .requirements
+            .iter()
+            .find(|requirement| requirement.requirement_ref == requirement_ref)
+            .expect("configured requirement remains projected")
+            .selected_count,
+        1
+    );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn assistant_feature_rejects_source_drift_without_consuming_the_review() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_source_transport(&model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let source = support::configure_fixture_calendar(&host, "Synthetic team calendar");
+
+    let snapshot = read_assistant_feature_snapshot(&host);
+    let (feature, group, requirement) = snapshot
+        .features
+        .iter()
+        .filter(|feature| feature.display_name == "Schedule Expert")
+        .find_map(|feature| {
+            feature.source_groups.iter().find_map(|group| {
+                group
+                    .requirements
+                    .iter()
+                    .find(|requirement| requirement.requirement_ref == "floe.source.calendar")
+                    .map(|requirement| (feature, group, requirement))
+            })
+        })
+        .expect("Schedule Expert has a Calendar source requirement");
+    let feature_ref = feature.feature_ref;
+    let source_scope_ref = group.source_scope_ref;
+    let requirement_ref = requirement.requirement_ref.clone();
+    let binding_revision = group.binding_revision;
+    let was_enabled = feature.enabled;
+
+    let prepared = host
+        .request(Uuid::new_v4())
+        .expect("admit source review command")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+            command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
+                AssistantFeatureCommand::PrepareSourceReview {
+                    feature_ref,
+                    source_scope_ref,
+                    requirement_ref: requirement_ref.clone(),
+                    expected_binding_revision: binding_revision,
+                },
+            )),
+        })
+        .expect("prepare the original Calendar candidate");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
+        AssistantFeatureCommandResult::SourceReview(review),
+    )) = prepared
+    else {
+        panic!("source review returned another outcome")
+    };
+    let candidate_ref = review
+        .candidate_refs_and_labels
+        .iter()
+        .find(|candidate| {
+            candidate.label == "Synthetic QA Calendar"
+                && candidate.availability == floe_experts::CandidateAvailability::Available
+        })
+        .expect("review has the original available Calendar candidate")
+        .candidate_ref;
+
+    support::disconnect_fixture_calendar(&host, &source);
+    let command_id = Uuid::new_v4();
+    let failure = host
+        .request(Uuid::new_v4())
+        .expect("admit reviewed configuration after source drift")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+            command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
+                AssistantFeatureCommand::Configure {
+                    feature_ref,
+                    expected_revision: snapshot.revision,
+                    enabled: !was_enabled,
+                    source_selections: vec![floe_experts::AssistantFeatureSourceSelection {
+                        source_scope_ref,
+                        requirement_ref: requirement_ref.clone(),
+                        review_ref: review.review_ref.clone(),
+                        expected_binding_revision: binding_revision,
+                        candidate_refs: vec![candidate_ref],
+                    }],
+                },
+            )),
+        })
+        .expect_err("a changed Calendar source invalidates the review");
+    assert_eq!(failure.disposition, ProductCommandDisposition::NotApplied);
+
+    let unchanged = read_assistant_feature_snapshot(&host);
+    assert_eq!(unchanged.revision, snapshot.revision);
+    let unchanged_feature = unchanged
+        .features
+        .iter()
+        .find(|entry| entry.feature_ref == feature_ref)
+        .expect("feature remains projected");
+    assert_eq!(unchanged_feature.enabled, was_enabled);
+    let unchanged_group = unchanged_feature
+        .source_groups
+        .iter()
+        .find(|entry| entry.source_scope_ref == source_scope_ref)
+        .expect("source group remains projected");
+    assert_eq!(unchanged_group.binding_revision, binding_revision);
+    assert_eq!(
+        unchanged_group
+            .requirements
+            .iter()
+            .find(|entry| entry.requirement_ref == requirement_ref)
+            .expect("Calendar requirement remains projected")
+            .selected_count,
+        requirement.selected_count
+    );
+
+    let receipt = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                owners
+                    .experts
+                    .binding_review_receipt(
+                        &actor,
+                        review.review_ref,
+                        &host_scope(
+                            Uuid::new_v4(),
+                            floe_execution::Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+            })
+            .expect("read binding receipt through the current owner generation")
+    });
+    assert!(
+        receipt.is_none(),
+        "failed drift review must not be consumed"
+    );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn read_assistant_feature_snapshot(
+    host: &AppHost<AppComposition>,
+) -> floe_experts::AssistantFeatureSnapshot {
+    let query_result = host
+        .request(Uuid::new_v4())
+        .expect("admit assistant-feature settings query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::AssistantFeature(AssistantFeatureQuery::Snapshot),
+        ))
+        .expect("read assistant-feature settings");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::AssistantFeature(
+        AssistantFeatureQueryResult::Snapshot(snapshot),
+    )) = query_result
+    else {
+        panic!("assistant-feature query returned another result")
+    };
+    snapshot
 }
 
 #[test]

@@ -1057,6 +1057,7 @@ dependencies = [
  "floe-day",
  "floe-execution",
  "floe-experts",
+ "floe-experts-builtin",
  "floe-kernel",
  "floe-knowledge",
  "getrandom 0.3.4",

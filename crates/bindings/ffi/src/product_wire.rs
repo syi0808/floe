@@ -45,9 +45,8 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
         | C::ConversationCancelRun { .. }
         | C::ConversationInteractionResolve { .. }
         | C::ConversationInteractionRefresh { .. }
-        | C::ExpertsSetInstallationEnabled { .. }
-        | C::ExpertsPrepareBindingReview { .. }
-        | C::ExpertsBindingReplace { .. }) => {
+        | C::AssistantFeatureSourcePrepareReview { .. }
+        | C::AssistantFeatureConfigure { .. }) => {
             ProductCommand::Conversation(crate::conversation_wire::command_in(command)?)
         }
         command @ (C::ConnectionsPairingStart { .. }
@@ -177,9 +176,8 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
         | Q::ConversationGetMessage { .. }
         | Q::ConversationInteractionGet { .. }
         | Q::ConversationInteractionList { .. }
-        | Q::ExpertsDirectory { .. }
-        | Q::ExpertsInspectBinding { .. }
-        | Q::ExpertsInspectBindingReview { .. }) => {
+        | Q::AssistantFeatureSnapshot { .. }
+        | Q::AssistantFeatureSourceReviewInspect { .. }) => {
             ProductQuery::Conversation(crate::conversation_wire::query_in(query)?)
         }
         query @ (Q::ConnectionsOverview { .. }

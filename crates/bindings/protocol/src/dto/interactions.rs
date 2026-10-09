@@ -1,9 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AssignmentRefDto, CommandIdDto, DigestHex64Dto, InteractionRefDto, RunRefDto, SessionRefDto,
-};
+use super::{CommandIdDto, DigestHex64Dto, InteractionRefDto, RunRefDto, SessionRefDto};
 
 /// Maximum snapshots returned by one interaction list read.
 pub const MAX_INTERACTIONS_PER_LIST: usize = 64;
@@ -12,7 +10,7 @@ pub const MAX_INTERACTIONS_PER_LIST: usize = 64;
 #[serde(rename_all = "snake_case")]
 pub enum AppInteractionKindDto {
     SourceAccess,
-    ExpertBinding,
+    AssistantFeatureSources,
     OperationApproval,
 }
 
@@ -41,7 +39,7 @@ pub enum AppSourceAccessReasonDto {
     SelectResource,
 }
 
-/// The projected requirement keeps source, Expert-binding, and operation
+/// The projected requirement keeps source-access, assistant-feature, and operation
 /// approvals distinct at the product boundary.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -54,10 +52,9 @@ pub enum AppInteractionRequirementDto {
         purpose: String,
         inline: bool,
     },
-    ExpertBinding {
-        consumer: String,
-        requirement_key: String,
-        review_ref: super::BindingReviewRefDto,
+    AssistantFeatureSourceReview {
+        source_requirement_ref: String,
+        review_ref: super::AssistantFeatureSourceReviewRefDto,
     },
     OperationApproval {
         review_ref: super::ActionReviewRefDto,
@@ -76,8 +73,10 @@ pub enum AppInteractionTargetDto {
     },
     #[serde(rename = "source_review")]
     SourceReview { review: super::ObserveReviewDto },
-    #[serde(rename = "expert_binding")]
-    ExpertBinding { review: super::BindingReviewDto },
+    #[serde(rename = "assistant_feature_source_review")]
+    AssistantFeatureSourceReview {
+        review: super::AssistantFeatureSourceReviewDto,
+    },
     #[serde(rename = "operation_approval")]
     OperationApproval { operation: super::ActionSnapshotDto },
 }
@@ -92,7 +91,7 @@ pub enum AppInteractionActionDto {
     OpenConnection,
     ReviewSource,
     RequestPermission,
-    OpenExpertSettings,
+    OpenAssistantFeatureSettings,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -167,19 +166,23 @@ impl AppInteractionSnapshotDto {
                 validate_requirement_text(purpose, 64, "interaction.requirement.purpose")?;
             }
             (
-                AppInteractionKindDto::ExpertBinding,
-                AppInteractionRequirementDto::ExpertBinding {
-                    consumer,
-                    requirement_key,
+                AppInteractionKindDto::AssistantFeatureSources,
+                AppInteractionRequirementDto::AssistantFeatureSourceReview {
+                    source_requirement_ref,
                     review_ref,
                 },
-                AppInteractionTargetDto::ExpertBinding { review },
+                AppInteractionTargetDto::AssistantFeatureSourceReview { review },
             ) => {
                 review.validate()?;
                 review_ref.validate()?;
-                validate_requirement_text(consumer, 256, "interaction.requirement.consumer")?;
-                validate_requirement_text(requirement_key, 256, "interaction.requirement.key")?;
-                if &review.review_ref != review_ref || &review.requirement_ref != requirement_key {
+                validate_requirement_text(
+                    source_requirement_ref,
+                    128,
+                    "interaction.requirement.source_requirement_ref",
+                )?;
+                if &review.review_ref != review_ref
+                    || &review.source_requirement_ref != source_requirement_ref
+                {
                     return Err("interaction.requirement.binding");
                 }
             }

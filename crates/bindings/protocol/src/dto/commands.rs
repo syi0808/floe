@@ -146,23 +146,19 @@ pub enum AppProductCommandDto {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
-    #[serde(rename = "conversation.experts.installation.set_enabled")]
-    ExpertsSetInstallationEnabled {
-        installation_ref: super::UuidRefDto,
+    #[serde(rename = "conversation.assistant_features.source.prepare_review")]
+    AssistantFeatureSourcePrepareReview {
+        feature_ref: super::UuidRefDto,
+        source_scope_ref: super::UuidRefDto,
+        source_requirement_ref: String,
+        expected_binding_revision: u64,
+    },
+    #[serde(rename = "conversation.assistant_features.configure")]
+    AssistantFeatureConfigure {
+        feature_ref: super::UuidRefDto,
         expected_revision: u64,
         enabled: bool,
-    },
-    #[serde(rename = "conversation.experts.binding.prepare_review")]
-    ExpertsPrepareBindingReview {
-        assignment_ref: super::AssignmentRefDto,
-        requirement_ref: String,
-        expected_binding_revision: u64,
-    },
-    #[serde(rename = "conversation.experts.binding.replace")]
-    ExpertsBindingReplace {
-        review_ref: super::BindingReviewRefDto,
-        expected_binding_revision: u64,
-        candidate_refs: Vec<super::UuidRefDto>,
+        source_selections: Vec<super::AssistantFeatureSourceSelectionDto>,
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
@@ -283,34 +279,34 @@ impl AppProductCommandDto {
                     Ok(())
                 }
             }
-            Self::ExpertsSetInstallationEnabled {
-                expected_revision, ..
-            } => validate_revision(*expected_revision),
-            Self::ExpertsPrepareBindingReview {
-                requirement_ref,
+            Self::AssistantFeatureSourcePrepareReview {
+                source_requirement_ref,
                 expected_binding_revision,
                 ..
             } => {
                 validate_revision(*expected_binding_revision)?;
-                if !valid_text(requirement_ref, 128) {
-                    return Err("command.requirement_ref");
+                if !valid_text(source_requirement_ref, 128) {
+                    return Err("command.source_requirement_ref");
                 }
                 Ok(())
             }
-            Self::ExpertsBindingReplace {
-                review_ref,
-                expected_binding_revision,
-                candidate_refs,
+            Self::AssistantFeatureConfigure {
+                expected_revision,
+                source_selections,
+                ..
             } => {
-                review_ref.validate()?;
-                validate_revision(*expected_binding_revision)?;
-                if candidate_refs.len() > 16
-                    || candidate_refs
-                        .iter()
-                        .enumerate()
-                        .any(|(i, id)| candidate_refs[i + 1..].contains(id))
-                {
-                    return Err("command.candidate_refs");
+                validate_revision(*expected_revision)?;
+                if source_selections.len() > super::MAX_ASSISTANT_FEATURE_SOURCE_SELECTIONS {
+                    return Err("command.source_selections");
+                }
+                for (index, selection) in source_selections.iter().enumerate() {
+                    selection.validate()?;
+                    if source_selections[..index].iter().any(|previous| {
+                        previous.source_scope_ref == selection.source_scope_ref
+                            && previous.source_requirement_ref == selection.source_requirement_ref
+                    }) {
+                        return Err("command.source_selections.duplicate");
+                    }
                 }
                 Ok(())
             }
@@ -529,12 +525,14 @@ pub enum AppCommandResultDto {
     MemoryDecision {
         acknowledgement: super::MemoryDecisionAcknowledgementDto,
     },
-    #[serde(rename = "conversation.experts.directory")]
-    ExpertsDirectory {
-        directory: super::ExpertDirectorySnapshotDto,
+    #[serde(rename = "conversation.assistant_features.snapshot")]
+    AssistantFeatureSnapshot {
+        snapshot: super::AssistantFeatureSnapshotDto,
     },
-    #[serde(rename = "conversation.experts.binding_review")]
-    ExpertsBindingReview { review: super::BindingReviewDto },
+    #[serde(rename = "conversation.assistant_features.source_review")]
+    AssistantFeatureSourceReview {
+        review: super::AssistantFeatureSourceReviewDto,
+    },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,
     },

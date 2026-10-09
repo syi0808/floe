@@ -3,13 +3,15 @@ use std::sync::Arc;
 use crate::{EncryptedAgentVault, VaultKeyProvider};
 use floe_agent_contract::{AgentFailure, BoxFuture, ExecutionScope, OwnerActor};
 use floe_experts::{
-    AgentRegistry, ExpertCommandLookup, RegistryCommit, RegistryCommitReceipt, RegistryRepository,
+    AgentRegistry, ExpertCommandLookup, RegistryCommit, RegistryCommitIntent,
+    RegistryCommitReceipt, RegistryRepository,
 };
 use floe_kernel::CommandFailure;
 use turso::transaction::TransactionBehavior;
 
 use crate::vault::expert_binding_reviews::{
-    EXPERT_COMMAND_LIMIT, EXPERT_COMMAND_REGISTRY, count_expert_command_admissions_on,
+    EXPERT_COMMAND_LIMIT, EXPERT_COMMAND_REGISTRY, MAX_EXPERT_RECEIPT_PAYLOAD_BYTES,
+    assistant_feature_task_review_receipt_on, count_expert_command_admissions_on,
     ensure_expert_binding_tables_on, insert_expert_command_admission_on, map_unique_conflict,
     read_expert_command_admission_on, read_registry_receipt_on, validate_registry_receipt,
     validate_registry_snapshot, validate_registry_successor,
@@ -221,6 +223,9 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                                 &commit.next,
                                 commit.expected_revision,
                                 self.vault.person_id(),
+                                commit.command_id,
+                                commit.request_digest,
+                                &commit.intent,
                             )?;
                             let payload = self.vault.registry_payload(&commit.next)?;
                             self.vault
@@ -242,6 +247,9 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                                 &commit.next,
                                 0,
                                 self.vault.person_id(),
+                                commit.command_id,
+                                commit.request_digest,
+                                &commit.intent,
                             )?;
                             self.vault
                                 .install_expert_registry_on(&transaction, &commit.next)
@@ -293,6 +301,56 @@ impl<Keys: VaultKeyProvider> RegistryRepository for VaultExpertRegistryRepositor
                         )
                         .await
                         .map_err(map_unique_conflict)?;
+                    if let RegistryCommitIntent::ConfigureAssistantFeature(configuration) =
+                        &commit.intent
+                    {
+                        if let Some(binding_receipt) =
+                            assistant_feature_task_review_receipt_on(
+                                &transaction,
+                                &commit.actor,
+                                configuration,
+                                receipt.clone(),
+                            )
+                            .await?
+                        {
+                            let binding_payload = serde_json::to_string(&binding_receipt)
+                                .map_err(|_| AgentFailure::StorageUnavailable)?;
+                            if binding_payload.len() > MAX_EXPERT_RECEIPT_PAYLOAD_BYTES {
+                                return Err(AgentFailure::BudgetExceeded);
+                            }
+                            transaction
+                                .execute(
+                                    "INSERT INTO agent_expert_binding_review_consumptions (review_id, command_id, person_id, device_id, review_digest, request_digest, committed_at_unix_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                    (
+                                        binding_receipt.review_ref.id.to_string(),
+                                        commit.command_id.as_uuid().to_string(),
+                                        commit.actor.person_id.to_string(),
+                                        commit.actor.device_id.as_str(),
+                                        hex_digest(&binding_receipt.review_ref.digest),
+                                        hex_digest(&commit.request_digest),
+                                        binding_receipt.committed_at_unix_ms,
+                                    ),
+                                )
+                                .await
+                                .map_err(map_unique_conflict)?;
+                            transaction
+                                .execute(
+                                    "INSERT INTO agent_expert_binding_replacement_receipts (command_id, consumed_review_id, person_id, device_id, review_digest, request_digest, committed_at_unix_ms, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (
+                                        commit.command_id.as_uuid().to_string(),
+                                        binding_receipt.review_ref.id.to_string(),
+                                        commit.actor.person_id.to_string(),
+                                        commit.actor.device_id.as_str(),
+                                        hex_digest(&binding_receipt.review_ref.digest),
+                                        hex_digest(&commit.request_digest),
+                                        binding_receipt.committed_at_unix_ms,
+                                        binding_payload,
+                                    ),
+                                )
+                                .await
+                                .map_err(map_unique_conflict)?;
+                        }
+                    }
                     self.vault.check_access()?;
                     Ok(receipt)
                 }
@@ -322,4 +380,412 @@ fn hex_digest(digest: &[u8; 32]) -> String {
 
 fn to_i64(value: u64) -> Result<i64, AgentFailure> {
     i64::try_from(value).map_err(|_| AgentFailure::Conflict)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{
+        collections::HashMap,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use floe_agent_contract::{
+        CommandId, OwnerActor, TaskExecutionKey, TaskExecutionReceiptRef, TaskId,
+    };
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle, SourceAuthority,
+        SourceSelectionReference,
+    };
+    use floe_execution::{
+        Cancellation, ExecutionScope,
+        budget::{BudgetConfig, BudgetLedger, ModelUsage},
+    };
+    use floe_experts::{
+        AgentRegistry, AssistantFeatureBindingChange, AssistantFeatureConfiguration,
+        BindingPrepareIdentity, BindingReviewDescriptor, BindingReviewRef, BindingReviewRepository,
+        Candidate, CandidateAvailability, CandidateSourceExpectation, ExpertInstallOperation,
+        ExpertSourceRequirement, PackageRef, RegistryCommit, RegistryCommitIntent,
+        RegistryRepository, ReviewedCandidate, binding_review_digest,
+    };
+    use floe_kernel::{AgentFailure, CommandFailure, PersonId, TraceContext};
+    use sha2::{Digest, Sha256};
+    use tokio::time::Instant;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::{RootKey, VaultExpertBindingReviewRepository, VaultKeyProvider};
+
+    #[derive(Default)]
+    struct TestKeys(Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>);
+
+    impl VaultKeyProvider for TestKeys {
+        fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .get(&(person_id, vault_id))
+                .copied()
+                .map(RootKey::from_bytes)
+                .ok_or(AgentFailure::VaultUnavailable)
+        }
+
+        fn insert(
+            &self,
+            person_id: PersonId,
+            vault_id: Uuid,
+            key: &RootKey,
+        ) -> Result<(), AgentFailure> {
+            self.0
+                .lock()
+                .map_err(|_| AgentFailure::VaultUnavailable)?
+                .insert((person_id, vault_id), *key.as_bytes());
+            Ok(())
+        }
+    }
+
+    struct TestRoot(PathBuf);
+
+    impl TestRoot {
+        fn new() -> Self {
+            let path =
+                std::env::temp_dir().join(format!("floe-feature-rollback-{}", Uuid::new_v4()));
+            std::fs::create_dir(&path).expect("create isolated Vault root");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+                .expect("restrict isolated Vault root");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_selection_failure_rolls_back_registry_and_linked_receipts() {
+        let root = TestRoot::new();
+        let person_id = PersonId::new();
+        let actor = OwnerActor {
+            person_id,
+            device_id: "device-feature-test".into(),
+            runtime_epoch: 1,
+        };
+        let vault = Arc::new(
+            EncryptedAgentVault::create(&root.0, person_id, TestKeys::default())
+                .await
+                .expect("create a real encrypted Vault for the transaction test"),
+        );
+        let registry_repository =
+            VaultExpertRegistryRepository::new(vault.clone(), actor.clone()).unwrap();
+        let review_repository =
+            VaultExpertBindingReviewRepository::new(vault.clone(), actor.clone()).unwrap();
+        let instance_id = vault.registry_instance_id();
+        let manifests = floe_experts_builtin::manifests();
+        let manifest = manifests
+            .iter()
+            .find(|manifest| manifest.package.id == "floe.builtin.commitments")
+            .expect("built-in Commitments manifest");
+        let mut registry = AgentRegistry::new(instance_id);
+        registry
+            .install_bundle(
+                person_id,
+                &ExpertInstallOperation {
+                    instance_id,
+                    expected_revision: 0,
+                    operation_id: Uuid::new_v4(),
+                },
+                &manifests,
+            )
+            .expect("install built-in Experts in the in-memory registry");
+        let before = registry.snapshot();
+        let installation = before
+            .installations
+            .iter()
+            .find(|installation| installation.package.id == manifest.package.id)
+            .expect("Commitments installation");
+        let assignment = before
+            .assignments
+            .iter()
+            .find(|assignment| {
+                assignment.person_id == person_id && assignment.installation_id == installation.id
+            })
+            .expect("Commitments assignment");
+        let connection = vault.connection().unwrap();
+        vault
+            .install_expert_registry_on(&connection, &before)
+            .await
+            .expect("persist the starting registry in Vault");
+        drop(connection);
+
+        let scope = test_scope();
+        let requirements = manifest
+            .source_requirements
+            .iter()
+            .take(2)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requirements.len(),
+            2,
+            "Commitments has multiple source choices"
+        );
+        let first = prepare_review(
+            &review_repository,
+            &actor,
+            assignment.id,
+            installation.id,
+            instance_id,
+            &manifest.package,
+            manifest.definition.definition_revision,
+            requirements[0].clone(),
+            true,
+            0,
+            &scope,
+        )
+        .await;
+        let second = prepare_review(
+            &review_repository,
+            &actor,
+            assignment.id,
+            installation.id,
+            instance_id,
+            &manifest.package,
+            manifest.definition.definition_revision,
+            requirements[1].clone(),
+            false,
+            1,
+            &scope,
+        )
+        .await;
+
+        let first_candidate = first.candidates[0].clone();
+        let second_candidate = second.candidates[0].clone();
+        let second_invalid_candidate_ref = Uuid::new_v4();
+        let configuration = AssistantFeatureConfiguration {
+            installation_id: installation.id,
+            expected_revision: before.revision,
+            enabled: false,
+            committed_at_unix_ms: 1_000,
+            binding_changes: vec![
+                AssistantFeatureBindingChange {
+                    assignment_id: assignment.id,
+                    requirement_key: requirements[0].key.clone(),
+                    review_ref: first.review_ref.clone(),
+                    expected_binding_revision: assignment.binding.revision,
+                    candidate_refs: vec![first_candidate.candidate_ref],
+                    selected: vec![first_candidate.candidate.reference.clone()],
+                },
+                AssistantFeatureBindingChange {
+                    assignment_id: assignment.id,
+                    requirement_key: requirements[1].key.clone(),
+                    review_ref: second.review_ref.clone(),
+                    expected_binding_revision: assignment.binding.revision,
+                    candidate_refs: vec![second_invalid_candidate_ref],
+                    selected: vec![second_candidate.candidate.reference.clone()],
+                },
+            ],
+        };
+        let command_id = CommandId::new();
+        let request_digest = [0x42; 32];
+        let mut next = AgentRegistry::restore(before.clone(), instance_id).unwrap();
+        next.configure_assistant_feature(
+            before.revision,
+            command_id.as_uuid(),
+            request_digest,
+            &configuration,
+            person_id,
+        )
+        .expect("registry accepts the two source changes before Vault verifies reviews");
+        let result = registry_repository
+            .commit(
+                RegistryCommit {
+                    actor: actor.clone(),
+                    command_id,
+                    request_digest,
+                    expected_revision: before.revision,
+                    intent: RegistryCommitIntent::ConfigureAssistantFeature(configuration),
+                    next: next.snapshot(),
+                },
+                &scope,
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(CommandFailure::NotApplied(AgentFailure::InvalidInput))
+        ));
+
+        let after = registry_repository.read(&actor, &scope).await.unwrap();
+        assert_eq!(
+            after, before,
+            "the installation toggle and both bindings roll back"
+        );
+        assert!(matches!(
+            registry_repository
+                .find_command(&actor, command_id, &scope)
+                .await
+                .unwrap(),
+            floe_experts::ExpertCommandLookup::Absent
+        ));
+        assert!(
+            review_repository
+                .find_review_replacement(&actor, first.review_ref.clone(), &scope)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let connection = vault.connection().unwrap();
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM agent_expert_binding_review_consumptions WHERE review_id = ?",
+                first.review_ref.id.to_string(),
+            )
+            .await,
+            0,
+            "task-origin review consumption rolls back",
+        );
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM agent_expert_binding_replacement_receipts WHERE command_id = ?",
+                command_id.as_uuid().to_string(),
+            )
+            .await,
+            0,
+            "linked replacement receipt rolls back",
+        );
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM agent_expert_registry_receipts WHERE command_id = ?",
+                command_id.as_uuid().to_string(),
+            )
+            .await,
+            0,
+            "registry receipt rolls back",
+        );
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM agent_expert_command_admissions WHERE command_id = ?",
+                command_id.as_uuid().to_string(),
+            )
+            .await,
+            0,
+            "command admission rolls back",
+        );
+    }
+
+    async fn prepare_review(
+        repository: &VaultExpertBindingReviewRepository<TestKeys>,
+        actor: &OwnerActor,
+        assignment_id: Uuid,
+        installation_id: Uuid,
+        registry_instance_id: Uuid,
+        package: &PackageRef,
+        definition_revision: u64,
+        requirement: ExpertSourceRequirement,
+        task_origin: bool,
+        index: u8,
+        scope: &ExecutionScope,
+    ) -> BindingReviewDescriptor {
+        let reference = SourceSelectionReference {
+            connector_id: ConnectorId::try_new(format!("test.connector.{index}")).unwrap(),
+            connection_id: ConnectionId::new(),
+            execution_owner_id: ExecutionOwnerId::try_new(format!("test.owner.{index}")).unwrap(),
+            capability_id: requirement.capability.clone(),
+            resource: ResourceHandle::try_new(format!("resource.{index}")).unwrap(),
+            contract_version: requirement.contract_version,
+        };
+        let task_origin = task_origin.then(|| TaskExecutionReceiptRef {
+            execution: TaskExecutionKey {
+                task_id: TaskId::new(),
+                execution_id: Uuid::new_v4(),
+                executor_generation: 1,
+            },
+            task_revision: 2,
+            journal_revision: 0,
+            digest: [0x55; 32],
+        });
+        let identity = BindingPrepareIdentity {
+            command_id: CommandId::new(),
+            person_id: actor.person_id,
+            device_id: actor.device_id.clone(),
+            assignment_id,
+            requirement_key: requirement.key.clone(),
+            expected_binding_revision: 1,
+            task_origin,
+        };
+        let review_id = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            &serde_json::to_vec(&("floe.expert-binding-review-id.v1", &identity)).unwrap(),
+        );
+        let candidate_ref = Uuid::new_v5(&review_id, &serde_json::to_vec(&reference).unwrap());
+        let candidate_id = format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&("floe.source-selection-candidate.sha256.v1", &reference))
+                    .unwrap(),
+            )
+        );
+        let candidate = Candidate {
+            candidate_id,
+            label: format!("Candidate {index}"),
+            detail: "Reviewed source".into(),
+            availability: CandidateAvailability::Available,
+            reference: reference.clone(),
+        };
+        let mut descriptor = BindingReviewDescriptor {
+            review_ref: BindingReviewRef {
+                id: review_id,
+                digest: [0; 32],
+            },
+            identity,
+            registry_instance_id,
+            installation_id,
+            package: package.clone(),
+            definition_revision,
+            requirement,
+            candidates: vec![ReviewedCandidate {
+                candidate_ref,
+                candidate,
+                selected: false,
+            }],
+            catalog_revision: definition_revision,
+            catalog_digest: [0x33; 32],
+            source_expectations: vec![CandidateSourceExpectation {
+                reference,
+                source_revision: 1,
+                source_authority: SourceAuthority::new(),
+            }],
+            created_at_unix_ms: 10,
+            expires_at_unix_ms: 600_010,
+        };
+        descriptor.review_ref.digest = binding_review_digest(&descriptor).unwrap();
+        floe_experts::validate_binding_review_descriptor(&descriptor).unwrap();
+        repository
+            .prepare(descriptor, scope)
+            .await
+            .expect("store a valid reviewed source in the encrypted Vault")
+    }
+
+    fn test_scope() -> ExecutionScope {
+        let budget = BudgetLedger::new(BudgetConfig::new(64, 64), ModelUsage::default());
+        ExecutionScope::root(
+            Cancellation::new(),
+            Instant::now() + Duration::from_secs(30),
+            budget.root_lease(),
+            TraceContext::new(Uuid::new_v4()),
+        )
+    }
+
+    async fn count_rows(connection: &turso::Connection, sql: &str, key: String) -> i64 {
+        let mut rows = connection.query(sql, (key,)).await.unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    }
 }

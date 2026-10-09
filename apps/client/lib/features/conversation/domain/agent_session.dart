@@ -130,14 +130,15 @@ sealed class AgentMessage {
   AgentMessageKind get kind;
 }
 
-enum AgentInteractionMessageKind { sourceAccess, expertBinding }
+enum AgentInteractionMessageKind { sourceAccess, assistantFeatureSources }
 
 final class AgentInteractionMessage extends AgentMessage {
   AgentInteractionMessage.fromJson(Map<String, Object?> json)
     : interactionId = _id(json['interaction_id']),
       interactionKind = switch (json['interaction_kind']) {
         'source_access' => AgentInteractionMessageKind.sourceAccess,
-        'expert_binding' => AgentInteractionMessageKind.expertBinding,
+        'assistant_feature_sources' =>
+          AgentInteractionMessageKind.assistantFeatureSources,
         _ => throw const FormatException('Unknown interaction kind.'),
       },
       super(_id(json['message_id']), _id(json['turn_id'])) {

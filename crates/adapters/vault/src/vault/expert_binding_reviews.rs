@@ -274,6 +274,86 @@ pub(crate) async fn read_binding_review_on(
     Ok(descriptor)
 }
 
+pub(crate) async fn assistant_feature_task_review_receipt_on(
+    connection: &Connection,
+    actor: &OwnerActor,
+    configuration: &floe_experts::AssistantFeatureConfiguration,
+    registry: floe_experts::RegistryCommitReceipt,
+) -> Result<Option<BindingReplacementReceipt>, AgentFailure> {
+    let mut task_descriptor = None;
+    for change in &configuration.binding_changes {
+        let descriptor = read_binding_review_on(
+            connection,
+            actor.person_id,
+            &actor.device_id,
+            &change.review_ref,
+            registry.snapshot.instance_id,
+        )
+        .await?;
+        if descriptor.identity.person_id != actor.person_id
+            || descriptor.identity.device_id != actor.device_id
+            || descriptor.identity.assignment_id != change.assignment_id
+            || descriptor.identity.requirement_key != change.requirement_key
+            || descriptor.identity.expected_binding_revision != change.expected_binding_revision
+            || descriptor.installation_id != configuration.installation_id
+            || configuration.expected_revision.checked_add(1) != Some(registry.snapshot.revision)
+            || configuration.committed_at_unix_ms < descriptor.created_at_unix_ms
+            || configuration.committed_at_unix_ms >= descriptor.expires_at_unix_ms
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        verify_binding_candidate_selection(
+            &descriptor,
+            &change.candidate_refs,
+            &registry.snapshot,
+        )?;
+        let mut expected_selected = change
+            .candidate_refs
+            .iter()
+            .map(|candidate_ref| {
+                let reviewed = descriptor
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.candidate_ref == *candidate_ref)
+                    .ok_or(AgentFailure::InvalidInput)?;
+                Ok(reviewed.candidate.reference.clone())
+            })
+            .collect::<Result<Vec<_>, AgentFailure>>()?;
+        expected_selected.sort();
+        if expected_selected != change.selected {
+            return Err(AgentFailure::Conflict);
+        }
+        if let Some(existing) = read_binding_replacement_for_review_on(
+            connection,
+            actor.person_id,
+            &actor.device_id,
+            &descriptor,
+            registry.snapshot.instance_id,
+        )
+        .await?
+        {
+            let _ = existing;
+            return Err(AgentFailure::Conflict);
+        }
+        if descriptor.identity.task_origin.is_some() {
+            if task_descriptor.replace(descriptor).is_some() {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
+    }
+    let Some(descriptor) = task_descriptor else {
+        return Ok(None);
+    };
+    let receipt = BindingReplacementReceipt {
+        review_ref: descriptor.review_ref.clone(),
+        registry,
+        committed_at_unix_ms: configuration.committed_at_unix_ms,
+        assistant_feature_configuration: Some(configuration.clone()),
+    };
+    floe_experts::project_binding_mutation_receipt(&receipt, &descriptor)?;
+    Ok(Some(receipt))
+}
+
 pub(crate) async fn read_registry_receipt_on(
     connection: &Connection,
     person_id: PersonId,
@@ -442,11 +522,15 @@ pub(crate) async fn read_binding_replacement_for_review_on(
     let admission = read_expert_command_admission_on(connection, command_id)
         .await?
         .ok_or(AgentFailure::VaultUnavailable)?;
-    if admission.family != EXPERT_COMMAND_REPLACEMENT
+    let family_matches = match admission.family.as_str() {
+        EXPERT_COMMAND_REPLACEMENT => admission.review_id == Some(descriptor.review_ref.id),
+        EXPERT_COMMAND_REGISTRY => admission.review_id.is_none(),
+        _ => false,
+    };
+    if !family_matches
         || admission.person_id != stored_person
         || admission.device_id != stored_device
         || admission.request_digest != stored_request_digest
-        || admission.review_id != Some(descriptor.review_ref.id)
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -473,7 +557,10 @@ async fn read_binding_replacement_for_command_on(
     admission: &ExpertCommandAdmission,
     registry_instance_id: Uuid,
 ) -> Result<BindingReplacementReceipt, AgentFailure> {
-    if admission.family != EXPERT_COMMAND_REPLACEMENT {
+    if !matches!(
+        admission.family.as_str(),
+        EXPERT_COMMAND_REPLACEMENT | EXPERT_COMMAND_REGISTRY
+    ) {
         return Err(AgentFailure::Conflict);
     }
     let command_id = admission.command_id.as_uuid().to_string();
@@ -511,7 +598,13 @@ async fn read_binding_replacement_for_command_on(
         || receipt.registry.device_id != stored_device
         || admission.person_id != stored_person
         || admission.device_id != stored_device
-        || admission.review_id != Some(consumed_review_id)
+        || (admission.family == EXPERT_COMMAND_REPLACEMENT
+            && admission.review_id != Some(consumed_review_id))
+        || (admission.family == EXPERT_COMMAND_REGISTRY && admission.review_id.is_some())
+        || (admission.family == EXPERT_COMMAND_REGISTRY
+            && receipt.assistant_feature_configuration.is_none())
+        || (admission.family == EXPERT_COMMAND_REPLACEMENT
+            && receipt.assistant_feature_configuration.is_some())
     {
         return Err(AgentFailure::VaultUnavailable);
     }
@@ -545,6 +638,20 @@ async fn read_binding_replacement_for_command_on(
         registry_instance_id,
     )
     .await?;
+    if admission.family == EXPERT_COMMAND_REGISTRY {
+        let registry_receipt = read_registry_receipt_on(
+            connection,
+            person_id,
+            device_id,
+            admission.command_id,
+            registry_instance_id,
+        )
+        .await?
+        .ok_or(AgentFailure::VaultUnavailable)?;
+        if registry_receipt != receipt.registry {
+            return Err(AgentFailure::VaultUnavailable);
+        }
+    }
     project_binding_mutation_receipt(&receipt, &descriptor)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
     Ok(receipt)
@@ -645,6 +752,9 @@ pub(crate) fn validate_registry_successor(
     next: &RegistrySnapshot,
     expected_revision: u64,
     person_id: PersonId,
+    command_id: CommandId,
+    request_digest: [u8; 32],
+    intent: &floe_experts::RegistryCommitIntent,
 ) -> Result<(), AgentFailure> {
     if previous.revision != expected_revision
         || expected_revision.checked_add(1) != Some(next.revision)
@@ -657,10 +767,36 @@ pub(crate) fn validate_registry_successor(
             .install_receipts
             .iter()
             .any(|entry| entry.person_id != person_id)
-        || previous
-            .install_receipts
-            .iter()
-            .any(|before| !next.install_receipts.iter().any(|after| before == after))
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    if let floe_experts::RegistryCommitIntent::ConfigureAssistantFeature(configuration) = intent {
+        return validate_assistant_feature_successor(
+            previous,
+            next,
+            expected_revision,
+            person_id,
+            command_id,
+            request_digest,
+            configuration,
+        );
+    }
+    if !matches!(intent, floe_experts::RegistryCommitIntent::Install) {
+        return Err(AgentFailure::Conflict);
+    }
+    validate_install_successor(previous, next, expected_revision, person_id)
+}
+
+fn validate_install_successor(
+    previous: &RegistrySnapshot,
+    next: &RegistrySnapshot,
+    expected_revision: u64,
+    person_id: PersonId,
+) -> Result<(), AgentFailure> {
+    if previous
+        .install_receipts
+        .iter()
+        .any(|before| !next.install_receipts.iter().any(|after| before == after))
         || previous.assignments.iter().any(|before| {
             !next.assignments.iter().any(|after| {
                 before.id == after.id
@@ -721,6 +857,161 @@ pub(crate) fn validate_registry_successor(
         if assignment.private_state != floe_experts::ExpertPrivateState::default() {
             return Err(AgentFailure::Conflict);
         }
+    }
+    validate_registry_snapshot(next, previous.instance_id, person_id)
+}
+
+fn validate_assistant_feature_successor(
+    previous: &RegistrySnapshot,
+    next: &RegistrySnapshot,
+    expected_revision: u64,
+    person_id: PersonId,
+    command_id: CommandId,
+    request_digest: [u8; 32],
+    configuration: &floe_experts::AssistantFeatureConfiguration,
+) -> Result<(), AgentFailure> {
+    if configuration.installation_id.is_nil()
+        || request_digest == [0; 32]
+        || configuration.expected_revision != expected_revision
+        || configuration.committed_at_unix_ms <= 0
+        || previous.manifests != next.manifests
+        || previous.install_receipts != next.install_receipts
+        || previous.installations.len() != next.installations.len()
+        || previous.assignments.len() != next.assignments.len()
+        || next.revision
+            != expected_revision
+                .checked_add(1)
+                .ok_or(AgentFailure::BudgetExceeded)?
+    {
+        return Err(AgentFailure::Conflict);
+    }
+
+    let mut expected_installation_found = false;
+    for before in &previous.installations {
+        let after = next
+            .installations
+            .iter()
+            .find(|candidate| candidate.id == before.id)
+            .ok_or(AgentFailure::Conflict)?;
+        if before.id == configuration.installation_id {
+            expected_installation_found = true;
+            if after.package != before.package || after.enabled != configuration.enabled {
+                return Err(AgentFailure::Conflict);
+            }
+        } else if after != before {
+            return Err(AgentFailure::Conflict);
+        }
+    }
+    if !expected_installation_found {
+        return Err(AgentFailure::Conflict);
+    }
+
+    let mut changes_by_assignment = std::collections::BTreeMap::<
+        Uuid,
+        (u64, Vec<&floe_experts::AssistantFeatureBindingChange>),
+    >::new();
+    let mut changed_requirements = std::collections::HashSet::new();
+    for change in &configuration.binding_changes {
+        if change.assignment_id.is_nil()
+            || change.expected_binding_revision == 0
+            || change.review_ref.validate().is_err()
+            || change.requirement_key.is_empty()
+            || change.requirement_key.len() > 128
+            || change.requirement_key.trim() != change.requirement_key
+            || change.requirement_key.chars().any(char::is_control)
+            || change.candidate_refs.len() > 16
+            || change
+                .candidate_refs
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            || !changed_requirements.insert((change.assignment_id, change.requirement_key.as_str()))
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let entry = changes_by_assignment
+            .entry(change.assignment_id)
+            .or_insert_with(|| (change.expected_binding_revision, Vec::new()));
+        if entry.0 != change.expected_binding_revision {
+            return Err(AgentFailure::Conflict);
+        }
+        entry.1.push(change);
+    }
+
+    for before in &previous.assignments {
+        if before.person_id != person_id {
+            return Err(AgentFailure::NotFound);
+        }
+        let after = next
+            .assignments
+            .iter()
+            .find(|candidate| candidate.id == before.id)
+            .ok_or(AgentFailure::Conflict)?;
+        if before.person_id != after.person_id
+            || before.installation_id != after.installation_id
+            || before.enabled != after.enabled
+            || before.private_state != after.private_state
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let Some((expected_binding_revision, changes)) = changes_by_assignment.remove(&before.id)
+        else {
+            if after.binding != before.binding {
+                return Err(AgentFailure::Conflict);
+            }
+            continue;
+        };
+        if before.installation_id != configuration.installation_id
+            || before.binding.revision != expected_binding_revision
+            || before.binding.schema_version != after.binding.schema_version
+            || after.binding.revision
+                != expected_binding_revision
+                    .checked_add(1)
+                    .ok_or(AgentFailure::BudgetExceeded)?
+            || after.binding.last_operation
+                != Some(floe_experts::BindingOperationReceipt {
+                    operation_id: command_id.as_uuid(),
+                    command_digest: request_digest,
+                    resulting_revision: after.binding.revision,
+                })
+            || before.binding.entries.len() != after.binding.entries.len()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        for previous_entry in &before.binding.entries {
+            let next_entry = after
+                .binding
+                .entries
+                .iter()
+                .find(|entry| entry.requirement_key == previous_entry.requirement_key)
+                .ok_or(AgentFailure::Conflict)?;
+            if previous_entry.capability != next_entry.capability
+                || previous_entry.contract_version != next_entry.contract_version
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            if let Some(change) = changes
+                .iter()
+                .find(|change| change.requirement_key == previous_entry.requirement_key)
+            {
+                if change.selected != next_entry.selected {
+                    return Err(AgentFailure::Conflict);
+                }
+            } else if previous_entry.selected != next_entry.selected {
+                return Err(AgentFailure::Conflict);
+            }
+        }
+        if changes.iter().any(|change| {
+            !before
+                .binding
+                .entries
+                .iter()
+                .any(|entry| entry.requirement_key == change.requirement_key)
+        }) {
+            return Err(AgentFailure::Conflict);
+        }
+    }
+    if !changes_by_assignment.is_empty() {
+        return Err(AgentFailure::Conflict);
     }
     validate_registry_snapshot(next, previous.instance_id, person_id)
 }
@@ -850,6 +1141,11 @@ pub(crate) fn verify_binding_candidate_selection(
             .iter()
             .find(|candidate| candidate.candidate_ref == *candidate_ref)
             .ok_or(AgentFailure::InvalidInput)?;
+        if reviewed.candidate.availability == floe_experts::CandidateAvailability::Unavailable
+            && !reviewed.selected
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         expected.push(reviewed.candidate.reference.clone());
     }
     expected.sort();

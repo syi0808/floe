@@ -13,8 +13,8 @@ pub use engine_endpoint::EngineExpertEndpoint;
 #[path = "application/binding.rs"]
 mod binding;
 pub use binding::{
-    binding_review_digest, project_binding_mutation_receipt, project_binding_review,
-    project_expert_directory, validate_binding_review_descriptor,
+    binding_review_digest, project_assistant_features, project_binding_mutation_receipt,
+    project_binding_review, validate_binding_review_descriptor,
 };
 pub use service::{ExpertsDependencies, ExpertsService};
 mod directory;
@@ -38,10 +38,10 @@ pub mod ports {
     pub mod source;
 }
 pub use api::{
-    BindingCandidateSummary, BindingInspection, BindingInspectionCandidate, BindingMutationReceipt,
-    BindingReview, BindingReviewAction, ExpertAssignmentSummary, ExpertClock,
-    ExpertDirectorySnapshot, ExpertInstallationSummary, ExpertRequirementSummary, ExpertsOwner,
-    SystemExpertClock,
+    AssistantFeature, AssistantFeatureSnapshot, AssistantFeatureSourceGroup,
+    AssistantFeatureSourceRequirement, AssistantFeatureSourceSelection, BindingCandidateSummary,
+    BindingInspection, BindingInspectionCandidate, BindingMutationReceipt, BindingReview,
+    BindingReviewAction, ExpertClock, ExpertsOwner, SystemExpertClock,
 };
 pub use ports::binding_review::{
     BindingPrepareIdentity, BindingReplacementReceipt, BindingReviewDescriptor, BindingReviewRef,
@@ -74,12 +74,13 @@ pub use manifest::{
     ExpertSourceRequirement, MAX_REQUIREMENT_SOURCES, manifest_set_digest,
 };
 pub use registry::{
-    AgentRegistry, AssignmentOverview, BindingOperationReceipt, EXPERT_BINDING_SCHEMA_VERSION,
+    AgentRegistry, AssignmentOverview, AssistantFeatureBindingChange,
+    AssistantFeatureConfiguration, BindingOperationReceipt, EXPERT_BINDING_SCHEMA_VERSION,
     EXPERT_REGISTRY_SCHEMA_VERSION, ExpertBindingCommand, ExpertBindingState,
     ExpertInstallOperation, ExpertInstallReceipt, ExpertInstallResult, ExpertPrivateState,
-    InstalledExpert, PackageAssignment, PackageInstallation, RegistryConfiguration,
-    RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot, RequirementBinding,
-    ResolvedExpert,
+    InstalledExpert, PackageAssignment, PackageInstallation, RegistryCommitIntent,
+    RegistryConfiguration, RegistryConfigurationTarget, RegistryOverview, RegistrySnapshot,
+    RequirementBinding, ResolvedExpert,
 };
 pub use selection::{
     AdmittedRequirementSelection, EXPERT_EXECUTION_SELECTION_SCHEMA_VERSION,

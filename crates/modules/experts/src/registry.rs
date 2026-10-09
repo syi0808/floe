@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    ExpertAdmissionIdentity, ExpertExecutionSelection, ExpertManifest, manifest_set_digest,
+    ExpertAdmissionIdentity, ExpertExecutionSelection, ExpertManifest, MAX_REQUIREMENT_SOURCES,
+    manifest_set_digest,
 };
 
 pub const EXPERT_REGISTRY_SCHEMA_VERSION: u32 = 3;
@@ -186,6 +187,34 @@ pub struct RegistryConfiguration {
     pub instance_id: Uuid,
     pub expected_revision: u64,
     pub target: RegistryConfigurationTarget,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssistantFeatureBindingChange {
+    pub assignment_id: Uuid,
+    pub requirement_key: String,
+    pub review_ref: crate::BindingReviewRef,
+    pub expected_binding_revision: u64,
+    pub candidate_refs: Vec<Uuid>,
+    pub selected: Vec<SourceSelectionReference>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssistantFeatureConfiguration {
+    pub installation_id: Uuid,
+    pub expected_revision: u64,
+    pub enabled: bool,
+    pub committed_at_unix_ms: i64,
+    pub binding_changes: Vec<AssistantFeatureBindingChange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RegistryCommitIntent {
+    Install,
+    ConfigureAssistantFeature(AssistantFeatureConfiguration),
+    ReviewedBindingReplacement,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -699,6 +728,115 @@ impl AgentRegistry {
             .find(|entry| entry.id == installation_id)
             .ok_or(AgentFailure::NotFound)?
             .enabled = enabled;
+        Ok(())
+    }
+
+    pub fn configure_assistant_feature(
+        &mut self,
+        expected_revision: u64,
+        operation_id: Uuid,
+        request_digest: [u8; 32],
+        configuration: &AssistantFeatureConfiguration,
+        person_id: PersonId,
+    ) -> Result<(), AgentFailure> {
+        self.check_revision(expected_revision)?;
+        if operation_id.is_nil()
+            || request_digest == [0; 32]
+            || configuration.installation_id.is_nil()
+            || configuration.expected_revision != expected_revision
+            || configuration.committed_at_unix_ms <= 0
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let installation = self.installation(configuration.installation_id)?;
+        let manifest = self.manifest(&installation.package)?;
+        let mut changes_by_assignment =
+            std::collections::BTreeMap::<Uuid, (u64, Vec<&AssistantFeatureBindingChange>)>::new();
+        let mut changed_requirements = HashSet::new();
+        for change in &configuration.binding_changes {
+            if change.assignment_id.is_nil()
+                || change.expected_binding_revision == 0
+                || change.review_ref.validate().is_err()
+                || change.requirement_key.is_empty()
+                || change.requirement_key.len() > 128
+                || change.requirement_key.trim() != change.requirement_key
+                || change.requirement_key.chars().any(char::is_control)
+                || change.candidate_refs.len() > usize::from(MAX_REQUIREMENT_SOURCES)
+                || change
+                    .candidate_refs
+                    .windows(2)
+                    .any(|pair| pair[0] >= pair[1])
+                || !changed_requirements
+                    .insert((change.assignment_id, change.requirement_key.as_str()))
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let assignment = self.assignment(person_id, change.assignment_id)?;
+            if assignment.installation_id != configuration.installation_id
+                || assignment.binding.revision != change.expected_binding_revision
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let requirement = manifest
+                .source_requirements
+                .iter()
+                .find(|requirement| requirement.key == change.requirement_key)
+                .ok_or(AgentFailure::NotFound)?;
+            if change.selected.len() > usize::from(requirement.maximum_sources)
+                || change.selected.iter().any(|selected| {
+                    selected.validate().is_err()
+                        || selected.capability_id != requirement.capability
+                        || selected.contract_version != requirement.contract_version
+                })
+                || change.selected.windows(2).any(|pair| pair[0] >= pair[1])
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let entry = changes_by_assignment
+                .entry(change.assignment_id)
+                .or_insert_with(|| (change.expected_binding_revision, Vec::new()));
+            if entry.0 != change.expected_binding_revision {
+                return Err(AgentFailure::Conflict);
+            }
+            entry.1.push(change);
+        }
+
+        let mut next = self.snapshot();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        next.installations
+            .iter_mut()
+            .find(|entry| entry.id == configuration.installation_id)
+            .ok_or(AgentFailure::NotFound)?
+            .enabled = configuration.enabled;
+        for (assignment_id, (expected_binding_revision, changes)) in changes_by_assignment {
+            let assignment = next
+                .assignments
+                .iter_mut()
+                .find(|entry| entry.person_id == person_id && entry.id == assignment_id)
+                .ok_or(AgentFailure::NotFound)?;
+            let next_binding_revision = expected_binding_revision
+                .checked_add(1)
+                .ok_or(AgentFailure::BudgetExceeded)?;
+            assignment.binding.revision = next_binding_revision;
+            for change in changes {
+                assignment
+                    .binding
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.requirement_key == change.requirement_key)
+                    .ok_or(AgentFailure::InvalidInput)?
+                    .selected = change.selected.clone();
+            }
+            assignment.binding.last_operation = Some(BindingOperationReceipt {
+                operation_id,
+                command_digest: request_digest,
+                resulting_revision: next_binding_revision,
+            });
+        }
+        *self = Self::restore(next, self.instance_id())?;
         Ok(())
     }
 

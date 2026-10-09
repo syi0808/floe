@@ -63,6 +63,7 @@ abstract interface class ConversationRuntimeGateway {
   /// Requests explicit cancellation and reports uncertainty when admission or
   /// a positive Start receipt cannot be established for this turn.
   Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
+
   /// Returns true only after a cancellation command for a known active Run
   /// receives and validates its positive receipt.
   Future<bool> cancelObservedRun(String runId);
@@ -115,14 +116,20 @@ final class NativeConversationRuntimeGateway
     required Map<String, Object?> receipt,
     required String artifactId,
     required String destinationRef,
-  }) => _client.submitCalendarProposal(
-    commandId: commandId,
-    sessionId: sessionId,
-    originRunId: originRunId,
-    receipt: receipt,
-    artifactId: artifactId,
-    destinationRef: destinationRef,
-  );
+  }) async {
+    final result = await _client.submitCalendarProposal(
+      commandId: commandId,
+      sessionId: sessionId,
+      originRunId: originRunId,
+      receipt: receipt,
+      artifactId: artifactId,
+      destinationRef: destinationRef,
+    );
+    return CalendarProposalSubmission(
+      operation: result.operation,
+      interaction: result.interaction,
+    );
+  }
 
   @override
   Future<void> awaitStoppedObservation({

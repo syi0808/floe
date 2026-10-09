@@ -128,35 +128,38 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentInteractionOpenConnection => 'Open settings';
 
   @override
-  String get agentInteractionOpenExpertSettings => 'Open Expert settings';
+  String get agentInteractionOpenAssistantFeatureSettings =>
+      'Open assistant features';
 
   @override
-  String get agentInteractionExpertBindingTitle => 'Expert setup needed';
+  String get agentInteractionAssistantFeatureSourcesTitle =>
+      'Assistant source setup';
 
   @override
-  String get expertSourceOptional => 'Optional source';
+  String get assistantFeatureSourceOptional => 'Optional source';
 
   @override
-  String get expertSourceRequired => 'Required source';
+  String get assistantFeatureSourceRequired => 'Required source';
 
   @override
-  String get expertSourceSelected => 'selected';
+  String get assistantFeatureSourceSelected => 'selected';
 
   @override
-  String get expertSourceSelectionBoundary =>
+  String get assistantFeatureSourceBoundary =>
       'Choosing a source does not grant access. Permissions are reviewed separately when needed.';
 
   @override
-  String get expertSourceNoCompatible => 'No compatible source is connected.';
+  String get assistantFeatureNoSourceSettings =>
+      'No source settings are needed for this feature.';
 
   @override
-  String get expertSourceUnavailable => 'Saved source unavailable';
+  String get assistantFeatureSourceUnavailable => 'Saved source unavailable';
 
   @override
-  String get expertSourceSave => 'Save sources';
+  String get assistantFeatureSaveSources => 'Save sources';
 
   @override
-  String get expertSourceRemove => 'Remove selection';
+  String get assistantFeatureRemoveSelection => 'Remove selection';
 
   @override
   String get agentInteractionRequestPermission => 'Request access';
@@ -1236,15 +1239,15 @@ class AppLocalizationsEn extends AppLocalizations {
       'Floe couldn’t access secure storage. Check your device access and try again. Your saved conversations haven’t been replaced.';
 
   @override
-  String get agentRegistryTitle => 'Conversation abilities';
+  String get assistantFeatureTitle => 'Assistant features';
 
   @override
-  String get agentRegistryBoundary =>
-      'Choose the kinds of help Floe may provide in your conversations.';
+  String get assistantFeatureBoundary =>
+      'Choose which assistant features Floe may use in your conversations and review their connected sources.';
 
   @override
-  String get agentRegistryEmpty =>
-      'No additional abilities are available yet. Add calendars below to get started.';
+  String get assistantFeatureEmpty =>
+      'No additional assistant features are available.';
 
   @override
   String get agentCalendarTitle => 'Calendars';
@@ -1318,11 +1321,21 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentCalendarMissingName => 'A previously selected calendar';
 
   @override
-  String get agentRegistryFailure =>
+  String get assistantFeatureFailure =>
       'Floe could not confirm these settings. Refresh before making another change.';
 
   @override
-  String get agentRegistryRefresh => 'Refresh settings';
+  String get assistantFeatureRefresh => 'Refresh settings';
+
+  @override
+  String get assistantFeatureSaveChanges => 'Save changes';
+
+  @override
+  String get assistantFeatureLoadSources => 'Review sources';
+
+  @override
+  String get assistantFeatureRetryPending =>
+      'Retry pending assistant feature change';
 
   @override
   String get agentProposalTitle => 'Suggested focus time';

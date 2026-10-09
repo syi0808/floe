@@ -52,7 +52,7 @@ pub struct BindingInspectionCandidate {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExpertRequirementSummary {
+pub struct AssistantFeatureSourceRequirement {
     pub requirement_ref: String,
     pub label: String,
     pub selected_count: usize,
@@ -61,31 +61,42 @@ pub struct ExpertRequirementSummary {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExpertAssignmentSummary {
-    pub assignment_ref: Uuid,
-    pub installation_ref: Uuid,
+pub struct AssistantFeatureSourceGroup {
+    pub source_scope_ref: Uuid,
     pub display_name: String,
     pub enabled: bool,
     pub binding_revision: u64,
-    pub requirements: Vec<ExpertRequirementSummary>,
+    pub requirements: Vec<AssistantFeatureSourceRequirement>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExpertInstallationSummary {
-    pub installation_ref: Uuid,
+pub struct AssistantFeature {
+    pub feature_ref: Uuid,
     pub display_name: String,
     pub description: String,
-    pub version: String,
     pub enabled: bool,
+    pub source_groups: Vec<AssistantFeatureSourceGroup>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ExpertDirectorySnapshot {
+pub struct AssistantFeatureSnapshot {
     pub revision: u64,
-    pub installations: Vec<ExpertInstallationSummary>,
-    pub assignments: Vec<ExpertAssignmentSummary>,
+    pub features: Vec<AssistantFeature>,
+}
+
+/// One reviewed source selection submitted together with the feature's enabled
+/// state. The owner validates every review and commits the complete setting in
+/// one registry revision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssistantFeatureSourceSelection {
+    pub source_scope_ref: Uuid,
+    pub requirement_ref: String,
+    pub review_ref: crate::BindingReviewRef,
+    pub expected_binding_revision: u64,
+    pub candidate_refs: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,11 +138,21 @@ pub trait ExpertsOwner: Send + Sync {
         request: &'a floe_agent_contract::DelegationRequest,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<floe_agent_contract::TaskReceipt, AgentFailure>>;
-    fn directory<'a>(
+    fn assistant_features<'a>(
         &'a self,
         actor: &'a OwnerActor,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<AssistantFeatureSnapshot, AgentFailure>>;
+    fn configure_assistant_feature<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        feature_ref: Uuid,
+        expected_revision: u64,
+        enabled: bool,
+        source_selections: Vec<AssistantFeatureSourceSelection>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<AssistantFeatureSnapshot, CommandFailure<AgentFailure>>>;
     fn set_installation_enabled<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -140,7 +161,7 @@ pub trait ExpertsOwner: Send + Sync {
         expected_revision: u64,
         enabled: bool,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>>;
+    ) -> BoxFuture<'a, Result<AssistantFeatureSnapshot, CommandFailure<AgentFailure>>>;
     fn inspect_binding<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -154,6 +175,16 @@ pub trait ExpertsOwner: Send + Sync {
         command_id: CommandId,
         assignment_id: Uuid,
         requirement_key: String,
+        expected_binding_revision: u64,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<BindingReview, CommandFailure<AgentFailure>>>;
+    fn prepare_assistant_feature_source_review<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        feature_ref: Uuid,
+        source_scope_ref: Uuid,
+        requirement_ref: String,
         expected_binding_revision: u64,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<BindingReview, CommandFailure<AgentFailure>>>;
@@ -179,7 +210,7 @@ pub trait ExpertsOwner: Send + Sync {
         expected_binding_revision: u64,
         candidate_ids: Vec<Uuid>,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<ExpertDirectorySnapshot, CommandFailure<AgentFailure>>>;
+    ) -> BoxFuture<'a, Result<AssistantFeatureSnapshot, CommandFailure<AgentFailure>>>;
     fn binding_operation_receipt<'a>(
         &'a self,
         actor: &'a OwnerActor,

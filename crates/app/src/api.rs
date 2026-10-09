@@ -26,47 +26,39 @@ pub trait HostServices: Send + Sync + 'static {
 pub use floe_access::{OperationAuthorizationPolicy, OperationPolicyMode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExpertCommand {
-    SetInstallationEnabled {
-        installation_ref: Uuid,
+pub enum AssistantFeatureCommand {
+    PrepareSourceReview {
+        feature_ref: Uuid,
+        source_scope_ref: Uuid,
+        requirement_ref: String,
+        expected_binding_revision: u64,
+    },
+    Configure {
+        feature_ref: Uuid,
         expected_revision: u64,
         enabled: bool,
-    },
-    PrepareBindingReview {
-        assignment_ref: Uuid,
-        requirement_ref: String,
-        expected_binding_revision: u64,
-    },
-    ReplaceBinding {
-        review_ref: floe_experts::BindingReviewRef,
-        expected_binding_revision: u64,
-        candidate_refs: Vec<Uuid>,
+        source_selections: Vec<floe_experts::AssistantFeatureSourceSelection>,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExpertQuery {
-    Directory,
-    InspectBinding {
-        assignment_ref: Uuid,
-        requirement_ref: String,
-    },
-    InspectBindingReview {
+pub enum AssistantFeatureCommandResult {
+    Snapshot(floe_experts::AssistantFeatureSnapshot),
+    SourceReview(floe_experts::BindingReview),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssistantFeatureQuery {
+    Snapshot,
+    InspectSourceReview {
         review_ref: floe_experts::BindingReviewRef,
     },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExpertCommandResult {
-    Directory(floe_experts::ExpertDirectorySnapshot),
-    BindingReview(floe_experts::BindingReview),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ExpertQueryResult {
-    Directory(floe_experts::ExpertDirectorySnapshot),
-    Binding(floe_experts::BindingInspection),
-    BindingReview(floe_experts::BindingReview),
+pub enum AssistantFeatureQueryResult {
+    Snapshot(floe_experts::AssistantFeatureSnapshot),
+    SourceReview(floe_experts::BindingReview),
 }
 
 /// Product command groups admitted through the App runtime dispatch path.
@@ -87,7 +79,7 @@ pub struct ProductCommandRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationCommand {
     StartSession,
-    Expert(ExpertCommand),
+    AssistantFeature(AssistantFeatureCommand),
     SetCalendarOperationPolicy {
         mode: OperationPolicyMode,
         expected_revision: u64,
@@ -218,7 +210,7 @@ pub enum ProductQuery {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQuery {
     CalendarOperationPolicy,
-    Expert(ExpertQuery),
+    AssistantFeature(AssistantFeatureQuery),
     ResumeSession,
     GetSession {
         session_id: Uuid,
@@ -279,7 +271,7 @@ pub enum ProductCommandOutcome {
 pub enum ConversationCommandOutcome {
     Session(floe_conversation::SessionSnapshot),
     CalendarOperationPolicy(OperationAuthorizationPolicy),
-    Expert(ExpertCommandResult),
+    AssistantFeature(AssistantFeatureCommandResult),
     Turn(floe_conversation::CommandReceipt),
     CalendarProposal(floe_conversation::CalendarProposalResult),
     CancelRun(floe_conversation::CancelRunReceipt),
@@ -319,7 +311,7 @@ pub enum ProductQueryOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQueryOutcome {
     CalendarOperationPolicy(OperationAuthorizationPolicy),
-    Expert(ExpertQueryResult),
+    AssistantFeature(AssistantFeatureQueryResult),
     Session(Option<floe_conversation::SessionSnapshot>),
     Command(Option<floe_conversation::RunReceipt>),
     Run(Option<floe_conversation::RunReceipt>),
