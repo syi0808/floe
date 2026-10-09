@@ -9,6 +9,125 @@ use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
 
+#[derive(Debug, Eq, PartialEq)]
+struct ComposedAdmissionSnapshot {
+    run: Option<RunRecord>,
+    session: (i64, String),
+    table_counts: Vec<(&'static str, i64)>,
+    binding: Option<OwnerInputBinding>,
+    mapping_by_run: Option<OwnerTranscriptInputMapping>,
+    mapping_by_reference: Option<OwnerTranscriptInputMapping>,
+    input_receipt: Option<(AdmissionResult, ConversationMessage)>,
+    input_entry: Option<TranscriptEntry>,
+    head: Option<(ConversationHead, String)>,
+    open_receipt: Option<RecorderOpenReceipt>,
+    active_recorder: Option<RecorderFence>,
+}
+
+async fn composed_admission_snapshot(
+    scenario: &Scenario,
+    run_id: RunId,
+    input: TranscriptReference,
+) -> ComposedAdmissionSnapshot {
+    let run = scenario
+        .vault()
+        .conversation_run(run_id)
+        .await
+        .expect("read owner Run snapshot");
+    let mut connection = scenario.vault().connection().expect("connect for snapshot");
+    let session = session_storage_snapshot(&connection, scenario.session_id).await;
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+        .await
+        .expect("start composed evidence snapshot");
+    let scope = Scope::from_identity(
+        scenario.person_id,
+        &scenario.identity,
+        scenario.conversation_id,
+        scenario.branch_id,
+    );
+    let binding = owner_input_binding_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read owner input binding");
+    let mapping_by_run =
+        owner_transcript_input_for_run_on(&transaction, scenario.person_id, run_id)
+            .await
+            .expect("read Run-to-input mapping");
+    let mapping_by_reference =
+        owner_transcript_input_for_reference_on(&transaction, scenario.person_id, input)
+            .await
+            .expect("read transcript-to-owner mapping");
+    let input_receipt = input_receipt_on(&transaction, scope, input.message_id)
+        .await
+        .expect("read Core input receipt");
+    let input_entry = entry_on(&transaction, scope, input.sequence)
+        .await
+        .expect("read Core input entry");
+    let head = load_head_on(&transaction, scope)
+        .await
+        .expect("read Core head")
+        .map(|loaded| (loaded.state, loaded.identity_json));
+    let open_receipt = open_receipt_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read immutable open receipt");
+    let active_recorder = active_recorder_on(&transaction, scope)
+        .await
+        .expect("read active recorder");
+    let mut table_counts = Vec::new();
+    for table in [
+        "agent_conversation_runs",
+        "agent_sessions",
+        "agent_conversation_core_v3_heads",
+        "agent_conversation_core_v3_entries",
+        "agent_conversation_core_v3_input_receipts",
+        "agent_conversation_core_v3_owner_bindings",
+        "agent_conversation_core_v3_open_receipts",
+        "agent_conversation_core_v3_active_recorders",
+        "agent_conversation_owner_transcript_inputs_v1",
+        "agent_conversation_owner_transcript_run_inputs_v1",
+    ] {
+        table_counts.push((table, table_count_in_transaction(&transaction, table).await));
+    }
+    transaction
+        .commit()
+        .await
+        .expect("finish composed evidence snapshot");
+    ComposedAdmissionSnapshot {
+        run,
+        session,
+        table_counts,
+        binding,
+        mapping_by_run,
+        mapping_by_reference,
+        input_receipt,
+        input_entry,
+        head,
+        open_receipt,
+        active_recorder,
+    }
+}
+
+async fn retry_composed_admission_after_busy(
+    vault: &EncryptedAgentVault<TestKeys>,
+    intent: CoreComposedOwnerIntent,
+    core_request: MessageAdmissionRequest,
+    mut result: Result<CoreComposedRunAdmission, ConversationStoreFailure>,
+) -> Result<CoreComposedRunAdmission, ConversationStoreFailure> {
+    for _ in 0..8 {
+        if result != Err(ConversationStoreFailure::Busy) {
+            return result;
+        }
+        tokio::task::yield_now().await;
+        result = compose_owner_core_run(vault, intent.clone(), core_request.clone()).await;
+    }
+    assert_ne!(
+        result,
+        Err(ConversationStoreFailure::Busy),
+        "transient Busy must be retried, not counted as a successful admission rejection"
+    );
+    result
+}
+
 fn output_artifact() -> floe_agent_contract::Artifact {
     floe_agent_contract::Artifact {
         artifact_id: Uuid::new_v4(),
@@ -1345,6 +1464,14 @@ async fn failed_owner_mapping_write_rolls_back_the_new_optional_family() {
         table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
         0
     );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+        0
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_active_recorders").await,
+        0
+    );
     assert!(
         !crate::schema::conversation_owner_custody_family_present(&connection)
             .await
@@ -1353,6 +1480,62 @@ async fn failed_owner_mapping_write_rolls_back_the_new_optional_family() {
     assert_eq!(
         session_storage_snapshot(&connection, scenario.session_id).await,
         before_session
+    );
+}
+
+#[tokio::test]
+async fn fault_after_composed_recorder_open_rolls_back_every_owner_and_core_write() {
+    let scenario = Scenario::new().await;
+    let before_session = session_storage_snapshot(
+        &scenario
+            .vault()
+            .connection()
+            .expect("connect before injected open failure"),
+        scenario.session_id,
+    )
+    .await;
+    scenario
+        .vault()
+        .conversation_core_fault_after_recorder_open
+        .store(true, Ordering::Release);
+    assert_eq!(
+        compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Turn(scenario.owner_request("rollback after recorder open")),
+            scenario.core_input_request("rollback after recorder open"),
+        )
+        .await,
+        Err(ConversationStoreFailure::NotCommitted)
+    );
+
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect after injected open failure");
+    for table in [
+        "agent_conversation_runs",
+        "agent_conversation_core_v3_entries",
+        "agent_conversation_core_v3_input_receipts",
+        "agent_conversation_core_v3_owner_bindings",
+        "agent_conversation_core_v3_open_receipts",
+        "agent_conversation_core_v3_active_recorders",
+    ] {
+        assert_eq!(
+            table_count(&connection, table).await,
+            0,
+            "rollback removes every {table} write"
+        );
+    }
+    assert!(
+        !crate::schema::conversation_owner_custody_family_present(&connection)
+            .await
+            .expect("inspect owner mapping family without creating it"),
+        "rollback removes the Run-to-input mapping family"
+    );
+    assert_eq!(
+        session_storage_snapshot(&connection, scenario.session_id).await,
+        before_session,
+        "the owner Session revision and User entry roll back with Core custody"
     );
 }
 
@@ -3817,4 +4000,292 @@ async fn owner_read_on_absent_core_family_does_not_initialize_it() {
         .await;
     assert!(result.is_err());
     assert_eq!(schema_tables(&connection).await, before);
+}
+
+#[tokio::test]
+async fn existing_composed_admission_without_open_receipt_fails_closed_without_repair() {
+    let mut scenario = Scenario::new().await;
+    let text = "do not repair missing recorder custody";
+    let owner_request = scenario.owner_request(text);
+    let core_request = scenario.core_input_request(text);
+    let run_id = owner_request.run_id;
+    let (record, input) = scenario
+        .admit_run_and_bind_input(owner_request.clone(), core_request.clone())
+        .await;
+    assert_eq!(record.state, RunState::Working);
+    assert!(scenario.last_core_recorder.is_some());
+
+    let mut connection = scenario.vault().connection().expect("connect to Vault");
+    let (mut guard, transaction) = scenario
+        .vault()
+        .journal_transaction(&mut connection)
+        .await
+        .expect("start fixture transaction to model missing committed open evidence");
+    assert_eq!(
+        transaction
+            .execute(
+                "DELETE FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND run_id = ?",
+                (scenario.person_id.to_string(), run_id.as_uuid().to_string()),
+            )
+            .await
+            .expect("remove active index for missing-receipt fixture"),
+        1
+    );
+    assert_eq!(
+        transaction
+            .execute(
+                "DELETE FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? AND run_id = ?",
+                (scenario.person_id.to_string(), run_id.as_uuid().to_string()),
+            )
+            .await
+            .expect("remove immutable open receipt for partial-evidence fixture"),
+        1
+    );
+    transaction
+        .commit()
+        .await
+        .expect("commit missing-open evidence fixture");
+    guard.settled();
+    drop(guard);
+    drop(connection);
+
+    scenario.reopen().await;
+    let before = composed_admission_snapshot(&scenario, run_id, input.receipt.transcript).await;
+    assert_eq!(
+        before.run.as_ref().map(|run| run.state),
+        Some(RunState::Working)
+    );
+    assert_eq!(
+        before.head.as_ref().map(|(head, _)| head.recorder_epoch),
+        Some(1),
+        "the still-Working same-generation Run had an open epoch before its receipt was lost"
+    );
+    assert!(before.binding.is_some());
+    assert!(before.mapping_by_run.is_some());
+    assert!(before.mapping_by_reference.is_some());
+    assert!(before.input_receipt.is_some());
+    assert!(before.input_entry.is_some());
+    assert!(before.open_receipt.is_none());
+    assert!(before.active_recorder.is_none());
+
+    assert_eq!(
+        compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Turn(owner_request),
+            core_request,
+        )
+        .await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "an exact owner replay cannot retrofit a missing immutable recorder receipt"
+    );
+    scenario.reopen().await;
+    let after = composed_admission_snapshot(&scenario, run_id, input.receipt.transcript).await;
+    assert_eq!(
+        after, before,
+        "missing receipt replay leaves all custody unchanged"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_composed_new_admissions_on_one_transcript_commit_at_most_one() {
+    let scenario = Scenario::new().await;
+    let second_session = match scenario
+        .vault()
+        .start_conversation_session(StartSessionRequest {
+            principal: scenario.person_id.to_string(),
+            command_id: CommandId::new(),
+        })
+        .await
+        .expect("start second independent owner Session")
+    {
+        SessionStartAdmission::Started(receipt) => receipt,
+        other => panic!("unexpected second Session admission: {other:?}"),
+    };
+    assert_ne!(scenario.session_id, second_session.session_id);
+    let first_owner = scenario.owner_request_for_session(
+        scenario.session_id,
+        scenario.session_revision,
+        "concurrent first Session turn",
+    );
+    let second_owner = scenario.owner_request_for_session(
+        second_session.session_id,
+        second_session.session_revision,
+        "concurrent second Session turn",
+    );
+    let first_core = scenario.core_input_request("concurrent first Session turn");
+    let second_core = scenario.core_input_request("concurrent second Session turn");
+    let first_run_id = first_owner.run_id;
+    let second_run_id = second_owner.run_id;
+    let first_message_id = first_core.message.message_id;
+    let second_message_id = second_core.message.message_id;
+    let first_session_before = session_storage_snapshot(
+        &scenario.vault().connection().expect("connect to Vault"),
+        scenario.session_id,
+    )
+    .await;
+    let second_session_before = session_storage_snapshot(
+        &scenario.vault().connection().expect("connect to Vault"),
+        second_session.session_id,
+    )
+    .await;
+    let start = std::sync::Arc::new(tokio::sync::Barrier::new(2));
+    let first_gate = start.clone();
+    let second_gate = start.clone();
+    let vault = scenario.vault();
+    let first_intent = CoreComposedOwnerIntent::Turn(first_owner.clone());
+    let second_intent = CoreComposedOwnerIntent::Turn(second_owner.clone());
+    let (first, second) = tokio::join!(
+        async {
+            first_gate.wait().await;
+            compose_owner_core_run(vault, first_intent.clone(), first_core.clone()).await
+        },
+        async {
+            second_gate.wait().await;
+            compose_owner_core_run(vault, second_intent.clone(), second_core.clone()).await
+        },
+    );
+    let first = retry_composed_admission_after_busy(vault, first_intent, first_core, first).await;
+    let second =
+        retry_composed_admission_after_busy(vault, second_intent, second_core, second).await;
+
+    let (winner, loser_run_id, loser_message_id, loser_session_id, loser_session_before) =
+        match (first, second) {
+            (
+                Ok(CoreComposedRunAdmission::Admitted {
+                    record,
+                    input,
+                    recorder,
+                }),
+                Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationConflict,
+                )),
+            ) => (
+                (record, input, recorder),
+                second_run_id,
+                second_message_id,
+                second_session.session_id,
+                second_session_before,
+            ),
+            (
+                Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::ConversationConflict,
+                )),
+                Ok(CoreComposedRunAdmission::Admitted {
+                    record,
+                    input,
+                    recorder,
+                }),
+            ) => (
+                (record, input, recorder),
+                first_run_id,
+                first_message_id,
+                scenario.session_id,
+                first_session_before,
+            ),
+            other => panic!("concurrent New admissions did not resolve to one commit: {other:?}"),
+        };
+    let (winner_record, winner_input, winner_recorder) = winner;
+    assert_eq!(winner_record.state, RunState::Working);
+    assert_eq!(winner_recorder.fence.run_id, winner_record.run_id);
+    assert_eq!(winner_recorder.fence.input, winner_input.receipt.transcript);
+
+    assert_eq!(
+        scenario
+            .vault()
+            .conversation_run(loser_run_id)
+            .await
+            .expect("check losing Run after concurrent admission"),
+        None
+    );
+    let mut connection = scenario.vault().connection().expect("connect after race");
+    assert_eq!(table_count(&connection, "agent_conversation_runs").await, 1);
+    assert_eq!(table_count(&connection, "agent_sessions").await, 2);
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_heads").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_entries").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_input_receipts").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_core_v3_active_recorders").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
+        1
+    );
+    assert_eq!(
+        table_count(
+            &connection,
+            "agent_conversation_owner_transcript_run_inputs_v1"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        session_storage_snapshot(&connection, loser_session_id).await,
+        loser_session_before,
+        "losing Session state rolls back with its partial owner/Core writes"
+    );
+
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+        .await
+        .expect("start loser-evidence read transaction");
+    let scope = Scope::from_identity(
+        scenario.person_id,
+        &scenario.identity,
+        scenario.conversation_id,
+        scenario.branch_id,
+    );
+    assert!(
+        owner_input_binding_on(&transaction, scenario.person_id, loser_run_id)
+            .await
+            .expect("check losing binding rollback")
+            .is_none()
+    );
+    assert!(
+        owner_transcript_input_for_run_on(&transaction, scenario.person_id, loser_run_id)
+            .await
+            .expect("check losing mapping rollback")
+            .is_none()
+    );
+    assert!(
+        input_receipt_on(&transaction, scope, loser_message_id)
+            .await
+            .expect("check losing Core input rollback")
+            .is_none()
+    );
+    assert!(
+        open_receipt_on(&transaction, scenario.person_id, loser_run_id)
+            .await
+            .expect("check losing open receipt rollback")
+            .is_none()
+    );
+    assert_eq!(
+        active_recorder_on(&transaction, scope)
+            .await
+            .expect("read single winning active recorder"),
+        Some(winner_recorder.fence.clone())
+    );
+    transaction
+        .commit()
+        .await
+        .expect("finish loser-evidence read transaction");
 }

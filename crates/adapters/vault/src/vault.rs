@@ -109,6 +109,8 @@ pub struct EncryptedAgentVault<Keys> {
     #[cfg(test)]
     conversation_core_fault_after_input_mapping: AtomicBool,
     #[cfg(test)]
+    conversation_core_fault_after_recorder_open: AtomicBool,
+    #[cfg(test)]
     conversation_core_typed_write_fault: AtomicU8,
     #[cfg(test)]
     typed_history_payload_hydrations: AtomicU64,
@@ -238,6 +240,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             #[cfg(test)]
             conversation_core_fault_after_input_mapping: AtomicBool::new(false),
             #[cfg(test)]
+            conversation_core_fault_after_recorder_open: AtomicBool::new(false),
+            #[cfg(test)]
             conversation_core_typed_write_fault: AtomicU8::new(0),
             #[cfg(test)]
             typed_history_payload_hydrations: AtomicU64::new(0),
@@ -306,6 +310,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             conversation_core_resume_fault_after_owner_claim: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_fault_after_input_mapping: AtomicBool::new(false),
+            #[cfg(test)]
+            conversation_core_fault_after_recorder_open: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_typed_write_fault: AtomicU8::new(0),
             #[cfg(test)]

@@ -66,7 +66,7 @@ pub(super) enum CoreComposedRunAdmission {
     Admitted {
         record: RunRecord,
         input: AdmissionResult,
-        recorder: Option<RecorderOpenReceipt>,
+        recorder: RecorderOpenReceipt,
     },
     /// The shared owner transition committed a stale request as superseded.
     /// The enclosing transaction must commit this outcome; report Conflict
@@ -1216,9 +1216,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Admit a Host Run and bind its exact retained Core input in the same
     /// Vault transaction. New turns append one Person input. Continue and
     /// linked Resume resolve an earlier immutable owner binding and replay
-    /// that exact Core input. Resume additionally claims the persisted group
+    /// that exact Core input. Every admitted Run opens its fresh HostRun
+    /// recorder before commit. Resume additionally claims the persisted group
     /// through the same transaction-scoped owner primitive as the public
-    /// owner-only API and opens its fresh recorder before commit.
+    /// owner-only API.
     pub(super) async fn admit_conversation_run_with_core_input_on(
         &self,
         transaction: &Transaction<'_>,
@@ -1227,7 +1228,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         replay_checked: &mut bool,
         prior_command: &mut bool,
     ) -> Result<CoreComposedRunAdmission, ConversationStoreFailure> {
-        let is_resume_composition = matches!(&intent, CoreComposedOwnerIntent::Resume(_));
         let (owner_request, resume_claim) = match intent {
             CoreComposedOwnerIntent::Turn(request) => {
                 if matches!(&request.mode, TurnMode::Resume(_)) {
@@ -1460,6 +1460,35 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             Some(binding)
         };
+        let existing_recorder = if newly_created {
+            None
+        } else {
+            let binding = existing_binding
+                .as_ref()
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            let receipt = open_receipt_on(transaction, self.person_id, record.run_id)
+                .await?
+                .ok_or(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))?;
+            replay_open_recording(
+                RecorderStartRequest {
+                    identity: identity.clone(),
+                    conversation_id,
+                    branch_id,
+                    run_id: record.run_id,
+                    input: binding.input,
+                    executor_domain: ExecutorDomain::HostRun,
+                    executor_generation: record.executor_generation,
+                    execution_task: None,
+                },
+                receipt.clone(),
+            )
+            .map_err(ConversationStoreFailure::Transition)?;
+            Some(receipt)
+        };
         let core_admission = self
             .append_conversation_input_on(transaction, core_request)
             .await?;
@@ -1605,8 +1634,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 ConversationFailure::OwnerEvidenceMismatch,
             ));
         }
-        let recorder = if is_resume_composition {
-            Some(
+        let recorder = match existing_recorder {
+            Some(receipt) => receipt,
+            None => {
                 self.open_conversation_recorder_on(
                     transaction,
                     RecorderStartRequest {
@@ -1620,11 +1650,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         execution_task: None,
                     },
                 )
-                .await?,
-            )
-        } else {
-            None
+                .await?
+            }
         };
+        #[cfg(test)]
+        if self
+            .conversation_core_fault_after_recorder_open
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(ConversationStoreFailure::NotCommitted);
+        }
         Ok(CoreComposedRunAdmission::Admitted {
             record,
             input: core_admission,
@@ -3392,10 +3427,8 @@ mod tests {
             else {
                 panic!("unexpected superseded result for ordinary Run admission");
             };
-            assert!(
-                recorder.is_none(),
-                "only composed Resume opens a recorder here"
-            );
+            assert_eq!(recorder.fence.run_id, record.run_id);
+            assert_eq!(recorder.fence.input, input.receipt.transcript);
             let next_revision = record.session_revision;
             transaction
                 .commit()
@@ -3405,7 +3438,7 @@ mod tests {
             drop(guard);
             self.session_revision = next_revision;
             self.last_core_input_request = Some((core_request, input.receipt.transcript));
-            self.last_core_recorder = recorder;
+            self.last_core_recorder = Some(recorder);
             (record, input)
         }
 
@@ -3802,7 +3835,7 @@ mod tests {
             {
                 self.session_revision = record.session_revision;
                 self.last_core_input_request = Some((core_request, input.receipt.transcript));
-                self.last_core_recorder = recorder.clone();
+                self.last_core_recorder = Some(recorder.clone());
             }
             admitted
         }
@@ -4086,6 +4119,16 @@ mod tests {
                 .await
                 .expect("write normal owner terminal receipt");
             self.session_revision = next.session_revision;
+            if let Some(recorder) = self
+                .last_core_recorder
+                .as_ref()
+                .filter(|recorder| recorder.fence.run_id == run.run_id)
+            {
+                self.vault()
+                    .close_conversation_recorder(recorder.fence.clone())
+                    .await
+                    .expect("close the cancelled Run's composed recorder");
+            }
             next
         }
 
@@ -4256,7 +4299,6 @@ mod tests {
         else {
             panic!("fresh Resume was unexpectedly superseded");
         };
-        let first_recorder = first_recorder.expect("Resume composition opens its recorder");
         assert_eq!(child.resume_of, Some(origin.run_id));
         assert_eq!(child.resume_lineage, 1);
         assert_eq!(child.executor_generation, next_generation);
@@ -4305,8 +4347,8 @@ mod tests {
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
-            1,
-            "the Resume child has one immutable recorder receipt"
+            2,
+            "the New origin and Resume child each have one immutable recorder receipt"
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
@@ -4436,7 +4478,6 @@ mod tests {
         else {
             panic!("claimed Resume replay was unexpectedly superseded");
         };
-        let replayed_recorder = replayed_recorder.expect("Resume replay returns its recorder");
         assert_eq!(replayed_child, child);
         assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
         assert_eq!(replayed_input.receipt, first_input.receipt);
@@ -4456,7 +4497,7 @@ mod tests {
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
-            1
+            2
         );
     }
 
@@ -4524,7 +4565,7 @@ mod tests {
         for table in tables {
             committed_counts.push(table_count(&connection, table).await);
         }
-        assert_eq!(committed_counts, [2, 1, 1, 1, 2, 1, 1]);
+        assert_eq!(committed_counts, [2, 1, 1, 1, 2, 2, 1]);
         assert_eq!(
             stored_resume_state(&connection, origin.run_id)
                 .await
@@ -4672,10 +4713,7 @@ mod tests {
         assert_eq!(replayed_child, child);
         assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
         assert_eq!(replayed_input.receipt, stored_input.receipt);
-        assert_eq!(
-            replayed_recorder.expect("exact replay returns the original recorder receipt"),
-            original_recorder
-        );
+        assert_eq!(replayed_recorder, original_recorder);
 
         let connection = scenario
             .vault()
@@ -4741,8 +4779,6 @@ mod tests {
         else {
             panic!("exact concurrent Resume calls return the one committed child");
         };
-        let first_recorder = first_recorder.expect("first Resume returned its recorder");
-        let second_recorder = second_recorder.expect("replayed Resume returned its recorder");
         assert_eq!(first, second);
         assert_eq!(first_recorder, second_recorder);
         let connection = scenario
@@ -4760,7 +4796,7 @@ mod tests {
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
-            1
+            2
         );
         assert_eq!(
             table_count(&connection, "agent_conversation_core_v3_entries").await,
@@ -5155,7 +5191,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exact_new_owner_replay_recovers_its_immutable_core_binding_and_receipt() {
+    async fn exact_new_owner_replay_recovers_its_input_and_open_receipts_after_terminal_reopen() {
         let mut scenario = Scenario::new().await;
         let owner_request = scenario.owner_request("exact New replay");
         let core_request = scenario.core_input_request("exact New replay");
@@ -5163,49 +5199,116 @@ mod tests {
             .admit_run_and_bind_input(owner_request.clone(), core_request.clone())
             .await;
         assert_eq!(first_input.disposition, AdmissionDisposition::Appended);
+        let first_recorder = scenario
+            .last_core_recorder
+            .clone()
+            .expect("New composition returns its open receipt");
+        assert_eq!(first_recorder.fence.run_id, first_run.run_id);
+        assert_eq!(first_recorder.fence.input, first_input.receipt.transcript);
         let first_mapping =
             stored_run_input_mapping(scenario.vault(), scenario.person_id, first_run.run_id)
                 .await
                 .expect("first New write stores the owner-to-Core mapping");
         assert_eq!(first_mapping.input, first_input.receipt.transcript);
         assert_eq!(first_mapping.original_owner_run_id, first_run.run_id);
+        let terminal = scenario.cancel_owner_run(&first_run).await;
+        assert!(terminal.state.is_terminal());
+        scenario.reopen().await;
+        let later_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance executor generation after terminal Run reopen")
+            .executor_generation;
+        assert!(later_generation > first_recorder.fence.executor_generation);
+
         let before = scenario
             .vault()
             .connection()
             .expect("connect to test Vault");
         let before_session = session_storage_snapshot(&before, scenario.session_id).await;
-        let before_runs = table_count(&before, "agent_conversation_runs").await;
-        let before_entries = table_count(&before, "agent_conversation_core_v3_entries").await;
-        let before_bindings =
-            table_count(&before, "agent_conversation_core_v3_owner_bindings").await;
         drop(before);
-
-        let (replayed_run, replayed_input) = scenario
-            .admit_run_and_bind_input(owner_request, core_request)
-            .await;
-        assert_eq!(replayed_run, first_run);
+        let replay = compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Turn(owner_request.clone()),
+            core_request.clone(),
+        )
+        .await
+        .expect("exact New replay precedes terminal and generation fences");
+        let CoreComposedRunAdmission::Admitted {
+            record: replayed_run,
+            input: replayed_input,
+            recorder: replayed_recorder,
+        } = replay
+        else {
+            panic!("exact New replay was unexpectedly superseded");
+        };
+        assert_eq!(replayed_run, terminal);
         assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
         assert_eq!(replayed_input.receipt, first_input.receipt);
+        assert_eq!(replayed_recorder, first_recorder);
         assert_eq!(
             stored_run_input_mapping(scenario.vault(), scenario.person_id, first_run.run_id).await,
             Some(first_mapping),
             "exact New replay validates and preserves the original mapping"
         );
+
+        let mut changed_command = owner_request.clone();
+        changed_command.command_id = CommandId::new();
+        assert!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Turn(changed_command),
+                core_request.clone(),
+            )
+            .await
+            .is_err(),
+            "a changed owner command cannot claim the old Run"
+        );
+        let mut changed_body = core_request.clone();
+        changed_body.message.text.push_str(" changed");
+        assert!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Turn(owner_request.clone()),
+                changed_body,
+            )
+            .await
+            .is_err(),
+            "a changed transcript body cannot replay the old admission"
+        );
+        let mut changed_identity = core_request.clone();
+        let AdmissionTarget::New { identity, .. } = &mut changed_identity.target else {
+            panic!("New admission keeps its original target");
+        };
+        identity.definition_revision += 1;
+        assert!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Turn(owner_request),
+                changed_identity,
+            )
+            .await
+            .is_err(),
+            "a changed Core identity cannot replay the old admission"
+        );
+
         let after = scenario
             .vault()
             .connection()
             .expect("reconnect to test Vault");
-        assert_eq!(
-            table_count(&after, "agent_conversation_runs").await,
-            before_runs
-        );
+        assert_eq!(table_count(&after, "agent_conversation_runs").await, 1);
         assert_eq!(
             table_count(&after, "agent_conversation_core_v3_entries").await,
-            before_entries
+            1
         );
         assert_eq!(
             table_count(&after, "agent_conversation_core_v3_owner_bindings").await,
-            before_bindings
+            1
+        );
+        assert_eq!(
+            table_count(&after, "agent_conversation_core_v3_open_receipts").await,
+            1
         );
         assert_eq!(
             session_storage_snapshot(&after, scenario.session_id).await,
@@ -5306,7 +5409,7 @@ mod tests {
                 .open_conversation_recorder(changed_identity)
                 .await,
             Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch
+                ConversationFailure::RunAlreadyUsed
             )),
         );
 
@@ -5318,7 +5421,7 @@ mod tests {
                 .open_conversation_recorder(changed_input)
                 .await,
             Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch
+                ConversationFailure::RunAlreadyUsed
             )),
         );
 
@@ -5330,7 +5433,7 @@ mod tests {
                 .open_conversation_recorder(changed_generation)
                 .await,
             Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch
+                ConversationFailure::RunAlreadyUsed
             )),
         );
 
@@ -5342,7 +5445,9 @@ mod tests {
                 .vault()
                 .open_conversation_recorder(changed_domain)
                 .await,
-            Err(ConversationStoreFailure::UnsupportedOwnerDomain),
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::RunAlreadyUsed
+            )),
         );
 
         scenario
@@ -5709,16 +5814,16 @@ mod tests {
         let (parent, input) = scenario
             .admit_run_and_append_input("retained input for Continue")
             .await;
-        let failed_parent = scenario
+        let parent_recorder = scenario
+            .last_core_recorder
+            .clone()
+            .expect("New composition opens the parent recorder");
+        let failed_parent = scenario.budget_exceeded_owner_run(&parent).await;
+        scenario
             .vault()
-            .finish_conversation_run(
-                parent.run_id,
-                parent.aggregate_revision,
-                RunTerminal::from_failure(AgentFailure::BudgetExceeded),
-            )
+            .close_conversation_recorder(parent_recorder.fence.clone())
             .await
-            .expect("finish parent before Continue admission");
-        scenario.session_revision = failed_parent.session_revision;
+            .expect("close the failed parent before Continue admission");
         let continuation = floe_conversation::project_run_receipt(failed_parent.clone())
             .expect("project failed parent receipt")
             .continuation()
@@ -5801,11 +5906,18 @@ mod tests {
         drop(connection);
 
         let (continued, reused) = scenario
-            .admit_run_and_bind_input(owner_request, core_request)
+            .admit_run_and_bind_input(owner_request.clone(), core_request.clone())
             .await;
         assert_eq!(reused.disposition, AdmissionDisposition::Replayed);
         assert_eq!(reused.receipt.transcript, retained_reference);
         assert_ne!(continued.run_id, failed_parent.run_id);
+        let continue_recorder = scenario
+            .last_core_recorder
+            .clone()
+            .expect("Continue composition opens the child recorder");
+        assert_eq!(continue_recorder.fence.run_id, continued.run_id);
+        assert_eq!(continue_recorder.fence.input, retained_reference);
+        assert!(continue_recorder.fence.recorder_epoch > parent_recorder.fence.recorder_epoch);
         let original_mapping =
             stored_run_input_mapping(scenario.vault(), scenario.person_id, failed_parent.run_id)
                 .await
@@ -5815,6 +5927,7 @@ mod tests {
             Some(original_mapping.clone()),
             "Continue Run points to the original New input mapping"
         );
+        assert_eq!(original_mapping.original_owner_run_id, parent.run_id);
         let connection = scenario
             .vault()
             .connection()
@@ -5845,6 +5958,36 @@ mod tests {
             .expect("open a Continue Run against the retained input");
         assert_eq!(opened.fence.run_id, continued.run_id);
         assert_eq!(opened.fence.input, retained_reference);
+        assert_eq!(opened, continue_recorder);
+
+        let terminal_continue = scenario.cancel_owner_run(&continued).await;
+        scenario.reopen().await;
+        let later_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .expect("advance executor generation after terminal Continue reopen")
+            .executor_generation;
+        assert!(later_generation > continue_recorder.fence.executor_generation);
+        let replay = compose_owner_core_run(
+            scenario.vault(),
+            CoreComposedOwnerIntent::Turn(owner_request),
+            core_request,
+        )
+        .await
+        .expect("exact Continue replay survives terminal state and generation movement");
+        let CoreComposedRunAdmission::Admitted {
+            record: replayed_run,
+            input: replayed_input,
+            recorder: replayed_recorder,
+        } = replay
+        else {
+            panic!("exact Continue replay was unexpectedly superseded");
+        };
+        assert_eq!(replayed_run, terminal_continue);
+        assert_eq!(replayed_input.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(replayed_input.receipt, reused.receipt);
+        assert_eq!(replayed_recorder, continue_recorder);
     }
 
     #[tokio::test]
@@ -6081,11 +6224,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_recorder_claims_have_one_writer_and_one_revision_winner() {
+    async fn active_recorder_excludes_another_composed_admission_atomically() {
         let mut scenario = Scenario::new().await;
         let (first_run, first_input) = scenario
-            .admit_run_and_append_input("first concurrent recorder")
+            .admit_run_and_append_input("first active recorder")
             .await;
+        let first_recorder = scenario
+            .last_core_recorder
+            .clone()
+            .expect("first composition opened its recorder");
         let second_session = match scenario
             .vault()
             .start_conversation_session(StartSessionRequest {
@@ -6098,7 +6245,7 @@ mod tests {
             SessionStartAdmission::Started(receipt) => receipt,
             other => panic!("unexpected second Session admission: {other:?}"),
         };
-        let second_text = "second concurrent recorder";
+        let second_text = "second active recorder";
         let second_owner = scenario.owner_request_for_session(
             second_session.session_id,
             second_session.session_revision,
@@ -6113,66 +6260,100 @@ mod tests {
                 head_revision: first_input.receipt.transcript.sequence,
             },
         };
-        let (second_run, second_input) = scenario
-            .admit_run_and_bind_input(second_owner, second_core)
-            .await;
         let target = ConversationReference {
             identity: scenario.identity.clone(),
             conversation_id: scenario.conversation_id,
             branch_id: scenario.branch_id,
-            head_revision: second_input.receipt.transcript.sequence,
+            head_revision: first_input.receipt.transcript.sequence,
         };
         let before = scenario
             .vault()
             .observe_conversation_recorder(target.clone(), first_run.run_id)
             .await
-            .expect("observe empty recorder claim state");
-        assert_eq!(before.state, RecorderRecoveryState::Absent);
-        assert_eq!(before.active_recorder, None);
+            .expect("observe the recorder opened by admission");
+        assert_eq!(before.state, RecorderRecoveryState::ActiveCurrentGeneration);
+        assert_eq!(before.active_recorder, Some(first_recorder.fence.clone()));
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect to test Vault");
+        let before_second_session =
+            session_storage_snapshot(&connection, second_session.session_id).await;
+        drop(connection);
 
-        let first_start = scenario.start_request(&first_run, first_input.receipt.transcript);
-        let second_start = scenario.start_request(&second_run, second_input.receipt.transcript);
-        let (first_result, second_result) = tokio::join!(
-            scenario
-                .vault()
-                .open_conversation_recorder(first_start.clone()),
-            scenario
-                .vault()
-                .open_conversation_recorder(second_start.clone()),
+        assert_eq!(
+            compose_owner_core_run(
+                scenario.vault(),
+                CoreComposedOwnerIntent::Turn(second_owner.clone()),
+                second_core.clone(),
+            )
+            .await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::WriterAlreadyActive
+            )),
+            "the second Run, input and recorder cannot commit while the first recorder is active"
         );
-        let (winner, losing_start, loser_error) = match (first_result, second_result) {
-            (Ok(winner), Err(error)) => (winner, second_start, error),
-            (Err(error), Ok(winner)) => (winner, first_start, error),
-            (Ok(_), Ok(_)) => panic!("both recorder claims won for one transcript"),
-            (Err(first), Err(second)) => {
-                panic!("both recorder claims failed: {first:?}; {second:?}")
-            }
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("reconnect after rejection");
+        assert_eq!(table_count(&connection, "agent_conversation_runs").await, 1);
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_owner_bindings").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_open_receipts").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_owner_transcript_inputs_v1").await,
+            1
+        );
+        assert_eq!(
+            table_count(
+                &connection,
+                "agent_conversation_owner_transcript_run_inputs_v1"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            session_storage_snapshot(&connection, second_session.session_id).await,
+            before_second_session
+        );
+        drop(connection);
+
+        scenario.cancel_owner_run(&first_run).await;
+        let (second_run, second_input) = scenario
+            .admit_run_and_bind_input(second_owner, second_core)
+            .await;
+        assert_eq!(second_input.disposition, AdmissionDisposition::Appended);
+        let second_recorder = scenario
+            .last_core_recorder
+            .clone()
+            .expect("retry after the first Run closes opens its recorder");
+        assert_eq!(second_recorder.fence.run_id, second_run.run_id);
+        assert_eq!(second_recorder.fence.input, second_input.receipt.transcript);
+        assert!(second_recorder.fence.recorder_epoch > first_recorder.fence.recorder_epoch);
+        let target_after = ConversationReference {
+            identity: scenario.identity.clone(),
+            conversation_id: scenario.conversation_id,
+            branch_id: scenario.branch_id,
+            head_revision: second_input.receipt.transcript.sequence,
         };
-        if loser_error == ConversationStoreFailure::Busy {
-            assert_eq!(
-                scenario
-                    .vault()
-                    .open_conversation_recorder(losing_start)
-                    .await,
-                Err(ConversationStoreFailure::Transition(
-                    ConversationFailure::WriterAlreadyActive
-                )),
-                "the serialized loser observes the winning active recorder"
-            );
-        } else {
-            assert_eq!(
-                loser_error,
-                ConversationStoreFailure::Transition(ConversationFailure::WriterAlreadyActive),
-            );
-        }
         let after = scenario
             .vault()
-            .observe_conversation_recorder(target, winner.fence.run_id)
+            .observe_conversation_recorder(target_after, second_run.run_id)
             .await
-            .expect("observe the single winning recorder claim");
-        assert_eq!(after.active_recorder, Some(winner.fence.clone()));
+            .expect("observe the recorder opened by the admitted retry");
+        assert_eq!(after.active_recorder, Some(second_recorder.fence.clone()));
         assert_eq!(after.head.recorder_epoch, before.head.recorder_epoch + 1);
-        assert_eq!(after.head.state_revision, before.head.state_revision + 1);
+        assert!(after.head.state_revision > before.head.state_revision);
     }
 
     #[tokio::test]
