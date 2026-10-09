@@ -586,78 +586,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         kind: &str,
         payload: &str,
     ) -> Result<u64, AgentFailure> {
-        if !run_id.is_valid()
-            || kind.is_empty()
-            || kind.len() > 64
-            || !kind
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-            || payload.is_empty()
-            || payload.len() > MAX_JOURNAL_ENTRY_BYTES
-        {
-            return Err(AgentFailure::InvalidInput);
-        }
+        validate_conversation_journal_append(run_id, kind, payload)?;
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            let mut record = self
-                .conversation_run_on(&transaction, run_id)
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            if record.executor_generation
-                != self.active_conversation_executor_generation(&transaction).await?
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            if record.state != RunState::Working || record.pending_terminal.is_some() { return Err(AgentFailure::Conflict); }
-            if record.journal_revision >= MAX_JOURNAL_ENTRIES { return Err(AgentFailure::BudgetExceeded); }
-            let event: JournalEvent = serde_json::from_str(payload).map_err(|_| AgentFailure::InvalidInput)?;
-            if kind != journal_kind(&event) || payload.len() > journal_event_byte_limit(&event) { return Err(AgentFailure::InvalidInput); }
-            let mut entries = self.conversation_journal_on(&transaction, &record).await?;
-            if let JournalEvent::ModelIntent { plan, .. } = &event {
-                let prior = self
-                    .model_selection_for_append_on(&transaction, &record, &entries)
-                    .await?;
-                floe_agent_contract::validate_model_intent_selection(&prior, plan)?;
-            }
-            entries.push(JournalEntry { revision: record.journal_revision + 1, event });
-            validate_journal(&record, &entries)?;
-            let previous = record.journal_revision;
-            record.journal_revision += 1;
-            let changed = transaction
-                .execute(
-                    "UPDATE agent_conversation_runs SET journal_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND journal_revision = ?",
-                    (
-                        integer(record.journal_revision)?,
-                        encode_record(&record)?,
-                        run_id.as_uuid().to_string(),
-                        integer(previous)?,
-                    ),
-                )
-                .await
-                .map_err(database_failure)?;
-            if changed != 1 {
-                return Err(AgentFailure::Conflict);
-            }
-            transaction
-                .execute(
-                    "INSERT INTO agent_conversation_journal (run_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
-                    (
-                        run_id.as_uuid().to_string(),
-                        integer(record.journal_revision)?,
-                        kind,
-                        payload,
-                    ),
-                )
-                .await
-                .map_err(database_failure)?;
-            self.check_access()?;
-            Ok(record.journal_revision)
-        }
-        .await;
+        let result = self
+            .append_conversation_journal_on(&transaction, run_id, kind, payload)
+            .await;
         let revision = self
             .finish_registry_transaction_checked(transaction, result)
             .await?;
@@ -671,6 +608,83 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::StorageUnavailable);
         }
         Ok(revision)
+    }
+
+    /// Append one validated Run journal event in the caller's transaction.
+    /// The public wrapper and owner/Core composition share this exact path.
+    pub(super) async fn append_conversation_journal_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run_id: RunId,
+        kind: &str,
+        payload: &str,
+    ) -> Result<u64, AgentFailure> {
+        validate_conversation_journal_append(run_id, kind, payload)?;
+        let mut record = self
+            .conversation_run_on(transaction, run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if record.executor_generation
+            != self
+                .active_conversation_executor_generation(transaction)
+                .await?
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        if record.state != RunState::Working || record.pending_terminal.is_some() {
+            return Err(AgentFailure::Conflict);
+        }
+        if record.journal_revision >= MAX_JOURNAL_ENTRIES {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let event: JournalEvent =
+            serde_json::from_str(payload).map_err(|_| AgentFailure::InvalidInput)?;
+        if kind != journal_kind(&event) || payload.len() > journal_event_byte_limit(&event) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut entries = self.conversation_journal_on(transaction, &record).await?;
+        if let JournalEvent::ModelIntent { plan, .. } = &event {
+            let prior = self
+                .model_selection_for_append_on(transaction, &record, &entries)
+                .await?;
+            floe_agent_contract::validate_model_intent_selection(&prior, plan)?;
+        }
+        entries.push(JournalEntry {
+            revision: record.journal_revision + 1,
+            event,
+        });
+        validate_journal(&record, &entries)?;
+        let previous = record.journal_revision;
+        record.journal_revision += 1;
+        let changed = transaction
+            .execute(
+                "UPDATE agent_conversation_runs SET journal_revision = ?, payload = ? WHERE run_id = ? AND state = 'working' AND journal_revision = ?",
+                (
+                    integer(record.journal_revision)?,
+                    encode_record(&record)?,
+                    run_id.as_uuid().to_string(),
+                    integer(previous)?,
+                ),
+            )
+            .await
+            .map_err(database_failure)?;
+        if changed != 1 {
+            return Err(AgentFailure::Conflict);
+        }
+        transaction
+            .execute(
+                "INSERT INTO agent_conversation_journal (run_id, revision, kind, payload) VALUES (?, ?, ?, ?)",
+                (
+                    run_id.as_uuid().to_string(),
+                    integer(record.journal_revision)?,
+                    kind,
+                    payload,
+                ),
+            )
+            .await
+            .map_err(database_failure)?;
+        self.check_access()?;
+        Ok(record.journal_revision)
     }
 
     async fn model_selection_for_append_on(
@@ -1511,6 +1525,26 @@ pub(super) fn journal_kind(event: &JournalEvent) -> &'static str {
         | JournalEvent::BatchProgress { .. } => "checkpoint",
     }
 }
+
+fn validate_conversation_journal_append(
+    run_id: RunId,
+    kind: &str,
+    payload: &str,
+) -> Result<(), AgentFailure> {
+    if !run_id.is_valid()
+        || kind.is_empty()
+        || kind.len() > 64
+        || !kind
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        || payload.is_empty()
+        || payload.len() > MAX_JOURNAL_ENTRY_BYTES
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    Ok(())
+}
+
 fn validate_journal(record: &RunRecord, entries: &[JournalEntry]) -> Result<(), AgentFailure> {
     let receipt = floe_conversation::project_run_receipt(record.clone())?;
     floe_conversation::validate_run_journal(&receipt, entries)

@@ -1,12 +1,157 @@
 // Focused owner-custody regressions reuse the Core scenario fixture.
 
 use super::*;
+use crate::vault::owner_custody::{ConversationRunOutputReceipt, ConversationRunOutputRequest};
 use crate::vault::owner_transcript_reads::{
     OwnerResolvedTranscriptEntry, OwnerTranscriptPageBudget, OwnerTranscriptTypedEvidence,
 };
 use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
+
+fn output_artifact() -> floe_agent_contract::Artifact {
+    floe_agent_contract::Artifact {
+        artifact_id: Uuid::new_v4(),
+        name: "answer.txt".into(),
+        parts: vec![floe_agent_contract::ArtifactPart::Text {
+            text: "attached answer".into(),
+        }],
+        coverage: DependencyCoverage::Independent,
+    }
+}
+
+async fn append_valid_answer_batch(
+    scenario: &Scenario,
+    run: &RunRecord,
+    text: &str,
+    artifacts: Vec<floe_agent_contract::Artifact>,
+) -> u64 {
+    use floe_agent_contract::{
+        BatchCursor, JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelStep, ModelUsage, PreparedModelPlan, ProcessingBoundary,
+        ValidatedModelBatch,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = floe_agent_contract::ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([101; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([102; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::Answer {
+                        text: text.to_owned(),
+                        artifacts,
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: None,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read prepared owner Run")
+        .expect("prepared owner Run remains present")
+        .journal_revision
+}
+
+fn run_output_request(
+    recorder: RecorderFence,
+    text: &str,
+    artifacts: Vec<floe_agent_contract::Artifact>,
+) -> ConversationRunOutputRequest {
+    ConversationRunOutputRequest {
+        recorder,
+        message_id: MessageId::new(),
+        command_id: CommandId::new(),
+        contribution_id: LogicalContributionId::new(),
+        typed_entry_id: Uuid::new_v4(),
+        event: floe_agent_contract::JournalEvent::Output {
+            text: text.to_owned(),
+            artifacts,
+        },
+    }
+}
+
+async fn compose_run_output(
+    vault: &EncryptedAgentVault<TestKeys>,
+    request: ConversationRunOutputRequest,
+) -> Result<ConversationRunOutputReceipt, ConversationStoreFailure> {
+    let mut connection = vault.connection().map_err(start_error)?;
+    let (guard, transaction) = vault
+        .journal_transaction(&mut connection)
+        .await
+        .map_err(start_error)?;
+    let result = vault
+        .record_conversation_run_output_on(&transaction, request)
+        .await;
+    vault
+        .finish_conversation_core_transaction(guard, transaction, result)
+        .await
+}
 
 fn owner_read_target(scenario: &Scenario) -> ConversationReadTarget {
     ConversationReadTarget {
@@ -47,6 +192,535 @@ fn typed_message(entry: &OwnerResolvedTranscriptEntry) -> &floe_conversation::Ag
         panic!("generated entry must have exact typed evidence");
     };
     message
+}
+
+#[tokio::test]
+async fn run_output_composition_commits_journal_typed_core_and_link_together() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("atomic owner Output")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open actual owner recorder");
+    let text = "answer with a sole-journal artifact";
+    let artifacts = vec![output_artifact()];
+    let before = append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+    let request = run_output_request(open.fence.clone(), text, artifacts.clone());
+
+    let receipt = compose_run_output(scenario.vault(), request.clone())
+        .await
+        .expect("compose the validated journal Output with typed/Core/link custody");
+    assert_eq!(receipt.journal_revision, before + 1);
+    assert_eq!(receipt.recording.recorder, open.fence);
+    assert_eq!(receipt.recording.contribution_id, request.contribution_id);
+
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .expect("read validated owner journal");
+    let last = journal.last().expect("composed Output is journal tail");
+    assert_eq!(last.revision, receipt.journal_revision);
+    let persisted = serde_json::from_str::<floe_agent_contract::JournalEvent>(&last.payload)
+        .expect("decode persisted Output");
+    let (
+        floe_agent_contract::JournalEvent::Output {
+            text: persisted_text,
+            artifacts: persisted_artifacts,
+        },
+        floe_agent_contract::JournalEvent::Output {
+            text: requested_text,
+            artifacts: requested_artifacts,
+        },
+    ) = (&persisted, &request.event)
+    else {
+        panic!("the composed journal tail is the requested Output event");
+    };
+    assert_eq!(persisted_text, requested_text);
+    assert_eq!(
+        persisted_artifacts, requested_artifacts,
+        "artifacts remain in the sole Run journal"
+    );
+
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("Output has its immutable owner link");
+    assert_eq!(link.first_recording_run_id, run.run_id);
+    assert_eq!(link.transcript_entry.message.text, text);
+    let boundary = owner_read_boundary(&scenario).await;
+    let resolved = scenario
+        .vault()
+        .read_owner_transcript_entry(
+            owner_read_target(&scenario),
+            scenario.session_id,
+            boundary,
+            TranscriptEntryLookup::Reference(receipt.recording.transcript),
+            floe_conversation_core::MAX_TRANSCRIPT_PAGE_BYTES,
+        )
+        .await
+        .expect("resolve exact owner-linked transcript entry");
+    assert_eq!(
+        typed_message(&resolved),
+        &floe_conversation::AgentMessage::Assistant {
+            turn_id: run.run_id.as_uuid(),
+            text: text.into(),
+        },
+        "typed Assistant custody stores the derived turn and text"
+    );
+    assert_eq!(resolved.transcript_entry.message.text, text);
+    assert_eq!(
+        resolved
+            .transcript_entry
+            .message
+            .evidence
+            .as_ref()
+            .map(|evidence| evidence.digest()),
+        Some(link.typed_reference.digest())
+    );
+}
+
+#[tokio::test]
+async fn run_output_composition_rolls_back_after_journal_typed_core_and_link_writes() {
+    for stage in [4, 1, 2, 3] {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input(&format!("Output rollback stage {stage}"))
+            .await;
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+            .await
+            .expect("open actual owner recorder");
+        let text = format!("rollback stage {stage}");
+        let artifacts = vec![output_artifact()];
+        let before = append_valid_answer_batch(&scenario, &run, &text, artifacts.clone()).await;
+        let request = run_output_request(open.fence, &text, artifacts);
+        scenario
+            .vault()
+            .conversation_core_typed_write_fault
+            .store(stage, Ordering::Release);
+        assert_eq!(
+            compose_run_output(scenario.vault(), request)
+                .await
+                .expect_err("fault must abort the full shared transaction"),
+            ConversationStoreFailure::NotCommitted,
+            "fault stage {stage} reports a confirmed rollback"
+        );
+
+        let current = scenario
+            .vault()
+            .conversation_run(run.run_id)
+            .await
+            .expect("read Run after fault rollback")
+            .expect("owner Run remains present");
+        assert_eq!(current.journal_revision, before);
+        assert_eq!(
+            scenario
+                .vault()
+                .conversation_journal(run.run_id)
+                .await
+                .expect("read journal after rollback")
+                .iter()
+                .filter(|entry| entry.kind == "output")
+                .count(),
+            0,
+            "a failed composition leaves no journal Output"
+        );
+        let connection = scenario
+            .vault()
+            .connection()
+            .expect("connect after Output rollback");
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_entries").await,
+            1
+        );
+        assert_eq!(
+            table_count(&connection, "agent_conversation_core_v3_recording_receipts").await,
+            0
+        );
+        assert_eq!(
+            table_count(
+                &connection,
+                "agent_conversation_owner_transcript_evidence_v1"
+            )
+            .await,
+            0
+        );
+        assert!(
+            !crate::schema::typed_history_family_present(&connection)
+                .await
+                .expect("inspect optional typed family after rollback"),
+            "typed owner family creation rolls back with every write stage"
+        );
+    }
+}
+
+#[tokio::test]
+async fn run_output_ack_loss_reopens_and_replays_after_session_and_generation_movement() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("Output ACK replay")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open actual owner recorder");
+    let text = "persist once across movement";
+    let artifacts = vec![output_artifact()];
+    let before = append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+    let request = run_output_request(open.fence.clone(), text, artifacts);
+
+    scenario
+        .vault()
+        .conversation_core_ack_loss
+        .store(true, Ordering::Release);
+    assert_eq!(
+        compose_run_output(scenario.vault(), request.clone()).await,
+        Err(ConversationStoreFailure::OutcomeUnknown),
+        "journal, typed payload, Core receipt, and link commit before the lost ACK"
+    );
+
+    scenario.reopen().await;
+    let mut moved_session = scenario
+        .vault()
+        .load(scenario.person_id, run.session_id)
+        .await
+        .expect("load the original owner Session after reopen");
+    let previous_session_revision = moved_session.revision;
+    moved_session.revision = previous_session_revision + 1;
+    scenario
+        .vault()
+        .compare_and_swap(&moved_session, previous_session_revision)
+        .await
+        .expect("advance the same owner Session through its CAS API");
+    assert!(moved_session.revision > run.session_revision);
+    scenario.session_revision = moved_session.revision;
+    let next_generation = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("move the active executor fence after the committed output")
+        .executor_generation;
+    assert!(next_generation > request.recorder.executor_generation);
+
+    let replay = compose_run_output(scenario.vault(), request.clone())
+        .await
+        .expect("recover exact original Output after reopen and mutable state movement");
+    assert_eq!(replay.journal_revision, before + 1);
+    let link = stored_typed_link(
+        scenario.vault(),
+        scenario.person_id,
+        request.contribution_id,
+    )
+    .await
+    .expect("original immutable link remains available");
+    assert_eq!(link.first_recording_run_id, run.run_id);
+    assert_eq!(replay.recording.recorder, request.recorder);
+    assert_eq!(replay.recording.contribution_id, request.contribution_id);
+    assert_eq!(replay.recording.transcript, link.transcript_entry.reference);
+    assert_eq!(
+        scenario
+            .vault()
+            .conversation_journal(run.run_id)
+            .await
+            .expect("read recovered journal")
+            .iter()
+            .filter(|entry| entry.kind == "output")
+            .count(),
+        1,
+        "exact ACK replay never appends a second Output"
+    );
+}
+
+#[tokio::test]
+async fn run_output_replay_compares_text_artifacts_and_contribution_identity() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("Output conflict replay")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open actual owner recorder");
+    let text = "same text, exact artifacts";
+    let artifacts = vec![output_artifact()];
+    let before = append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+    let request = run_output_request(open.fence, text, artifacts);
+    let original = compose_run_output(scenario.vault(), request.clone())
+        .await
+        .expect("compose original Output");
+
+    let mut changed_text = request.clone();
+    let floe_agent_contract::JournalEvent::Output { text, .. } = &mut changed_text.event else {
+        panic!("request carries Output");
+    };
+    text.push_str(" changed");
+    assert_eq!(
+        compose_run_output(scenario.vault(), changed_text).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::MessageIdConflict
+        )),
+        "same contribution with different text conflicts"
+    );
+
+    let mut changed_artifacts = request.clone();
+    let floe_agent_contract::JournalEvent::Output { artifacts, .. } = &mut changed_artifacts.event
+    else {
+        panic!("request carries Output");
+    };
+    artifacts.push(output_artifact());
+    assert_eq!(
+        compose_run_output(scenario.vault(), changed_artifacts).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::MessageIdConflict
+        )),
+        "same contribution and text with different artifacts conflicts"
+    );
+
+    let mut changed_contribution = request.clone();
+    changed_contribution.contribution_id = LogicalContributionId::new();
+    assert_eq!(
+        compose_run_output(scenario.vault(), changed_contribution).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "a different contribution cannot claim the existing Run Output"
+    );
+
+    assert_eq!(original.journal_revision, before + 1);
+    let current = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read Run after conflict replays")
+        .expect("Run remains present");
+    assert_eq!(current.journal_revision, original.journal_revision);
+}
+
+#[tokio::test]
+async fn run_output_continue_child_cannot_replay_a_parent_core_link_or_revision() {
+    let mut scenario = Scenario::new().await;
+    let (parent, input) = scenario
+        .admit_run_and_append_input("parent contribution for Continue")
+        .await;
+    let parent_open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&parent, input.receipt.transcript))
+        .await
+        .expect("open parent owner recorder");
+    let parent_request =
+        typed_assistant_request(parent_open.fence.clone(), "parent typed contribution");
+    let parent_receipt = compose_typed_recording(scenario.vault(), parent_request.clone())
+        .await
+        .expect("record parent typed contribution through the existing writer");
+    let failed_parent = scenario.budget_exceeded_owner_run(&parent).await;
+    scenario
+        .vault()
+        .close_conversation_recorder(parent_open.fence)
+        .await
+        .expect("close parent recorder after the terminal budget failure");
+    assert_eq!(parent_receipt.recorder.run_id, parent.run_id);
+    assert_eq!(failed_parent.journal_revision, 0);
+
+    let (child, child_input) = scenario
+        .admit_owner_run_reusing_input(&failed_parent, "continue parent contribution")
+        .await;
+    let child_open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&child, child_input.receipt.transcript))
+        .await
+        .expect("open child owner recorder");
+    let text = "child answer with matching contribution id";
+    let artifacts = vec![output_artifact()];
+    let before = append_valid_answer_batch(&scenario, &child, text, artifacts.clone()).await;
+    let child_output = floe_agent_contract::JournalEvent::Output {
+        text: text.into(),
+        artifacts: artifacts.clone(),
+    };
+    scenario
+        .append_owner_event(child.run_id, child_output.clone())
+        .await;
+    let output_revision = before + 1;
+    let request = ConversationRunOutputRequest {
+        recorder: child_open.fence,
+        message_id: parent_request.message_id,
+        command_id: parent_request.command_id,
+        contribution_id: parent_request.contribution_id,
+        typed_entry_id: parent_request.typed_entry_id,
+        event: child_output,
+    };
+
+    assert_eq!(
+        compose_run_output(scenario.vault(), request).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::OwnerEvidenceMismatch
+        )),
+        "the child Output cannot claim the parent's typed/Core/link proof"
+    );
+    assert_ne!(parent_receipt.recorder.run_id, child.run_id);
+    assert_eq!(
+        scenario
+            .vault()
+            .conversation_run(child.run_id)
+            .await
+            .expect("read Continue child after replay rejection")
+            .expect("child remains present")
+            .journal_revision,
+        output_revision,
+        "no parent journal revision is returned or appended to the child"
+    );
+}
+
+#[tokio::test]
+async fn run_output_composition_rejects_partial_journal_or_core_link_evidence() {
+    {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input("unbound journal Output")
+            .await;
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+            .await
+            .expect("open actual owner recorder");
+        let text = "journal output without owner proof";
+        let artifacts = vec![output_artifact()];
+        append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+        let request = run_output_request(open.fence, text, artifacts.clone());
+        scenario
+            .append_owner_event(run.run_id, request.event.clone())
+            .await;
+        let output_revision = scenario
+            .vault()
+            .conversation_run(run.run_id)
+            .await
+            .expect("read unbound journal Run")
+            .expect("Run remains present")
+            .journal_revision;
+        assert_eq!(
+            compose_run_output(scenario.vault(), request).await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "existing Output with no typed/Core/link proof is not retrofitted"
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .conversation_run(run.run_id)
+                .await
+                .expect("read Run after unbound Output rejection")
+                .expect("Run remains present")
+                .journal_revision,
+            output_revision,
+            "the unbound Output is not appended again"
+        );
+    }
+
+    {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input("unbound typed Output")
+            .await;
+        let open = scenario
+            .vault()
+            .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+            .await
+            .expect("open actual owner recorder");
+        let text = "owner proof without journal output";
+        let artifacts = vec![output_artifact()];
+        let before = append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+        let typed = typed_assistant_request(open.fence.clone(), text);
+        compose_typed_recording(scenario.vault(), typed.clone())
+            .await
+            .expect("create the existing typed/Core/link evidence through its writer");
+        let request = ConversationRunOutputRequest {
+            recorder: typed.recorder,
+            message_id: typed.message_id,
+            command_id: typed.command_id,
+            contribution_id: typed.contribution_id,
+            typed_entry_id: typed.typed_entry_id,
+            event: floe_agent_contract::JournalEvent::Output {
+                text: text.into(),
+                artifacts,
+            },
+        };
+        assert_eq!(
+            compose_run_output(scenario.vault(), request).await,
+            Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch
+            )),
+            "existing Core/link evidence with no journal Output is not adopted"
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .conversation_run(run.run_id)
+                .await
+                .expect("read Run after unbound typed evidence rejection")
+                .expect("Run remains present")
+                .journal_revision,
+            before,
+            "the composer does not append around pre-existing Core/link evidence"
+        );
+    }
+}
+
+#[tokio::test]
+async fn run_output_new_write_requires_the_current_executor_generation() {
+    let mut scenario = Scenario::new().await;
+    let (run, input) = scenario
+        .admit_run_and_append_input("stale new Output")
+        .await;
+    let open = scenario
+        .vault()
+        .open_conversation_recorder(scenario.start_request(&run, input.receipt.transcript))
+        .await
+        .expect("open actual owner recorder");
+    let text = "new output must use the current executor";
+    let artifacts = vec![output_artifact()];
+    let before = append_valid_answer_batch(&scenario, &run, text, artifacts.clone()).await;
+    let request = run_output_request(open.fence, text, artifacts);
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance the actual executor generation");
+
+    assert_eq!(
+        compose_run_output(scenario.vault(), request).await,
+        Err(ConversationStoreFailure::Transition(
+            ConversationFailure::WrongWriter
+        )),
+        "a genuinely new Output is denied under a stale executor fence"
+    );
+    let current = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read stale Run after denial")
+        .expect("Run remains present");
+    assert_eq!(current.journal_revision, before);
+    assert_eq!(
+        scenario
+            .vault()
+            .conversation_journal(run.run_id)
+            .await
+            .expect("read journal after stale new write")
+            .iter()
+            .filter(|entry| entry.kind == "output")
+            .count(),
+        0
+    );
 }
 
 fn large_owner_coverage(person_id: PersonId) -> DependencyCoverage {

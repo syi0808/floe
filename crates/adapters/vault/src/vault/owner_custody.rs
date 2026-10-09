@@ -11,14 +11,17 @@ use super::conversation_core::{
     positive_integer, recording_receipt_on, schema_error, task_evidence_reference, unavailable,
 };
 use super::{EncryptedAgentVault, VaultKeyProvider};
-use floe_agent_contract::{TaskExecutionEvidence, TaskExecutionReceiptRef, TaskReceipt};
+use floe_agent_contract::{
+    JournalEvent, TaskExecutionEvidence, TaskExecutionReceiptRef, TaskReceipt,
+};
 use floe_conversation::{
     AgentMessage, RunRecord, TYPED_AGENT_MESSAGE_OWNER_NAMESPACE, TypedAgentMessageProvenance,
     TypedAgentMessageReference,
 };
 use floe_conversation_contract::{
     AgentIdentity, ConversationBranchId, ConversationFailure, ConversationId, ConversationMessage,
-    MessageEvidenceReference, MessageId, MessageOrigin, TaskEvidenceReference, TranscriptReference,
+    LogicalContributionId, MessageEvidenceReference, MessageId, MessageOrigin,
+    TaskEvidenceReference, TranscriptReference,
 };
 use floe_conversation_core::{
     ConversationStoreFailure, ExecutorDomain, RecorderFence, RecordingReceipt, RecordingRequest,
@@ -156,6 +159,24 @@ pub(super) struct TypedConversationRecordingRequest {
     pub contribution_id: floe_conversation_contract::LogicalContributionId,
     pub typed_entry_id: Uuid,
     pub typed_message: AgentMessage,
+}
+
+/// Inputs for one terminal Run Output composition. Typed Assistant content is
+/// derived from the verified Run and Output event inside the composer.
+#[derive(Clone, Debug)]
+pub(super) struct ConversationRunOutputRequest {
+    pub recorder: RecorderFence,
+    pub message_id: MessageId,
+    pub command_id: CommandId,
+    pub contribution_id: LogicalContributionId,
+    pub typed_entry_id: Uuid,
+    pub event: JournalEvent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ConversationRunOutputReceipt {
+    pub journal_revision: u64,
+    pub recording: RecordingReceipt,
 }
 
 impl OwnerInputBinding {
@@ -1126,6 +1147,196 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ));
         }
         Ok(())
+    }
+
+    /// Compose one validated Run Output journal event with its typed Assistant
+    /// payload, Core recording receipt, and immutable owner link in the
+    /// caller's transaction. Replay is proved from this Run's bounded journal
+    /// and the contribution's exact Core/link pair before live writer fences.
+    pub(super) async fn record_conversation_run_output_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: ConversationRunOutputRequest,
+    ) -> Result<ConversationRunOutputReceipt, ConversationStoreFailure> {
+        ensure_core_v3_on(transaction).await?;
+        request
+            .recorder
+            .validate()
+            .map_err(ConversationStoreFailure::Transition)?;
+        let text = match &request.event {
+            JournalEvent::Output { text, .. } => text.clone(),
+            _ => {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::InvalidInput,
+                ));
+            }
+        };
+        if request.recorder.identity.person_id != self.person_id
+            || request.recorder.executor_domain != ExecutorDomain::HostRun
+            || request.typed_entry_id.is_nil()
+        {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+
+        let run = self
+            .conversation_run_on(transaction, request.recorder.run_id)
+            .await
+            .map_err(owner_error)?
+            .ok_or(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ))?;
+        run.validate(self.person_id).map_err(owner_error)?;
+        if run.run_id != request.recorder.run_id || run.person_id != self.person_id {
+            return Err(ConversationStoreFailure::Transition(
+                ConversationFailure::OwnerEvidenceMismatch,
+            ));
+        }
+
+        // This read validates the complete one-Run journal (bounded by its
+        // existing 512-entry cap) and gives the unique Output revision.
+        let entries = self
+            .conversation_journal_on(transaction, &run)
+            .await
+            .map_err(owner_error)?;
+        let output = entries.iter().find_map(|entry| {
+            matches!(&entry.event, JournalEvent::Output { .. })
+                .then(|| (entry.revision, entry.event.clone()))
+        });
+        let stored_receipt =
+            recording_receipt_on(transaction, self.person_id, request.contribution_id).await?;
+        let stored_link = typed_transcript_link_for_contribution_on(
+            transaction,
+            self.person_id,
+            request.contribution_id,
+        )
+        .await?;
+
+        match (output, stored_receipt, stored_link) {
+            (Some((revision, stored_event)), Some(receipt), Some(link)) => {
+                if receipt.recorder.run_id != run.run_id
+                    || receipt.contribution_id != request.contribution_id
+                    || link.first_recording_run_id != run.run_id
+                    || link.owner_turn_id != run.run_id.as_uuid()
+                    || link.contribution_id != request.contribution_id
+                {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                let outputs_match = match (&stored_event, &request.event) {
+                    (
+                        JournalEvent::Output {
+                            text: stored_text,
+                            artifacts: stored_artifacts,
+                        },
+                        JournalEvent::Output {
+                            text: requested_text,
+                            artifacts: requested_artifacts,
+                        },
+                    ) => stored_text == requested_text && stored_artifacts == requested_artifacts,
+                    _ => false,
+                };
+                if !outputs_match {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::MessageIdConflict,
+                    ));
+                }
+                let replay = self
+                    .record_typed_conversation_entry_on(
+                        transaction,
+                        TypedConversationRecordingRequest {
+                            recorder: request.recorder,
+                            message_id: request.message_id,
+                            command_id: request.command_id,
+                            contribution_id: request.contribution_id,
+                            typed_entry_id: request.typed_entry_id,
+                            typed_message: AgentMessage::Assistant {
+                                turn_id: run.run_id.as_uuid(),
+                                text,
+                            },
+                        },
+                    )
+                    .await?;
+                if replay != receipt {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                Ok(ConversationRunOutputReceipt {
+                    journal_revision: revision,
+                    recording: replay,
+                })
+            }
+            (Some(_), _, _) | (None, Some(_), _) | (None, _, Some(_)) => {
+                // Neither side is repaired or appended around partial evidence.
+                Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ))
+            }
+            (None, None, None) => {
+                // Only a genuinely new Output consults the mutable recorder and
+                // executor fences. The stored replay branch above is immutable.
+                let (verified_run, _) = self
+                    .verified_typed_recorder_on(transaction, &request.recorder)
+                    .await?;
+                let typed_message = AgentMessage::Assistant {
+                    turn_id: verified_run.run_id.as_uuid(),
+                    text,
+                };
+                let kind = super::conversations::journal_kind(&request.event);
+                let payload = serde_json::to_string(&request.event).map_err(|_| {
+                    ConversationStoreFailure::Transition(ConversationFailure::InvalidInput)
+                })?;
+                let journal_revision = self
+                    .append_conversation_journal_on(
+                        transaction,
+                        verified_run.run_id,
+                        kind,
+                        &payload,
+                    )
+                    .await
+                    .map_err(owner_error)?;
+                #[cfg(test)]
+                if self
+                    .conversation_core_typed_write_fault
+                    .compare_exchange(
+                        4,
+                        0,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    return Err(ConversationStoreFailure::NotCommitted);
+                }
+                let recording = self
+                    .record_typed_conversation_entry_on(
+                        transaction,
+                        TypedConversationRecordingRequest {
+                            recorder: request.recorder,
+                            message_id: request.message_id,
+                            command_id: request.command_id,
+                            contribution_id: request.contribution_id,
+                            typed_entry_id: request.typed_entry_id,
+                            typed_message,
+                        },
+                    )
+                    .await?;
+                if recording.recorder.run_id != verified_run.run_id
+                    || recording.contribution_id != request.contribution_id
+                {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                Ok(ConversationRunOutputReceipt {
+                    journal_revision,
+                    recording,
+                })
+            }
+        }
     }
 
     /// Compose owner-typed evidence, the neutral Core output receipt, and its

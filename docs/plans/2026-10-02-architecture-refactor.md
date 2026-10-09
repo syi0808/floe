@@ -345,6 +345,10 @@ This writer-only completion extends the same owner-custody-v1 transaction/link s
 Verification on this candidate: `cargo test -p floe-vault conversation_core::tests::owner_custody:: -- --nocapture` passed 13/13; `cargo test -p floe-vault --tests` passed 83/83; `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` exited 0 across all targets; `python3 tools/architecture/check_boundaries.py` reported 26 nodes, 136 edges, zero warnings/errors; changed Rust files passed `rustfmt --edition 2024 --check`; `git diff --check` passed. Workspace compilation reported existing unused/dead-code warnings. The exact command log summaries and patch are included in the review handoff; publication remains with root review.
 
 
+### Accepted prerequisite — atomic Run Output composition (2026-10-08)
+
+Vault shares one transaction-taking Run journal append path for public appends and owner composition. The owner composer commits the validated `Output` event, typed Assistant entry, Core receipt and immutable owner link together. Exact ACK replay recovers the original Output revision and receipt only within the same owner Run, with text and artifact equality; partial or mismatched evidence conflicts. Production Manager/Expert caller cutover remains follow-up; this prerequisite does not switch production callers.
+
 ### Final-state decisions
 
 - Keep `floe-app` responsible for composition, verified request admission, runtime lifetime and one typed stateless product router. Do not remove lifecycle correctness merely because it remains in App.
