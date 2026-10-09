@@ -102,9 +102,9 @@ The owner-scoped root layout is explicitly versioned. Ready is published only af
 first Trust persistence succeeds; interruption before that retains initializing
 evidence and reports creation_incomplete, never regenerating identity or keys.
 
-`server/internal/adapters/storage` implements the Trust and Integrations repository
+`server/internal/adapters/storage` implements the Trust, Integrations, and Inference repository
 ports over scoped authenticated file capabilities. It owns `trust.json`,
-`producer-identity.json`, `admin-token`, and `integrations.json` file selection,
+`producer-identity.json`, `admin-token`, `integrations.json`, and `inference.json` file selection,
 strict JSON encoding/decoding, and encrypted atomic replacement. The Trust port
 reports presence and write disposition for its complete state, producer identity,
 and operator credential; Trust decides fresh initialization, rejects partial or
@@ -117,15 +117,26 @@ reads are scoped to the exact binding. No secret token is included in the Trust
 repository read snapshot. Explicit local token retrieval remains a separate
 read-only adapter operation.
 
-Logical file purpose and root identity are AEAD-bound. Trust and Integrations retain
-their schema, validation, transitions and indeterminate-write fences behind typed
-repositories. Inference configuration remains on its separate concrete-storage
-path for its later P5 slice. Trust state/producer identity/admin token,
-integration journals, inference configuration and Gmail index are encrypted. Node releases its
-profile lease after owner shutdown and after the storage lifetime guard drains in-flight file I/O. Closed capabilities reject later writes. Explicit local administrator
-token retrieval opens an existing root read-only without starting owners or creating
-credentials. Public profile/identity markers, diagnostic logs and operator-supplied
-environment input remain outside the encrypted payload store.
+Inference owns its typed complete-snapshot contract, configuration validation,
+provider-target preparation, and engine adoption after a confirmed commit. The
+storage adapter retains the existing bounded JSON shape and encrypted atomic
+replacement. The credential adapter accepts a separate `FLOE_KEY_*` reference
+for Inference provider-key reads and writes; runtime connection credential reads
+remain scoped to the exact binding. Provider-key writes still precede the
+Inference snapshot commit, while target/provider removal leaves its old
+credential slot. That cross-store recovery lifecycle remains a bounded follow-up
+for parent design review. No secret values enter owner snapshots.
+
+Logical file purpose and root identity are AEAD-bound. Trust, Integrations and
+Inference retain their schema, validation, transitions and indeterminate-write
+fences behind typed repositories. Trust state/producer identity/admin token,
+integration journals, inference configuration and Gmail index are encrypted.
+Node releases its profile lease after owner shutdown and after the storage
+lifetime guard drains in-flight file I/O. Closed capabilities reject later
+writes. Explicit local administrator token retrieval opens an existing root
+read-only without starting owners or creating credentials. Public
+profile/identity markers, diagnostic logs and operator-supplied environment
+input remain outside the encrypted payload store.
 
 Each Gateway semantic owner receives a distinct storage scope; connector factories
 receive only the connectors subtree. Per-file write locks serialize replacement,

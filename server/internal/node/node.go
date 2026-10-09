@@ -110,8 +110,10 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	factory := providers.NewFactory(vault.Get, runtime)
-	configuration, err := inference.OpenConfiguration(context.Background(), inferenceFiles, model, t, vault, factory)
+	providerCredentials := credentialadapter.NewInferenceProviderAccess(vault)
+	factory := providers.NewFactory(providerCredentials.ReadProviderCredential, runtime)
+	configurationRepository := storageadapter.NewInferenceConfigRepository(inferenceFiles)
+	configuration, err := inference.OpenConfiguration(context.Background(), configurationRepository, model, t, providerCredentials, factory)
 	if err != nil {
 		return nil, err
 	}

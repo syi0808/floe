@@ -1,73 +1,61 @@
 package inference
 
-import (
-	"encoding/json"
-	"errors"
-	"os"
+import "errors"
 
-	"floe/server/internal/storage"
-	"floe/server/internal/trust"
-)
-
-const configurationFileName = "inference.json"
-
-type providerProfile struct {
+// ProviderProfile is the Inference-owned persisted provider configuration.
+type ProviderProfile struct {
 	BaseURL   string                  `json:"base_url"`
 	APIKeyEnv string                  `json:"api_key_env,omitempty"`
 	Purposes  map[string]PurposeModel `json:"purposes"`
 }
 
-type configurationState struct {
+// ConfigState is the complete Inference persistence unit. A repository commit
+// replaces it atomically; Inference validates and adopts it only after commit.
+type ConfigState struct {
 	SchemaVersion int                        `json:"schema_version"`
 	Targets       map[string]ProviderTarget  `json:"targets"`
 	Routes        map[Purpose]PurposeRoute   `json:"routes"`
-	Providers     map[string]providerProfile `json:"providers"`
+	Providers     map[string]ProviderProfile `json:"providers"`
 }
 
-func emptyConfigurationState() configurationState {
-	return configurationState{
+func emptyConfigurationState() ConfigState {
+	return ConfigState{
 		SchemaVersion: 1,
 		Targets:       map[string]ProviderTarget{},
 		Routes:        map[Purpose]PurposeRoute{},
-		Providers:     map[string]providerProfile{},
+		Providers:     map[string]ProviderProfile{},
 	}
 }
 
-func readConfigurationState(files *storage.Files, factory ProviderFactory) (configurationState, error) {
-	state := emptyConfigurationState()
-	data, err := files.Read(configurationFileName, 65536)
-	if os.IsNotExist(err) {
-		return state, nil
-	}
-	if err != nil || trust.DecodeStrict(data, &state, 65536, 32) != nil ||
-		state.SchemaVersion != 1 || state.Targets == nil || state.Routes == nil || state.Providers == nil ||
+func validateConfigurationState(state ConfigState, factory ProviderFactory) error {
+	if factory == nil || state.SchemaVersion != 1 || state.Targets == nil || state.Routes == nil || state.Providers == nil ||
 		len(state.Targets) > 32 || len(state.Providers) > 3 || ValidateConfig(InferenceConfig{Routes: state.Routes}) != nil {
-		return state, errors.New("inference configuration unavailable")
+		return errors.New("inference configuration unavailable")
 	}
 	for _, target := range state.Targets {
 		if factory.ValidateTarget(target) != nil {
-			return state, errors.New("invalid inference target")
+			return errors.New("invalid inference target")
 		}
 	}
 	for _, profile := range state.Providers {
 		if profile.Purposes == nil || len(profile.Purposes) > 3 {
-			return state, errors.New("invalid provider configuration")
+			return errors.New("invalid provider configuration")
 		}
 		for purpose := range profile.Purposes {
 			if !ValidPurpose(purpose) {
-				return state, errors.New("invalid purpose")
+				return errors.New("invalid purpose")
 			}
 		}
 	}
-	return state, nil
+	return nil
 }
 
-func cloneConfigurationState(state configurationState) configurationState {
-	out := configurationState{
+func cloneConfigurationState(state ConfigState) ConfigState {
+	out := ConfigState{
 		SchemaVersion: state.SchemaVersion,
 		Targets:       make(map[string]ProviderTarget, len(state.Targets)),
 		Routes:        make(map[Purpose]PurposeRoute, len(state.Routes)),
-		Providers:     make(map[string]providerProfile, len(state.Providers)),
+		Providers:     make(map[string]ProviderProfile, len(state.Providers)),
 	}
 	for id, target := range state.Targets {
 		target.Capabilities = append([]string(nil), target.Capabilities...)
@@ -88,12 +76,4 @@ func cloneConfigurationState(state configurationState) configurationState {
 		out.Providers[name] = copy
 	}
 	return out
-}
-
-func writeConfigurationState(files *storage.Files, state configurationState) error {
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return files.Write(configurationFileName, data)
 }

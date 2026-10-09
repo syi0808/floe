@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Check the Go import graph with go list.
 
-Owner-to-concrete-adapter boundaries cover Authority, Views, Trust, and
-Integrations. Authority may import Views-owned contract types under
+Owner-to-concrete-adapter boundaries cover Authority, Views, Trust,
+Integrations, and Inference. Authority may import Views-owned contract types under
 views/contracts; it may not import the Views application package at
 internal/views.
 """
@@ -22,7 +22,8 @@ AUTHORITY = f"{MODULE}/internal/authority"
 VIEWS = f"{MODULE}/internal/views"
 TRUST = f"{MODULE}/internal/trust"
 INTEGRATIONS = f"{MODULE}/internal/integrations"
-OWNER_PACKAGES = {AUTHORITY, VIEWS, TRUST, INTEGRATIONS}
+INFERENCE = f"{MODULE}/internal/inference"
+OWNER_PACKAGES = {AUTHORITY, VIEWS, TRUST, INTEGRATIONS, INFERENCE}
 COMPOSITION_ROOTS = {f"{MODULE}/internal/node", f"{MODULE}/internal/transport/http"}
 CONCRETE_ADAPTER_PREFIXES = (
     f"{MODULE}/internal/adapters",
@@ -108,6 +109,9 @@ def write_fixture(root: Path, edge: tuple[str, str] | None) -> None:
         "internal/integrations/integrations.go": (
             "package integrations\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
         ),
+        "internal/inference/inference.go": (
+            "package inference\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
+        ),
         "internal/transport/http/http.go": "package httptransport\ntype Handler struct{}\n",
         "internal/connectors/fixture/adapter.go": "package fixture\n",
         "internal/adapters/storage/repository.go": "package storageadapter\n",
@@ -158,6 +162,10 @@ def run_fixtures() -> int:
             (INTEGRATIONS, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
             (INTEGRATIONS, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
             (INTEGRATIONS, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
+            (INFERENCE, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
+            (INFERENCE, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
+            (INFERENCE, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
+            (INFERENCE, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
         )
         for index, (importer, target, expected_rule) in enumerate(forbidden):
             with tempfile.TemporaryDirectory(dir=base, prefix=f"negative-{index}-") as fixture:

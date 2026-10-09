@@ -111,7 +111,7 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 		if len(next.Targets) > 32 {
 			return operation.Reject(operation.Limited, "target_limit")
 		}
-		if apiKey != "" && c.vault.Put(ctx, target.APIKeyEnv, apiKey) != nil {
+		if apiKey != "" && c.credentials.StoreProviderCredential(ctx, target.APIKeyEnv, apiKey) != nil {
 			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
 		}
 		return c.commitConfiguration(ctx, next)
@@ -143,7 +143,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 			baseURL = "https://chatgpt.com/backend-api/codex"
 			apiKey = ""
 		}
-		profile := providerProfile{BaseURL: baseURL, Purposes: clonePurposeModels(input.Purposes)}
+		profile := ProviderProfile{BaseURL: baseURL, Purposes: clonePurposeModels(input.Purposes)}
 		old := next.Providers[input.Provider]
 		if apiKey != "" {
 			profile.APIKeyEnv = "FLOE_KEY_" + strings.ToUpper(trust.Token())
@@ -157,7 +157,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 			next.Routes[Purpose(purpose)] = PurposeRoute{TargetID: profileTargetID(input.Provider, purpose), ReasoningEffort: configured.ReasoningEffort, Enabled: true}
 		}
 		next.Providers[input.Provider] = profile
-		if apiKey != "" && c.vault.Put(ctx, profile.APIKeyEnv, apiKey) != nil {
+		if apiKey != "" && c.credentials.StoreProviderCredential(ctx, profile.APIKeyEnv, apiKey) != nil {
 			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
 		}
 		return c.commitConfiguration(ctx, next)
@@ -236,7 +236,7 @@ func (c *Configuration) withCurrentOperator(operator trust.OperatorPrincipal, ap
 	return result
 }
 
-func (c *Configuration) commitConfiguration(ctx context.Context, state configurationState) operation.Result {
+func (c *Configuration) commitConfiguration(ctx context.Context, state ConfigState) operation.Result {
 	if ctx.Err() != nil {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
@@ -250,7 +250,7 @@ func (c *Configuration) commitConfiguration(ctx context.Context, state configura
 	if c.save(state) != nil {
 		return operation.Reject(operation.Unavailable, "configuration_unavailable")
 	}
-	c.state = state
+	c.state = cloneConfigurationState(state)
 	if err = c.engine.Configure(config, accounts, executor); err != nil {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
@@ -259,7 +259,7 @@ func (c *Configuration) commitConfiguration(ctx context.Context, state configura
 	return operation.Accept(map[string]bool{"ok": true})
 }
 
-func configuredTarget(state configurationState, id string) (ProviderTarget, bool) {
+func configuredTarget(state ConfigState, id string) (ProviderTarget, bool) {
 	if target, ok := state.Targets[id]; ok {
 		return target, true
 	}

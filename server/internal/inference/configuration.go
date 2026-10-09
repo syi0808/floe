@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"floe/server/internal/credentials"
-	"floe/server/internal/storage"
 )
 
 type ProviderTarget struct {
@@ -27,30 +24,39 @@ type ProviderFactory interface {
 
 type Configuration struct {
 	mu                sync.Mutex
-	files             *storage.Files
+	repository        ConfigRepository
 	engine            *Service
 	authority         Trust
-	vault             credentials.Store
+	credentials       ProviderCredentialAccess
 	factory           ProviderFactory
-	state             configurationState
+	state             ConfigState
 	configUnavailable bool
 }
 
-func OpenConfiguration(ctx context.Context, files *storage.Files, engine *Service, authority Trust, vault credentials.Store, factory ProviderFactory) (*Configuration, error) {
-	if files == nil || engine == nil || authority == nil || vault == nil || factory == nil {
+func OpenConfiguration(ctx context.Context, repository ConfigRepository, engine *Service, authority Trust, credentials ProviderCredentialAccess, factory ProviderFactory) (*Configuration, error) {
+	if repository == nil || engine == nil || authority == nil || credentials == nil || factory == nil {
 		return nil, errors.New("inference configuration dependencies required")
 	}
-	state, err := readConfigurationState(files, factory)
-	if err != nil {
-		return nil, err
+	read := repository.LoadConfig()
+	var state ConfigState
+	switch read.Disposition {
+	case ConfigReadAbsent:
+		state = emptyConfigurationState()
+	case ConfigReadPresent:
+		if err := validateConfigurationState(read.State, factory); err != nil {
+			return nil, err
+		}
+		state = cloneConfigurationState(read.State)
+	default:
+		return nil, errors.New("inference configuration unavailable")
 	}
 	configuration := &Configuration{
-		files:     files,
-		engine:    engine,
-		authority: authority,
-		vault:     vault,
-		factory:   factory,
-		state:     state,
+		repository:  repository,
+		engine:      engine,
+		authority:   authority,
+		credentials: credentials,
+		factory:     factory,
+		state:       state,
 	}
 	config, accounts, executor, err := configuration.prepare(ctx, state)
 	if err != nil {
@@ -62,8 +68,8 @@ func OpenConfiguration(ctx context.Context, files *storage.Files, engine *Servic
 	return configuration, nil
 }
 
-func (c *Configuration) prepare(ctx context.Context, state configurationState) (InferenceConfig, map[string]ModelAccount, ModelExecutor, error) {
-	config := InferenceConfig{Routes: state.Routes}
+func (c *Configuration) prepare(ctx context.Context, state ConfigState) (InferenceConfig, map[string]ModelAccount, ModelExecutor, error) {
+	config := InferenceConfig{Routes: cloneConfigurationState(state).Routes}
 	accounts, executor, err := c.open(ctx, state)
 	if err != nil || validatePreparedConfiguration(config, accounts, executor) != nil {
 		return InferenceConfig{}, nil, nil, errors.New("invalid inference configuration")
@@ -83,9 +89,11 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 	return nil
 }
 
-func (c *Configuration) open(ctx context.Context, state configurationState) (map[string]ModelAccount, ModelExecutor, error) {
+func (c *Configuration) open(ctx context.Context, state ConfigState) (map[string]ModelAccount, ModelExecutor, error) {
 	targets := make(map[string]ProviderTarget, len(state.Targets)+9)
 	for id, target := range state.Targets {
+		target.Capabilities = append([]string(nil), target.Capabilities...)
+		target.BudgetOverride = cloneModelBudgetOverride(target.BudgetOverride)
 		targets[id] = target
 	}
 	for provider, profile := range state.Providers {
@@ -112,7 +120,7 @@ func profileTargetID(provider, purpose string) string {
 	return "managed_" + provider + "_" + purpose
 }
 
-func profileTarget(provider, purpose string, profile providerProfile) ProviderTarget {
+func profileTarget(provider, purpose string, profile ProviderProfile) ProviderTarget {
 	configured := profile.Purposes[purpose]
 	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, Capabilities: append([]string(nil), configured.Capabilities...), BudgetOverride: cloneModelBudgetOverride(configured.BudgetOverride)}
 }
@@ -123,17 +131,23 @@ func (c *Configuration) RequiredError() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.configUnavailable || c.files.Available() != nil {
+	if c.configUnavailable || c.repository.Health() != ConfigRepositoryReady {
 		return errors.New("inference persistence uncertain")
 	}
 	return nil
 }
 
-func (c *Configuration) save(state configurationState) error {
-	err := writeConfigurationState(c.files, state)
-	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
+func (c *Configuration) save(state ConfigState) error {
+	outcome := c.repository.SaveConfig(cloneConfigurationState(state))
+	switch outcome.Disposition {
+	case ConfigWriteCommitted:
+		return nil
+	case ConfigWriteIndeterminate, ConfigWriteIntegrityFailure:
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
 	}
-	return err
+	if outcome.Cause != nil {
+		return outcome.Cause
+	}
+	return errors.New("inference configuration unavailable")
 }

@@ -11,6 +11,15 @@ type Trust interface {
 	WithCurrentOperator(trust.OperatorPrincipal, func() error) error
 	ActiveIssuer(trust.Principal) (trust.IssuerSnapshot, error)
 }
+
+// ProviderCredentialAccess exposes only read and write operations for
+// Inference provider credentials. References are generated and persisted by
+// Inference; this capability does not permit arbitrary credential deletion.
+type ProviderCredentialAccess interface {
+	ReadProviderCredential(context.Context, string) (string, error)
+	StoreProviderCredential(context.Context, string, string) error
+}
+
 type PurposeCatalog interface {
 	Snapshot(context.Context) (PurposeInventory, error)
 }

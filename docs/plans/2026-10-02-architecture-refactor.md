@@ -535,6 +535,44 @@ changed Go files are gofmt-clean and `git diff --check` passed. Review logs and
 the exact candidate tree/patch are captured outside the repository for root
 review. No commit or push was made.
 
+**Bounded Inference configuration-port candidate (2026-10-09):** implemented on
+the exact base `d702d09c0018f3f226100eebe44e5b4e68a2d9ea` (tree
+`30652d0f195147dfc76cfd8c983df38e9f32afcd`, parent
+`7a7099222ba8e85110dae56f005096496e1b2616`). Inference now defines a typed
+whole-snapshot `ConfigRepository` and a provider-only credential capability;
+`adapters/storage` retains the existing `inference.json` path, bounded strict
+JSON, and encrypted atomic replacement, while `adapters/credentials` accepts
+only `FLOE_KEY_*` provider references. Node composes both adapters. Inference
+retains semantic target/route validation, bounded deep clones, prepare-before-
+commit, full-state adoption after confirmed commit, and engine denial on
+indeterminate or integrity failures. The Go import gate now includes Inference
+with the same positive and negative owner-to-adapter checks.
+
+This port move intentionally preserves the existing split-store gap: provider
+credential writes precede configuration commit, and target/provider removal
+leaves its credential slot. A bounded follow-up for parent design review should
+be owned by Inference and use one pending provider-credential transition in the
+existing full snapshot, with one operation ID, exact old/new references, and the
+candidate config. Cut points are: persist intent; write the new unique slot;
+read back that exact slot if the write outcome is uncertain; commit the active
+snapshot; then adopt the prepared engine. A restart resolves that single intent
+before enabling inference and remains unavailable if the exact slot cannot be
+resolved. Deletion similarly commits config without the target plus an exact
+cleanup reference, drains the retired provider generation, performs idempotent
+exact-slot deletion, then commits cleanup completion. Tests should crash/reopen
+after each commit/write/adoption boundary, cover present/absent/unavailable
+readback and retryable deletion, assert old live config is retained or denied
+until settlement, and prove no secret values enter durable state or logs. This
+design is recorded for review only; no lifecycle journal or key deletion was
+added in this slice.
+
+Focused Inference/storage/credential adapter and Node/HTTP tests passed. The
+final server gate passed `go test -race ./...`, `go vet ./...`, `go build ./...`,
+gofmt on changed Go files, and the Go graph gate with one positive and 15
+negative fixtures. `git diff --check` passed. This remains one bounded P5
+candidate; HTTP/model typed-result migration, authority/View expansion, and
+connector/model/OAuth relocations remain later work. No commit or push was made.
+
 - **의존 DAG 먼저:** Trust는 identity/principal/custody port, Authority는 signed enforcement, Views는 parse/read/validate workflow. 공유되는 SourceReference/Snapshot/Bounds 등 순수 값만 contracts/source로 옮긴다. authority는 views application을 import하지 않고 Views가 자신의 Authority port로 협력한다.
 - **첫 View:** authority.SourceService의 Preview/Admit/Read/Release orchestration을 views/application으로 이관한다. Engine의 issue/claim/stage/release 검증은 authority에 남긴다. canonical query bytes·proof binding·one-use release·fence를 그대로 보존한다.
 - **Repository 역전:** Trust.Repository, Integrations.Repository, Inference.ConfigRepository와 실제 필요한 credential capability port를 owner가 정의한다. owner transition/원자적 commit 의미는 남기고 파일명·JSON 저장·암호화 mechanics만 adapters/storage로 이동한다.

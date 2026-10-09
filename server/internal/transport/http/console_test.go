@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	credentialadapter "floe/server/internal/adapters/credentials"
 	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
@@ -114,8 +115,10 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	if err != nil {
 		t.Fatalf("create inference owner: %v", err)
 	}
-	factory := providers.NewFactory(credentialsStore.Get, nil)
-	configuration, err := inference.OpenConfiguration(context.Background(), inferenceFiles, inferenceService, trustService, credentialsStore, factory)
+	providerCredentials := credentialadapter.NewInferenceProviderAccess(credentialsStore)
+	factory := providers.NewFactory(providerCredentials.ReadProviderCredential, nil)
+	configurationRepository := storageadapter.NewInferenceConfigRepository(inferenceFiles)
+	configuration, err := inference.OpenConfiguration(context.Background(), configurationRepository, inferenceService, trustService, providerCredentials, factory)
 	if err != nil {
 		t.Fatalf("open inference configuration owner: %v", err)
 	}
