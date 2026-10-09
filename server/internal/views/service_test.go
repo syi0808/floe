@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/authority"
 	sourcecontract "floe/server/internal/contracts/source"
 	"floe/server/internal/credentials"
@@ -217,20 +218,21 @@ func newServiceFixture(t *testing.T, provider *scriptedReader, producer *failing
 	if err != nil {
 		t.Fatal(err)
 	}
-	trustService, err := trust.Open(trustFiles, true)
+	trustRepository := storageadapter.NewTrustRepository(trustFiles)
+	trustService, err := trust.Open(trustRepository, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	credentialsStore := newMemoryCredentials()
-	adminBytes, err := trustFiles.Read("admin-token", 1024)
+	adminToken, err := trustRepository.ReadAdministratorToken()
 	if err != nil {
 		t.Fatal(err)
 	}
 	personID := trust.NewID()
 	clientOne := enrollTestClient(t, trustService, credentialsStore, personID, "view-client-one")
-	clientOne = approveTestClient(t, trustService, credentialsStore, string(adminBytes), clientOne)
+	clientOne = approveTestClient(t, trustService, credentialsStore, adminToken, clientOne)
 	clientTwo := enrollTestClient(t, trustService, credentialsStore, personID, "view-client-two")
-	clientTwo = approveTestClient(t, trustService, credentialsStore, string(adminBytes), clientTwo)
+	clientTwo = approveTestClient(t, trustService, credentialsStore, adminToken, clientTwo)
 	principalOne, err := trustService.AuthenticateBearer(context.Background(), clientOne.bearer)
 	if err != nil {
 		t.Fatalf("authenticate first synthetic client: %v", err)

@@ -102,11 +102,26 @@ The owner-scoped root layout is explicitly versioned. Ready is published only af
 first Trust persistence succeeds; interruption before that retains initializing
 evidence and reports creation_incomplete, never regenerating identity or keys.
 
-The storage adapter provides scoped authenticated file capabilities. Logical file
-purpose and root identity are AEAD-bound. Semantic owners retain their schema,
-validation, transitions and indeterminate-write fences; they no longer concatenate
-raw private payload paths. Trust state/producer identity/admin token, integration
-journals, inference configuration and Gmail index are encrypted. Node releases its
+`server/internal/adapters/storage` implements the Trust and Integrations repository
+ports over scoped authenticated file capabilities. It owns `trust.json`,
+`producer-identity.json`, `admin-token`, and `integrations.json` file selection,
+strict JSON encoding/decoding, and encrypted atomic replacement. The Trust port
+reports presence and write disposition for its complete state, producer identity,
+and operator credential; Trust decides fresh initialization, rejects partial or
+damaged bootstrap, validates semantic state, and latches unavailable authority on
+integrity or indeterminate writes. The Integrations port reads and replaces one
+complete typed snapshot; Integrations validates its records, advances revisions,
+and adopts only a confirmed commit. The separate credential adapter accepts only
+an owner-defined connection binding for writes and deletion; runtime credential
+reads are scoped to the exact binding. No secret token is included in the Trust
+repository read snapshot. Explicit local token retrieval remains a separate
+read-only adapter operation.
+
+Logical file purpose and root identity are AEAD-bound. Trust and Integrations retain
+their schema, validation, transitions and indeterminate-write fences behind typed
+repositories. Inference configuration remains on its separate concrete-storage
+path for its later P5 slice. Trust state/producer identity/admin token,
+integration journals, inference configuration and Gmail index are encrypted. Node releases its
 profile lease after owner shutdown and after the storage lifetime guard drains in-flight file I/O. Closed capabilities reject later writes. Explicit local administrator
 token retrieval opens an existing root read-only without starting owners or creating
 credentials. Public profile/identity markers, diagnostic logs and operator-supplied

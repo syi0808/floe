@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	credentialadapter "floe/server/internal/adapters/credentials"
 	githubconnector "floe/server/internal/connectors/github"
 	"floe/server/internal/connectors/gmail"
 	googleauth "floe/server/internal/connectors/googleauth"
@@ -57,6 +58,7 @@ func integrationFactories(files *storage.Files, vault credentials.Store, env fun
 func openIntegration(ctx context.Context, files *storage.Files, vault credentials.Store, env func(string) string, c integrations.RuntimeConfig) (out integrations.Runtime, err error) {
 	r := c.Record
 	scope := r.Scope
+	scopedCredentials := credentialadapter.NewScopedStore(vault, c.Binding)
 	var auth sourceOAuth
 	var identity lifecycle.IdentityDriver
 	var reader views.Reader
@@ -66,32 +68,32 @@ func openIntegration(ctx context.Context, files *storage.Files, vault credential
 		cfg := googleauth.Config{ClientID: env("FLOE_GOOGLE_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_GOOGLE_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "gmail":
-			auth, err = googleauth.New(ctx, vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.New(ctx, scopedCredentials, cfg, c.Binding.Slot)
 		case "google_drive.files":
-			auth, err = googleauth.NewDrive(ctx, vault, cfg, c.Binding.Slot)
+			auth, err = googleauth.NewDrive(ctx, scopedCredentials, cfg, c.Binding.Slot)
 		case "calendar.google":
 			var concrete *googleauth.Runtime
-			concrete, err = googleauth.NewCalendar(ctx, vault, cfg, c.Binding.Slot)
+			concrete, err = googleauth.NewCalendar(ctx, scopedCredentials, cfg, c.Binding.Slot)
 			auth, identity = concrete, concrete
 		}
 	case "microsoft.mail", "calendar.microsoft", "microsoft.teams":
 		cfg := microsoftauth.Config{ClientID: env("FLOE_MICROSOFT_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_MICROSOFT_OAUTH_CLIENT_SECRET")}
 		switch r.ConnectorID {
 		case "microsoft.mail":
-			auth, err = microsoftauth.New(ctx, vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.New(ctx, scopedCredentials, cfg, c.Binding.Slot)
 		case "calendar.microsoft":
 			var concrete *microsoftauth.Runtime
-			concrete, err = microsoftauth.NewCalendar(ctx, vault, cfg, c.Binding.Slot)
+			concrete, err = microsoftauth.NewCalendar(ctx, scopedCredentials, cfg, c.Binding.Slot)
 			auth, identity = concrete, concrete
 		case "microsoft.teams":
-			auth, err = microsoftauth.NewTeams(ctx, vault, cfg, c.Binding.Slot)
+			auth, err = microsoftauth.NewTeams(ctx, scopedCredentials, cfg, c.Binding.Slot)
 		}
 	case "github.issues":
-		auth, err = workoauth.NewGitHub(ctx, vault, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
+		auth, err = workoauth.NewGitHub(ctx, scopedCredentials, workoauth.Config{ClientID: env("FLOE_GITHUB_OAUTH_CLIENT_ID")}, c.Binding.Slot)
 	case "slack.conversations":
-		auth, err = workoauth.NewSlack(ctx, vault, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
+		auth, err = workoauth.NewSlack(ctx, scopedCredentials, workoauth.Config{ClientID: env("FLOE_SLACK_OAUTH_CLIENT_ID"), ClientSecret: env("FLOE_SLACK_OAUTH_CLIENT_SECRET")}, c.Binding.Slot)
 	case "home_assistant.states":
-		client, e := homeconnector.New(vaultTokenSource{vault, c.Binding.Slot}, scope["base_url"].(string), r.ConnectionID)
+		client, e := homeconnector.New(vaultTokenSource{scopedCredentials, c.Binding.Slot}, scope["base_url"].(string), r.ConnectionID)
 		if e != nil {
 			return out, e
 		}
@@ -103,7 +105,7 @@ func openIntegration(ctx context.Context, files *storage.Files, vault credential
 		if e != nil {
 			return out, e
 		}
-		out.Setup = lifecycle.NewSecret(ctx, vault, c.Binding)
+		out.Setup = lifecycle.NewSecret(ctx, scopedCredentials, c.Binding)
 		out.Snapshot = service
 		return registeredRuntime(out, homeconnector.ConnectorDescriptor(), service), nil
 	default:

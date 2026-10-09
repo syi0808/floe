@@ -4,9 +4,7 @@ package integrations
 import (
 	"context"
 	"errors"
-	"floe/server/internal/credentials"
 	"floe/server/internal/operation"
-	"floe/server/internal/storage"
 	"floe/server/internal/trust"
 	"reflect"
 	"sort"
@@ -16,32 +14,41 @@ import (
 
 type Service struct {
 	mu          sync.RWMutex
-	files       *storage.Files
+	repository  Repository
 	trust       Trust
-	vault       credentials.Store
+	credentials CredentialAccess
 	factories   map[string]RuntimeFactory
-	state       diskState
+	state       StateSnapshot
 	runtimes    map[string]Runtime
 	unavailable bool
 	lifecycles  sync.Map
 }
 
-func New(ctx context.Context, files *storage.Files, t Trust, v credentials.Store, factories map[string]RuntimeFactory) (*Service, error) {
-	if files == nil || t == nil || v == nil {
+func New(ctx context.Context, repository Repository, t Trust, credentials CredentialAccess, factories map[string]RuntimeFactory) (*Service, error) {
+	if repository == nil || t == nil || credentials == nil {
 		return nil, errors.New("integration dependency unavailable")
 	}
-	state, err := readState(files)
-	if err != nil {
+	loaded := repository.LoadState()
+	var state StateSnapshot
+	switch loaded.Disposition {
+	case LoadAbsent:
+		state = initialState()
+	case LoadPresent:
+		state = loaded.Snapshot
+	default:
+		return nil, errors.New("integration state unavailable")
+	}
+	if err := validateState(state); err != nil {
 		return nil, err
 	}
-	s := &Service{files: files, trust: t, vault: v, factories: map[string]RuntimeFactory{}, state: state, runtimes: map[string]Runtime{}}
+	s := &Service{repository: repository, trust: t, credentials: credentials, factories: map[string]RuntimeFactory{}, state: clone(state), runtimes: map[string]Runtime{}}
 	for k, f := range factories {
 		s.factories[k] = f
 	}
 	// Interrupted authorization never resumes with a provider: journal cleanup before opening sources.
 	for id, a := range s.state.Attempts {
 		if a.Status == Pending {
-			c := cleanupRecord{ID: trust.NewID(), Records: []Record{a.Record}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
+			c := CleanupSnapshot{ID: trust.NewID(), Records: []Record{a.Record}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
 			s.state.Cleanup[c.ID] = c
 			a.Status = Failed
 			a.Revision++
@@ -51,7 +58,7 @@ func New(ctx context.Context, files *storage.Files, t Trust, v credentials.Store
 			s.state.Attempts[id] = a
 		}
 	}
-	if err = s.persist(s.state); err != nil {
+	if err := s.persist(s.state); err != nil {
 		return nil, err
 	}
 	_ = s.ResumeCleanup(ctx)
@@ -90,7 +97,7 @@ func (s *Service) check(p trust.Principal) error {
 	})
 }
 func (s *Service) readyLocked(person string) error {
-	if s.unavailable || s.files.Available() != nil {
+	if !s.storageReadyLocked() {
 		return operation.Fail(operation.Unavailable, "integrations_unavailable")
 	}
 	for _, c := range s.state.Cleanup {
@@ -102,7 +109,25 @@ func (s *Service) readyLocked(person string) error {
 	}
 	return nil
 }
-func (s *Service) commit(p trust.Principal, mutate func(*diskState) error) error {
+func (s *Service) storageReadyLocked() bool {
+	return !s.unavailable && s.repository.Health() == RepositoryReady
+}
+func (s *Service) persist(st StateSnapshot) error {
+	if !s.storageReadyLocked() {
+		return errors.New("integration persistence unavailable")
+	}
+	st.Revision = s.state.Revision + 1
+	outcome := s.repository.SaveState(st)
+	switch outcome.Disposition {
+	case WriteCommitted:
+		s.state = clone(st)
+		return nil
+	case WriteIndeterminate, WriteIntegrityFailure:
+		s.unavailable = true
+	}
+	return errors.New("integration persistence unavailable")
+}
+func (s *Service) commit(p trust.Principal, mutate func(*StateSnapshot) error) error {
 	return s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -186,11 +211,11 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in Co
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
-	var result attemptRecord
+	var result AttemptSnapshot
 	err = s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable || s.files.Available() != nil {
+		if !s.storageReadyLocked() {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		if prior, ok := s.state.Attempts[in.OperationID]; ok {
@@ -225,11 +250,11 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in Co
 			namespace = d.OAuthCredential
 		}
 		var err error
-		r.Credential, err = credentials.ConnectionName(namespace, r.ConnectionID, r.PersonID)
+		r.Credential, err = CredentialSlot(namespace, r.ConnectionID, r.PersonID)
 		if err != nil {
 			return err
 		}
-		result = attemptRecord{ID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, Record: r, Status: AwaitingUser, CreatedAt: time.Now().UnixMilli(), Revision: 1, CatalogRevision: in.ExpectedCatalogRevision, RequestedScope: CloneConnectorScope(scope)}
+		result = AttemptSnapshot{ID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, Record: r, Status: AwaitingUser, CreatedAt: time.Now().UnixMilli(), Revision: 1, CatalogRevision: in.ExpectedCatalogRevision, RequestedScope: CloneConnectorScope(scope)}
 		next := clone(s.state)
 		next.Attempts[result.ID] = result
 		return s.persist(next)
@@ -245,7 +270,7 @@ func (s *Service) Poll(ctx context.Context, p trust.Principal, id, attemptID str
 	}
 	s.mu.RLock()
 	a, ok := s.state.Attempts[attemptID]
-	denied := s.unavailable
+	denied := !s.storageReadyLocked()
 	s.mu.RUnlock()
 	if !ok || a.ClientID != p.ClientID() || a.PersonID != p.PersonID() || a.DeviceID != p.DeviceID() || a.ConnectorID != id {
 		return operation.Reject(operation.Missing, "attempt_not_found")
@@ -261,11 +286,11 @@ func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID s
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
-	var removed attemptRecord
+	var removed AttemptSnapshot
 	err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable || s.files.Available() != nil {
+		if !s.storageReadyLocked() {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		a, ok := s.state.Attempts[attemptID]
@@ -316,7 +341,7 @@ func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string,
 	defer unlock()
 	var result Record
 	changedScope := false
-	err = s.commit(p, func(st *diskState) error {
+	err = s.commit(p, func(st *StateSnapshot) error {
 		r, ok := st.Connections[in.ConnectionID]
 		if !ok || r.PersonID != p.PersonID() || r.ConnectorID != id || r.Revision != in.ConnectionRevision {
 			return operation.Fail(operation.Conflict, "connection_changed")
@@ -364,12 +389,12 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
-	request := disconnectOperation{OperationID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, ConnectionID: in.ConnectionID, ConnectionRevision: in.ConnectionRevision, CleanupState: "pending"}
+	request := DisconnectSnapshot{OperationID: in.OperationID, ClientID: p.ClientID(), PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectorID: id, ConnectionID: in.ConnectionID, ConnectionRevision: in.ConnectionRevision, CleanupState: "pending"}
 	// Replay admission checks current trust, then the durable operation before source existence.
 	err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable || s.files.Available() != nil {
+		if !s.storageReadyLocked() {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		if prior, ok := s.state.Disconnects[in.OperationID]; ok {
@@ -397,7 +422,7 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 				delete(next.Attempts, key)
 			}
 		}
-		next.Cleanup[in.OperationID] = cleanupRecord{ID: in.OperationID, Records: []Record{r}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
+		next.Cleanup[in.OperationID] = CleanupSnapshot{ID: in.OperationID, Records: []Record{r}, RuntimeDone: map[string]bool{}, VaultDone: map[string]bool{}}
 		next.Disconnects[in.OperationID] = request
 		return s.persist(next)
 	})
@@ -407,14 +432,14 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 	_ = s.ResumeCleanup(ctx)
 	s.mu.RLock()
 	receipt, exists := s.state.Disconnects[in.OperationID]
-	denied := s.unavailable
+	denied := !s.storageReadyLocked()
 	s.mu.RUnlock()
 	if !exists || denied {
 		return operation.Reject(operation.Unavailable, "cleanup_receipt_unavailable")
 	}
 	return operation.Accept(map[string]any{"schema_version": 1, "operation_id": receipt.OperationID, "person_id": receipt.PersonID, "device_id": receipt.DeviceID, "connection_id": receipt.ConnectionID, "connector_id": receipt.ConnectorID, "connection_revision": receipt.ConnectionRevision, "cleanup_state": receipt.CleanupState})
 }
-func attemptResponse(a attemptRecord) map[string]any {
+func attemptResponse(a AttemptSnapshot) map[string]any {
 	return map[string]any{"schema_version": 1, "operation_id": a.ID, "connector_id": a.ConnectorID, "connection_id": a.Record.ConnectionID, "person_id": a.PersonID, "device_id": a.DeviceID, "setup_state": string(a.Status), "management_ref": "/manage/setup/" + a.ID, "revision": a.Revision}
 }
 func copyRuntimes(in map[string]Runtime) map[string]Runtime {
@@ -424,12 +449,12 @@ func copyRuntimes(in map[string]Runtime) map[string]Runtime {
 	}
 	return out
 }
-func queueCleanup(st *diskState, records []Record, t *trust.CleanupTicket) string {
+func queueCleanup(st *StateSnapshot, records []Record, t *trust.CleanupTicket) string {
 	id := trust.NewID()
 	if t != nil {
 		id = t.ID
 	}
-	st.Cleanup[id] = cleanupRecord{id, t, records, map[string]bool{}, map[string]bool{}}
+	st.Cleanup[id] = CleanupSnapshot{id, t, records, map[string]bool{}, map[string]bool{}}
 	return id
 }
 func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) error {
@@ -445,7 +470,7 @@ func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) er
 		return operation.Fail(operation.Conflict, "cleanup_conflict")
 	}
 	s.mu.Lock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.storageReadyLocked() {
 		s.mu.Unlock()
 		return operation.Fail(operation.Unavailable, "integrations_unavailable")
 	}
@@ -487,7 +512,7 @@ func (s *Service) ApplyRevocation(ctx context.Context, t trust.CleanupTicket) er
 }
 func (s *Service) ResumeCleanup(ctx context.Context) error {
 	s.mu.RLock()
-	denied := s.unavailable
+	denied := !s.storageReadyLocked()
 	s.mu.RUnlock()
 	if denied {
 		return errors.New("integration persistence uncertain")
@@ -572,7 +597,7 @@ func (s *Service) cleanup(ctx context.Context, id string) error {
 		}
 		if !c.VaultDone[r.ConnectionID] {
 			if r.Credential != "" {
-				if err := s.vault.Delete(ctx, r.Credential); err != nil {
+				if err := s.credentials.DeleteConnectionCredential(ctx, binding(r)); err != nil {
 					unlock()
 					return err
 				}

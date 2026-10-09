@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 	"floe/server/internal/inference/providers"
@@ -99,11 +100,12 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	if err != nil {
 		t.Fatalf("open inference storage scope: %v", err)
 	}
-	trustService, err := trust.Open(trustFiles, true)
+	trustRepository := storageadapter.NewTrustRepository(trustFiles)
+	trustService, err := trust.Open(trustRepository, true)
 	if err != nil {
 		t.Fatalf("open Trust owner: %v", err)
 	}
-	adminToken, err := trustFiles.Read("admin-token", 1024)
+	adminToken, err := trustRepository.ReadAdministratorToken()
 	if err != nil {
 		t.Fatalf("read generated test administrator token: %v", err)
 	}
@@ -124,7 +126,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	}
 	return &consoleFixture{
 		address:     dashboardTestAddress,
-		adminToken:  string(adminToken),
+		adminToken:  adminToken,
 		trust:       trustService,
 		credentials: credentialsStore,
 		catalog:     catalog,

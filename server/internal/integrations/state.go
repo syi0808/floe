@@ -1,52 +1,15 @@
 package integrations
 
 import (
-	"encoding/json"
 	"errors"
-	"floe/server/internal/credentials"
-	"floe/server/internal/storage"
 	"floe/server/internal/trust"
-	"os"
 	"reflect"
 )
 
-type attemptRecord struct {
-	ID, ClientID, PersonID, DeviceID, ConnectorID string
-	Record                                        Record
-	Status                                        AuthorizationState
-	AuthorizationURL, UserCode, ErrorCode         string
-	CreatedAt                                     int64
-	Revision                                      uint64
-	Started                                       bool
-	CatalogRevision                               uint64
-	RequestedScope                                map[string]any
+func initialState() StateSnapshot {
+	return StateSnapshot{1, 1, map[string]Record{}, map[string]AttemptSnapshot{}, map[string]CleanupSnapshot{}, map[string]trust.CleanupReceipt{}, map[string]DisconnectSnapshot{}}
 }
-type cleanupRecord struct {
-	ID          string
-	Ticket      *trust.CleanupTicket
-	Records     []Record
-	RuntimeDone map[string]bool
-	VaultDone   map[string]bool
-}
-type disconnectOperation struct {
-	OperationID, ClientID, PersonID, DeviceID, ConnectorID, ConnectionID string
-	ConnectionRevision                                                   uint64
-	CleanupState                                                         string
-}
-type diskState struct {
-	SchemaVersion int                             `json:"schema_version"`
-	Revision      uint64                          `json:"revision"`
-	Connections   map[string]Record               `json:"connections"`
-	Attempts      map[string]attemptRecord        `json:"attempts"`
-	Cleanup       map[string]cleanupRecord        `json:"cleanup"`
-	Receipts      map[string]trust.CleanupReceipt `json:"receipts"`
-	Disconnects   map[string]disconnectOperation  `json:"disconnects"`
-}
-
-func initialState() diskState {
-	return diskState{1, 1, map[string]Record{}, map[string]attemptRecord{}, map[string]cleanupRecord{}, map[string]trust.CleanupReceipt{}, map[string]disconnectOperation{}}
-}
-func clone(st diskState) diskState {
+func clone(st StateSnapshot) StateSnapshot {
 	out := initialState()
 	out.Revision = st.Revision
 	for k, r := range st.Connections {
@@ -107,29 +70,25 @@ func validateRecord(r Record) bool {
 	if namespace == "" {
 		namespace = d.OAuthCredential
 	}
-	slot, err := credentials.ConnectionName(namespace, r.ConnectionID, r.PersonID)
+	slot, err := CredentialSlot(namespace, r.ConnectionID, r.PersonID)
 	return err == nil && slot == r.Credential
 }
-func readState(files *storage.Files) (diskState, error) {
-	st := initialState()
-	data, err := files.Read("integrations.json", 2<<20)
-	if os.IsNotExist(err) {
-		return st, nil
-	}
-	if err != nil || trust.DecodeStrict(data, &st, 2<<20, 32) != nil || st.SchemaVersion != 1 || st.Revision == 0 || st.Connections == nil || st.Attempts == nil || st.Cleanup == nil || st.Receipts == nil || st.Disconnects == nil || len(st.Connections) > 9 || len(st.Attempts) > 64 || len(st.Cleanup) > 64 || len(st.Receipts) > 128 || len(st.Disconnects) > 256 {
-		return st, errors.New("integration state unavailable")
+
+func validateState(st StateSnapshot) error {
+	if st.SchemaVersion != 1 || st.Revision == 0 || st.Connections == nil || st.Attempts == nil || st.Cleanup == nil || st.Receipts == nil || st.Disconnects == nil || len(st.Connections) > 9 || len(st.Attempts) > 64 || len(st.Cleanup) > 64 || len(st.Receipts) > 128 || len(st.Disconnects) > 256 {
+		return errors.New("integration state unavailable")
 	}
 	owned := map[string]bool{}
 	for id, r := range st.Connections {
 		key := r.PersonID + "/" + r.ConnectorID
 		if id != r.ConnectionID || !validateRecord(r) || owned[key] {
-			return st, errors.New("invalid integration state")
+			return errors.New("invalid integration state")
 		}
 		owned[key] = true
 	}
 	for id, a := range st.Attempts {
 		if id != a.ID || !trust.ValidID(id) || !trust.ValidID(a.ClientID) || a.PersonID != a.Record.PersonID || !trust.ValidDevice(a.DeviceID) || !(validateRecord(a.Record) || (a.Status == AwaitingUser || a.Status == Cancelled || a.Status == Failed) && !a.Started && len(a.Record.Scope) == 0 && validAttemptIdentity(a.Record)) || a.RequestedScope == nil || a.CatalogRevision == 0 || a.ConnectorID != a.Record.ConnectorID || a.CreatedAt <= 0 || a.Revision == 0 || a.Status != Pending && a.Status != Connected && a.Status != Failed && a.Status != AwaitingUser && a.Status != Cancelled {
-			return st, errors.New("invalid integration attempt")
+			return errors.New("invalid integration attempt")
 		}
 	}
 	for _, attempt := range st.Attempts {
@@ -137,44 +96,25 @@ func readState(files *storage.Files) (diskState, error) {
 			definition, ok := DefinitionFor(attempt.ConnectorID)
 			canonical, err := ValidatedConnectorScope(definition, attempt.RequestedScope)
 			if !ok || err != nil || !reflect.DeepEqual(canonical, CloneConnectorScope(attempt.RequestedScope)) {
-				return st, errors.New("invalid integration request identity")
+				return errors.New("invalid integration request identity")
 			}
 		}
 	}
 	for id, c := range st.Cleanup {
 		if id != c.ID || !trust.ValidID(id) || c.RuntimeDone == nil || c.VaultDone == nil {
-			return st, errors.New("invalid integration cleanup")
+			return errors.New("invalid integration cleanup")
 		}
 		for _, r := range c.Records {
 			if !validateRecord(r) {
-				return st, errors.New("invalid integration cleanup")
+				return errors.New("invalid integration cleanup")
 			}
 		}
 	}
 	for id, o := range st.Disconnects {
 		if id != o.OperationID || !trust.ValidID(id) || !trust.ValidID(o.ClientID) || !trust.ValidID(o.PersonID) || !trust.ValidDevice(o.DeviceID) || !trust.ValidID(o.ConnectionID) || o.ConnectionRevision == 0 || o.CleanupState != "pending" && o.CleanupState != "completed" {
-			return st, errors.New("invalid disconnect operation")
+			return errors.New("invalid disconnect operation")
 		}
 	}
-	return clone(st), nil
-}
-func (s *Service) persist(st diskState) error {
-	if s.unavailable {
-		return errors.New("integration persistence uncertain")
-	}
-	st.Revision = s.state.Revision + 1
-	data, err := json.Marshal(st)
-	if err != nil {
-		return err
-	}
-	err = s.files.Write("integrations.json", data)
-	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
-		s.unavailable = true
-	}
-	if err != nil {
-		return errors.New("integration persistence unavailable")
-	}
-	s.state = st
 	return nil
 }
 
@@ -187,6 +127,6 @@ func validAttemptIdentity(r Record) bool {
 	if namespace == "" {
 		namespace = d.OAuthCredential
 	}
-	slot, err := credentials.ConnectionName(namespace, r.ConnectionID, r.PersonID)
+	slot, err := CredentialSlot(namespace, r.ConnectionID, r.PersonID)
 	return err == nil && slot == r.Credential
 }

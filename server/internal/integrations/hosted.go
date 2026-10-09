@@ -19,7 +19,7 @@ type SetupPresentation struct {
 	SecretRequired                                                           bool
 }
 
-func (s *Service) hostedAttempt(operator trust.OperatorPrincipal, id string) (out attemptRecord, err error) {
+func (s *Service) hostedAttempt(operator trust.OperatorPrincipal, id string) (out AttemptSnapshot, err error) {
 	s.mu.RLock()
 	out, ok := s.state.Attempts[id]
 	s.mu.RUnlock()
@@ -30,7 +30,7 @@ func (s *Service) hostedAttempt(operator trust.OperatorPrincipal, id string) (ou
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		current, ok := s.state.Attempts[id]
-		if s.unavailable || !ok || current.Record.ConnectionID != out.Record.ConnectionID {
+		if !s.storageReadyLocked() || !ok || current.Record.ConnectionID != out.Record.ConnectionID {
 			return operation.Fail(operation.Conflict, "operation_changed")
 		}
 		out = current
@@ -38,11 +38,11 @@ func (s *Service) hostedAttempt(operator trust.OperatorPrincipal, id string) (ou
 	})
 	return out, err
 }
-func (s *Service) hostedCommit(operator trust.OperatorPrincipal, expected attemptRecord, mutate func(*diskState, attemptRecord) error) error {
+func (s *Service) hostedCommit(operator trust.OperatorPrincipal, expected AttemptSnapshot, mutate func(*StateSnapshot, AttemptSnapshot) error) error {
 	return s.trust.WithPairingOperation(operator, expected.ClientID, expected.PersonID, expected.DeviceID, func(trust.PrincipalSnapshot) error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.unavailable {
+		if !s.storageReadyLocked() {
 			return operation.Fail(operation.Unavailable, "integrations_unavailable")
 		}
 		a, ok := s.state.Attempts[expected.ID]
@@ -116,7 +116,7 @@ func (s *Service) BeginHostedSetup(ctx context.Context, operator trust.OperatorP
 	if time.Since(time.UnixMilli(a.CreatedAt)) > 10*time.Minute {
 		return SetupPresentation{}, operation.Fail(operation.Conflict, "setup_expired")
 	}
-	err = s.hostedCommit(operator, a, func(st *diskState, current attemptRecord) error {
+	err = s.hostedCommit(operator, a, func(st *StateSnapshot, current AttemptSnapshot) error {
 		if current.Status != AwaitingUser {
 			return operation.Fail(operation.Conflict, "operation_changed")
 		}
@@ -133,7 +133,7 @@ func (s *Service) BeginHostedSetup(ctx context.Context, operator trust.OperatorP
 	}
 	// The exact owned operation is durable before writing a credential or opening OAuth.
 	if secret != "" {
-		if err = s.vault.Put(ctx, a.Record.Credential, secret); err != nil {
+		if err = s.credentials.StoreConnectionCredential(ctx, binding(a.Record), secret); err != nil {
 			return s.hostedFailure(ctx, operator, a, "credential_store_unavailable")
 		}
 	}
@@ -171,7 +171,7 @@ func (s *Service) BeginHostedSetup(ctx context.Context, operator trust.OperatorP
 	}
 	return presentation(a), nil
 }
-func (s *Service) finishHosted(ctx context.Context, operator trust.OperatorPrincipal, a attemptRecord, runtime Runtime, progress AuthorizationProgress) (attemptRecord, error) {
+func (s *Service) finishHosted(ctx context.Context, operator trust.OperatorPrincipal, a AttemptSnapshot, runtime Runtime, progress AuthorizationProgress) (AttemptSnapshot, error) {
 	if progress.State != Pending && progress.State != Connected {
 		_, err := s.hostedFailure(ctx, operator, a, "authorization_interrupted")
 		if err != nil {
@@ -207,7 +207,7 @@ func (s *Service) finishHosted(ctx context.Context, operator trust.OperatorPrinc
 		return a, nil
 	}
 	updated.Revision++
-	err := s.hostedCommit(operator, a, func(st *diskState, current attemptRecord) error {
+	err := s.hostedCommit(operator, a, func(st *StateSnapshot, current AttemptSnapshot) error {
 		if current.Status != Pending || !current.Started {
 			return operation.Fail(operation.Conflict, "operation_changed")
 		}
@@ -228,8 +228,8 @@ func (s *Service) finishHosted(ctx context.Context, operator trust.OperatorPrinc
 	}
 	return updated, nil
 }
-func (s *Service) hostedFailure(ctx context.Context, operator trust.OperatorPrincipal, a attemptRecord, code string) (SetupPresentation, error) {
-	err := s.hostedCommit(operator, a, func(st *diskState, current attemptRecord) error {
+func (s *Service) hostedFailure(ctx context.Context, operator trust.OperatorPrincipal, a AttemptSnapshot, code string) (SetupPresentation, error) {
+	err := s.hostedCommit(operator, a, func(st *StateSnapshot, current AttemptSnapshot) error {
 		current.Status = Failed
 		current.Revision++
 		current.ErrorCode = code
@@ -248,7 +248,7 @@ func (s *Service) hostedFailure(ctx context.Context, operator trust.OperatorPrin
 	_ = s.ResumeCleanup(ctx)
 	return presentation(a), nil
 }
-func presentation(a attemptRecord) SetupPresentation {
+func presentation(a AttemptSnapshot) SetupPresentation {
 	name := a.ConnectorID
 	secret := false
 	fields := []SetupScopeField{}

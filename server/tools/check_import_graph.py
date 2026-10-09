@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Check the Go import graph with go list.
 
-The owner-to-adapter scope is deliberately limited to the Authority and Views
-packages changed by the first P5 View slice. Existing Integrations, Inference,
-Trust, and other P5 adapter debt remains outside this gate. Authority may import
-Views-owned contract types under views/contracts; it may not import the Views
-application package at internal/views.
+Owner-to-concrete-adapter boundaries cover Authority, Views, Trust, and
+Integrations. Authority may import Views-owned contract types under
+views/contracts; it may not import the Views application package at
+internal/views.
 """
 
 from __future__ import annotations
@@ -21,9 +20,12 @@ from pathlib import Path
 MODULE = "floe/server"
 AUTHORITY = f"{MODULE}/internal/authority"
 VIEWS = f"{MODULE}/internal/views"
-OWNER_PACKAGES = {AUTHORITY, VIEWS}
+TRUST = f"{MODULE}/internal/trust"
+INTEGRATIONS = f"{MODULE}/internal/integrations"
+OWNER_PACKAGES = {AUTHORITY, VIEWS, TRUST, INTEGRATIONS}
 COMPOSITION_ROOTS = {f"{MODULE}/internal/node", f"{MODULE}/internal/transport/http"}
 CONCRETE_ADAPTER_PREFIXES = (
+    f"{MODULE}/internal/adapters",
     f"{MODULE}/internal/connectors",
     f"{MODULE}/internal/storage",
     f"{MODULE}/internal/credentials",
@@ -102,9 +104,16 @@ def write_fixture(root: Path, edge: tuple[str, str] | None) -> None:
             "contract \"floe/server/internal/views/contracts\")\n"
             "var _ source.ID\nvar _ contract.ID\n"
         ),
-        "internal/trust/trust.go": "package trust\n",
+        "internal/trust/trust.go": "package trust\ntype Principal struct{}\n",
+        "internal/integrations/integrations.go": (
+            "package integrations\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
+        ),
         "internal/transport/http/http.go": "package httptransport\ntype Handler struct{}\n",
         "internal/connectors/fixture/adapter.go": "package fixture\n",
+        "internal/adapters/storage/repository.go": "package storageadapter\n",
+        "internal/adapters/credentials/repository.go": "package credentialadapter\n",
+        "internal/storage/files.go": "package storage\n",
+        "internal/credentials/store.go": "package credentials\n",
     }
     # Keep the composition fixture valid without needing exported behavior.
     files["internal/authority/authority.go"] += "type Owner struct{}\n"
@@ -128,7 +137,7 @@ def write_fixture(root: Path, edge: tuple[str, str] | None) -> None:
         path.write_text(contents, encoding="utf-8")
 
 
-def run_fixtures() -> None:
+def run_fixtures() -> int:
     with tempfile.TemporaryDirectory(prefix="floe-go-import-graph-") as temp:
         base = Path(temp)
         with tempfile.TemporaryDirectory(dir=base) as positive:
@@ -140,7 +149,15 @@ def run_fixtures() -> None:
         forbidden = (
             (VIEWS, f"{MODULE}/internal/connectors/fixture", "owner-imports-concrete-adapter"),
             (AUTHORITY, VIEWS, "authority-imports-views-application"),
-            (f"{MODULE}/internal/trust", HTTP, "core-imports-http"),
+            (TRUST, HTTP, "core-imports-http"),
+            (TRUST, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
+            (TRUST, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
+            (TRUST, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
+            (TRUST, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
+            (INTEGRATIONS, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
+            (INTEGRATIONS, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
+            (INTEGRATIONS, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
+            (INTEGRATIONS, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
         )
         for index, (importer, target, expected_rule) in enumerate(forbidden):
             with tempfile.TemporaryDirectory(dir=base, prefix=f"negative-{index}-") as fixture:
@@ -149,6 +166,7 @@ def run_fixtures() -> None:
                 found = violations(go_list_graph(fixture_root))
                 if not any(rule == expected_rule for rule, _, _ in found):
                     raise RuntimeError(f"forbidden fixture did not trigger {expected_rule}")
+    return len(forbidden)
 
 
 def main() -> int:
@@ -156,7 +174,7 @@ def main() -> int:
     parser.add_argument("--fixtures-only", action="store_true", help="run positive and forbidden graph fixtures only")
     args = parser.parse_args()
     try:
-        run_fixtures()
+        negative_fixtures = run_fixtures()
         if not args.fixtures_only:
             graph = go_list_graph(Path(__file__).resolve().parents[1])
             found = violations(graph)
@@ -168,7 +186,7 @@ def main() -> int:
         print(f"Go import-graph gate failed: {error}", file=sys.stderr)
         return 1
     scope = "fixture set" if args.fixtures_only else "server graph"
-    print(f"Go import-graph gate passed ({scope}; positive fixture and 3 forbidden fixtures).")
+    print(f"Go import-graph gate passed ({scope}; positive fixture and {negative_fixtures} negative fixtures).")
     return 0
 
 

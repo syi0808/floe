@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/credentials"
 	"floe/server/internal/storage"
 	"io"
@@ -411,7 +412,7 @@ func AdministratorToken(ctx context.Context, directory string) (string, error) {
 	if err != nil {
 		return "", profileStorageFailure(err, operationAdminToken, stageTrustStorage)
 	}
-	token, err := trustFiles.Read("admin-token", 1024)
+	token, err := storageadapter.NewTrustRepository(trustFiles).ReadAdministratorToken()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, storage.ErrIntegrity) {
 			return "", storageFailure("profile_invalid", operationAdminToken, stageAdminToken, err)

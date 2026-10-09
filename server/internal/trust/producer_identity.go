@@ -29,6 +29,32 @@ type ProducerIdentity struct {
 	publicKey  ed25519.PublicKey
 }
 
+// MarshalJSON keeps the producer identity's versioned key encoding owned by
+// Trust while allowing the persistence adapter to own JSON file mechanics.
+func (identity *ProducerIdentity) MarshalJSON() ([]byte, error) {
+	if identity == nil || len(identity.privateKey) != ed25519.PrivateKeySize || len(identity.publicKey) != ed25519.PublicKeySize {
+		return nil, errors.New("invalid producer identity")
+	}
+	record := producerIdentityRecord{
+		SchemaVersion: producerIdentitySchema,
+		KeyID:         identity.keyID,
+		PrivateKey:    base64.RawURLEncoding.EncodeToString(identity.privateKey),
+		PublicKey:     base64.RawURLEncoding.EncodeToString(identity.publicKey),
+	}
+	return json.Marshal(record)
+}
+
+// UnmarshalJSON validates key identity and the exact persisted shape before
+// publishing the private key to the owning Trust instance.
+func (identity *ProducerIdentity) UnmarshalJSON(data []byte) error {
+	parsed, err := DecodeProducerIdentity(data)
+	if err != nil {
+		return err
+	}
+	*identity = *parsed
+	return nil
+}
+
 func DecodeProducerIdentity(data []byte) (*ProducerIdentity, error) {
 	if len(data) == 0 || len(data) > 4096 || StrictJSON(data, 4096, 16) != nil {
 		return nil, errors.New("invalid producer identity")
@@ -76,16 +102,17 @@ func (identity *ProducerIdentity) PublicKey() ed25519.PublicKey {
 	return append(ed25519.PublicKey(nil), identity.publicKey...)
 }
 
-func GenerateProducerIdentity(keyID string) (*ProducerIdentity, []byte, error) {
+func GenerateProducerIdentity(keyID string) (*ProducerIdentity, error) {
+	if !ValidID(keyID) {
+		return nil, errors.New("invalid producer identity")
+	}
 	publicKey, privateKey, err := ed25519.GenerateKey(cryptorand.Reader)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	record := producerIdentityRecord{SchemaVersion: producerIdentitySchema, KeyID: keyID, PrivateKey: base64.RawURLEncoding.EncodeToString(privateKey), PublicKey: base64.RawURLEncoding.EncodeToString(publicKey)}
-	encoded, err := json.Marshal(record)
-	if err != nil {
-		return nil, nil, err
-	}
-	identity, err := DecodeProducerIdentity(encoded)
-	return identity, encoded, err
+	return &ProducerIdentity{
+		keyID:      keyID,
+		privateKey: append(ed25519.PrivateKey(nil), privateKey...),
+		publicKey:  append(ed25519.PublicKey(nil), publicKey...),
+	}, nil
 }

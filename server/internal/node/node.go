@@ -4,6 +4,8 @@ package node
 import (
 	"context"
 	"errors"
+	credentialadapter "floe/server/internal/adapters/credentials"
+	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/authority"
 	"floe/server/internal/inference"
 	codexauth "floe/server/internal/inference/codex"
@@ -90,7 +92,8 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, startupStorageFailure(err, "owner_storage_unavailable", stageOwnerStorage, storageRoot.fresh)
 	}
-	t, err := trust.Open(trustFiles, storageRoot.fresh)
+	trustRepository := storageadapter.NewTrustRepository(trustFiles)
+	t, err := trust.Open(trustRepository, storageRoot.fresh)
 	if err != nil {
 		return nil, startupStorageFailure(err, "trust_unavailable", stageTrustStorage, storageRoot.fresh)
 	}
@@ -116,7 +119,9 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
-	sources, err := integrations.New(context.Background(), integrationFiles, t, vault, integrationFactories(connectorFiles, vault, os.Getenv))
+	integrationRepository := storageadapter.NewIntegrationsRepository(integrationFiles)
+	integrationCredentials := credentialadapter.NewIntegrationAccess(vault)
+	sources, err := integrations.New(context.Background(), integrationRepository, t, integrationCredentials, integrationFactories(connectorFiles, vault, os.Getenv))
 	if err != nil {
 		return nil, err
 	}

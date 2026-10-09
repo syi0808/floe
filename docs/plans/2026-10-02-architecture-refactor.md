@@ -514,6 +514,27 @@ Prerequisite: P3.
 
 Prerequisite: P4.
 
+**Bounded Trust/Integrations implementation candidate (2026-10-09):** on the
+verified base `7a7099222ba8e85110dae56f005096496e1b2616` (tree
+`75f084c9ac7b0acbf2892d72ca0abd98a2c1c6bb`, parent
+`f6384b1f67c8b37e8f91cd2c364aa131dc2c257b`), Trust and Integrations now depend
+on owner-defined typed repository ports. `adapters/storage` retains the existing
+encrypted filenames and JSON shapes while owning strict read, encoding, and file
+replacement. Trust retains all-or-nothing fresh bootstrap and partial-profile
+refusal; Integrations retains whole-snapshot adoption and separate runtime/vault
+cleanup journals. The credential adapter accepts the typed connection binding,
+and connector runtimes receive an exact-slot scoped store. The Go import gate now
+rejects both owners' direct storage, credentials, and adapter imports through
+positive and negative `go list` fixtures. This is a bounded P5 candidate, not P5
+completion: Inference.ConfigRepository, HTTP/model typed-result migration,
+authority/View expansion, and connector/model/OAuth relocations remain later work.
+Validation on this candidate: focused Trust/Integrations/adapter/Node/HTTP/View
+tests passed; `go test -race ./...`, `go vet ./...`, and `go build ./...` passed.
+The Go import-graph gate passed with one positive and 11 negative fixtures;
+changed Go files are gofmt-clean and `git diff --check` passed. Review logs and
+the exact candidate tree/patch are captured outside the repository for root
+review. No commit or push was made.
+
 - **의존 DAG 먼저:** Trust는 identity/principal/custody port, Authority는 signed enforcement, Views는 parse/read/validate workflow. 공유되는 SourceReference/Snapshot/Bounds 등 순수 값만 contracts/source로 옮긴다. authority는 views application을 import하지 않고 Views가 자신의 Authority port로 협력한다.
 - **첫 View:** authority.SourceService의 Preview/Admit/Read/Release orchestration을 views/application으로 이관한다. Engine의 issue/claim/stage/release 검증은 authority에 남긴다. canonical query bytes·proof binding·one-use release·fence를 그대로 보존한다.
 - **Repository 역전:** Trust.Repository, Integrations.Repository, Inference.ConfigRepository와 실제 필요한 credential capability port를 owner가 정의한다. owner transition/원자적 commit 의미는 남기고 파일명·JSON 저장·암호화 mechanics만 adapters/storage로 이동한다.

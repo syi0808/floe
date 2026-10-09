@@ -7,15 +7,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"os"
 	"sort"
 	"sync"
 	"time"
 
 	"floe/server/internal/operation"
-	"floe/server/internal/storage"
 )
 
 // Principal is immutable, process-bound, and stamped with a shared trust generation.
@@ -95,93 +92,66 @@ type RevocationReceipt struct {
 	Cleanup    CleanupTicket
 }
 type ClientSnapshot struct{ ClientID, PersonID, DeviceID string }
-type clientRecord struct {
-	ClientID      string `json:"client_id"`
-	PersonID      string `json:"person_id"`
-	DeviceID      string `json:"device_id"`
-	TokenHash     string `json:"token_hash"`
-	PollProofHash string `json:"poll_proof_hash"`
-}
-type issuerRecord struct {
-	KeyID        string `json:"key_id"`
-	ClientID     string `json:"client_id"`
-	EnrollmentID string `json:"enrollment_id"`
-	PublicKey    []byte `json:"public_key"`
-	Generation   uint64 `json:"generation"`
-}
-type diskState struct {
-	SchemaVersion  int                      `json:"schema_version"`
-	Revision       uint64                   `json:"revision"`
-	InstanceID     string                   `json:"instance_id"`
-	ExecutionOwner string                   `json:"execution_owner"`
-	Clients        map[string]clientRecord  `json:"clients"`
-	Issuers        map[string]issuerRecord  `json:"issuers"`
-	Revoked        map[string]bool          `json:"revoked_issuers"`
-	Cleanup        map[string]CleanupTicket `json:"cleanup"`
-}
 type Service struct {
 	mu          sync.RWMutex
-	files       *storage.Files
-	state       diskState
+	repository  Repository
+	state       StateSnapshot
 	producer    *ProducerIdentity
 	unavailable bool
 	operators   *operatorSessions
 }
 
 func fail(category operation.Category, code string) error { return operation.Fail(category, code) }
-func Open(files *storage.Files, initialize bool) (*Service, error) {
-	if files == nil {
+func Open(repository Repository, initialize bool) (*Service, error) {
+	if repository == nil {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
-	s := &Service{files: files}
-	data, err := files.Read("trust.json", 1<<20)
-	fresh := os.IsNotExist(err)
-	if fresh {
+	s := &Service{repository: repository}
+	stored := repository.Load()
+	if stored.State.Disposition == ReadAbsent {
 		if !initialize {
 			return nil, fail(operation.Unavailable, "trust_recovery_required")
 		}
 		// Any partial prior identity/state is a recovery error, never permission to replace it.
-		for _, name := range []string{"producer-identity.json", "admin-token"} {
-			if exists, e := files.Exists(name); e != nil || exists {
-				return nil, fail(operation.Unavailable, "trust_recovery_required")
-			}
+		if stored.Producer.Disposition != ReadAbsent || stored.AdministratorCredential.Disposition != ReadAbsent {
+			return nil, fail(operation.Unavailable, "trust_recovery_required")
 		}
-		s.state = diskState{SchemaVersion: 1, Revision: 1, InstanceID: NewID(), ExecutionOwner: NewID(), Clients: map[string]clientRecord{}, Issuers: map[string]issuerRecord{}, Revoked: map[string]bool{}, Cleanup: map[string]CleanupTicket{}}
-		identity, encoded, e := GenerateProducerIdentity(NewID())
+		s.state = StateSnapshot{SchemaVersion: 1, Revision: 1, InstanceID: NewID(), ExecutionOwner: NewID(), Clients: map[string]ClientRecord{}, Issuers: map[string]IssuerRecord{}, Revoked: map[string]bool{}, Cleanup: map[string]CleanupTicket{}}
+		identity, e := GenerateProducerIdentity(NewID())
 		if e != nil {
 			return nil, e
 		}
-		if e = files.Write("producer-identity.json", encoded); e != nil {
+		if e = s.write(repository.SaveProducerIdentity(identity), "producer_unavailable"); e != nil {
 			return nil, e
 		}
 		s.producer = identity
-		if e = files.Write("admin-token", []byte(Token())); e != nil {
+		adminToken := Token()
+		if e = s.write(repository.SaveAdministratorCredential(adminToken), "operator_unavailable"); e != nil {
 			return nil, e
 		}
+		s.operators = newOperatorSessions(Digest(adminToken))
 		if e = s.persist(s.state); e != nil {
 			return nil, e
 		}
 	} else {
-		if err != nil || DecodeStrict(data, &s.state, 1<<20, 32) != nil || !validState(s.state) {
+		if stored.State.Disposition != ReadPresent || !validState(stored.State.State) {
 			return nil, fail(operation.Unavailable, "trust_unavailable")
 		}
-		raw, e := files.Read("producer-identity.json", 4096)
-		if e != nil {
+		s.state = clone(stored.State.State)
+		if stored.Producer.Disposition != ReadPresent || stored.Producer.Identity == nil {
 			return nil, fail(operation.Unavailable, "producer_unavailable")
 		}
-		s.producer, e = DecodeProducerIdentity(raw)
-		if e != nil {
-			return nil, fail(operation.Unavailable, "producer_unavailable")
+		s.producer = stored.Producer.Identity
+	}
+	if s.operators == nil {
+		if stored.AdministratorCredential.Disposition != ReadPresent || len(stored.AdministratorCredential.Fingerprint) != 64 {
+			return nil, fail(operation.Unavailable, "operator_unavailable")
 		}
+		s.operators = newOperatorSessions(stored.AdministratorCredential.Fingerprint)
 	}
-	admin, err := files.Read("admin-token", 1024)
-	if err != nil || len(admin) < 32 {
-		return nil, fail(operation.Unavailable, "operator_unavailable")
-	}
-	s.operators = newOperatorSessions(Digest(string(admin)))
 	return s, nil
 }
-func validState(st diskState) bool {
+func validState(st StateSnapshot) bool {
 	if st.SchemaVersion != 1 || st.Revision == 0 || !ValidID(st.InstanceID) || !ValidID(st.ExecutionOwner) || st.Clients == nil || st.Issuers == nil || st.Revoked == nil || st.Cleanup == nil || len(st.Clients) > 16 || len(st.Issuers)+len(st.Revoked) > 128 || len(st.Cleanup) > 32 {
 		return false
 	}
@@ -215,10 +185,10 @@ func validState(st diskState) bool {
 	}
 	return true
 }
-func clone(st diskState) diskState {
+func clone(st StateSnapshot) StateSnapshot {
 	n := st
-	n.Clients = map[string]clientRecord{}
-	n.Issuers = map[string]issuerRecord{}
+	n.Clients = map[string]ClientRecord{}
+	n.Issuers = map[string]IssuerRecord{}
 	n.Revoked = map[string]bool{}
 	n.Cleanup = map[string]CleanupTicket{}
 	for k, v := range st.Clients {
@@ -236,19 +206,20 @@ func clone(st diskState) diskState {
 	}
 	return n
 }
-func (s *Service) persist(st diskState) error {
-	data, err := json.Marshal(st)
-	if err != nil {
-		return fail(operation.Internal, "trust_unavailable")
-	}
-	err = s.files.Write("trust.json", data)
-	if storage.IsIndeterminate(err) || errors.Is(err, storage.ErrIntegrity) {
+func (s *Service) write(outcome WriteOutcome, code string) error {
+	switch outcome.Disposition {
+	case WriteCommitted:
+		return nil
+	case WriteIndeterminate, WriteIntegrityFailure:
 		s.unavailable = true
 	}
-	if err != nil {
-		return fail(operation.Unavailable, "trust_unavailable")
-	}
-	return nil
+	return fail(operation.Unavailable, code)
+}
+func (s *Service) persist(st StateSnapshot) error {
+	return s.write(s.repository.SaveState(st), "trust_unavailable")
+}
+func (s *Service) ready() bool {
+	return !s.unavailable && s.repository.Health() == RepositoryReady
 }
 func (s *Service) blocked(person string) bool {
 	for _, t := range s.state.Cleanup {
@@ -261,7 +232,7 @@ func (s *Service) blocked(person string) bool {
 func (s *Service) RequiredSecurityError() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil || s.producer == nil {
+	if !s.ready() || s.producer == nil {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	return nil
@@ -276,7 +247,7 @@ func (s *Service) AuthenticateBearer(ctx context.Context, bearer string) (Princi
 	hash := Digest(bearer)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return Principal{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	for _, r := range s.state.Clients {
@@ -295,7 +266,7 @@ func (s *Service) AuthenticateBearer(ctx context.Context, bearer string) (Princi
 }
 func (s *Service) checkLocked(p Principal) error {
 	c, ok := s.state.Clients[p.client]
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	if p.owner != s || p.generation != s.state.Revision || !ok || c.PersonID != p.person || c.DeviceID != p.device {
@@ -348,7 +319,7 @@ func (s *Service) WithActiveIssuer(p Principal, id string, consume func(IssuerSn
 func (s *Service) ProducerMetadata() (ProducerMetadata, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil || s.producer == nil {
+	if !s.ready() || s.producer == nil {
 		return ProducerMetadata{}, fail(operation.Unavailable, "producer_unavailable")
 	}
 	return s.metadataLocked(), nil
@@ -359,7 +330,7 @@ func (s *Service) metadataLocked() ProducerMetadata {
 func (s *Service) SignProducerChallenge(data []byte) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil || s.producer == nil || len(data) > 65536 {
+	if !s.ready() || s.producer == nil || len(data) > 65536 {
 		return nil, fail(operation.Unavailable, "producer_unavailable")
 	}
 	return s.producer.SignChallenge(data), nil
@@ -367,7 +338,7 @@ func (s *Service) SignProducerChallenge(data []byte) ([]byte, error) {
 func (s *Service) PreparePairing(person string) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return 0, fail(operation.Unavailable, "trust_unavailable")
 	}
 	if !ValidID(person) {
@@ -395,7 +366,7 @@ func (s *Service) ActivatePairing(ctx context.Context, a PairingActivation) (Pai
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return PairingCommit{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	if a.ExpectedRevision != s.state.Revision || len(s.state.Cleanup) != 0 {
@@ -445,8 +416,8 @@ func (s *Service) ActivatePairing(ctx context.Context, a PairingActivation) (Pai
 	}
 	next := clone(s.state)
 	next.Revision++
-	next.Clients[a.PairingID] = clientRecord{a.PairingID, a.PersonID, a.DeviceID, a.TokenHash, a.PollProofHash}
-	next.Issuers[a.IssuerKeyID] = issuerRecord{a.IssuerKeyID, a.PairingID, a.ChallengeID, append([]byte(nil), a.IssuerPublicKey...), next.Revision}
+	next.Clients[a.PairingID] = ClientRecord{a.PairingID, a.PersonID, a.DeviceID, a.TokenHash, a.PollProofHash}
+	next.Issuers[a.IssuerKeyID] = IssuerRecord{a.IssuerKeyID, a.PairingID, a.ChallengeID, append([]byte(nil), a.IssuerPublicKey...), next.Revision}
 	if err := s.persist(next); err != nil {
 		return PairingCommit{}, err
 	}
@@ -459,7 +430,7 @@ func (s *Service) RevokeClient(ctx context.Context, id string) (RevocationReceip
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return RevocationReceipt{}, fail(operation.Unavailable, "trust_unavailable")
 	}
 	c, ok := s.state.Clients[id]
@@ -495,7 +466,7 @@ func (s *Service) RevokeIssuer(ctx context.Context, id string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	if _, ok := s.state.Issuers[id]; !ok {
@@ -514,7 +485,7 @@ func (s *Service) RevokeIssuer(ctx context.Context, id string) error {
 func (s *Service) PendingCleanup() ([]CleanupTicket, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]CleanupTicket, 0, len(s.state.Cleanup))
@@ -530,7 +501,7 @@ func (s *Service) AcknowledgeCleanup(ctx context.Context, t CleanupTicket, r Cle
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return fail(operation.Unavailable, "trust_unavailable")
 	}
 	current, ok := s.state.Cleanup[t.ID]
@@ -549,7 +520,7 @@ func (s *Service) AcknowledgeCleanup(ctx context.Context, t CleanupTicket, r Cle
 func (s *Service) Clients() ([]ClientSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]ClientSnapshot, 0, len(s.state.Clients))
@@ -561,7 +532,7 @@ func (s *Service) Clients() ([]ClientSnapshot, error) {
 func (s *Service) Issuers() ([]IssuerSnapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return nil, fail(operation.Unavailable, "trust_unavailable")
 	}
 	out := make([]IssuerSnapshot, 0, len(s.state.Issuers))
@@ -615,7 +586,7 @@ func (s *Service) InspectPairing(ctx context.Context, id, proof string) (Pairing
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.unavailable || s.files.Available() != nil {
+	if !s.ready() {
 		return PairingReadback{}, false, fail(operation.Unavailable, "trust_unavailable")
 	}
 	c, ok := s.state.Clients[id]
