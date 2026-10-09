@@ -2,6 +2,162 @@ enum DayItemKind { event, task, note }
 
 enum TaskPriority { low, normal, high }
 
+enum ManualCalendarOperationStatus {
+  pending,
+  executing,
+  blocked,
+  notApplied,
+  unknown,
+  succeeded,
+}
+
+final class ManualCalendarDestination {
+  const ManualCalendarDestination({
+    required this.destinationRef,
+    required this.label,
+  });
+
+  final String destinationRef;
+  final String label;
+}
+
+final class ManualCalendarOperationReceipt {
+  const ManualCalendarOperationReceipt({
+    required this.operationRef,
+    required this.revision,
+    required this.status,
+    required this.collectionPending,
+  });
+
+  factory ManualCalendarOperationReceipt.fromJson(Map<String, dynamic> json) {
+    const expected = {
+      'operation_ref',
+      'revision',
+      'status',
+      'collection_pending',
+    };
+    if (json.keys.toSet().difference(expected).isNotEmpty ||
+        !json.keys.toSet().containsAll(expected) ||
+        json['operation_ref'] is! String ||
+        json['revision'] is! int ||
+        (json['revision'] as int) <= 0 ||
+        json['collection_pending'] is! bool) {
+      throw const FormatException('Invalid Calendar operation receipt.');
+    }
+    final status = switch (json['status']) {
+      'pending' => ManualCalendarOperationStatus.pending,
+      'executing' => ManualCalendarOperationStatus.executing,
+      'blocked' => ManualCalendarOperationStatus.blocked,
+      'not_applied' => ManualCalendarOperationStatus.notApplied,
+      'unknown' => ManualCalendarOperationStatus.unknown,
+      'succeeded' => ManualCalendarOperationStatus.succeeded,
+      _ => throw const FormatException('Invalid Calendar operation status.'),
+    };
+    return ManualCalendarOperationReceipt(
+      operationRef: json['operation_ref'] as String,
+      revision: json['revision'] as int,
+      status: status,
+      collectionPending: json['collection_pending'] as bool,
+    );
+  }
+
+  final String operationRef;
+  final int revision;
+  final ManualCalendarOperationStatus status;
+  final bool collectionPending;
+}
+
+final class ManualCalendarOperationPage {
+  const ManualCalendarOperationPage({
+    required this.operations,
+    required this.nextCursor,
+  });
+
+  final List<ManualCalendarOperationReceipt> operations;
+  final String? nextCursor;
+}
+
+sealed class ManualCalendarOperationIntent {
+  const ManualCalendarOperationIntent();
+  Map<String, dynamic> toJson(String Function(DateTime) timestamp);
+}
+
+final class CreateManualCalendarEvent extends ManualCalendarOperationIntent {
+  const CreateManualCalendarEvent({
+    required this.destinationRef,
+    required this.title,
+    required this.startsAt,
+    required this.endsAt,
+    required this.timezone,
+  });
+
+  final String destinationRef;
+  final String title;
+  final DateTime startsAt;
+  final DateTime endsAt;
+  final String timezone;
+
+  @override
+  Map<String, dynamic> toJson(String Function(DateTime) timestamp) => {
+    'kind': 'create',
+    'destination_ref': destinationRef,
+    'title': title,
+    'schedule': {
+      'starts_at': timestamp(startsAt.toUtc()),
+      'ends_at': timestamp(endsAt.toUtc()),
+      'timezone': timezone,
+    },
+  };
+}
+
+final class UpdateManualCalendarEvent extends ManualCalendarOperationIntent {
+  const UpdateManualCalendarEvent({
+    required this.eventRef,
+    required this.expectedRevision,
+    required this.title,
+    required this.startsAt,
+    required this.endsAt,
+    required this.timezone,
+  });
+
+  final String eventRef;
+  final int expectedRevision;
+  final String title;
+  final DateTime startsAt;
+  final DateTime endsAt;
+  final String timezone;
+
+  @override
+  Map<String, dynamic> toJson(String Function(DateTime) timestamp) => {
+    'kind': 'update',
+    'event_ref': eventRef,
+    'expected_revision': expectedRevision,
+    'title': title,
+    'schedule': {
+      'starts_at': timestamp(startsAt.toUtc()),
+      'ends_at': timestamp(endsAt.toUtc()),
+      'timezone': timezone,
+    },
+  };
+}
+
+final class DeleteManualCalendarEvent extends ManualCalendarOperationIntent {
+  const DeleteManualCalendarEvent({
+    required this.eventRef,
+    required this.expectedRevision,
+  });
+
+  final String eventRef;
+  final int expectedRevision;
+
+  @override
+  Map<String, dynamic> toJson(String Function(DateTime) timestamp) => {
+    'kind': 'delete',
+    'event_ref': eventRef,
+    'expected_revision': expectedRevision,
+  };
+}
+
 final class DayQuery {
   const DayQuery({
     required this.personId,

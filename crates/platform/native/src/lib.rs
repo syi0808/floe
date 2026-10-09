@@ -15,8 +15,9 @@ pub use acquisition::{
     CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker, CalendarSourceFailure,
     CompletionOutcome, HostRegistration, MAX_ACQUISITION_DEADLINE_MS, MAX_ACQUISITION_PENDING,
     NativeResourceGroup, NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
-    PersonalAcquisitionResult, PersonalBroker, PersonalDomain, attention_failure, calendar_failure,
-    personal_failure,
+    PersonalAcquisitionResult, PersonalBroker, PersonalDomain, ValidatedAttentionAcquisitionResult,
+    ValidatedPersonalAcquisitionResult, ValidatedPersonalProjection, attention_failure,
+    calendar_failure, personal_failure,
 };
 pub use calendar_wire::{
     NATIVE_CALENDAR_WIRE_VERSION, NativeCalendarBatch, NativeCalendarFailure, NativeCalendarRecord,

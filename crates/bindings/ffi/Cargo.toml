@@ -23,7 +23,7 @@ floe-connections = { path = "../../modules/connections" }
 floe-access = { path = "../../modules/access" }
 floe-context = { path = "../../modules/context" }
 floe-day = { path = "../../modules/day" }
-floe-actions = { path = "../../modules/actions" }
+floe-calendar-operations = { path = "../../modules/calendar_operations" }
 floe-experts = { path = "../../modules/experts" }
 floe-knowledge = { path = "../../modules/knowledge" }
 floe-execution = { path = "../../runtime/execution" }

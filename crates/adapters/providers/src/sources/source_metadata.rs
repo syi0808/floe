@@ -177,13 +177,14 @@ impl NativeSourceMetadataAdapter {
         request: PersonalAcquisitionRequest,
         scope: &ExecutionScope,
     ) -> Result<PersonalAcquisitionResult, AgentFailure> {
-        let response = scope
+        let validated = scope
             .run(self.personal.submit(
                 request.clone(),
                 chrono::Utc::now().timestamp_millis(),
                 scope.cancellation().clone(),
             ))
             .await?;
+        let (response, projection) = validated.into_parts();
         let provider = match request.domain {
             PersonalDomain::People => "apple_contacts",
             PersonalDomain::Wellbeing => "apple_health",
@@ -197,6 +198,7 @@ impl NativeSourceMetadataAdapter {
             || response.mode != request.mode
             || response.provider != provider
             || response.view.is_some()
+            || projection.is_some()
             || response.transform_operation_id.is_some()
         {
             return Err(AgentFailure::PolicyDenied);
@@ -267,7 +269,7 @@ impl NativeSourceMetadataAdapter {
         let (_, deadline) = deadline(scope)?;
         let host_epoch = self.attention.host_epoch(actor.person_id)?;
         let request_id = Uuid::new_v4();
-        let response = scope
+        let validated = scope
             .run(self.attention.submit(
                 AttentionAcquisitionRequest {
                     request_id,
@@ -282,6 +284,7 @@ impl NativeSourceMetadataAdapter {
                 scope.cancellation().clone(),
             ))
             .await?;
+        let (response, projection) = validated.into_parts();
         if self.attention.host_epoch(actor.person_id).as_deref() != Ok(host_epoch.as_str())
             || response.request_id != request_id
             || response.host_epoch != host_epoch
@@ -289,6 +292,7 @@ impl NativeSourceMetadataAdapter {
             || response.device_id != actor.device_id
             || response.mode != AttentionAcquisitionMode::InspectSubject
             || response.view.is_some()
+            || projection.is_some()
             || response.permission_class != "session_observation"
         {
             return Err(AgentFailure::PolicyDenied);

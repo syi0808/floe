@@ -13,6 +13,21 @@ abstract interface class DayRefreshGateway {
 
 abstract interface class DayGateway {
   Future<DaySnapshot> loadDay(DayQuery query);
+  Future<List<ManualCalendarDestination>> loadExternalCalendarDestinations();
+  Future<ManualCalendarOperationPage> loadExternalCalendarOperations({
+    String? cursor,
+    int limit = 100,
+  });
+  Future<ManualCalendarOperationReceipt> inspectExternalCalendarOperation(
+    String operationRef,
+  );
+  Future<ManualCalendarOperationReceipt> reconcileExternalCalendarOperation(
+    String operationRef,
+    int expectedRevision,
+  );
+  Future<ManualCalendarOperationReceipt> executeExternalCalendarOperation(
+    ManualCalendarOperationIntent operation,
+  );
   Future<CaptureReceipt> submitCapture(String input, DayQuery query);
   Future<DaySnapshot> classifyCapture(
     CaptureReceipt capture,

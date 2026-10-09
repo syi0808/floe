@@ -8,20 +8,19 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_selection.dart';
-import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
-import 'package:floe_client/features/actions/domain/calendar_action.dart';
+import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/presentation/calendar_date_time_field.dart';
 
 class CalendarEventComposer extends StatefulWidget {
   const CalendarEventComposer({
     super.key,
-    required this.controller,
+    required this.gateway,
     this.initialStart,
     this.event,
   });
 
-  final CalendarActionController controller;
+  final DayGateway gateway;
   final DateTime? initialStart;
   final EventItem? event;
 
@@ -35,14 +34,14 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   late DateTime start;
   late DateTime end;
   String? destinationRef;
-  CalendarAction? submittedAction;
+  List<ManualCalendarDestination> destinations = const [];
+  bool loadingDestinations = false;
+  String? destinationError;
   bool saving = false;
-  bool closingAfterSuccess = false;
 
   @override
   void initState() {
     super.initState();
-    widget.controller.addListener(_closeWhenSucceeded);
     final now = DateTime.now();
     final next =
         widget.initialStart ??
@@ -53,20 +52,35 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
         ? start.add(const Duration(minutes: 45))
         : start.add(event.endsAt.difference(event.startsAt));
     title.text = widget.event?.title ?? '';
-    final destinations = widget.controller.destinations;
-    destinationRef = destinations.isEmpty
-        ? null
-        : destinations.first.destinationRef;
-    if (!widget.controller.loaded || !widget.controller.destinationsLoaded) {
-      unawaited(widget.controller.load());
+    if (event == null) {
+      loadingDestinations = true;
+      unawaited(_loadDestinations());
     }
   }
 
   @override
   void dispose() {
-    widget.controller.removeListener(_closeWhenSucceeded);
     title.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDestinations() async {
+    destinationError = null;
+    try {
+      final values = await widget.gateway.loadExternalCalendarDestinations();
+      if (!mounted) return;
+      setState(() {
+        destinations = values;
+        destinationRef = values.isEmpty ? null : values.first.destinationRef;
+        loadingDestinations = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        destinationError = error.toString();
+        loadingDestinations = false;
+      });
+    }
   }
 
   bool _validTitle(String? value) {
@@ -78,270 +92,158 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   }
 
   Future<void> save() async {
-    if (saving ||
-        widget.controller.busy ||
-        !widget.controller.calendarChangesAvailable ||
-        submittedAction != null ||
-        !form.currentState!.validate()) {
+    if (saving || loadingDestinations || !form.currentState!.validate()) {
       return;
     }
     final event = widget.event;
     final target = event?.actionTarget;
     if (event == null &&
-            !widget.controller.destinations.any(
+            !destinations.any(
               (choice) => choice.destinationRef == destinationRef,
             ) ||
         event != null && target == null) {
       return;
     }
     setState(() => saving = true);
-    final schedule = ActionSchedule(
-      startsAt: start.toUtc(),
-      endsAt: end.toUtc(),
-      timezone:
-          event?.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
-    );
-    final ActionIntent intent = event == null
-        ? DirectCreate(
+    final ManualCalendarOperationIntent intent = event == null
+        ? CreateManualCalendarEvent(
             destinationRef: destinationRef!,
             title: title.text.trim(),
-            schedule: schedule,
+            startsAt: start.toUtc(),
+            endsAt: end.toUtc(),
+            timezone: calendarStorageTimezone(start.timeZoneOffset),
           )
-        : DirectUpdate(
+        : UpdateManualCalendarEvent(
             eventRef: target!.eventId,
             expectedRevision: target.expectedRevision,
             title: title.text.trim(),
-            schedule: schedule,
+            startsAt: start.toUtc(),
+            endsAt: end.toUtc(),
+            timezone:
+                event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
           );
     try {
-      final action = await widget.controller.submit(intent);
+      final receipt = await widget.gateway.executeExternalCalendarOperation(
+        intent,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(receipt);
+    } on Object catch (error) {
       if (!mounted) return;
       setState(() {
-        submittedAction = action;
         saving = false;
+        destinationError = error.toString();
       });
-      _closeWhenSucceeded();
-    } on Object {
-      if (!mounted) return;
-      setState(() => saving = false);
     }
   }
-
-  void _closeWhenSucceeded() {
-    final submitted = submittedAction;
-    if (!mounted || closingAfterSuccess || submitted == null) return;
-    final action = widget.controller.find(submitted.actionRef) ?? submitted;
-    if (action.status.state != CalendarActionState.succeeded) return;
-    closingAfterSuccess = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) Navigator.of(context).pop(action);
-    });
-  }
-
-  Future<void> reconcile(CalendarAction action) async {
-    try {
-      final latest = widget.controller.find(action.actionRef) ?? action;
-      final result = await widget.controller.reconcile(latest);
-      if (mounted) {
-        setState(() => submittedAction = result);
-        _closeWhenSucceeded();
-      }
-    } on Object {
-      // The controller retains the owner result state for this view.
-    }
-  }
-
-  String _statusText(CalendarAction action) => switch (action.status.state) {
-    CalendarActionState.pendingReview => 'Action submitted for review.',
-    CalendarActionState.approved =>
-      'Action approved; the owner is processing it.',
-    CalendarActionState.rejected =>
-      'Action rejected. No Calendar change was made.',
-    CalendarActionState.cancelled => 'Action cancelled.',
-    CalendarActionState.expired => 'Action expired.',
-    CalendarActionState.executing => 'Action is in progress.',
-    CalendarActionState.blocked =>
-      'Action blocked: ${action.status.blockedReason!.name}.',
-    CalendarActionState.failed => switch (action.status.failedReason) {
-      ActionNotAppliedReason.sourceChanged => 'The Calendar source changed before this action. No change was applied.',
-      ActionNotAppliedReason.cancelled =>
-        'Cancelled before any Calendar change was made.',
-      ActionNotAppliedReason.timeout =>
-        'Timed out before any Calendar change was made.',
-      _ => 'The owner confirmed the change was not applied.',
-    },
-    CalendarActionState.unknown => 'Action result is unconfirmed. Reconcile this Action before creating another.',
-    CalendarActionState.succeeded =>
-      action.status.collection == ActionCollectionStatus.pending
-          ? 'Calendar change succeeded; Day collection is pending.'
-          : 'Calendar change succeeded and was collected.',
-  };
 
   @override
   Widget build(BuildContext context) {
     final strings = AppLocalizations.of(context);
-    return AnimatedBuilder(
-      animation: widget.controller,
-      builder: (context, _) {
-        final destinations = widget.controller.destinations;
-        final event = widget.event;
-        final target = event?.actionTarget;
-        final submitted = submittedAction == null
-            ? null
-            : widget.controller.find(submittedAction!.actionRef) ??
-                  submittedAction;
-        final destinationError = widget.controller.destinationsError;
-        final canSubmit =
-            !saving &&
-            !widget.controller.busy &&
-            widget.controller.error == null &&
-            widget.controller.calendarChangesAvailable &&
-            submittedAction == null &&
-            (event == null
-                ? destinations.any(
-                    (choice) => choice.destinationRef == destinationRef,
-                  )
-                : target != null);
-        return FloeDetailDialog(
-          title: event == null ? 'New event' : 'Edit event',
-          loading: saving,
-          loadingLabel: strings.actionLoading,
-          children: [
-            const Text(
-              'Existing alerts are preserved. Manage recurring events and invitations in the original calendar.',
-            ),
-            const SizedBox(height: 16),
-            Form(
-              key: form,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (event == null)
-                    FloeSelect<String>(
-                      label: strings.actionDestination,
-                      value:
-                          destinations.any(
-                            (choice) => choice.destinationRef == destinationRef,
-                          )
-                          ? destinationRef
-                          : null,
-                      options: destinations
-                          .map(
-                            (choice) => FloeSelectOption(
-                              value: choice.destinationRef,
-                              label: choice.label,
-                            ),
-                          )
-                          .toList(growable: false),
-                      enabled:
-                          !saving &&
-                          !widget.controller.busy &&
-                          submittedAction == null,
-                      onChanged: (value) =>
-                          setState(() => destinationRef = value),
-                      validator: (value) =>
-                          value == null ? strings.actionFormInvalid : null,
+    final event = widget.event;
+    final target = event?.actionTarget;
+    final canSubmit = !saving &&
+        !loadingDestinations &&
+        (event == null
+            ? destinations.any(
+                (choice) => choice.destinationRef == destinationRef,
+              )
+            : target != null);
+    return FloeDetailDialog(
+      title: event == null ? 'New event' : 'Edit event',
+      loading: saving || (event == null && loadingDestinations),
+      loadingLabel: strings.actionLoading,
+      children: [
+        const Text(
+          'Existing alerts are preserved. Manage recurring events and invitations in the original calendar.',
+        ),
+        const SizedBox(height: 16),
+        Form(
+          key: form,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (event == null && loadingDestinations)
+                const Text('Checking writable Calendar destinations…'),
+              if (event == null && !loadingDestinations)
+                if (destinations.isNotEmpty)
+                  FloeSelect<String>(
+                    label: strings.actionDestination,
+                    value: destinations.any(
+                      (choice) => choice.destinationRef == destinationRef,
                     )
-                  else
-                    Text(
-                      target == null
-                          ? 'This event has no safe Actions target and cannot be edited.'
-                          : 'The current event is the target for this update.',
-                    ),
-                  if (event == null) const SizedBox(height: 12),
-                  FloeInput(
-                    label: strings.actionTitle,
-                    controller: title,
-                    enabled:
-                        !saving &&
-                        !widget.controller.busy &&
-                        submittedAction == null,
+                        ? destinationRef
+                        : null,
+                    options: destinations
+                        .map(
+                          (choice) => FloeSelectOption(
+                            value: choice.destinationRef,
+                            label: choice.label,
+                          ),
+                        )
+                        .toList(growable: false),
+                    enabled: !saving,
+                    onChanged: (value) =>
+                        setState(() => destinationRef = value),
                     validator: (value) =>
-                        _validTitle(value) ? null : strings.actionFormInvalid,
-                  ),
-                  const SizedBox(height: 12),
-                  CalendarDateTimeField(
-                    label: strings.actionStart,
-                    value: start,
-                    enabled:
-                        !saving &&
-                        !widget.controller.busy &&
-                        submittedAction == null,
-                    onChanged: (value) => setState(() {
-                      end = value.add(end.difference(start));
-                      start = value;
-                    }),
-                  ),
-                  CalendarDateTimeField(
-                    label: strings.actionEnd,
-                    value: end,
-                    enabled:
-                        !saving &&
-                        !widget.controller.busy &&
-                        submittedAction == null,
-                    onChanged: (value) => setState(() => end = value),
-                    validator: (value) =>
-                        end.isAfter(start) &&
-                            end.difference(start) <= const Duration(hours: 24)
-                        ? null
-                        : strings.actionFormInvalid,
-                  ),
-                  if (!widget.controller.calendarChangesAvailable) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      widget.controller.busy
-                          ? 'Checking whether Calendar changes are available…'
-                          : 'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
-                    ),
-                    if (destinationError != null)
-                      Text(destinationError.message),
-                    FloeButton.text(
-                      onPressed: widget.controller.busy
-                          ? null
-                          : widget.controller.load,
-                      child: Text(strings.actionReload),
-                    ),
-                  ],
-                  if (widget.controller.error case final error?) ...[
-                    const SizedBox(height: 16),
-                    Text(error.message),
-                    FloeButton.text(
-                      onPressed: widget.controller.busy
-                          ? null
-                          : widget.controller.load,
-                      child: Text(strings.actionReload),
-                    ),
-                  ],
-                  if (submitted case final action?) ...[
-                    const SizedBox(height: 16),
-                    Text(_statusText(action)),
-                    if (action.allowedActions.contains(
-                      ActionAllowedAction.reconcile,
-                    ))
-                      FloeButton.outlined(
-                        onPressed: saving || widget.controller.busy
-                            ? null
-                            : () => reconcile(action),
-                        child: Text(strings.actionCheckCalendar),
-                      ),
-                    FloeButton.text(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ] else
-                    FloeButton.filled(
-                      onPressed: canSubmit ? save : null,
-                      loading: saving,
-                      child: Text(
-                        event == null ? 'Create event' : 'Save changes',
-                      ),
-                    ),
-                ],
+                        value == null ? strings.actionFormInvalid : null,
+                  )
+                else
+                  const Text(
+                    'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
+                  )
+              else
+                Text(
+                  target == null
+                      ? 'This event has no safe Calendar target and cannot be edited.'
+                      : 'The current event is the target for this update.',
+                ),
+              if (event == null) const SizedBox(height: 12),
+              FloeInput(
+                label: strings.actionTitle,
+                controller: title,
+                enabled: !saving && !(event == null && loadingDestinations),
+                validator: (value) =>
+                    _validTitle(value) ? null : strings.actionFormInvalid,
               ),
-            ),
-          ],
-        );
-      },
+              const SizedBox(height: 12),
+              CalendarDateTimeField(
+                label: strings.actionStart,
+                value: start,
+                enabled: !saving,
+                onChanged: (value) => setState(() {
+                  end = value.add(end.difference(start));
+                  start = value;
+                }),
+              ),
+              CalendarDateTimeField(
+                label: strings.actionEnd,
+                value: end,
+                enabled: !saving,
+                onChanged: (value) => setState(() => end = value),
+                validator: (value) =>
+                    end.isAfter(start) &&
+                        end.difference(start) <= const Duration(hours: 24)
+                    ? null
+                    : strings.actionFormInvalid,
+              ),
+              if (destinationError case final error?) ...[
+                const SizedBox(height: 16),
+                Text(error),
+                FloeButton.text(
+                  onPressed: saving ? null : _loadDestinations,
+                  child: Text(strings.actionReload),
+                ),
+              ],
+              FloeButton.filled(
+                onPressed: canSubmit ? save : null,
+                loading: saving,
+                child: Text(event == null ? 'Create event' : 'Save changes'),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

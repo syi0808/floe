@@ -24,8 +24,46 @@ pub struct DayReadQuery {
     pub person_id: PersonId,
     pub selection: DayReadSelection,
     pub max_items: usize,
-    pub max_bytes: usize,
+    /// Maximum serialized DayTimelineItem projection bytes returned by the read.
+    pub max_projected_item_bytes: usize,
+    /// Optional bounds for evidence reads that must stop before JSON decoding.
+    pub acquisition: Option<DayReadAcquisitionBudget>,
 }
+
+/// Pre-deserialization bounds for exact Task/Note evidence selections.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DayReadAcquisitionBudget {
+    max_candidate_items: usize,
+    max_serialized_payload_bytes: usize,
+}
+
+impl DayReadAcquisitionBudget {
+    pub fn try_new(
+        max_candidate_items: usize,
+        max_serialized_payload_bytes: usize,
+    ) -> Result<Self, DayError> {
+        if max_candidate_items == 0
+            || max_candidate_items > MAX_DAY_SNAPSHOT_ITEMS
+            || max_serialized_payload_bytes == 0
+            || max_serialized_payload_bytes > MAX_DAY_SNAPSHOT_BYTES
+        {
+            return Err(DayError::validation("invalid Day acquisition budget"));
+        }
+        Ok(Self {
+            max_candidate_items,
+            max_serialized_payload_bytes,
+        })
+    }
+
+    pub fn max_candidate_items(self) -> usize {
+        self.max_candidate_items
+    }
+
+    pub fn max_serialized_payload_bytes(self) -> usize {
+        self.max_serialized_payload_bytes
+    }
+}
+
 impl DayReadQuery {
     pub fn display(person_id: PersonId, query: &DayQuery) -> Result<Self, DayError> {
         Ok(Self {
@@ -34,15 +72,42 @@ impl DayReadQuery {
                 range: query.range()?,
             },
             max_items: MAX_DAY_SNAPSHOT_ITEMS,
-            max_bytes: MAX_DAY_SNAPSHOT_BYTES,
+            max_projected_item_bytes: MAX_DAY_SNAPSHOT_BYTES,
+            acquisition: None,
         })
     }
+
+    pub fn context_evidence(
+        person_id: PersonId,
+        selection: DayReadSelection,
+        acquisition: DayReadAcquisitionBudget,
+        max_projected_item_bytes: usize,
+    ) -> Result<Self, DayError> {
+        let query = Self {
+            person_id,
+            selection,
+            max_items: acquisition.max_candidate_items(),
+            max_projected_item_bytes,
+            acquisition: Some(acquisition),
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
     pub fn validate(&self) -> Result<(), DayError> {
         if !self.person_id.is_valid()
             || self.max_items == 0
             || self.max_items > MAX_DAY_SNAPSHOT_ITEMS
-            || self.max_bytes == 0
-            || self.max_bytes > MAX_DAY_SNAPSHOT_BYTES
+            || self.max_projected_item_bytes == 0
+            || self.max_projected_item_bytes > MAX_DAY_SNAPSHOT_BYTES
+            || self
+                .acquisition
+                .is_some_and(|budget| budget.max_candidate_items != self.max_items)
+            || (self.acquisition.is_some()
+                && !matches!(
+                    &self.selection,
+                    DayReadSelection::OpenTasks | DayReadSelection::CurrentNotes
+                ))
         {
             return Err(DayError::validation("invalid Day read budget"));
         }
@@ -170,7 +235,7 @@ impl DayReadQuery {
         }
         let mut count = Counter {
             bytes: 0,
-            maximum: self.max_bytes,
+            maximum: self.max_projected_item_bytes,
         };
         serde_json::to_writer(&mut count, &value)
             .map_err(|_| DayError::budget("Day read byte budget"))?;

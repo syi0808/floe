@@ -30,19 +30,19 @@ pub use domain::{
     CompactionRequest, ContinuationRef, ContinuationSnapshot, ContinuationToken,
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
-    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
-    InteractionResolution, InteractionResolutionCause, InteractionResolutionReceipt,
-    InteractionResumeRef, InteractionState, JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN,
-    MAX_COMPACTION_SUMMARY_BYTES, MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES,
-    MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
-    MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES,
-    NavigationDestination, NavigationOnlyTarget, PendingRunTerminal, PriorExhaustion,
-    ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState,
-    RunTerminal, SessionHistoryMessage, SessionHistoryPage, SessionReadRequest, SessionReceipt,
-    SessionRequest, StartSessionRequest, StartTurn, SupersedeInteraction, TurnAdmission,
-    TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt, canonical_requirement_digest,
-    canonical_target_digest, decision_owner_command_id, interaction_publication_id,
-    next_state_after_decision, resume_command_id, state_after_resolution,
+    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionResolution,
+    InteractionResolutionCause, InteractionResolutionReceipt, InteractionResumeRef,
+    InteractionState, JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES,
+    MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
+    MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
+    MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
+    PendingRunTerminal, PriorExhaustion, ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery,
+    RunReceipt, RunRecord, RunState, RunTerminal, SessionHistoryMessage, SessionHistoryPage,
+    SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest, StartTurn,
+    SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt,
+    canonical_requirement_digest, canonical_target_digest, decision_owner_command_id,
+    interaction_publication_id, next_state_after_decision, resume_command_id,
+    state_after_resolution,
 };
 pub use domain::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CanonicalTurnIntent, normalize_turn_text,
@@ -66,9 +66,10 @@ pub use turn::{
 };
 
 pub use domain::{
-    BlockedReviewEvidence, BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,
-    ResumeChildAdmission, ResumeRequired, ReviewAuditRecord, ReviewPublication, SourceReviewLink,
-    TurnInput,
+    BlockedRunCommit, InteractionResolutionCommit, OperationApprovalAdmission,
+    OperationApprovalPublication, OwnerResolutionReceipt, ResumeChildAdmission, ResumeRequired,
+    ReviewAuditEvidence, ReviewAuditRecord, ReviewPublication, SourceReviewLink, TurnInput,
+    operation_approval_interaction,
 };
 
 pub use application::{
@@ -90,8 +91,8 @@ pub use application::{
 };
 
 pub use application::{
-    CommandReceipt, ConversationDependencies, ConversationOwner, InteractionResult,
-    RefreshInteraction, ResolveInteraction,
+    CalendarProposalRequest, CalendarProposalResult, CommandReceipt, ConversationDependencies,
+    ConversationOwner, InteractionResult, RefreshInteraction, ResolveInteraction,
 };
 
 pub use application::{ArtifactSummary, SessionMessage, TaskSummary};

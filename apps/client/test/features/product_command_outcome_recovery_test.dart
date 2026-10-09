@@ -3,7 +3,7 @@ import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
-import 'package:floe_client/features/actions/infrastructure/native_calendar_action_gateway.dart';
+import 'package:floe_client/features/actions/infrastructure/app_wire_operation_authorization_gateway.dart';
 import 'package:floe_client/features/experts/infrastructure/app_wire_registry_gateway.dart';
 import 'package:floe_client/features/knowledge/domain/memory_review.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
@@ -60,10 +60,10 @@ void main() {
   );
 
   test(
-    'Actions preserves the router command disposition for its caller',
+    'Access preserves the router command disposition for its caller',
     () async {
       final transport = _RecordingTransport(_indeterminateConflict);
-      final gateway = NativeCalendarActionGateway(transport);
+      final gateway = AppWireOperationAuthorizationGateway(transport);
 
       await expectLater(
         gateway.setAuthority(

@@ -493,7 +493,7 @@ pub async fn authorize_remote_dependency(
     let grant = grants
         .iter()
         .find(|grant| grant.id() == dependency.grant_id())
-        .ok_or(AgentFailure::PolicyDenied)?;
+        .ok_or(AgentFailure::AccessReviewRequired)?;
     let resource = remote_dependency_resource(grant, dependency)?;
     let source_connection = dependency.source().connection_id();
     let connection_id = source_connection.as_str();
@@ -527,7 +527,7 @@ pub async fn authorize_remote_dependency(
     )?;
     let current = exact_view_grant(store, view_id, dependency.source())
         .await?
-        .ok_or(AgentFailure::PolicyDenied)?;
+        .ok_or(AgentFailure::AccessReviewRequired)?;
     require_unfenced(operations, dependency.source()).await?;
     admit_remote_view_binding(&current, grant, dependency.source(), resource)
 }
@@ -576,19 +576,26 @@ async fn current_remote_source(
         .load(binding.person_id(), &binding.connection_id())
         .await
         .map_err(|_| AgentFailure::StorageUnavailable)?
-        .ok_or(AgentFailure::PolicyDenied)?;
-    if !source.is_serving()
-        || source.person_id() != binding.person_id()
-        || source.connector_id() != binding.connector()
+        .ok_or(AgentFailure::StaleContext)?;
+    if source.person_id() != binding.person_id() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if !source.is_serving() {
+        return Err(AgentFailure::StaleContext);
+    }
+    if source.connector_id() != binding.connector()
         || source.execution_owner_id() != binding.execution_owner()
-        || source.source_authority() != reference.source_authority
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if source.source_authority() != reference.source_authority
         || source
             .resources()
             .iter()
             .map(|resource| resource.handle())
             .ne(reference.source_resources.iter())
     {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::StaleContext);
     }
     Ok(source)
 }

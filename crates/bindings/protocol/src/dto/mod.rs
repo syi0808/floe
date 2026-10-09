@@ -11,6 +11,11 @@ mod day;
 mod day_mutation;
 pub use day::*;
 pub use day_mutation::DayMutationDto;
+mod day_operation;
+pub use day_operation::{
+    ManualCalendarDestinationDto, ManualCalendarOperationDto, ManualCalendarOperationReceiptDto,
+    ManualCalendarOperationStatusDto, ManualCalendarOperationsDto,
+};
 mod envelope;
 mod errors;
 mod events;
@@ -41,9 +46,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub const APP_WIRE_VERSION: u32 = 2;
 
 pub use agent::{
-    ActionAuthorityModeDto, AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction,
-    AgentMemoryOriginDto, AgentMemoryOverviewDto, AgentMemoryReviewDecisionKindDto,
-    AgentMemorySummaryDto, AgentRetryPolicy,
+    AgentFailureCategory, AgentFailureDomain, AgentFailureSafeAction, AgentMemoryOriginDto,
+    AgentMemoryOverviewDto, AgentMemoryReviewDecisionKindDto, AgentMemorySummaryDto,
+    AgentRetryPolicy, OperationPolicyModeDto,
 };
 pub use calendar::{
     CalendarFailureDto, CalendarProviderDto, CalendarRangeDto, CalendarScopeDto,
@@ -64,9 +69,9 @@ pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsRes
 pub use interactions::{
     AppInteractionActionDto, AppInteractionDecisionDto, AppInteractionKindDto,
     AppInteractionListDto, AppInteractionRefreshOutcomeDto, AppInteractionRefreshResultDto,
-    AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto, AppInteractionSnapshotDto,
-    AppInteractionStateDto, AppInteractionTargetDto, AppNavigationDestinationDto,
-    MAX_INTERACTIONS_PER_LIST,
+    AppInteractionRequirementDto, AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto,
+    AppInteractionSnapshotDto, AppInteractionStateDto, AppInteractionTargetDto,
+    AppNavigationDestinationDto, AppSourceAccessReasonDto, MAX_INTERACTIONS_PER_LIST,
 };
 pub use local_context::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,

@@ -13,6 +13,7 @@ pub const MAX_INTERACTIONS_PER_LIST: usize = 64;
 pub enum AppInteractionKindDto {
     SourceAccess,
     ExpertBinding,
+    OperationApproval,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -29,6 +30,40 @@ pub enum AppInteractionStateDto {
     WrongDevice,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppSourceAccessReasonDto {
+    EnableObserve,
+    ReviewChangedSource,
+    RequestSystemPermission,
+    Reconnect,
+    ReviewProcessing,
+    SelectResource,
+}
+
+/// The projected requirement keeps source, Expert-binding, and operation
+/// approvals distinct at the product boundary.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AppInteractionRequirementDto {
+    SourceAccess {
+        reason: AppSourceAccessReasonDto,
+        source_id: String,
+        connection_id: Option<String>,
+        consumer: String,
+        purpose: String,
+        inline: bool,
+    },
+    ExpertBinding {
+        consumer: String,
+        requirement_key: String,
+        review_ref: super::BindingReviewRefDto,
+    },
+    OperationApproval {
+        review_ref: super::ActionReviewRefDto,
+    },
+}
+
 /// A source access card carries the safe stored review projection itself.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
@@ -43,6 +78,8 @@ pub enum AppInteractionTargetDto {
     SourceReview { review: super::ObserveReviewDto },
     #[serde(rename = "expert_binding")]
     ExpertBinding { review: super::BindingReviewDto },
+    #[serde(rename = "operation_approval")]
+    OperationApproval { operation: super::ActionSnapshotDto },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -70,6 +107,7 @@ pub struct AppInteractionSnapshotDto {
     pub target_digest: DigestHex64Dto,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub requirement: AppInteractionRequirementDto,
     pub target: AppInteractionTargetDto,
     pub actions: Vec<AppInteractionActionDto>,
 }
@@ -82,22 +120,79 @@ impl AppInteractionSnapshotDto {
         if self.expires_at <= self.created_at {
             return Err("interaction.expires_at");
         }
-        match (&self.interaction_kind, &self.target) {
+        match (&self.interaction_kind, &self.requirement, &self.target) {
             (
                 AppInteractionKindDto::SourceAccess,
+                AppInteractionRequirementDto::SourceAccess {
+                    source_id,
+                    connection_id,
+                    consumer,
+                    purpose,
+                    ..
+                },
                 AppInteractionTargetDto::SourceReview { review },
             ) => {
                 review.validate()?;
+                validate_requirement_text(source_id, 128, "interaction.requirement.source_id")?;
+                if let Some(connection_id) = connection_id {
+                    validate_requirement_text(
+                        connection_id,
+                        256,
+                        "interaction.requirement.connection_id",
+                    )?;
+                }
+                validate_requirement_text(consumer, 256, "interaction.requirement.consumer")?;
+                validate_requirement_text(purpose, 64, "interaction.requirement.purpose")?;
             }
             (
                 AppInteractionKindDto::SourceAccess,
+                AppInteractionRequirementDto::SourceAccess {
+                    source_id,
+                    connection_id,
+                    consumer,
+                    purpose,
+                    ..
+                },
                 AppInteractionTargetDto::NavigationOnly { source_label, .. },
-            ) if !source_label.is_empty() && source_label.len() <= 256 => {}
+            ) if !source_label.is_empty() && source_label.len() <= 256 => {
+                validate_requirement_text(source_id, 128, "interaction.requirement.source_id")?;
+                if let Some(connection_id) = connection_id {
+                    validate_requirement_text(
+                        connection_id,
+                        256,
+                        "interaction.requirement.connection_id",
+                    )?;
+                }
+                validate_requirement_text(consumer, 256, "interaction.requirement.consumer")?;
+                validate_requirement_text(purpose, 64, "interaction.requirement.purpose")?;
+            }
             (
                 AppInteractionKindDto::ExpertBinding,
+                AppInteractionRequirementDto::ExpertBinding {
+                    consumer,
+                    requirement_key,
+                    review_ref,
+                },
                 AppInteractionTargetDto::ExpertBinding { review },
             ) => {
                 review.validate()?;
+                review_ref.validate()?;
+                validate_requirement_text(consumer, 256, "interaction.requirement.consumer")?;
+                validate_requirement_text(requirement_key, 256, "interaction.requirement.key")?;
+                if &review.review_ref != review_ref || &review.requirement_ref != requirement_key {
+                    return Err("interaction.requirement.binding");
+                }
+            }
+            (
+                AppInteractionKindDto::OperationApproval,
+                AppInteractionRequirementDto::OperationApproval { review_ref },
+                AppInteractionTargetDto::OperationApproval { operation },
+            ) => {
+                operation.validate()?;
+                review_ref.validate()?;
+                if &operation.review_ref != review_ref {
+                    return Err("interaction.requirement.operation");
+                }
             }
             _ => return Err("interaction.target.kind"),
         }
@@ -110,6 +205,22 @@ impl AppInteractionSnapshotDto {
         {
             return Err("interaction.actions");
         }
+        Ok(())
+    }
+}
+
+fn validate_requirement_text(
+    value: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<(), &'static str> {
+    if value.is_empty()
+        || value.len() > max_bytes
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        Err(field)
+    } else {
         Ok(())
     }
 }

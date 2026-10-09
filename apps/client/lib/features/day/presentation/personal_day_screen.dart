@@ -25,14 +25,13 @@ import 'package:floe_client/app/floe_toast.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
-import 'package:floe_client/features/actions/presentation/calendar_action_panel.dart';
 import 'package:floe_client/features/actions/presentation/calendar_action_proposal.dart';
 import 'package:floe_client/features/day/application/personal_day_controller.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
-import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/day/presentation/day_appearance.dart';
 import 'package:floe_client/features/day/presentation/calendar_agenda.dart';
 import 'package:floe_client/features/day/presentation/calendar_context_rail.dart';
+import 'package:floe_client/features/day/presentation/manual_calendar_activity.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
@@ -63,13 +62,13 @@ class PersonalDayScreen extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.query,
-    this.calendarActions,
+    this.operationAuthorization,
     this.agentGateway,
     this.connectionsController,
     this.ownerGateways = const LocalOwnerGateways(),
   });
   final DayGateway gateway;
-  final CalendarActionGateway? calendarActions;
+  final OperationAuthorizationGateway? operationAuthorization;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
   final ConnectionsController? connectionsController;
@@ -81,7 +80,7 @@ class PersonalDayScreen extends StatefulWidget {
 class _PersonalDayScreenState extends State<PersonalDayScreen>
     with WidgetsBindingObserver {
   late final PersonalDayController controller;
-  CalendarActionController? actionController;
+  OperationPolicyController? operationPolicyController;
   ConversationController? agentController;
   bool assistantOpen = false;
   SourceRef? selectedConnectionSource;
@@ -94,8 +93,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   DateTime? draftEventStart;
   bool appActive = true;
   String? connectionSelection;
-  final Set<String> collectedActions = {};
-  bool actionBaselineLoaded = false;
 
   @override
   void initState() {
@@ -111,17 +108,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     widget.connectionsController?.addListener(_connectionsChanged);
     unawaited(_loadInitialDay());
     final runtime = widget.ownerGateways.runtime;
-    final actionGateway = widget.calendarActions;
+    final actionGateway = widget.operationAuthorization;
     if (actionGateway != null && runtime != null) {
-      actionController = CalendarActionController(
+      operationPolicyController = OperationPolicyController(
         gateway: actionGateway,
         runtime: runtime,
       );
-      actionController!.addListener(_actionsChanged);
     }
     screenState = Listenable.merge([
       controller,
-      ?actionController,
+      ?operationPolicyController,
       ?widget.ownerGateways.runtime,
     ]);
     final agentGateway = widget.agentGateway;
@@ -138,9 +134,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     widget.connectionsController?.removeListener(_connectionsChanged);
-    actionController?.removeListener(_actionsChanged);
     controller.dispose();
-    actionController?.dispose();
+    operationPolicyController?.dispose();
     agentController?.dispose();
     assistantEntryFocus.dispose();
     super.dispose();
@@ -186,26 +181,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     // This is a query; only the existing active-Day policy admits acquisition.
     unawaited(controller.load());
     unawaited(controller.refreshIfStale(force: true));
-  }
-
-  void _actionsChanged() {
-    if (!mounted) return;
-    if (actionController?.loaded != true) {
-      actionBaselineLoaded = false;
-      collectedActions.clear();
-      return;
-    }
-    final hadBaseline = actionBaselineLoaded;
-    actionBaselineLoaded = true;
-    var changed = false;
-    for (final action
-        in actionController?.actions ?? const <CalendarAction>[]) {
-      if (action.status.state == CalendarActionState.succeeded &&
-          action.status.collection == ActionCollectionStatus.collected &&
-          collectedActions.add(action.actionRef))
-        changed = true;
-    }
-    if (hadBaseline && changed) unawaited(controller.load());
   }
 
   @override
@@ -267,7 +242,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     if (destination == _DestinationView.settings) {
       return SettingsScreen(
         connectionsController: widget.connectionsController,
-        actionController: actionController,
+        operationPolicyController: operationPolicyController,
         runtime: widget.ownerGateways.runtime,
         registryController: widget.ownerGateways.registry,
         memoryController: widget.ownerGateways.memory,
@@ -277,10 +252,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       );
     }
     if (destination == _DestinationView.activity) {
-      final actions = actionController;
-      return actions == null
-          ? const Text('Activity is available in the native Floe app.')
-          : ActivityPanel(controller: actions);
+      return ManualCalendarActivity(gateway: widget.gateway);
     }
     if (controller.loadState == DayLoadState.failure) {
       return _FailureDay(
@@ -322,9 +294,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                   _DayToolbar(
                     controller,
                     narrow: narrow,
-                    onCreateEvent:
-                        actionController?.calendarChangesAvailable == true &&
-                            actionController?.busy == false
+                    onCreateEvent: widget.ownerGateways.runtime?.ready == true
                         ? () => _openCalendarEditor()
                         : null,
                   ),
@@ -355,17 +325,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Widget _content(bool narrow, DaySnapshot snapshot) {
-    final actions = actionController;
-    final calendarChangesAvailable =
-        actions != null && actions.calendarChangesAvailable && !actions.busy;
-    final showReviews =
-        actions != null &&
-        actions.actions.any(
-          (action) =>
-              action.allowedActions.contains(ActionAllowedAction.approve) ||
-              action.allowedActions.contains(ActionAllowedAction.reject) ||
-              action.allowedActions.contains(ActionAllowedAction.cancel),
-        );
+    final calendarChangesAvailable = widget.ownerGateways.runtime?.ready == true;
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
@@ -384,10 +344,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (showReviews) ...[
-          ReviewRequestPanel(controller: actions),
-          SizedBox(height: FloeSpace.lg),
-        ],
         CalendarContextRail(
           snapshot: snapshot,
           query: controller.query,
@@ -415,7 +371,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           if (assistantOpen && agentController != null) {
             return AgentPanel(
               controller: agentController!,
-              onOpenAction: actionController == null ? null : _openAgentAction,
+              dayGateway: widget.gateway,
               onOpenConnections: () =>
                   _selectDestination(_DestinationView.connections),
               onOpenSourceReview: _openAgentSourceReview,
@@ -445,9 +401,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               child: assistantOpen && agentController != null
                   ? AgentPanel(
                       controller: agentController!,
-                      onOpenAction: actionController == null
-                          ? null
-                          : _openAgentAction,
+                      dayGateway: widget.gateway,
                       onOpenConnections: () =>
                           _selectDestination(_DestinationView.connections),
                       onOpenSourceReview: _openAgentSourceReview,
@@ -491,7 +445,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         height: MediaQuery.sizeOf(context).height * .88,
         child: AgentPanel(
           controller: agent,
-          onOpenAction: actionController == null ? null : _openAgentAction,
+          dayGateway: widget.gateway,
           onOpenConnections: () =>
               _selectDestination(_DestinationView.connections),
           onOpenSourceReview: _openAgentSourceReview,
@@ -502,16 +456,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           },
         ),
       ),
-    );
-  }
-
-  Future<void> _openAgentAction(String actionRef) async {
-    final actions = actionController;
-    if (actions == null) return;
-    unawaited(actions.load());
-    await showFloeDialog<void>(
-      context,
-      (_) => ActionReviewDialog(controller: actions, actionRef: actionRef),
     );
   }
 
@@ -561,9 +505,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     DateTime? initialStart,
     EventItem? event,
   }) async {
-    final actions = actionController;
-    if (actions == null || actions.busy || !actions.calendarChangesAvailable)
-      return;
     final date = controller.query.date;
     final now = DateTime.now();
     final createStart =
@@ -572,20 +513,22 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             ? DateTime(now.year, now.month, now.day, now.hour + 1)
             : DateTime(date.year, date.month, date.day, 9));
     if (event == null) setState(() => draftEventStart = createStart);
-    final saved = await showFloeDialog<CalendarAction>(
+    final saved = await showFloeDialog<ManualCalendarOperationReceipt>(
       context,
       (_) => CalendarEventComposer(
-        controller: actions,
+        gateway: widget.gateway,
         initialStart: event == null ? createStart : initialStart,
         event: event,
       ),
     );
     if (mounted && saved != null) {
-      _showCalendarActionOutcome(
+      _showManualCalendarOperationOutcome(
         saved,
         success: event == null ? 'Event created' : 'Event saved',
       );
-      await controller.load();
+      if (saved.status == ManualCalendarOperationStatus.succeeded) {
+        await controller.load();
+      }
     }
     if (event == null && mounted && draftEventStart == createStart) {
       setState(() => draftEventStart = null);
@@ -598,56 +541,42 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Future<void> _moveCalendarEvent(EventItem event, DateTime start) async {
-    final actions = actionController;
     final target = event.actionTarget;
-    if (actions == null ||
-        actions.busy ||
-        !actions.calendarChangesAvailable ||
-        target == null)
-      return;
+    if (target == null) return;
     try {
-      final result = await actions.submit(
-        DirectUpdate(
+      final result = await widget.gateway.executeExternalCalendarOperation(
+        UpdateManualCalendarEvent(
           eventRef: target.eventId,
           expectedRevision: target.expectedRevision,
           title: event.title,
-          schedule: ActionSchedule(
-            startsAt: start.toUtc(),
-            endsAt: start.toUtc().add(event.endsAt.difference(event.startsAt)),
-            timezone:
-                event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
-          ),
+          startsAt: start.toUtc(),
+          endsAt: start
+              .toUtc()
+              .add(event.endsAt.difference(event.startsAt)),
+          timezone:
+              event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
         ),
       );
-      _showCalendarActionOutcome(result, success: 'Event moved');
-      if (mounted && result.status.state == CalendarActionState.succeeded)
+      _showManualCalendarOperationOutcome(result, success: 'Event moved');
+      if (mounted &&
+          result.status == ManualCalendarOperationStatus.succeeded) {
         await controller.load();
+      }
     } on Object {
-      _showCalendarActionOutcome(null, success: 'Event moved');
+      _showManualCalendarOperationOutcome(null, success: 'Event moved');
     }
   }
 
   Future<void> _deleteCalendarEvent(EventItem event) async {
-    final actions = actionController;
-    if (actions == null ||
-        actions.busy ||
-        !actions.calendarChangesAvailable ||
-        event.actionTarget == null)
-      return;
+    if (event.actionTarget == null) return;
     final confirmed = await showFloeDialog<bool>(
       context,
-      (dialogContext) => AnimatedBuilder(
-        animation: actions,
-        builder: (dialogContext, _) => FloeDetailDialog(
+      (dialogContext) => FloeDetailDialog(
           title: 'Delete event?',
           children: [
             Text(
               '“${event.title}” will be removed from ${event.calendarLabel ?? 'its Calendar source'}.',
             ),
-            if (!actions.calendarChangesAvailable)
-              const Text(
-                'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
-              ),
             const SizedBox(height: FloeSpace.base),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -658,15 +587,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 ),
                 const SizedBox(width: FloeSpace.md),
                 FloeButton.filled(
-                  onPressed: actions.busy || !actions.calendarChangesAvailable
-                      ? null
-                      : () => Navigator.of(dialogContext).pop(true),
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
                   child: const Text('Delete event'),
                 ),
               ],
             ),
           ],
-        ),
       ),
     );
     if (confirmed == true && mounted) {
@@ -675,47 +601,42 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   }
 
   Future<void> _deleteCalendarEventAtOwner(EventItem event) async {
-    final actions = actionController;
     final target = event.actionTarget;
-    if (actions == null ||
-        actions.busy ||
-        !actions.calendarChangesAvailable ||
-        target == null)
-      return;
+    if (target == null) return;
     try {
-      final result = await actions.submit(
-        DirectDelete(
+      final result = await widget.gateway.executeExternalCalendarOperation(
+        DeleteManualCalendarEvent(
           eventRef: target.eventId,
           expectedRevision: target.expectedRevision,
         ),
       );
-      _showCalendarActionOutcome(result, success: 'Event deleted');
+      _showManualCalendarOperationOutcome(result, success: 'Event deleted');
     } on Object {
-      _showCalendarActionOutcome(null, success: 'Event deleted');
+      _showManualCalendarOperationOutcome(null, success: 'Event deleted');
     }
   }
 
-  void _showCalendarActionOutcome(
-    CalendarAction? action, {
+  void _showManualCalendarOperationOutcome(
+    ManualCalendarOperationReceipt? operation, {
     required String success,
   }) {
     if (!mounted) return;
-    final controller = actionController;
-    final title = switch (action?.status.state) {
-      CalendarActionState.succeeded =>
-        action?.status.collection == ActionCollectionStatus.pending
-            ? '$success. Day update is pending; check Activity.'
-            : success,
-      CalendarActionState.blocked =>
-        'Blocked: ${action?.status.blockedReason?.name ?? 'The action owner blocked this request.'}',
-      CalendarActionState.unknown =>
-        'Unknown outcome: ${action?.status.unknownReason?.name ?? 'Reconcile this action in Activity.'}',
-      CalendarActionState.failed =>
-        'Not applied: ${action?.status.failedReason?.name ?? 'Check Activity.'}',
+    final title = switch (operation?.status) {
+      ManualCalendarOperationStatus.succeeded => operation!.collectionPending
+          ? '$success. Day update is pending.'
+          : success,
+      ManualCalendarOperationStatus.pending =>
+        '$success request accepted. Check Activity for updates.',
+      ManualCalendarOperationStatus.executing =>
+        'Calendar change is in progress. Check Activity for updates.',
+      ManualCalendarOperationStatus.blocked =>
+        'Calendar change was blocked before dispatch.',
+      ManualCalendarOperationStatus.notApplied =>
+        'Calendar change was not applied.',
+      ManualCalendarOperationStatus.unknown =>
+        'Calendar outcome is unknown. Reconcile it in Activity before retrying.',
       null =>
-        controller?.error?.message ??
-            'The action outcome was not confirmed. Check Activity.',
-      final status => 'Action status: ${status.name}. Check Activity.',
+        'Calendar outcome was not confirmed. Check Activity before retrying.',
     };
     FloeToastHost.of(context).show(title: title);
   }

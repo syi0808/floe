@@ -6,10 +6,59 @@ final class FakeDayGateway implements DayGateway {
     : _items = List.of(initialItems);
 
   final List<DayItem> _items;
+  final Map<String, ManualCalendarOperationReceipt> _operations = {};
   int _nextId = 1;
 
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async => _snapshot(query);
+
+  @override
+  Future<List<ManualCalendarDestination>>
+  loadExternalCalendarDestinations() async => const [];
+
+  @override
+  Future<ManualCalendarOperationPage> loadExternalCalendarOperations({
+    String? cursor,
+    int limit = 100,
+  }) async {
+    final values = _operations.values.toList()
+      ..sort((left, right) => left.operationRef.compareTo(right.operationRef));
+    final afterCursor = cursor == null
+        ? values
+        : values.where((value) => value.operationRef.compareTo(cursor) > 0).toList();
+    final hasMore = afterCursor.length > limit;
+    final page = afterCursor.take(limit).toList(growable: false);
+    return ManualCalendarOperationPage(
+      operations: List.unmodifiable(page),
+      nextCursor: hasMore ? page.last.operationRef : null,
+    );
+  }
+
+  @override
+  Future<ManualCalendarOperationReceipt> inspectExternalCalendarOperation(
+    String operationRef,
+  ) async => _operations[operationRef] ??
+      (throw StateError('Unknown fake Calendar operation.'));
+
+  @override
+  Future<ManualCalendarOperationReceipt> reconcileExternalCalendarOperation(
+    String operationRef,
+    int expectedRevision,
+  ) async => inspectExternalCalendarOperation(operationRef);
+
+  @override
+  Future<ManualCalendarOperationReceipt> executeExternalCalendarOperation(
+    ManualCalendarOperationIntent operation,
+  ) async {
+    final receipt = ManualCalendarOperationReceipt(
+      operationRef: 'fake-operation-${_nextId++}',
+      revision: 1,
+      status: ManualCalendarOperationStatus.notApplied,
+      collectionPending: false,
+    );
+    _operations[receipt.operationRef] = receipt;
+    return receipt;
+  }
 
   @override
   Future<CaptureReceipt> submitCapture(String input, DayQuery query) async {

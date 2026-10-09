@@ -14,7 +14,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
 
   @override
   Future<AgentDirectorySnapshot> readDirectory() async =>
-      _readDirectoryResult(await _query(const {'kind': 'experts.directory'}));
+      _readDirectoryResult(await _query(const {'kind': 'conversation.experts.directory'}));
 
   @override
   Future<AgentDirectorySnapshot> setInstallationEnabled({
@@ -23,7 +23,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     required bool enabled,
   }) async {
     final intent = <String, Object?>{
-      'kind': 'experts.installation.set_enabled',
+      'kind': 'conversation.experts.installation.set_enabled',
       'installation_ref': installationRef,
       'expected_revision': expectedRevision,
       'enabled': enabled,
@@ -52,12 +52,12 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     required String requirementRef,
   }) async {
     final result = await _query({
-      'kind': 'experts.binding.inspect',
+      'kind': 'conversation.experts.binding.inspect',
       'assignment_ref': assignmentRef,
       'requirement_ref': requirementRef,
     });
     final binding = AgentBindingInspection.fromJson(
-      _payload(result, 'experts.binding', 'binding'),
+      _payload(result, 'conversation.experts.binding', 'binding'),
     );
     if (binding.assignmentRef != assignmentRef ||
         binding.requirementRef != requirementRef) {
@@ -73,7 +73,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     required int expectedBindingRevision,
   }) async {
     final intent = <String, Object?>{
-      'kind': 'experts.binding.prepare_review',
+      'kind': 'conversation.experts.binding.prepare_review',
       'assignment_ref': assignmentRef,
       'requirement_ref': requirementRef,
       'expected_binding_revision': expectedBindingRevision,
@@ -95,11 +95,11 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     AgentBindingReviewRef reviewRef,
   ) async {
     final result = await _query({
-      'kind': 'experts.binding.inspect_review',
+      'kind': 'conversation.experts.binding.inspect_review',
       'review_ref': reviewRef.toJson(),
     });
     final review = AgentBindingReview.fromJson(
-      _payload(result, 'experts.binding_review', 'review'),
+      _payload(result, 'conversation.experts.binding_review', 'review'),
     );
     if (!review.reviewRef.matches(reviewRef)) {
       throw const FormatException('Expert review reference mismatch.');
@@ -114,7 +114,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
   }) async {
     _validateReplacement(review, candidateRefs);
     final intent = <String, Object?>{
-      'kind': 'experts.binding.replace',
+      'kind': 'conversation.experts.binding.replace',
       'review_ref': Map<String, Object?>.unmodifiable(
         review.reviewRef.toJson(),
       ),
@@ -264,7 +264,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
 
   AgentDirectorySnapshot _readDirectoryResult(Map<String, dynamic> result) =>
       AgentDirectorySnapshot.fromJson(
-        _payload(result, 'experts.directory', 'directory'),
+        _payload(result, 'conversation.experts.directory', 'directory'),
       );
 
   AgentBindingReview _readBindingReviewResult(
@@ -274,7 +274,7 @@ final class AppWireRegistryGateway implements AgentRegistryGateway {
     required int bindingRevision,
   }) {
     final review = AgentBindingReview.fromJson(
-      _payload(result, 'experts.binding_review', 'review'),
+      _payload(result, 'conversation.experts.binding_review', 'review'),
     );
     if (review.assignmentRef != assignmentRef ||
         review.requirementRef != requirementRef ||

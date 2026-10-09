@@ -5,9 +5,9 @@
 //! typed requests invoke the owning service API and return its safe projection.
 
 mod abi;
-mod actions_wire;
 mod app_wire;
 mod bridge;
+mod calendar_operations_wire;
 mod connections_wire;
 mod context_wire;
 mod conversation_wire;

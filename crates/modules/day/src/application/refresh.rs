@@ -537,7 +537,8 @@ impl DayService {
             person_id: actor.person_id,
             selection: crate::DayReadSelection::ActionWindow { starts_at, ends_at },
             max_items: crate::MAX_DAY_SNAPSHOT_ITEMS,
-            max_bytes: crate::MAX_DAY_SNAPSHOT_BYTES,
+            max_projected_item_bytes: crate::MAX_DAY_SNAPSHOT_BYTES,
+            acquisition: None,
         };
         let mut events = Vec::new();
         for item in self.repository.read_items(query.clone()).await? {

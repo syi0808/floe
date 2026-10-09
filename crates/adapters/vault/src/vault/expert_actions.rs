@@ -1,11 +1,11 @@
 //! Physical Task receipt/artifact reader for Actions. Immutable Task provenance
 //! is validated by Experts; proposal and effect policy remain Actions-owned.
 
-use floe_actions::{
+use floe_agent_contract::{ArtifactPart, DependencyCoverage, TaskExecutionReceiptRef};
+use floe_calendar_operations::{
     EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE, ExpertCalendarProposal, ExpertProposalEvidence,
     ExpertProposalReader,
 };
-use floe_agent_contract::{ArtifactPart, DependencyCoverage, TaskExecutionReceiptRef};
 use floe_execution::{BoxFuture, ExecutionScope};
 use floe_experts::{TaskRecord, TaskRepository};
 use floe_kernel::{AgentFailure, OwnerActor, PersonId};
@@ -80,7 +80,6 @@ pub(super) fn decode_task_proposal(
         || proposal.instance_id != trusted.admission.registry_instance_id
         || proposal.assignment_id != trusted.admission.assignment_id
         || proposal.package != trusted.admission.package
-        || proposal.data_class != floe_context_contract::DataClass::Personal
     {
         return Err(AgentFailure::PolicyDenied);
     }
@@ -94,7 +93,9 @@ pub(super) fn decode_task_proposal(
         dependency.person_id() == person_id
             && dependency.observation_id() == proposal.evidence_id
             && dependency.consumer().identifier() == proposal.package.id
-            && dependency.source().connector().as_str() == "calendar.event_kit"
+            && (dependency.source().connector().as_str() == "calendar.event_kit"
+                || (cfg!(feature = "qa-fixtures")
+                    && dependency.source().connector().as_str() == "calendar.fixture"))
             && dependency.operation() == floe_context_contract::GrantOperation::Read
             && dependency.purpose() == floe_context_contract::GrantPurpose::Assistant
             && trusted.selection.requirements.iter().any(|requirement| {
@@ -109,6 +110,13 @@ pub(super) fn decode_task_proposal(
     });
     let dependency = contributors.next().ok_or(AgentFailure::PolicyDenied)?;
     if contributors.next().is_some() {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if proposal.data_class != floe_context_contract::DataClass::Personal
+        && !(cfg!(feature = "qa-fixtures")
+            && dependency.source().connector().as_str() == "calendar.fixture"
+            && proposal.data_class == floe_context_contract::DataClass::Synthetic)
+    {
         return Err(AgentFailure::PolicyDenied);
     }
     let coverage = trusted.receipt.snapshot.coverage.clone();

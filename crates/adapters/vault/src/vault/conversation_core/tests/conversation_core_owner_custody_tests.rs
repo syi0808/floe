@@ -4063,8 +4063,8 @@ fn pending_navigation_interaction(
         SourceAccessRequirementKind,
     };
     use floe_conversation::{
-        BlockedReviewEvidence, ConversationInteraction, InteractionOrigin, InteractionRequirement,
-        InteractionState, NavigationDestination, NavigationOnlyTarget, ReviewAuditRecord,
+        ConversationInteraction, InteractionOrigin, InteractionRequirement, InteractionState,
+        NavigationDestination, NavigationOnlyTarget, ReviewAuditEvidence, ReviewAuditRecord,
         ReviewedTarget, canonical_requirement_digest, canonical_target_digest,
         interaction_publication_id,
     };
@@ -4092,7 +4092,7 @@ fn pending_navigation_interaction(
             .connection_id()
             .map(|connection| connection.as_str().to_owned()),
         consumer: source.consumer().identifier().to_owned(),
-        purpose: requirement.purpose.clone(),
+        purpose: "assistant".into(),
     };
     let target = ReviewedTarget::NavigationOnly(target);
     let origin = InteractionOrigin::Task {
@@ -4106,7 +4106,7 @@ fn pending_navigation_interaction(
         run_id: run.run_id,
         executor_generation: run.executor_generation,
         operation_id: Uuid::new_v4(),
-        evidence: BlockedReviewEvidence::Navigation {
+        evidence: ReviewAuditEvidence::Navigation {
             execution,
             requirement: source,
             target: match &target {

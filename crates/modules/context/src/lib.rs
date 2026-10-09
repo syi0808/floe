@@ -39,6 +39,7 @@ mod ports {
     pub mod archive_reader;
     pub mod calendar_product;
     pub mod calendar_source;
+    pub mod day_context_evidence;
     pub mod evidence_reader;
     pub mod expert_execution;
     pub mod personal_source;
@@ -56,9 +57,8 @@ pub use application::coverage::{
 pub use application::day_context_views::{note_context_view, task_context_view};
 pub use application::expert_context::{ExpertContextRequest, prepare_expert_context};
 pub use application::expert_sources::{
-    CalendarReviewClassification, DeclaredSourceRequirement, DeclaredSourceValue,
-    LocalExpertSource, LocalExpertSourceDriver, classify_calendar_review,
-    current_calendar_connector, observe_calendar_binding, read_declared_source,
+    DeclaredSourceRequirement, DeclaredSourceValue, LocalExpertSource, LocalExpertSourceDriver,
+    current_calendar_connector, read_declared_source,
 };
 pub use application::history::read_history_coverage;
 pub use application::learner_projection::ContextLearnerProjection;
@@ -119,6 +119,11 @@ pub use ports::archive_reader::{
     ArchiveProjection, ArchiveReader, MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
 };
 pub use ports::calendar_source::{CalendarObservation, CalendarObserveRequest, CalendarSource};
+pub use ports::day_context_evidence::{
+    DayContextEvidence, DayContextEvidenceError, DayContextEvidenceQuery, DayContextEvidenceReader,
+    DayContextEvidenceSelection, DayEvidenceAcquisitionBudget, DayNoteEvidence, DayTaskEvidence,
+    MAX_DAY_EVIDENCE_ACQUISITION_PAYLOAD_BYTES, NativeContextProjectionBudget,
+};
 pub use ports::evidence_reader::EvidenceReader;
 pub use ports::expert_execution::{
     ExpertRemoteSource, ExpertRemoteTransport, ExpertSourceTransport,

@@ -69,26 +69,19 @@ impl RuntimeQueryDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppProductQueryDto {
-    #[serde(rename = "actions.destinations")]
-    ActionsDestinations {},
-    #[serde(rename = "actions.proposal.preview")]
-    ActionsProposalPreview {
-        receipt: super::TaskExecutionReceiptRefDto,
-        artifact_id: super::UuidRefDto,
-    },
-    #[serde(rename = "actions.authority.get")]
-    ActionsAuthority {},
-    #[serde(rename = "actions.list")]
-    ActionsList {
-        cursor: Option<super::ActionRefDto>,
-        limit: u16,
-    },
-    #[serde(rename = "actions.inspect")]
-    ActionsInspect { action_ref: super::ActionRefDto },
     #[serde(rename = "day.refresh.get")]
     DayRefreshGet { operation_ref: OperationRefDto },
     #[serde(rename = "day.snapshot")]
     DaySnapshot { day: super::DayQueryDto },
+    #[serde(rename = "day.calendar_destinations")]
+    DayCalendarDestinations {},
+    #[serde(rename = "day.external_calendar_operation.get")]
+    DayExternalCalendarOperationGet { operation_ref: OperationRefDto },
+    #[serde(rename = "day.external_calendar_operations")]
+    DayExternalCalendarOperations {
+        cursor: Option<OperationRefDto>,
+        limit: u16,
+    },
     #[serde(rename = "memory.overview")]
     MemoryOverview {},
     #[serde(rename = "memory.review")]
@@ -107,14 +100,14 @@ pub enum AppProductQueryDto {
     ConnectionsSourceInspectReview { review_ref: ReviewRefDto },
     #[serde(rename = "connections.observe.inspect_review")]
     ConnectionsObserveInspectReview { review_ref: ReviewRefDto },
-    #[serde(rename = "experts.directory")]
+    #[serde(rename = "conversation.experts.directory")]
     ExpertsDirectory {},
-    #[serde(rename = "experts.binding.inspect")]
+    #[serde(rename = "conversation.experts.binding.inspect")]
     ExpertsInspectBinding {
         assignment_ref: super::AssignmentRefDto,
         requirement_ref: String,
     },
-    #[serde(rename = "experts.binding.inspect_review")]
+    #[serde(rename = "conversation.experts.binding.inspect_review")]
     ExpertsInspectBindingReview {
         review_ref: super::BindingReviewRefDto,
     },
@@ -125,6 +118,8 @@ pub enum AppProductQueryDto {
     },
     #[serde(rename = "conversation.session.resume")]
     ConversationSessionResume {},
+    #[serde(rename = "conversation.calendar_policy.get")]
+    ConversationCalendarPolicy {},
     #[serde(rename = "conversation.get_command")]
     ConversationGetCommand { command_id: CommandIdDto },
     #[serde(rename = "conversation.get_run")]
@@ -140,19 +135,17 @@ pub enum AppProductQueryDto {
 impl AppProductQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::ActionsDestinations {}
-            | Self::ActionsAuthority {}
-            | Self::ActionsInspect { .. } => return Ok(()),
-            Self::ActionsProposalPreview { receipt, .. } => return receipt.validate(),
-            Self::ActionsList { limit, .. } => {
+            Self::DayRefreshGet { .. } => return Ok(()),
+            Self::DaySnapshot { .. } => return Ok(()),
+            Self::DayCalendarDestinations {} => return Ok(()),
+            Self::DayExternalCalendarOperationGet { .. } => return Ok(()),
+            Self::DayExternalCalendarOperations { limit, .. } => {
                 return if (1..=100).contains(limit) {
                     Ok(())
                 } else {
                     Err("query.limit")
                 };
             }
-            Self::DayRefreshGet { .. } => return Ok(()),
-            Self::DaySnapshot { .. } => return Ok(()),
             Self::MemoryOverview {} | Self::MemoryReview {} | Self::ConnectionsOverview {} => {
                 return Ok(());
             }
@@ -180,6 +173,7 @@ impl AppProductQueryDto {
             Self::ExpertsInspectBindingReview { review_ref } => return review_ref.validate(),
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
+            Self::ConversationCalendarPolicy {} => return Ok(()),
             Self::ConversationGetCommand { .. }
             | Self::ConversationGetRun { .. }
             | Self::ConversationGetMessage { .. }
@@ -204,25 +198,9 @@ pub enum AppQueryResultDto {
     NativeHostPersonalAcquisitions {
         acquisitions: Vec<super::LocalContextPersonalAcquisitionRequestDto>,
     },
-    #[serde(rename = "actions.destinations")]
-    ActionsDestinations {
-        destinations: Vec<super::ActionDestinationChoiceDto>,
-    },
-    #[serde(rename = "actions.proposal.preview")]
-    ActionsProposalPreview {
-        preview: super::ActionProposalPreviewDto,
-    },
-    #[serde(rename = "actions.authority")]
-    ActionsAuthority {
-        authority: super::ActionsAuthorityDto,
-    },
-    #[serde(rename = "actions.action")]
-    Action {
-        action: super::ActionSnapshotDto,
-    },
-    #[serde(rename = "actions.page")]
-    ActionsPage {
-        page: super::ActionsPageDto,
+    #[serde(rename = "conversation.calendar_policy")]
+    ConversationCalendarPolicy {
+        policy: super::CalendarOperationPolicyDto,
     },
     DaySnapshot {
         snapshot: super::DaySnapshotDto,
@@ -230,6 +208,18 @@ pub enum AppQueryResultDto {
     #[serde(rename = "day.refresh")]
     DayRefresh {
         refresh: super::DayRefreshStateDto,
+    },
+    #[serde(rename = "day.calendar_destinations")]
+    DayCalendarDestinations {
+        destinations: Vec<super::ManualCalendarDestinationDto>,
+    },
+    #[serde(rename = "day.external_calendar_operation")]
+    DayExternalCalendarOperation {
+        operation: super::ManualCalendarOperationReceiptDto,
+    },
+    #[serde(rename = "day.external_calendar_operations")]
+    DayExternalCalendarOperations {
+        operations: super::ManualCalendarOperationsDto,
     },
     #[serde(rename = "memory.overview")]
     MemoryOverview {
@@ -275,15 +265,15 @@ pub enum AppQueryResultDto {
     ConnectionsLaunch {
         launch_action: super::LaunchActionDto,
     },
-    #[serde(rename = "experts.directory")]
+    #[serde(rename = "conversation.experts.directory")]
     ExpertsDirectory {
         directory: super::ExpertDirectorySnapshotDto,
     },
-    #[serde(rename = "experts.binding")]
+    #[serde(rename = "conversation.experts.binding")]
     ExpertsBinding {
         binding: super::BindingInspectionDto,
     },
-    #[serde(rename = "experts.binding_review")]
+    #[serde(rename = "conversation.experts.binding_review")]
     ExpertsBindingReview {
         review: super::BindingReviewDto,
     },

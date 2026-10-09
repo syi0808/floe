@@ -52,6 +52,19 @@ pub struct InteractionResult {
     pub interaction: InteractionSnapshot,
     pub linked: Option<CommandReceipt>,
 }
+#[derive(Clone, Debug)]
+pub struct CalendarProposalRequest {
+    pub session_id: Uuid,
+    pub origin_run_id: RunId,
+    pub receipt: floe_agent_contract::TaskExecutionReceiptRef,
+    pub artifact_id: Uuid,
+    pub destination_ref: Uuid,
+}
+#[derive(Clone, Debug)]
+pub struct CalendarProposalResult {
+    pub operation: floe_calendar_operations::ActionSnapshot,
+    pub interaction: Option<InteractionSnapshot>,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -70,12 +83,39 @@ pub struct MessageSnapshot {
 pub trait ConversationOwner: Send + Sync {
     /// Immediate lifetime fence for Drop/panic paths; shutdown also drains.
     fn close_admission(&self);
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_lose_next_operation_approval_admission_ack(&self);
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_pause_recovery<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>>;
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_read_interaction_record<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        interaction_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<ConversationInteraction>, AgentFailure>>;
     fn start_session<'a>(
         &'a self,
         actor: &'a OwnerActor,
         command_id: CommandId,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>>;
+    fn calendar_operation_policy<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_access::OperationAuthorizationPolicy, AgentFailure>>;
+    fn set_calendar_operation_policy<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        mode: floe_access::OperationPolicyMode,
+        expected_revision: u64,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<floe_access::OperationAuthorizationPolicy, CommandFailure<AgentFailure>>,
+    >;
     fn resume_session<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -94,6 +134,13 @@ pub trait ConversationOwner: Send + Sync {
         request: StartTurn,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<CommandReceipt, CommandFailure<AgentFailure>>>;
+    fn submit_calendar_proposal<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        request: CalendarProposalRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<CalendarProposalResult, CommandFailure<AgentFailure>>>;
     fn cancel_run<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -166,6 +213,7 @@ pub struct ConversationDependencies<R, S, T> {
     pub evidence: Arc<dyn EvidenceReader>,
     pub resolver: Arc<dyn DependencyResolver>,
     pub connections: Arc<floe_connections::ConnectionsService>,
+    pub calendar_operations: Arc<floe_calendar_operations::CalendarOperationsService>,
     pub experts_owner: Arc<dyn floe_experts::ExpertsOwner>,
     pub knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
     pub runtime_epoch: u64,
@@ -195,6 +243,14 @@ struct ServiceState<R, S, T> {
     tasks: Mutex<JoinSet<()>>,
     recovery_started: AtomicBool,
     recovery_wake: Notify,
+    #[cfg(feature = "qa-fixtures")]
+    lose_next_operation_admission_ack: AtomicBool,
+    #[cfg(feature = "qa-fixtures")]
+    recovery_pause_requested: AtomicBool,
+    #[cfg(feature = "qa-fixtures")]
+    recovery_pause_acknowledged: AtomicBool,
+    #[cfg(feature = "qa-fixtures")]
+    recovery_pause_ack: Notify,
 }
 
 impl<R, S, T> ConversationService<R, S, T>
@@ -213,6 +269,7 @@ where
             dependencies.repository.clone(),
             config.clone(),
             dependencies.connections.clone(),
+            dependencies.calendar_operations.clone(),
             dependencies.experts_owner.clone(),
         )?;
         let events = ConversationEventBuffer::new(dependencies.runtime_epoch)?;
@@ -230,6 +287,14 @@ where
                 tasks: Mutex::new(JoinSet::new()),
                 recovery_started: AtomicBool::new(false),
                 recovery_wake: Notify::new(),
+                #[cfg(feature = "qa-fixtures")]
+                lose_next_operation_admission_ack: AtomicBool::new(false),
+                #[cfg(feature = "qa-fixtures")]
+                recovery_pause_requested: AtomicBool::new(false),
+                #[cfg(feature = "qa-fixtures")]
+                recovery_pause_acknowledged: AtomicBool::new(false),
+                #[cfg(feature = "qa-fixtures")]
+                recovery_pause_ack: Notify::new(),
             }),
         })
     }
@@ -429,7 +494,7 @@ where
                 Ok(receipt) => Ok(receipt),
                 Err(failure) => match state.dependencies.repository.load_receipt(run_id).await {
                     Ok(Some(receipt)) if receipt.state == RunState::Working => {
-                        state
+                        let settled = state
                             .dependencies
                             .repository
                             .finish_run(
@@ -437,7 +502,8 @@ where
                                 receipt.aggregate_revision,
                                 RunTerminal::from_failure(failure),
                             )
-                            .await
+                            .await;
+                        settled
                     }
                     Ok(Some(receipt)) => Ok(receipt),
                     Ok(None) => Err(AgentFailure::StorageUnavailable),
@@ -503,6 +569,55 @@ where
             .shutdown
             .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
     }
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_lose_next_operation_approval_admission_ack(&self) {
+        self.inner
+            .lose_next_operation_admission_ack
+            .store(true, Ordering::Release);
+    }
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_pause_recovery<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.inner
+                .recovery_pause_requested
+                .store(true, Ordering::Release);
+            self.inner.recovery_wake.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let notified = self.inner.recovery_pause_ack.notified();
+                    if self
+                        .inner
+                        .recovery_pause_acknowledged
+                        .load(Ordering::Acquire)
+                    {
+                        return;
+                    }
+                    notified.await;
+                }
+            })
+            .await
+            .map_err(|_| AgentFailure::DeadlineExceeded)
+        })
+    }
+    #[cfg(feature = "qa-fixtures")]
+    fn qa_read_interaction_record<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        interaction_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<ConversationInteraction>, AgentFailure>> {
+        Box::pin(async move {
+            self.inner.check(actor)?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .get_interaction(actor.person_id, interaction_id),
+                )
+                .await
+        })
+    }
     fn start_session<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -532,6 +647,48 @@ where
                 })
                 .await
                 .map_err(crate::SessionStartFailure::Indeterminate)?
+        })
+    }
+    fn calendar_operation_policy<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_access::OperationAuthorizationPolicy, AgentFailure>> {
+        Box::pin(async move {
+            self.inner.check(actor)?;
+            self.inner
+                .dependencies
+                .calendar_operations
+                .inspect_authority(actor, scope)
+                .await
+        })
+    }
+    fn set_calendar_operation_policy<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        mode: floe_access::OperationPolicyMode,
+        expected_revision: u64,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<floe_access::OperationAuthorizationPolicy, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async move {
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .dependencies
+                .calendar_operations
+                .set_calendar_create_authority(
+                    actor,
+                    command_id.as_uuid(),
+                    mode,
+                    expected_revision,
+                    scope,
+                )
+                .await
         })
     }
     fn resume_session<'a>(
@@ -611,6 +768,95 @@ where
             self.inner
                 .submit(actor, request.command_id, prepared.intent, session, scope)
                 .await
+        })
+    }
+    fn submit_calendar_proposal<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        request: CalendarProposalRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<CalendarProposalResult, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
+            let admission = self
+                .inner
+                .dependencies
+                .calendar_operations
+                .prepare_expert_proposal(
+                    actor,
+                    command_id.as_uuid(),
+                    request.receipt.clone(),
+                    request.artifact_id,
+                    request.destination_ref,
+                    request.session_id,
+                    request.origin_run_id.as_uuid(),
+                    scope,
+                )
+                .await?;
+            let admitted = scope
+                .run(async {
+                    Ok(self
+                        .inner
+                        .dependencies
+                        .repository
+                        .admit_operation_approval(
+                            admission,
+                            OperationApprovalPublication {
+                                run_id: request.origin_run_id,
+                                session_id: request.session_id,
+                                execution: request.receipt,
+                                artifact_id: request.artifact_id,
+                            },
+                        )
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)??;
+            #[cfg(feature = "qa-fixtures")]
+            if self
+                .inner
+                .lose_next_operation_admission_ack
+                .swap(false, Ordering::AcqRel)
+            {
+                return Err(CommandFailure::Indeterminate(
+                    AgentFailure::StorageUnavailable,
+                ));
+            }
+            let operation = self
+                .inner
+                .dependencies
+                .calendar_operations
+                .complete_admission(actor, admitted.operation.clone(), scope)
+                .await?;
+            let interaction = if let Some(record) = admitted.interaction.as_ref() {
+                Some(
+                    super::interaction_projection::project_interaction(
+                        self.inner.dependencies.connections.as_ref(),
+                        self.inner.dependencies.experts_owner.as_ref(),
+                        self.inner.dependencies.calendar_operations.as_ref(),
+                        actor,
+                        record,
+                        chrono::Utc::now().timestamp_millis(),
+                        scope,
+                    )
+                    .await
+                    .map_err(CommandFailure::Admitted)?,
+                )
+            } else {
+                None
+            };
+            Ok(CalendarProposalResult {
+                operation,
+                interaction,
+            })
         })
     }
     fn cancel_run<'a>(
@@ -750,6 +996,7 @@ where
             super::interaction_projection::project_interaction(
                 self.inner.dependencies.connections.as_ref(),
                 self.inner.dependencies.experts_owner.as_ref(),
+                self.inner.dependencies.calendar_operations.as_ref(),
                 actor,
                 &record,
                 chrono::Utc::now().timestamp_millis(),
@@ -793,6 +1040,7 @@ where
                     super::interaction_projection::project_interaction(
                         self.inner.dependencies.connections.as_ref(),
                         self.inner.dependencies.experts_owner.as_ref(),
+                        self.inner.dependencies.calendar_operations.as_ref(),
                         actor,
                         &record,
                         chrono::Utc::now().timestamp_millis(),
@@ -828,6 +1076,7 @@ where
                     Ok(apply_source_interaction(
                         self.inner.dependencies.repository.as_ref(),
                         self.inner.dependencies.connections.as_ref(),
+                        self.inner.dependencies.calendar_operations.as_ref(),
                         actor,
                         DecideInteractionCommand {
                             command_id: request.command_id,
@@ -860,6 +1109,7 @@ where
             let interaction = super::interaction_projection::project_interaction(
                 self.inner.dependencies.connections.as_ref(),
                 self.inner.dependencies.experts_owner.as_ref(),
+                self.inner.dependencies.calendar_operations.as_ref(),
                 actor,
                 &interaction,
                 chrono::Utc::now().timestamp_millis(),
@@ -924,6 +1174,7 @@ where
                     recover_source_interaction(
                         self.inner.dependencies.repository.as_ref(),
                         self.inner.dependencies.connections.as_ref(),
+                        self.inner.dependencies.calendar_operations.as_ref(),
                         actor,
                         request.interaction_id,
                         chrono::Utc::now().timestamp_millis(),
@@ -941,6 +1192,7 @@ where
                 let interaction = super::interaction_projection::project_interaction(
                     self.inner.dependencies.connections.as_ref(),
                     self.inner.dependencies.experts_owner.as_ref(),
+                    self.inner.dependencies.calendar_operations.as_ref(),
                     actor,
                     &interaction,
                     chrono::Utc::now().timestamp_millis(),

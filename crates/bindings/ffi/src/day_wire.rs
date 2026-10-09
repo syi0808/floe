@@ -1,6 +1,10 @@
 use crate::conversion;
 use floe_protocol::wire::{WireResult, conversion_error, parse_date, parse_id, parse_time};
-use floe_protocol::{DayMutationDto, DayQueryDto};
+use floe_protocol::{
+    DayMutationDto, DayQueryDto, ManualCalendarOperationDto, ManualCalendarOperationReceiptDto,
+    ManualCalendarOperationStatusDto,
+};
+use uuid::Uuid;
 
 pub(crate) fn read(day: DayQueryDto) -> WireResult<floe_day::DayQuery> {
     day.validate()
@@ -126,6 +130,164 @@ pub(crate) fn mutation(mutation: DayMutationDto) -> WireResult<floe_day::DayMuta
             occurred_at: parse_time(&occurred_at, "occurred_at")?,
         },
     })
+}
+
+pub(crate) fn manual_operation(
+    operation: ManualCalendarOperationDto,
+) -> WireResult<floe_day::ManualCalendarOperation> {
+    let timed = |schedule: floe_protocol::TimedScheduleDto| -> WireResult<floe_day::TimedSchedule> {
+        match conversion::event_schedule_from_dto(floe_protocol::EventScheduleDto::Timed {
+            starts_at: schedule.starts_at,
+            ends_at: schedule.ends_at,
+            timezone: schedule.timezone,
+        })
+        .map_err(conversion_error)?
+        {
+            floe_day::EventSchedule::Timed(value) => Ok(value),
+            floe_day::EventSchedule::AllDay(_) => Err(floe_protocol::wire::invalid(
+                "schedule",
+                "external calendar operations require a timed schedule",
+            )),
+        }
+    };
+    Ok(match operation {
+        ManualCalendarOperationDto::Create {
+            destination_ref,
+            title,
+            schedule,
+        } => floe_day::ManualCalendarOperation::Create {
+            destination_ref: Uuid::parse_str(&destination_ref)
+                .map_err(|_| floe_protocol::wire::invalid("destination_ref", "invalid id"))?,
+            title,
+            schedule: timed(schedule)?,
+        },
+        ManualCalendarOperationDto::Update {
+            event_ref,
+            expected_revision,
+            title,
+            schedule,
+        } => floe_day::ManualCalendarOperation::Update {
+            event_ref: parse_id(&event_ref, "event_ref", floe_app::EventId)?,
+            expected_revision: floe_app::Revision(expected_revision),
+            title,
+            schedule: timed(schedule)?,
+        },
+        ManualCalendarOperationDto::Delete {
+            event_ref,
+            expected_revision,
+        } => floe_day::ManualCalendarOperation::Delete {
+            event_ref: parse_id(&event_ref, "event_ref", floe_app::EventId)?,
+            expected_revision: floe_app::Revision(expected_revision),
+        },
+    })
+}
+
+pub(crate) fn manual_operation_receipt(
+    value: floe_day::ManualCalendarOperationReceipt,
+) -> WireResult<ManualCalendarOperationReceiptDto> {
+    if value.operation_id.is_nil() || value.revision == 0 {
+        return Err(floe_protocol::wire::invalid(
+            "operation",
+            "invalid calendar operation receipt",
+        ));
+    }
+    Ok(ManualCalendarOperationReceiptDto {
+        operation_ref: floe_protocol::OperationRefDto::new(value.operation_id)
+            .ok_or_else(|| floe_protocol::wire::invalid("operation_ref", "invalid id"))?,
+        revision: value.revision,
+        status: match value.status {
+            floe_day::ManualCalendarOperationStatus::Pending => {
+                ManualCalendarOperationStatusDto::Pending
+            }
+            floe_day::ManualCalendarOperationStatus::Executing => {
+                ManualCalendarOperationStatusDto::Executing
+            }
+            floe_day::ManualCalendarOperationStatus::Blocked => {
+                ManualCalendarOperationStatusDto::Blocked
+            }
+            floe_day::ManualCalendarOperationStatus::NotApplied => {
+                ManualCalendarOperationStatusDto::NotApplied
+            }
+            floe_day::ManualCalendarOperationStatus::Unknown => {
+                ManualCalendarOperationStatusDto::Unknown
+            }
+            floe_day::ManualCalendarOperationStatus::Succeeded => {
+                ManualCalendarOperationStatusDto::Succeeded
+            }
+        },
+        collection_pending: value.collection_pending,
+    })
+}
+
+pub(crate) fn manual_destinations(
+    values: Vec<floe_day::ManualCalendarDestination>,
+) -> WireResult<Vec<floe_protocol::ManualCalendarDestinationDto>> {
+    if values.len() > 64 {
+        return Err(floe_protocol::wire::invalid(
+            "destinations",
+            "too many Calendar destinations",
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    values
+        .into_iter()
+        .map(|value| {
+            if value.destination_ref.is_nil()
+                || value.label.is_empty()
+                || value.label.trim() != value.label
+                || value.label.len() > 512
+                || value.label.chars().any(char::is_control)
+                || !seen.insert(value.destination_ref)
+            {
+                return Err(floe_protocol::wire::invalid(
+                    "destinations",
+                    "invalid Calendar destination list",
+                ));
+            }
+            Ok(floe_protocol::ManualCalendarDestinationDto {
+                destination_ref: floe_protocol::UuidRefDto::new(value.destination_ref)
+                    .ok_or_else(|| floe_protocol::wire::invalid("destination_ref", "invalid id"))?,
+                label: value.label,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn manual_operation_receipts(
+    value: floe_day::ManualCalendarOperationPage,
+) -> WireResult<floe_protocol::ManualCalendarOperationsDto> {
+    value
+        .validate(100)
+        .map_err(floe_protocol::wire::agent_failure)?;
+    let values = value.operations;
+    if values.len() > 100 {
+        return Err(floe_protocol::wire::invalid(
+            "operations",
+            "too many Calendar operations",
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    let operations = values
+        .into_iter()
+        .map(|value| {
+            if !seen.insert(value.operation_id) {
+                return Err(floe_protocol::wire::invalid(
+                    "operations",
+                    "duplicate Calendar operation",
+                ));
+            }
+            manual_operation_receipt(value)
+        })
+        .collect::<WireResult<Vec<_>>>()?;
+    let dto = floe_protocol::ManualCalendarOperationsDto {
+        operations,
+        next_cursor: value
+            .next_cursor
+            .and_then(floe_protocol::OperationRefDto::new),
+    };
+    dto.validate()
+        .map_err(|field| floe_protocol::wire::invalid(field, "invalid operation list"))?;
+    Ok(dto)
 }
 
 pub(crate) fn refresh(

@@ -39,10 +39,15 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
     use AppProductCommandDto as C;
     Ok(match value {
         command @ (C::ConversationSessionStart { .. }
+        | C::ConversationSetCalendarPolicy { .. }
         | C::ConversationStartTurn { .. }
+        | C::ConversationCalendarProposalSubmit { .. }
         | C::ConversationCancelRun { .. }
         | C::ConversationInteractionResolve { .. }
-        | C::ConversationInteractionRefresh { .. }) => {
+        | C::ConversationInteractionRefresh { .. }
+        | C::ExpertsSetInstallationEnabled { .. }
+        | C::ExpertsPrepareBindingReview { .. }
+        | C::ExpertsBindingReplace { .. }) => {
             ProductCommand::Conversation(crate::conversation_wire::command_in(command)?)
         }
         command @ (C::ConnectionsPairingStart { .. }
@@ -66,17 +71,19 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
             day: crate::day_wire::read(day).map_err(structural_error)?,
             mutation: crate::day_wire::mutation(mutation).map_err(structural_error)?,
         }),
-        command @ (C::ActionsSubmit { .. }
-        | C::ActionsDecide { .. }
-        | C::ActionsReconcile { .. }
-        | C::ActionsSetAuthority { .. }) => {
-            ProductCommand::Actions(crate::actions_wire::command_in(command)?)
+        C::DayExternalCalendarOperation { operation } => {
+            ProductCommand::Day(DayCommand::ExternalCalendarOperation {
+                operation: crate::day_wire::manual_operation(operation)
+                    .map_err(structural_error)?,
+            })
         }
-        command @ (C::ExpertsSetInstallationEnabled { .. }
-        | C::ExpertsPrepareBindingReview { .. }
-        | C::ExpertsBindingReplace { .. }) => {
-            ProductCommand::Experts(crate::experts_wire::command_in(command)?)
-        }
+        C::DayExternalCalendarOperationReconcile {
+            operation_ref,
+            expected_revision,
+        } => ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation {
+            operation_ref: operation_ref.get(),
+            expected_revision,
+        }),
         command @ C::MemoryDecide { .. } => {
             ProductCommand::Memory(crate::memory_wire::command_in(command)?)
         }
@@ -126,12 +133,21 @@ fn command_out(
                 },
             }
         }
-        (ProductCommand::Actions(request), ProductCommandOutcome::Actions(value)) => {
-            return crate::actions_wire::command_out(request, value, caller);
-        }
-        (ProductCommand::Experts(request), ProductCommandOutcome::Experts(value)) => {
-            return crate::experts_wire::command_out(request, value);
-        }
+        (
+            ProductCommand::Day(DayCommand::ExternalCalendarOperation { .. }),
+            ProductCommandOutcome::Day(floe_app::DayCommandOutcome::ExternalCalendarOperation(
+                value,
+            )),
+        )
+        | (
+            ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation { .. }),
+            ProductCommandOutcome::Day(
+                floe_app::DayCommandOutcome::ReconciledExternalCalendarOperation(value),
+            ),
+        ) => AppCommandResultDto::DayExternalCalendarOperation {
+            operation: crate::day_wire::manual_operation_receipt(value)
+                .map_err(structural_error)?,
+        },
         (ProductCommand::Memory(request), ProductCommandOutcome::Memory(value)) => {
             return crate::memory_wire::command_out(request, command_id, value);
         }
@@ -154,12 +170,16 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
     use AppProductQueryDto as Q;
     Ok(match value {
         query @ (Q::ConversationSessionResume { .. }
+        | Q::ConversationCalendarPolicy { .. }
         | Q::ConversationSessionGet { .. }
         | Q::ConversationGetCommand { .. }
         | Q::ConversationGetRun { .. }
         | Q::ConversationGetMessage { .. }
         | Q::ConversationInteractionGet { .. }
-        | Q::ConversationInteractionList { .. }) => {
+        | Q::ConversationInteractionList { .. }
+        | Q::ExpertsDirectory { .. }
+        | Q::ExpertsInspectBinding { .. }
+        | Q::ExpertsInspectBindingReview { .. }) => {
             ProductQuery::Conversation(crate::conversation_wire::query_in(query)?)
         }
         query @ (Q::ConnectionsOverview { .. }
@@ -177,15 +197,19 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
         Q::DayRefreshGet { operation_ref } => ProductQuery::Day(DayProductQuery::RefreshGet {
             operation_ref: operation_ref.get(),
         }),
-        query @ (Q::ActionsDestinations { .. }
-        | Q::ActionsProposalPreview { .. }
-        | Q::ActionsAuthority { .. }
-        | Q::ActionsInspect { .. }
-        | Q::ActionsList { .. }) => ProductQuery::Actions(crate::actions_wire::query_in(query)?),
-        query @ (Q::ExpertsDirectory { .. }
-        | Q::ExpertsInspectBinding { .. }
-        | Q::ExpertsInspectBindingReview { .. }) => {
-            ProductQuery::Experts(crate::experts_wire::query_in(query)?)
+        Q::DayCalendarDestinations {} => {
+            ProductQuery::Day(DayProductQuery::ExternalCalendarDestinations)
+        }
+        Q::DayExternalCalendarOperationGet { operation_ref } => {
+            ProductQuery::Day(DayProductQuery::ExternalCalendarOperationGet {
+                operation_ref: operation_ref.get(),
+            })
+        }
+        Q::DayExternalCalendarOperations { cursor, limit } => {
+            ProductQuery::Day(DayProductQuery::ExternalCalendarOperations {
+                cursor: cursor.map(|cursor| cursor.get()),
+                limit,
+            })
         }
         query @ (Q::MemoryOverview {} | Q::MemoryReview {}) => {
             ProductQuery::Memory(crate::memory_wire::query_in(query)?)
@@ -224,12 +248,32 @@ fn query_out(
                 refresh: crate::day_wire::refresh(value).map_err(structural_error)?,
             }
         }
-        (ProductQuery::Actions(request), ProductQueryOutcome::Actions(value)) => {
-            return crate::actions_wire::query_out(request, value, caller);
+        (
+            ProductQuery::Day(DayProductQuery::ExternalCalendarDestinations),
+            ProductQueryOutcome::Day(floe_app::DayQueryOutcome::ExternalCalendarDestinations(
+                value,
+            )),
+        ) => AppQueryResultDto::DayCalendarDestinations {
+            destinations: crate::day_wire::manual_destinations(value).map_err(structural_error)?,
+        },
+        (
+            ProductQuery::Day(DayProductQuery::ExternalCalendarOperationGet { operation_ref }),
+            ProductQueryOutcome::Day(floe_app::DayQueryOutcome::ExternalCalendarOperation(value)),
+        ) => {
+            let operation =
+                crate::day_wire::manual_operation_receipt(value).map_err(structural_error)?;
+            if operation.operation_ref.get() != *operation_ref {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::DayExternalCalendarOperation { operation }
         }
-        (ProductQuery::Experts(request), ProductQueryOutcome::Experts(value)) => {
-            return crate::experts_wire::query_out(request, value);
-        }
+        (
+            ProductQuery::Day(DayProductQuery::ExternalCalendarOperations { .. }),
+            ProductQueryOutcome::Day(floe_app::DayQueryOutcome::ExternalCalendarOperations(value)),
+        ) => AppQueryResultDto::DayExternalCalendarOperations {
+            operations: crate::day_wire::manual_operation_receipts(value)
+                .map_err(structural_error)?,
+        },
         (ProductQuery::Memory(request), ProductQueryOutcome::Memory(value)) => {
             return crate::memory_wire::query_out(request, value, caller);
         }
@@ -268,10 +312,9 @@ fn product_failure(failure: ProductFailure, correlation_id: Uuid) -> AppWireErro
         ProductFailure::Conversation(reason) => {
             crate::conversation_wire::failure_dto(reason, correlation_id)
         }
-        ProductFailure::Connections(reason)
-        | ProductFailure::Actions(reason)
-        | ProductFailure::Experts(reason)
-        | ProductFailure::Memory(reason) => agent_failure(reason),
+        ProductFailure::Connections(reason) | ProductFailure::Memory(reason) => {
+            agent_failure(reason)
+        }
         ProductFailure::Day(reason) => day_error(reason),
     }
 }

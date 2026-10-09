@@ -56,7 +56,7 @@ Future<void> _start() async {
       FloeApp(
         personId: runtime.personId,
         gateway: openedBootstrap.dayGateway,
-        calendarActions: runtime.actions,
+        operationAuthorization: runtime.operationAuthorization,
         agentGateway: runtime.conversation,
         ownerGateways: runtime.owners,
         connectionsController: runtime.connectionsController,

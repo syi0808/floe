@@ -1,8 +1,9 @@
 //! Deterministic synthetic Calendar facts for explicit Linux QA builds.
 //!
 //! This module is the fixture's external boundary. It never reads a host
-//! calendar or mutates one; Connections, Access and Context still own source
-//! setup, selection, grants and read admission.
+//! calendar or mutates one; Calendar Operations tests use the separate
+//! scripted executor for writes. Connections, Access and Context still own
+//! source setup, selection, grants and read admission.
 
 use floe_context_contract::CalendarProvider;
 use floe_kernel::AgentFailure;
@@ -235,7 +236,10 @@ fn batch(
         calendar_id: calendar_id.to_owned(),
         records: if overlaps {
             vec![NativeCalendarRecord {
-                can_modify: false,
+                // Only the selected team fixture advertises write capability;
+                // the explicit QA build routes every effect through its
+                // scripted executor and never mutates a real provider.
+                can_modify: calendar_id == TEAM_CALENDAR,
                 calendar_id: calendar_id.to_owned(),
                 external_id: event_id.to_owned(),
                 external_revision: event_revision.to_owned(),
@@ -327,7 +331,8 @@ mod tests {
                 .iter()
                 .flat_map(|batch| &batch.records)
                 .all(|record| {
-                    !record.can_modify && record.title != "Unselected calendar sentinel event"
+                    record.can_modify == (record.calendar_id == TEAM_CALENDAR)
+                        && record.title != "Unselected calendar sentinel event"
                 })
         );
     }

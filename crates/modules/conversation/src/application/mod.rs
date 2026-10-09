@@ -60,9 +60,9 @@ pub use start::{PreparedStartTurn, prepare_start_turn, read_session_snapshot};
 mod manager_policy;
 mod service;
 pub use service::{
-    CommandReceipt, ConversationDependencies, ConversationOwner, ConversationService,
-    InteractionResult, MessageSnapshot, MessageSnapshotRole, RefreshInteraction,
-    ResolveInteraction,
+    CalendarProposalRequest, CalendarProposalResult, CommandReceipt, ConversationDependencies,
+    ConversationOwner, ConversationService, InteractionResult, MessageSnapshot,
+    MessageSnapshotRole, RefreshInteraction, ResolveInteraction,
 };
 
 mod session_projection;

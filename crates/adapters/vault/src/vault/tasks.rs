@@ -3194,9 +3194,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?
             .ok_or(AgentFailure::StorageUnavailable)?;
         let journal = self.task_journal_on(transaction, &record).await?;
-        let revision = journal.last().map_or(0, |entry| entry.revision);
-        if revision > 0 {
-            let (expected, _) = expert_task_evidence_reference_at(&record, &journal, revision)?;
+        // Transcript custody pins the exact Task journal event that produced
+        // an entry. Later Task events and final settlement must not retarget
+        // that reference, so verify it against every admitted journal revision.
+        // The stored journal is bounded by MAX_TASK_JOURNAL_ENTRIES.
+        for entry in &journal {
+            let (expected, _) =
+                expert_task_evidence_reference_at(&record, &journal, entry.revision)?;
             if reference == &expected {
                 return Ok(expected);
             }

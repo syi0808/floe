@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
-use floe_actions::{
-    ActionBlockedReason, ActionCalendarExecutor, ActionDependencySourceFence, ActionRecord,
-    ActionSourceFence, ActionUnknownReason, CalendarDestinationObservation, CalendarEffect,
-    CalendarEffectOutcome, CalendarReceiptEvidence, DispatchAdmission, EffectIdentity,
+use floe_agent_contract::AgentFailure;
+use floe_calendar_operations::{
+    ActionBlockedReason, ActionDependencySourceFence, ActionRecord, ActionSourceFence,
+    ActionUnknownReason, CalendarDestinationObservation, CalendarEffect, CalendarEffectOutcome,
+    CalendarOperationExecutor, CalendarReceiptEvidence, DispatchAdmission, EffectIdentity,
     ExecutionIntent, PreparedCalendarEffect,
 };
-use floe_agent_contract::AgentFailure;
 use floe_context::{CalendarObservation, CalendarObserveRequest, CalendarSource};
 use floe_execution::Cancellation;
 use floe_execution::{BoxFuture, ExecutionScope};
@@ -617,7 +617,7 @@ fn unknown(intent: &ExecutionIntent, reason: ActionUnknownReason) -> CalendarEff
     }
 }
 
-impl ActionCalendarExecutor for NativeCalendarExecutor {
+impl CalendarOperationExecutor for NativeCalendarExecutor {
     fn destinations<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -679,13 +679,13 @@ impl ActionCalendarExecutor for NativeCalendarExecutor {
                 || record.person_id != actor.person_id
                 || record.device_id != actor.device_id
                 || record.validate().is_err()
-                || record.state != floe_actions::ActionState::Approved
+                || record.state != floe_calendar_operations::ActionState::Approved
                 || record.execution.is_some()
             {
                 return Err(ActionBlockedReason::PolicyDenied);
             }
             match &record.origin {
-                floe_actions::ActionOrigin::Expert { .. }
+                floe_calendar_operations::ActionOrigin::Expert { .. }
                     if !record.dependency.as_ref().is_some_and(|selected| {
                         dependencies
                             .iter()
@@ -694,7 +694,9 @@ impl ActionCalendarExecutor for NativeCalendarExecutor {
                 {
                     return Err(ActionBlockedReason::PolicyDenied);
                 }
-                floe_actions::ActionOrigin::Direct { .. } if !dependencies.is_empty() => {
+                floe_calendar_operations::ActionOrigin::Direct { .. }
+                    if !dependencies.is_empty() =>
+                {
                     return Err(ActionBlockedReason::PolicyDenied);
                 }
                 _ => {}
@@ -838,10 +840,10 @@ impl NativePreparedCalendarEffect {
     fn not_invoked(
         &self,
         intent: &ExecutionIntent,
-        reason: floe_actions::ActionNotAppliedReason,
+        reason: floe_calendar_operations::ActionNotAppliedReason,
     ) -> CalendarEffectOutcome {
         CalendarEffectOutcome::NotApplied {
-            proof: floe_actions::NotAppliedProof {
+            proof: floe_calendar_operations::NotAppliedProof {
                 identity: intent.identity(),
                 host_epoch: self.host_epoch,
                 invocation_id: self.preparation_id,
@@ -852,8 +854,8 @@ impl NativePreparedCalendarEffect {
     }
 }
 
-fn prewrite_reason(error: AgentFailure) -> floe_actions::ActionNotAppliedReason {
-    use floe_actions::ActionNotAppliedReason as Reason;
+fn prewrite_reason(error: AgentFailure) -> floe_calendar_operations::ActionNotAppliedReason {
+    use floe_calendar_operations::ActionNotAppliedReason as Reason;
     match error {
         AgentFailure::Cancelled | AgentFailure::Interrupted => Reason::Cancelled,
         AgentFailure::DeadlineExceeded => Reason::Timeout,
@@ -890,10 +892,16 @@ impl PreparedCalendarEffect for NativePreparedCalendarEffect {
                 return unknown(intent, ActionUnknownReason::InvalidReceipt);
             }
             if scope.cancellation().is_cancelled() {
-                return self.not_invoked(intent, floe_actions::ActionNotAppliedReason::Cancelled);
+                return self.not_invoked(
+                    intent,
+                    floe_calendar_operations::ActionNotAppliedReason::Cancelled,
+                );
             }
             if Utc::now() >= self.expires_at {
-                return self.not_invoked(intent, floe_actions::ActionNotAppliedReason::Timeout);
+                return self.not_invoked(
+                    intent,
+                    floe_calendar_operations::ActionNotAppliedReason::Timeout,
+                );
             }
             let source_check = scope
                 .run(async {
@@ -973,7 +981,7 @@ struct NativeActionDestinations {
 }
 
 enum NativeActionTransportError {
-    NotInvoked(floe_actions::ActionNotAppliedReason),
+    NotInvoked(floe_calendar_operations::ActionNotAppliedReason),
     Unknown(AgentFailure),
 }
 impl From<AgentFailure> for NativeActionTransportError {
@@ -989,22 +997,22 @@ async fn action_native<T: DeserializeOwned + serde::Serialize + Send + 'static>(
 ) -> Result<T, NativeActionTransportError> {
     let input = serde_json::to_string(&request).map_err(|_| {
         NativeActionTransportError::NotInvoked(
-            floe_actions::ActionNotAppliedReason::ProviderRejected,
+            floe_calendar_operations::ActionNotAppliedReason::ProviderRejected,
         )
     })?;
-    if input.len() > floe_actions::MAX_ACTION_BYTES {
+    if input.len() > floe_calendar_operations::MAX_ACTION_BYTES {
         return Err(NativeActionTransportError::NotInvoked(
-            floe_actions::ActionNotAppliedReason::ProviderRejected,
+            floe_calendar_operations::ActionNotAppliedReason::ProviderRejected,
         ));
     }
     if scope.cancellation().is_cancelled() {
         return Err(NativeActionTransportError::NotInvoked(
-            floe_actions::ActionNotAppliedReason::Cancelled,
+            floe_calendar_operations::ActionNotAppliedReason::Cancelled,
         ));
     }
     if Instant::now() >= scope.deadline() {
         return Err(NativeActionTransportError::NotInvoked(
-            floe_actions::ActionNotAppliedReason::Timeout,
+            floe_calendar_operations::ActionNotAppliedReason::Timeout,
         ));
     }
     let task = tokio::task::spawn_blocking(move || {
@@ -1016,16 +1024,16 @@ async fn action_native<T: DeserializeOwned + serde::Serialize + Send + 'static>(
         // These three driver errors are returned strictly before invoke().
         // NoResponse/ResponseTooLarge occur after it and remain uncertain.
         let bytes = bridge
-            .call(&input, Some(floe_actions::MAX_ACTION_BYTES))
+            .call(&input, Some(floe_calendar_operations::MAX_ACTION_BYTES))
             .map_err(|failure| match failure {
                 floe_native::NativeCallError::Busy | floe_native::NativeCallError::Unavailable => {
                     NativeActionTransportError::NotInvoked(
-                        floe_actions::ActionNotAppliedReason::ProviderUnavailable,
+                        floe_calendar_operations::ActionNotAppliedReason::ProviderUnavailable,
                     )
                 }
                 floe_native::NativeCallError::InvalidRequest => {
                     NativeActionTransportError::NotInvoked(
-                        floe_actions::ActionNotAppliedReason::ProviderRejected,
+                        floe_calendar_operations::ActionNotAppliedReason::ProviderRejected,
                     )
                 }
                 floe_native::NativeCallError::NoResponse
@@ -1033,7 +1041,10 @@ async fn action_native<T: DeserializeOwned + serde::Serialize + Send + 'static>(
                     NativeActionTransportError::Unknown(AgentFailure::CapabilityUnavailable)
                 }
             })?;
-        crate::gateway::json::strict_json_bytes(&bytes, floe_actions::MAX_ACTION_BYTES)?;
+        crate::gateway::json::strict_json_bytes(
+            &bytes,
+            floe_calendar_operations::MAX_ACTION_BYTES,
+        )?;
         let envelope: NativeActionEnvelope<T> =
             serde_json::from_slice(&bytes).map_err(|_| AgentFailure::CapabilityUnavailable)?;
         let raw: Value =

@@ -81,6 +81,79 @@ fn route_command(
                 };
                 let service = owners.conversation.as_ref();
                 let outcome = match command {
+                    ConversationCommand::Expert(command) => {
+                        let outcome = match command {
+                            ExpertCommand::SetInstallationEnabled {
+                                installation_ref,
+                                expected_revision,
+                                enabled,
+                            } => owners
+                                .experts
+                                .set_installation_enabled(
+                                    &actor,
+                                    command_id,
+                                    installation_ref,
+                                    expected_revision,
+                                    enabled,
+                                    &scope,
+                                )
+                                .await
+                                .map(ExpertCommandResult::Directory),
+                            ExpertCommand::PrepareBindingReview {
+                                assignment_ref,
+                                requirement_ref,
+                                expected_binding_revision,
+                            } => owners
+                                .experts
+                                .prepare_binding_review(
+                                    &actor,
+                                    command_id,
+                                    assignment_ref,
+                                    requirement_ref,
+                                    expected_binding_revision,
+                                    &scope,
+                                )
+                                .await
+                                .map(ExpertCommandResult::BindingReview),
+                            ExpertCommand::ReplaceBinding {
+                                review_ref,
+                                expected_binding_revision,
+                                candidate_refs,
+                            } => owners
+                                .experts
+                                .replace_binding(
+                                    &actor,
+                                    command_id,
+                                    review_ref,
+                                    expected_binding_revision,
+                                    candidate_refs,
+                                    &scope,
+                                )
+                                .await
+                                .map(ExpertCommandResult::Directory),
+                        };
+                        outcome
+                            .map(ConversationCommandOutcome::Expert)
+                            .map_err(|failure| {
+                                owner_command_failure(failure, ProductFailure::Conversation)
+                            })?
+                    }
+                    ConversationCommand::SetCalendarOperationPolicy {
+                        mode,
+                        expected_revision,
+                    } => service
+                        .set_calendar_operation_policy(
+                            &actor,
+                            command_id,
+                            mode,
+                            expected_revision,
+                            &scope,
+                        )
+                        .await
+                        .map(ConversationCommandOutcome::CalendarOperationPolicy)
+                        .map_err(|failure| {
+                            owner_command_failure(failure, ProductFailure::Conversation)
+                        })?,
                     ConversationCommand::StartSession => {
                         let receipt = service
                             .start_session(&actor, command_id, &scope)
@@ -139,6 +212,32 @@ fn route_command(
                                     owner_command_failure(failure, ProductFailure::Conversation)
                                 })?;
                         ConversationCommandOutcome::Turn(receipt)
+                    }
+                    ConversationCommand::SubmitCalendarProposal {
+                        session_id,
+                        origin_run_id,
+                        receipt,
+                        artifact_id,
+                        destination_ref,
+                    } => {
+                        let result = service
+                            .submit_calendar_proposal(
+                                &actor,
+                                command_id,
+                                floe_conversation::CalendarProposalRequest {
+                                    session_id,
+                                    origin_run_id,
+                                    receipt,
+                                    artifact_id,
+                                    destination_ref,
+                                },
+                                &scope,
+                            )
+                            .await
+                            .map_err(|failure| {
+                                owner_command_failure(failure, ProductFailure::Conversation)
+                            })?;
+                        ConversationCommandOutcome::CalendarProposal(result)
                     }
                     ConversationCommand::CancelRun { run_id } => {
                         let receipt = service
@@ -429,146 +528,29 @@ fn route_command(
                         )
                         .await
                         .map(DayCommandOutcome::Mutation),
+                    DayCommand::ExternalCalendarOperation { operation } => service
+                        .operate_external_calendar(&actor, command_id.as_uuid(), operation, &scope)
+                        .await
+                        .map(DayCommandOutcome::ExternalCalendarOperation),
+                    DayCommand::ReconcileExternalCalendarOperation {
+                        operation_ref,
+                        expected_revision,
+                    } => service
+                        .reconcile_external_calendar_operation(
+                            &actor,
+                            command_id.as_uuid(),
+                            operation_ref,
+                            expected_revision,
+                            &scope,
+                        )
+                        .await
+                        .map(DayCommandOutcome::ReconciledExternalCalendarOperation),
                 };
                 result.map(ProductCommandOutcome::Day).map_err(|failure| {
                     owner_command_failure(failure, |failure| {
                         ProductFailure::Day(crate::core::day_error(failure))
                     })
                 })
-            })
-        }
-        ProductCommand::Actions(command) => {
-            let owners = app.ready_owners(caller).map_err(|failure| {
-                command_failure(
-                    ProductCommandDisposition::NotAdmitted,
-                    ProductFailure::Actions(failure),
-                )
-            })?;
-            let actor = caller.owner_actor();
-            let scope = command_scope();
-            app.execute_owner(async move {
-                let outcome = match command {
-                    ActionsCommand::Submit { intent } => owners
-                        .actions
-                        .submit(&actor, command_id.as_uuid(), intent, &scope)
-                        .await
-                        .map(ActionsCommandResult::Action),
-                    ActionsCommand::Decide {
-                        action_ref,
-                        review_ref,
-                        decision,
-                        expected_revision,
-                    } => owners
-                        .actions
-                        .decide(
-                            &actor,
-                            command_id.as_uuid(),
-                            action_ref,
-                            review_ref,
-                            decision,
-                            expected_revision,
-                            &scope,
-                        )
-                        .await
-                        .map(ActionsCommandResult::Action),
-                    ActionsCommand::Reconcile {
-                        action_ref,
-                        expected_revision,
-                    } => owners
-                        .actions
-                        .reconcile(
-                            &actor,
-                            command_id.as_uuid(),
-                            action_ref,
-                            expected_revision,
-                            &scope,
-                        )
-                        .await
-                        .map(ActionsCommandResult::Action),
-                    ActionsCommand::SetAuthority {
-                        mode,
-                        expected_revision,
-                    } => owners
-                        .actions
-                        .set_calendar_create_authority(
-                            &actor,
-                            command_id.as_uuid(),
-                            mode,
-                            expected_revision,
-                            &scope,
-                        )
-                        .await
-                        .map(ActionsCommandResult::Authority),
-                };
-                outcome
-                    .map(|value| ProductCommandOutcome::Actions(value))
-                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Actions))
-            })
-        }
-        ProductCommand::Experts(command) => {
-            let command_id = command_id;
-            let owners = app.ready_owners(caller).map_err(|failure| {
-                command_failure(
-                    ProductCommandDisposition::NotAdmitted,
-                    ProductFailure::Experts(failure),
-                )
-            })?;
-            let actor = caller.owner_actor();
-            let scope = command_scope();
-            app.execute_owner(async move {
-                let outcome = match command {
-                    ExpertCommand::SetInstallationEnabled {
-                        installation_ref,
-                        expected_revision,
-                        enabled,
-                    } => owners
-                        .experts
-                        .set_installation_enabled(
-                            &actor,
-                            command_id,
-                            installation_ref,
-                            expected_revision,
-                            enabled,
-                            &scope,
-                        )
-                        .await
-                        .map(ExpertCommandResult::Directory),
-                    ExpertCommand::PrepareBindingReview {
-                        assignment_ref,
-                        requirement_ref,
-                        expected_binding_revision,
-                    } => owners
-                        .experts
-                        .prepare_binding_review(
-                            &actor,
-                            command_id,
-                            assignment_ref,
-                            requirement_ref,
-                            expected_binding_revision,
-                            &scope,
-                        )
-                        .await
-                        .map(ExpertCommandResult::BindingReview),
-                    ExpertCommand::ReplaceBinding {
-                        review_ref,
-                        expected_binding_revision,
-                        candidate_refs,
-                    } => owners
-                        .experts
-                        .replace_binding(
-                            &actor,
-                            command_id,
-                            review_ref,
-                            expected_binding_revision,
-                            candidate_refs,
-                            &scope,
-                        )
-                        .await
-                        .map(ExpertCommandResult::Directory),
-                };
-                outcome
-                    .map(ProductCommandOutcome::Experts)
-                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Experts))
             })
         }
         ProductCommand::Memory(command) => {
@@ -617,6 +599,33 @@ fn route_query(
             app.execute_owner(async move {
                 let service = owners.conversation.as_ref();
                 let outcome = match query {
+                    ConversationQuery::Expert(query) => {
+                        let outcome = match query {
+                            ExpertQuery::Directory => owners
+                                .experts
+                                .directory(&actor, &scope)
+                                .await
+                                .map(ExpertQueryResult::Directory),
+                            ExpertQuery::InspectBinding {
+                                assignment_ref,
+                                requirement_ref,
+                            } => owners
+                                .experts
+                                .inspect_binding(&actor, assignment_ref, requirement_ref, &scope)
+                                .await
+                                .map(ExpertQueryResult::Binding),
+                            ExpertQuery::InspectBindingReview { review_ref } => owners
+                                .experts
+                                .inspect_binding_review(&actor, review_ref, &scope)
+                                .await
+                                .map(ExpertQueryResult::BindingReview),
+                        };
+                        outcome.map(ConversationQueryOutcome::Expert)
+                    }
+                    ConversationQuery::CalendarOperationPolicy => service
+                        .calendar_operation_policy(&actor, &scope)
+                        .await
+                        .map(ConversationQueryOutcome::CalendarOperationPolicy),
                     ConversationQuery::ResumeSession => service
                         .resume_session(&actor, &scope)
                         .await
@@ -702,6 +711,9 @@ fn route_query(
             let timeout = match &query {
                 DayProductQuery::Snapshot(_) => DAY_SNAPSHOT_SCOPE,
                 DayProductQuery::RefreshGet { .. } => PRODUCT_SCOPE,
+                DayProductQuery::ExternalCalendarDestinations
+                | DayProductQuery::ExternalCalendarOperationGet { .. }
+                | DayProductQuery::ExternalCalendarOperations { .. } => PRODUCT_SCOPE,
             };
             let scope = crate::host_scope(request_id, Cancellation::new(), timeout);
             let service = app.core.day.clone();
@@ -715,80 +727,22 @@ fn route_query(
                         .get_refresh(&actor, operation_ref, &scope)
                         .await
                         .map(DayQueryOutcome::Refresh),
+                    DayProductQuery::ExternalCalendarDestinations => service
+                        .external_calendar_destinations(&actor, &scope)
+                        .await
+                        .map(DayQueryOutcome::ExternalCalendarDestinations),
+                    DayProductQuery::ExternalCalendarOperationGet { operation_ref } => service
+                        .inspect_external_calendar_operation(&actor, operation_ref, &scope)
+                        .await
+                        .map(DayQueryOutcome::ExternalCalendarOperation),
+                    DayProductQuery::ExternalCalendarOperations { cursor, limit } => service
+                        .list_external_calendar_operations(&actor, cursor, limit, &scope)
+                        .await
+                        .map(DayQueryOutcome::ExternalCalendarOperations),
                 };
                 outcome
                     .map(ProductQueryOutcome::Day)
                     .map_err(|failure| ProductFailure::Day(crate::core::day_error(failure)))
-            })
-        }
-        ProductQuery::Actions(query) => {
-            let owners = app.ready_owners(caller).map_err(ProductFailure::Actions)?;
-            let actor = caller.owner_actor();
-            let scope = scope();
-            app.execute_owner(async move {
-                let outcome = match query {
-                    ActionsQuery::Destinations => owners
-                        .actions
-                        .destinations(&actor, &scope)
-                        .await
-                        .map(ActionsQueryResult::Destinations),
-                    ActionsQuery::ProposalPreview {
-                        receipt,
-                        artifact_id,
-                    } => owners
-                        .actions
-                        .proposal_preview(&actor, receipt, artifact_id, &scope)
-                        .await
-                        .map(ActionsQueryResult::ProposalPreview),
-                    ActionsQuery::Authority => owners
-                        .actions
-                        .inspect_authority(&actor, &scope)
-                        .await
-                        .map(ActionsQueryResult::Authority),
-                    ActionsQuery::Inspect { action_ref } => owners
-                        .actions
-                        .inspect(&actor, action_ref, &scope)
-                        .await
-                        .map(ActionsQueryResult::Action),
-                    ActionsQuery::List { cursor, limit } => owners
-                        .actions
-                        .list(&actor, cursor, limit, &scope)
-                        .await
-                        .map(ActionsQueryResult::Page),
-                };
-                outcome
-                    .map(ProductQueryOutcome::Actions)
-                    .map_err(ProductFailure::Actions)
-            })
-        }
-        ProductQuery::Experts(query) => {
-            let owners = app.ready_owners(caller).map_err(ProductFailure::Experts)?;
-            let actor = caller.owner_actor();
-            let scope = scope();
-            app.execute_owner(async move {
-                let outcome = match query {
-                    ExpertQuery::Directory => owners
-                        .experts
-                        .directory(&actor, &scope)
-                        .await
-                        .map(ExpertQueryResult::Directory),
-                    ExpertQuery::InspectBinding {
-                        assignment_ref,
-                        requirement_ref,
-                    } => owners
-                        .experts
-                        .inspect_binding(&actor, assignment_ref, requirement_ref, &scope)
-                        .await
-                        .map(ExpertQueryResult::Binding),
-                    ExpertQuery::InspectBindingReview { review_ref } => owners
-                        .experts
-                        .inspect_binding_review(&actor, review_ref, &scope)
-                        .await
-                        .map(ExpertQueryResult::BindingReview),
-                };
-                outcome
-                    .map(ProductQueryOutcome::Experts)
-                    .map_err(ProductFailure::Experts)
             })
         }
         ProductQuery::Memory(query) => {

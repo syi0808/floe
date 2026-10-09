@@ -61,6 +61,14 @@ pub enum InteractionOrigin {
         projection_operation_id: Uuid,
         target_digest: [u8; 32],
     },
+    /// A later product approval linked to authentic, immutable Task evidence
+    /// from a terminal Manager Run. The Run remains read-only custody.
+    OperationApproval {
+        run_id: RunId,
+        execution: TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        operation_id: Uuid,
+    },
 }
 
 impl InteractionOrigin {
@@ -80,6 +88,17 @@ impl InteractionOrigin {
             } => {
                 run_id.is_valid() && !projection_operation_id.is_nil() && *target_digest != [0; 32]
             }
+            Self::OperationApproval {
+                run_id,
+                execution,
+                artifact_id,
+                operation_id,
+            } => {
+                run_id.is_valid()
+                    && execution.validate().is_ok()
+                    && !artifact_id.is_nil()
+                    && !operation_id.is_nil()
+            }
         };
         valid.then_some(()).ok_or(AgentFailure::StorageUnavailable)
     }
@@ -87,30 +106,25 @@ impl InteractionOrigin {
 
 /// The owner-produced semantic request, converted at the App boundary.
 ///
-/// Variants mirror the source-owner requirement reasons; Conversation stores
-/// the converted record and binds decisions to the reviewed target, but never
-/// interprets source authority itself.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InteractionRequirementKind {
-    EnableObserve,
-    ReviewChangedSource,
-    RequestSystemPermission,
-    Reconnect,
-    ReviewProcessing,
-    SelectResource,
-    ConfigureExpertBinding,
-}
-
+/// Source, Expert-binding and Calendar-operation reviews have different
+/// owners and therefore retain distinct typed requirements. Conversation
+/// binds each requirement to its immutable reviewed target without turning
+/// product operations into synthetic source-access requests.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct InteractionRequirement {
-    pub kind: InteractionRequirementKind,
-    pub source_id: String,
-    pub connection_id: Option<String>,
-    pub consumer: String,
-    pub purpose: String,
-    pub inline: bool,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InteractionRequirement {
+    SourceAccess {
+        requirement: floe_context_contract::SourceAccessRequirement,
+        inline: bool,
+    },
+    ExpertBinding {
+        consumer: String,
+        requirement_key: String,
+        review: floe_experts::BindingReviewRef,
+    },
+    OperationApproval {
+        review: floe_access::OperationApprovalRef,
+    },
 }
 
 impl InteractionRequirement {
@@ -118,42 +132,39 @@ impl InteractionRequirement {
         blocker: &floe_context_contract::SourceAccessRequirement,
         inline: bool,
     ) -> Self {
-        use floe_context_contract::SourceAccessRequirementKind as Reason;
-        InteractionRequirement {
-            kind: match blocker.reason() {
-                Reason::EnableObserve => InteractionRequirementKind::EnableObserve,
-                Reason::ReviewChangedSource => InteractionRequirementKind::ReviewChangedSource,
-                Reason::RequestSystemPermission => {
-                    InteractionRequirementKind::RequestSystemPermission
-                }
-                Reason::Reconnect => InteractionRequirementKind::Reconnect,
-                Reason::ReviewProcessing => InteractionRequirementKind::ReviewProcessing,
-                Reason::SelectResource => InteractionRequirementKind::SelectResource,
-            },
-            source_id: blocker.source_id().to_owned(),
-            connection_id: blocker.connection_id().map(|id| id.as_str().to_owned()),
-            consumer: blocker.consumer().identifier().to_owned(),
-            purpose: match blocker.purpose() {
-                floe_context_contract::GrantPurpose::Assistant => "assistant",
-                floe_context_contract::GrantPurpose::Scheduling => "scheduling",
-                floe_context_contract::GrantPurpose::Summarization => "summarization",
-            }
-            .into(),
+        InteractionRequirement::SourceAccess {
+            requirement: blocker.clone(),
             inline,
         }
     }
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        if validate_identifier(&self.source_id, MAX_REVIEWED_SOURCE_BYTES).is_err()
-            || self.connection_id.as_ref().is_some_and(|value| {
-                validate_identifier(value, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            })
-            || validate_identifier(&self.consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
-            || validate_identifier(&self.purpose, MAX_REVIEWED_PURPOSE_BYTES).is_err()
-        {
-            return Err(AgentFailure::StorageUnavailable);
+        match self {
+            Self::SourceAccess { requirement, .. } => requirement
+                .validate()
+                .map_err(|_| AgentFailure::StorageUnavailable),
+            Self::ExpertBinding {
+                consumer,
+                requirement_key,
+                review,
+            } => {
+                review.validate()?;
+                if validate_identifier(consumer, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+                    || validate_identifier(requirement_key, MAX_REVIEWED_IDENTIFIER_BYTES).is_err()
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                Ok(())
+            }
+            Self::OperationApproval { review } => review
+                .validate()
+                .map_err(|_| AgentFailure::StorageUnavailable),
         }
-        Ok(())
+    }
+
+    pub fn is_review_processing(&self) -> bool {
+        matches!(self, Self::SourceAccess { requirement, .. }
+            if requirement.reason() == floe_context_contract::SourceAccessRequirementKind::ReviewProcessing)
     }
 }
 
@@ -203,6 +214,7 @@ pub enum ReviewedTarget {
     NavigationOnly(NavigationOnlyTarget),
     SourceReview(floe_access::ReviewRef),
     ExpertBinding(floe_experts::BindingReviewRef),
+    OperationApproval(floe_access::OperationApprovalRef),
 }
 
 impl ReviewedTarget {
@@ -211,6 +223,7 @@ impl ReviewedTarget {
             Self::NavigationOnly(target) => target.validate(),
             Self::SourceReview(reference) => reference.validate(),
             Self::ExpertBinding(target) => target.validate(),
+            Self::OperationApproval(reference) => reference.validate(),
         }
     }
 }
@@ -254,6 +267,9 @@ impl InteractionResolutionReceipt {
             ) | (
                 InteractionResolutionCause::Refresh { .. },
                 super::OwnerResolutionReceipt::ExpertBinding { .. }
+            ) | (
+                InteractionResolutionCause::Decision { .. },
+                super::OwnerResolutionReceipt::CalendarOperation { .. }
             )
         ) {
             return Err(AgentFailure::StorageUnavailable);
@@ -281,6 +297,14 @@ pub enum InteractionState {
     Resolving {
         decision_id: Uuid,
         owner_command_id: Uuid,
+        /// Kept with the intent so restart recovery applies the same choice.
+        /// Old resolving rows were created only by Approve.
+        #[serde(default = "default_resolution_decision")]
+        decision_kind: InteractionDecisionKind,
+        /// The admission time is part of the durable choice. Owner recovery may
+        /// happen after the review expires, but must replay this exact decision.
+        #[serde(default)]
+        decided_at_unix_ms: Option<i64>,
     },
     Resolved {
         receipt: InteractionResolutionReceipt,
@@ -297,6 +321,10 @@ pub enum InteractionState {
     Expired,
 }
 
+fn default_resolution_decision() -> InteractionDecisionKind {
+    InteractionDecisionKind::Approve
+}
+
 impl InteractionState {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         match self {
@@ -304,6 +332,7 @@ impl InteractionState {
             Self::Resolving {
                 decision_id,
                 owner_command_id,
+                ..
             } => {
                 if decision_id.is_nil() || owner_command_id.is_nil() {
                     return Err(AgentFailure::StorageUnavailable);
@@ -380,7 +409,7 @@ impl ConversationInteraction {
                     projection_operation_id,
                     target_digest,
                 },
-                super::BlockedReviewEvidence::ModelProjection { review, .. },
+                super::ReviewAuditEvidence::ModelProjection { review, .. },
             ) if *run_id == self.origin_run_id
                 && *projection_operation_id == review.projection_operation_id
                 && *target_digest == review.target_digest => {}
@@ -389,7 +418,7 @@ impl ConversationInteraction {
                     execution,
                     capability_call_id,
                 },
-                super::BlockedReviewEvidence::SourceRead {
+                super::ReviewAuditEvidence::SourceRead {
                     execution: evidence,
                     tool_call_id,
                     ..
@@ -400,14 +429,14 @@ impl ConversationInteraction {
                     execution,
                     capability_call_id: None,
                 },
-                super::BlockedReviewEvidence::ExpertBinding {
+                super::ReviewAuditEvidence::ExpertBinding {
                     execution: evidence,
                     ..
                 },
             ) if execution == evidence => {}
             (
                 InteractionOrigin::Task { execution, .. },
-                super::BlockedReviewEvidence::Navigation {
+                super::ReviewAuditEvidence::Navigation {
                     execution: evidence,
                     ..
                 },
@@ -417,16 +446,41 @@ impl ConversationInteraction {
                     execution,
                     capability_call_id: None,
                 },
-                super::BlockedReviewEvidence::TaskModelProjection {
+                super::ReviewAuditEvidence::TaskModelProjection {
                     execution: evidence,
                     ..
                 },
             ) if execution == evidence => {}
+            (
+                InteractionOrigin::OperationApproval {
+                    run_id,
+                    execution,
+                    artifact_id,
+                    operation_id,
+                },
+                super::ReviewAuditEvidence::OperationApproval {
+                    execution: evidence,
+                    artifact_id: audit_artifact_id,
+                    operation_id: audit_operation_id,
+                    review,
+                },
+            ) if *run_id == self.origin_run_id
+                && execution == evidence
+                && artifact_id == audit_artifact_id
+                && operation_id == audit_operation_id
+                && review.operation_id == *operation_id => {}
             _ => return Err(AgentFailure::StorageUnavailable),
         }
         self.requirement.validate()?;
         self.target.validate()?;
         self.state.validate()?;
+        let expected_expiry = match &self.target {
+            ReviewedTarget::OperationApproval(reference) => reference.expires_at.timestamp_millis(),
+            _ => self
+                .created_at_unix_ms
+                .checked_add(INTERACTION_PENDING_LIFETIME_MS)
+                .ok_or(AgentFailure::StorageUnavailable)?,
+        };
         if self.id.is_nil()
             || !self.person_id.is_valid()
             || self.session_id.is_nil()
@@ -434,16 +488,32 @@ impl ConversationInteraction {
             || self.origin_turn_id != self.origin_run_id.as_uuid()
             || self.revision == 0
             || self.created_at_unix_ms < 0
-            || self.expires_at_unix_ms != self.created_at_unix_ms + INTERACTION_PENDING_LIFETIME_MS
+            || self.expires_at_unix_ms != expected_expiry
             || matches!(self.target, ReviewedTarget::SourceReview(_))
                 && self.kind != UserInteractionKind::SourceAccess
-            || self.requirement.kind == InteractionRequirementKind::ReviewProcessing
+            || matches!(self.target, ReviewedTarget::OperationApproval(_))
+                && self.kind != UserInteractionKind::OperationApproval
+            || self.requirement.is_review_processing()
                 && !matches!(self.target, ReviewedTarget::SourceReview(_))
             || matches!(&self.origin, InteractionOrigin::Projection { run_id, .. } if *run_id != self.origin_run_id)
-            || (self.kind == UserInteractionKind::ExpertBinding)
-                != (self.requirement.kind == InteractionRequirementKind::ConfigureExpertBinding)
-            || (self.kind == UserInteractionKind::ExpertBinding)
-                != matches!(self.target, ReviewedTarget::ExpertBinding(_))
+            || match (&self.requirement, &self.target, self.kind) {
+                (
+                    InteractionRequirement::SourceAccess { .. },
+                    ReviewedTarget::SourceReview(_) | ReviewedTarget::NavigationOnly(_),
+                    UserInteractionKind::SourceAccess,
+                ) => false,
+                (
+                    InteractionRequirement::ExpertBinding { review, .. },
+                    ReviewedTarget::ExpertBinding(target),
+                    UserInteractionKind::ExpertBinding,
+                ) if review == target => false,
+                (
+                    InteractionRequirement::OperationApproval { review },
+                    ReviewedTarget::OperationApproval(target),
+                    UserInteractionKind::OperationApproval,
+                ) if review == target => false,
+                _ => true,
+            }
             || self.requirement_digest == [0; 32]
             || self.target_digest == [0; 32]
         {
@@ -460,6 +530,25 @@ impl ConversationInteraction {
         {
             return Err(AgentFailure::StorageUnavailable);
         }
+        if let (
+            ReviewedTarget::OperationApproval(reference),
+            InteractionState::Resolving {
+                decided_at_unix_ms, ..
+            },
+        ) = (&self.target, &self.state)
+        {
+            let Some(decided_at) =
+                decided_at_unix_ms.and_then(chrono::DateTime::from_timestamp_millis)
+            else {
+                return Err(AgentFailure::StorageUnavailable);
+            };
+            if decided_at < reference.created_at
+                || decided_at >= reference.expires_at
+                || decided_at.timestamp_millis() < self.created_at_unix_ms
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+        }
         if let InteractionState::Resolved { receipt } = &self.state {
             if receipt.resolved_at_unix_ms < self.created_at_unix_ms {
                 return Err(AgentFailure::StorageUnavailable);
@@ -475,6 +564,26 @@ impl ConversationInteraction {
                     ReviewedTarget::ExpertBinding(reference),
                     super::OwnerResolutionReceipt::ExpertBinding { receipt },
                 ) => &receipt.review_ref == reference,
+                (
+                    ReviewedTarget::OperationApproval(reference),
+                    super::OwnerResolutionReceipt::CalendarOperation {
+                        operation_id,
+                        decision,
+                    },
+                ) => {
+                    *operation_id == reference.operation_id
+                        && matches!(decision, floe_access::OperationDecisionReceipt::ReviewedDecision {
+                            command_id, approval_id, subject_digest, policy_revision,
+                            person_id, device_id, decided_at, ..
+                        } if !command_id.is_nil()
+                            && *approval_id == reference.id
+                            && *subject_digest == reference.subject().digest()?
+                            && Some(*policy_revision) == reference.policy_revision
+                            && *person_id == self.person_id
+                            && device_id == &self.audit.device_id
+                            && *decided_at >= reference.created_at
+                            && *decided_at < reference.expires_at)
+                }
                 _ => false,
             };
             if !matches_owner {
@@ -617,6 +726,8 @@ pub fn next_state_after_decision(
             Ok(InteractionState::Resolving {
                 decision_id: decision.command_id,
                 owner_command_id: decision_owner_command_id(decision.command_id),
+                decision_kind: decision.kind,
+                decided_at_unix_ms: Some(decision.decided_at_unix_ms),
             })
         }
         (InteractionState::Pending, InteractionDecisionKind::Deny) => {
@@ -645,6 +756,7 @@ pub fn state_after_resolution(
         InteractionState::Resolving {
             decision_id,
             owner_command_id,
+            ..
         } if resolution.cause
             == (InteractionResolutionCause::Decision {
                 command_id: *decision_id,
@@ -696,26 +808,69 @@ pub fn canonical_requirement_digest(
         .map_err(|_| AgentFailure::InvalidInput)?;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"floe.conversation.interaction-requirement\0");
-    bytes.push(match requirement.kind {
-        InteractionRequirementKind::EnableObserve => 1,
-        InteractionRequirementKind::ReviewChangedSource => 2,
-        InteractionRequirementKind::RequestSystemPermission => 3,
-        InteractionRequirementKind::Reconnect => 4,
-        InteractionRequirementKind::ReviewProcessing => 5,
-        InteractionRequirementKind::SelectResource => 6,
-        InteractionRequirementKind::ConfigureExpertBinding => 7,
-    });
-    append_str(&mut bytes, &requirement.source_id);
-    match &requirement.connection_id {
-        Some(connection_id) => {
-            bytes.push(1);
-            append_str(&mut bytes, connection_id);
+    match requirement {
+        InteractionRequirement::SourceAccess {
+            requirement,
+            inline,
+        } => {
+            use floe_context_contract::SourceAccessRequirementKind as Reason;
+            bytes.push(match requirement.reason() {
+                Reason::EnableObserve => 1,
+                Reason::ReviewChangedSource => 2,
+                Reason::RequestSystemPermission => 3,
+                Reason::Reconnect => 4,
+                Reason::ReviewProcessing => 5,
+                Reason::SelectResource => 6,
+            });
+            append_str(&mut bytes, requirement.source_id());
+            match requirement.connection_id() {
+                Some(connection_id) => {
+                    bytes.push(1);
+                    append_str(&mut bytes, connection_id.as_str());
+                }
+                None => bytes.push(0),
+            }
+            append_str(&mut bytes, requirement.consumer().identifier());
+            append_str(
+                &mut bytes,
+                match requirement.purpose() {
+                    floe_context_contract::GrantPurpose::Assistant => "assistant",
+                    floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+                    floe_context_contract::GrantPurpose::Summarization => "summarization",
+                },
+            );
+            bytes.push(u8::from(*inline));
         }
-        None => bytes.push(0),
+        InteractionRequirement::ExpertBinding {
+            consumer,
+            requirement_key,
+            review,
+        } => {
+            bytes.push(7);
+            append_str(&mut bytes, consumer);
+            append_str(&mut bytes, requirement_key);
+            bytes.extend_from_slice(review.id.as_bytes());
+            bytes.extend_from_slice(&review.digest);
+        }
+        InteractionRequirement::OperationApproval { review } => {
+            bytes.push(8);
+            bytes.extend_from_slice(review.id.as_bytes());
+            bytes.extend_from_slice(review.operation_id.as_bytes());
+            bytes.extend_from_slice(&review.effect_digest);
+            bytes.extend_from_slice(&review.source_digest);
+            append_str(&mut bytes, &review.person_id.to_string());
+            append_str(&mut bytes, &review.device_id);
+            match review.policy_revision {
+                Some(revision) => {
+                    bytes.push(1);
+                    bytes.extend_from_slice(&revision.to_be_bytes());
+                }
+                None => bytes.push(0),
+            }
+            bytes.extend_from_slice(&review.created_at.timestamp_millis().to_be_bytes());
+            bytes.extend_from_slice(&review.expires_at.timestamp_millis().to_be_bytes());
+        }
     }
-    append_str(&mut bytes, &requirement.consumer);
-    append_str(&mut bytes, &requirement.purpose);
-    bytes.push(u8::from(requirement.inline));
     Ok(Sha256::digest(bytes).into())
 }
 
@@ -754,6 +909,18 @@ pub fn canonical_target_digest(target: &ReviewedTarget) -> Result<[u8; 32], Agen
             bytes.push(4);
             bytes.extend_from_slice(target.id.as_bytes());
             bytes.extend_from_slice(&target.digest);
+        }
+        ReviewedTarget::OperationApproval(reference) => {
+            bytes.push(5);
+            bytes.extend_from_slice(reference.id.as_bytes());
+            bytes.extend_from_slice(reference.operation_id.as_bytes());
+            bytes.extend_from_slice(&reference.effect_digest);
+            bytes.extend_from_slice(&reference.source_digest);
+            bytes.extend_from_slice(reference.person_id.0.as_bytes());
+            append_str(&mut bytes, &reference.device_id);
+            bytes.extend_from_slice(&reference.policy_revision.unwrap_or_default().to_be_bytes());
+            bytes.extend_from_slice(&reference.created_at.timestamp_millis().to_be_bytes());
+            bytes.extend_from_slice(&reference.expires_at.timestamp_millis().to_be_bytes());
         }
     }
     Ok(Sha256::digest(bytes).into())
@@ -810,6 +977,26 @@ pub fn interaction_publication_id(
             bytes.extend_from_slice(run_id.as_uuid().as_bytes());
             bytes.extend_from_slice(projection_operation_id.as_bytes());
             bytes.extend_from_slice(target_digest);
+        }
+        InteractionOrigin::OperationApproval {
+            run_id,
+            execution,
+            artifact_id,
+            operation_id,
+        } => {
+            if *run_id != origin_run_id {
+                return Err(AgentFailure::InvalidInput);
+            }
+            bytes.push(4);
+            bytes.extend_from_slice(run_id.as_uuid().as_bytes());
+            bytes.extend_from_slice(execution.execution.task_id.as_uuid().as_bytes());
+            bytes.extend_from_slice(execution.execution.execution_id.as_bytes());
+            bytes.extend_from_slice(&execution.execution.executor_generation.to_be_bytes());
+            bytes.extend_from_slice(&execution.task_revision.to_be_bytes());
+            bytes.extend_from_slice(&execution.journal_revision.to_be_bytes());
+            bytes.extend_from_slice(&execution.digest);
+            bytes.extend_from_slice(artifact_id.as_bytes());
+            bytes.extend_from_slice(operation_id.as_bytes());
         }
     }
     bytes.extend_from_slice(requirement_digest);
@@ -936,5 +1123,40 @@ impl InteractionRefresh {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolving_operation_keeps_admitted_choice_time_for_late_recovery() {
+        let decided_at_unix_ms = 1_800_000_000_000;
+        let decision = InteractionDecision {
+            command_id: Uuid::new_v4(),
+            interaction_id: Uuid::new_v4(),
+            interaction_revision: 1,
+            kind: InteractionDecisionKind::Approve,
+            target_digest: [9; 32],
+            principal: "person".into(),
+            decided_at_unix_ms,
+        };
+        let resolving = next_state_after_decision(&InteractionState::Pending, &decision)
+            .expect("decision admission stores its choice and time");
+        assert!(matches!(
+            resolving,
+            InteractionState::Resolving {
+                decision_kind: InteractionDecisionKind::Approve,
+                decided_at_unix_ms: Some(value),
+                ..
+            } if value == decided_at_unix_ms
+        ));
+        let encoded = serde_json::to_vec(&resolving).expect("serialize durable resolving row");
+        assert_eq!(
+            serde_json::from_slice::<InteractionState>(&encoded)
+                .expect("recover durable resolving row"),
+            resolving
+        );
     }
 }

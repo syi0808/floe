@@ -12,7 +12,7 @@ members = [
     "crates/platform/diagnostics",
     "crates/platform/native",
     "crates/modules/access",
-    "crates/modules/actions",
+    "crates/modules/calendar_operations",
     "crates/modules/connections",
     "crates/modules/context",
     "crates/modules/conversation",

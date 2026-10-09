@@ -16,8 +16,10 @@ pub use run_record::{
     RunReceipt, RunRecord, RunState, RunTerminal, UnresolvedModelAttempt,
 };
 pub use source_review::{
-    BlockedReviewEvidence, BlockedRunCommit, InteractionResolutionCommit, OwnerResolutionReceipt,
-    ResumeChildAdmission, ResumeRequired, ReviewAuditRecord, ReviewPublication, SourceReviewLink,
+    BlockedRunCommit, InteractionResolutionCommit, OperationApprovalAdmission,
+    OperationApprovalPublication, OwnerResolutionReceipt, ResumeChildAdmission, ResumeRequired,
+    ReviewAuditEvidence, ReviewAuditRecord, ReviewPublication, SourceReviewLink,
+    operation_approval_interaction,
 };
 
 pub use intent::{
@@ -27,9 +29,9 @@ pub use intent::{
 pub use interaction::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
-    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionRequirementKind,
-    InteractionResolution, InteractionResolutionCause, InteractionResolutionReceipt,
-    InteractionResumeRef, InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE,
+    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionResolution,
+    InteractionResolutionCause, InteractionResolutionReceipt, InteractionResumeRef,
+    InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
     NavigationDestination, NavigationOnlyTarget, ReviewedTarget, SupersedeInteraction,

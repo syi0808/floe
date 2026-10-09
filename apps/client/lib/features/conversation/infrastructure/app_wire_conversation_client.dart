@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
 const _maxTurnTextBytes = 8 * 1024;
 const _maxTurnPayloadBytes = 64 * 1024;
@@ -99,6 +100,12 @@ final class AppCancelRunReceipt {
   final String runId;
   final AppCancelRunOutcome outcome;
   final int runtimeEpoch;
+}
+
+final class CalendarProposalCommandResult {
+  const CalendarProposalCommandResult({required this.operation, this.interaction});
+  final CalendarAction operation;
+  final AgentInteractionSnapshot? interaction;
 }
 
 enum AppRunState {
@@ -342,6 +349,67 @@ final class AppWireConversationClient {
         );
       }
       throw const FormatException('Invalid cancel Run receipt.');
+    });
+  }
+
+  Future<CalendarProposalCommandResult> submitCalendarProposal({
+    required String commandId,
+    required String sessionId,
+    required String originRunId,
+    required Map<String, Object?> receipt,
+    required String artifactId,
+    required String destinationRef,
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) {
+      return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
+    if (!_wireId(commandId) ||
+        !_wireId(sessionId) ||
+        !_wireId(originRunId) ||
+        !_wireId(artifactId) ||
+        !_wireId(destinationRef)) {
+      return Future.error(const FormatException('Invalid Calendar proposal identity.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': commandId,
+        'command': {
+          'kind': 'conversation.calendar_proposal.submit',
+          'session_id': sessionId,
+          'origin_run_id': originRunId,
+          'receipt': receipt,
+          'artifact_id': artifactId,
+          'destination_ref': destinationRef,
+        },
+      }, timeout: timeout);
+      _wireFields(result, const {'kind', 'operation', 'interaction'});
+      if (result['kind'] != 'conversation.calendar_proposal') {
+        throw const FormatException('Invalid Calendar proposal response.');
+      }
+      final operation = CalendarAction.fromJson(_map(result['operation']));
+      final interactionValue = result['interaction'];
+      final interaction = interactionValue == null
+          ? null
+          : AgentInteractionSnapshot.parse(_map(interactionValue));
+      if (operation.origin != CalendarActionOrigin.expert ||
+          interaction != null &&
+              (interaction.kind != AgentInteractionKind.operationApproval ||
+                  interaction.sessionId != sessionId ||
+                  interaction.target is! AgentOperationApprovalTarget ||
+                  (interaction.target as AgentOperationApprovalTarget)
+                          .operation
+                          .actionRef !=
+                      operation.actionRef)) {
+        throw const FormatException('Calendar proposal response changed its owner identity.');
+      }
+      return CalendarProposalCommandResult(
+        operation: operation,
+        interaction: interaction,
+      );
     });
   }
 

@@ -11,6 +11,7 @@ pub const USER_INTERACTION_MEDIA_TYPE: &str =
 pub enum UserInteractionKind {
     SourceAccess,
     ExpertBinding,
+    OperationApproval,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

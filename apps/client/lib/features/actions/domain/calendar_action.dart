@@ -392,60 +392,83 @@ final class ActionAuthority {
 final class ActionReviewReference {
   const ActionReviewReference({
     required this.id,
-    required this.actionId,
+    required this.operationId,
     required this.effectDigest,
     required this.sourceDigest,
+    required this.personId,
+    required this.deviceId,
     required this.authorityRevision,
+    required this.createdAt,
     required this.expiresAt,
   });
 
   factory ActionReviewReference.fromJson(Map<String, dynamic> json) {
     _expectKeys(json, const {
       'id',
-      'action_id',
+      'operation_id',
       'effect_digest',
       'source_digest',
-      'authority_revision',
+      'person_id',
+      'device_id',
+      'policy_revision',
+      'created_at',
       'expires_at',
     });
     final reference = ActionReviewReference(
       id: _string(json['id'], 'review_ref.id'),
-      actionId: _string(json['action_id'], 'review_ref.action_id'),
+      operationId: _string(json['operation_id'], 'review_ref.operation_id'),
       effectDigest: _string(json['effect_digest'], 'review_ref.effect_digest'),
       sourceDigest: _string(json['source_digest'], 'review_ref.source_digest'),
-      authorityRevision: _integer(
-        json['authority_revision'],
-        'review_ref.authority_revision',
-      ),
+      personId: _string(json['person_id'], 'review_ref.person_id'),
+      deviceId: _string(json['device_id'], 'review_ref.device_id'),
+      authorityRevision: json['policy_revision'] == null
+          ? null
+          : _integer(
+              json['policy_revision'],
+              'review_ref.policy_revision',
+            ),
+      createdAt: _string(json['created_at'], 'review_ref.created_at'),
       expiresAt: _string(json['expires_at'], 'review_ref.expires_at'),
     );
+    _utcInstant(reference.createdAt, 'review_ref.created_at');
     _utcInstant(reference.expiresAt, 'review_ref.expires_at');
     _validateUuid(reference.id, 'review_ref.id');
-    _validateUuid(reference.actionId, 'review_ref.action_id');
-    _validateRevision(
-      reference.authorityRevision,
-      'review_ref.authority_revision',
-    );
+    _validateUuid(reference.operationId, 'review_ref.operation_id');
+    _validateUuid(reference.personId, 'review_ref.person_id');
+    if (reference.deviceId.isEmpty || reference.deviceId.length > 256) {
+      throw const FormatException('Invalid review_ref.device_id.');
+    }
+    if (reference.authorityRevision case final policyRevision?) {
+      _validateRevision(policyRevision, 'review_ref.policy_revision');
+    }
     _validateDigest(reference.effectDigest, 'review_ref.effect_digest');
     _validateDigest(reference.sourceDigest, 'review_ref.source_digest');
     return reference;
   }
 
   final String id;
-  final String actionId;
+  final String operationId;
   final String effectDigest;
   final String sourceDigest;
-  final int authorityRevision;
+  final String personId;
+  final String deviceId;
+  final int? authorityRevision;
+  final String createdAt;
   final String expiresAt;
 
   Map<String, Object?> toJson() => {
     'id': id,
-    'action_id': actionId,
+    'operation_id': operationId,
     'effect_digest': effectDigest,
     'source_digest': sourceDigest,
-    'authority_revision': authorityRevision,
+    'person_id': personId,
+    'device_id': deviceId,
+    'policy_revision': authorityRevision,
+    'created_at': createdAt,
     'expires_at': expiresAt,
   };
+
+  String get actionId => operationId;
 }
 
 sealed class ActionEffectSummary {

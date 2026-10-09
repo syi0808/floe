@@ -1,5 +1,6 @@
 use std::{
-    sync::{Arc, Mutex, mpsc},
+    collections::VecDeque,
+    sync::{Arc, Condvar, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
@@ -31,6 +32,13 @@ use uuid::Uuid;
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 use floe_access::{CalendarReadAccessRequest, CalendarReadAccessStamp};
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_calendar_operations::{
+    ActionBlockedReason, ActionSourceFence, ActionUnknownReason, CalendarDestinationObservation,
+    CalendarEffectOutcome, CalendarEffectReceipt, CalendarOperationExecutor,
+    CalendarReceiptEvidence, CalendarWriteResult, CommittedCalendarEffect, ExecutionIntent,
+    PreparedCalendarEffect,
+};
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 use floe_connections::SourceConnection;
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 use floe_context::{
@@ -59,6 +67,7 @@ pub enum ModelOutput {
     ScheduleExpertRevocationFlow,
     ScheduleBlockedResumeFlow,
     ScheduleFinalizationFlow,
+    ScheduleOperationApprovalFlow,
 }
 
 #[derive(Clone, Debug)]
@@ -117,14 +126,17 @@ struct RecorderState {
 }
 
 #[derive(Clone)]
-pub struct ScriptRecorder(Arc<Mutex<RecorderState>>);
+pub struct ScriptRecorder(Arc<Mutex<RecorderState>>, Arc<Condvar>);
 
 impl ScriptRecorder {
     fn new(expected_consumers: Vec<String>) -> Self {
-        Self(Arc::new(Mutex::new(RecorderState {
-            expected_consumers,
-            ..RecorderState::default()
-        })))
+        Self(
+            Arc::new(Mutex::new(RecorderState {
+                expected_consumers,
+                ..RecorderState::default()
+            })),
+            Arc::new(Condvar::new()),
+        )
     }
 
     fn record_plan(
@@ -280,7 +292,38 @@ impl ScriptRecorder {
             task_id,
             attempt_id: Some(request.attempt_id),
         });
+        drop(state);
+        self.1.notify_all();
         Ok(index)
+    }
+
+    pub fn wait_for_generated_run(&self, run_id: Uuid, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.0.lock().expect("script recorder mutex poisoned");
+        loop {
+            if state
+                .generated_bindings
+                .iter()
+                .any(|binding| binding.run_id == Some(run_id))
+            {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, timeout) = self
+                .1
+                .wait_timeout(state, remaining)
+                .expect("script recorder mutex poisoned while waiting");
+            state = next;
+            if timeout.timed_out() {
+                return state
+                    .generated_bindings
+                    .iter()
+                    .any(|binding| binding.run_id == Some(run_id));
+            }
+        }
     }
 
     pub fn snapshot(&self) -> ScriptSnapshot {
@@ -339,13 +382,16 @@ impl ScriptedModel {
             ModelOutput::ScheduleBlockedResumeFlow => {
                 vec![CONVERSATION_CONSUMER.into(), CONVERSATION_CONSUMER.into()]
             }
-            ModelOutput::ScheduleFinalizationFlow => vec![
-                CONVERSATION_CONSUMER.into(),
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
-                floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
-                CONVERSATION_CONSUMER.into(),
-                CONVERSATION_CONSUMER.into(),
-            ],
+            ModelOutput::ScheduleFinalizationFlow | ModelOutput::ScheduleOperationApprovalFlow => {
+                vec![
+                    CONVERSATION_CONSUMER.into(),
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                    floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                    CONVERSATION_CONSUMER.into(),
+                    CONVERSATION_CONSUMER.into(),
+                    CONVERSATION_CONSUMER.into(),
+                ]
+            }
             _ => vec![CONVERSATION_CONSUMER.into()],
         };
         Self {
@@ -373,6 +419,15 @@ impl ScriptedModel {
     ) -> AppOpenOptions {
         self.app_options()
             .with_qa_expert_source_transport(transport)
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub fn app_options_with_qa_calendar_executor(
+        &self,
+        executor: ScriptedCalendarExecutor,
+    ) -> AppOpenOptions {
+        self.app_options()
+            .with_qa_calendar_operation_executor(executor)
     }
 
     fn validate_canonical(
@@ -403,6 +458,7 @@ impl ScriptedModel {
                 | ModelOutput::ScheduleExpertRevocationFlow
                 | ModelOutput::ScheduleBlockedResumeFlow
                 | ModelOutput::ScheduleFinalizationFlow
+                | ModelOutput::ScheduleOperationApprovalFlow
         );
         let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
         let consumer_is_expert = plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
@@ -542,6 +598,18 @@ impl ScriptedModel {
                     input: serde_json::to_string(&input).map_err(|_| AgentFailure::InvalidInput)?,
                 }]))
             }
+            5 if matches!(&self.output, ModelOutput::ScheduleOperationApprovalFlow) => {
+                Ok(response(vec![ModelStep::Answer {
+                    text: "I resumed the reviewed Calendar operation.".into(),
+                    artifacts: vec![],
+                }]))
+            }
+            4 if matches!(&self.output, ModelOutput::ScheduleOperationApprovalFlow) => {
+                Ok(response(vec![ModelStep::Answer {
+                    text: "I resumed the reviewed Calendar operation.".into(),
+                    artifacts: vec![],
+                }]))
+            }
             2 | 5 => Ok(response(vec![ModelStep::Answer {
                 text:
                     "The selected synthetic calendar has one planning event in the requested range."
@@ -575,6 +643,12 @@ impl ScriptedModel {
                 }
                 ModelOutput::ScheduleBlockedResumeFlow => Err(AgentFailure::InvalidInput),
                 ModelOutput::ScheduleFinalizationFlow => Err(AgentFailure::BudgetExceeded),
+                ModelOutput::ScheduleOperationApprovalFlow => {
+                    Ok(response(vec![ModelStep::Answer {
+                        text: "I found a time that fits the calendar.".into(),
+                        artifacts: vec![],
+                    }]))
+                }
                 _ => Err(AgentFailure::InvalidInput),
             },
             6 if matches!(&self.output, ModelOutput::ScheduleExpertContinuationFlow) => {
@@ -583,7 +657,11 @@ impl ScriptedModel {
                     artifacts: vec![],
                 }]))
             }
-            4 if matches!(&self.output, ModelOutput::ScheduleFinalizationFlow) => {
+            4 if matches!(
+                &self.output,
+                ModelOutput::ScheduleFinalizationFlow | ModelOutput::ScheduleOperationApprovalFlow
+            ) =>
+            {
                 self.finalization_answer(request)
             }
             _ => {
@@ -807,6 +885,9 @@ impl PreparedModelTransport for ScriptedTransport {
                 ModelOutput::ScheduleFinalizationFlow => {
                     self.model.schedule_flow_response(call_index, &request)
                 }
+                ModelOutput::ScheduleOperationApprovalFlow => {
+                    self.model.schedule_flow_response(call_index, &request)
+                }
             }
         })
     }
@@ -895,6 +976,325 @@ impl IsolatedProfile {
             model.app_options_with_qa_source_transport(transport),
         )
         .unwrap_or_else(|error| panic!("open isolated App profile: {error:?}"))
+    }
+
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    pub fn open_with_qa_calendar_executor(
+        &self,
+        model: &ScriptedModel,
+        executor: ScriptedCalendarExecutor,
+    ) -> AppHost<AppComposition> {
+        let path = self.root.path().to_str().expect("temporary path is UTF-8");
+        floe_app::open_default_with_options(
+            path,
+            model.app_options_with_qa_calendar_executor(executor),
+        )
+        .unwrap_or_else(|error| panic!("open isolated App profile: {error:?}"))
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CalendarExecutorScript {
+    Commit,
+    PreDispatchFailure,
+    ApplyThenLoseAck,
+    MissingReceipt,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CalendarExecutorSnapshot {
+    pub destinations: usize,
+    pub preparations: usize,
+    pub pre_dispatch_failures: usize,
+    pub dispatch_attempts: usize,
+    pub external_effects: usize,
+    pub lookups: usize,
+    pub effect_kinds: Vec<&'static str>,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[derive(Clone)]
+pub struct ScriptedCalendarExecutor {
+    state: Arc<Mutex<ScriptedCalendarExecutorState>>,
+    changed: Arc<Condvar>,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[derive(Default)]
+struct ScriptedCalendarExecutorState {
+    scripts: VecDeque<CalendarExecutorScript>,
+    snapshot: CalendarExecutorSnapshot,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl ScriptedCalendarExecutor {
+    pub fn new(scripts: impl IntoIterator<Item = CalendarExecutorScript>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ScriptedCalendarExecutorState {
+                scripts: scripts.into_iter().collect(),
+                snapshot: CalendarExecutorSnapshot::default(),
+            })),
+            changed: Arc::new(Condvar::new()),
+        }
+    }
+
+    pub fn snapshot(&self) -> CalendarExecutorSnapshot {
+        self.state
+            .lock()
+            .expect("scripted calendar executor lock")
+            .snapshot
+            .clone()
+    }
+
+    pub fn queue_script(&self, script: CalendarExecutorScript) {
+        self.state
+            .lock()
+            .expect("scripted calendar executor lock")
+            .scripts
+            .push_back(script);
+        self.changed.notify_all();
+    }
+
+    pub fn wait_for_snapshot(
+        &self,
+        timeout: Duration,
+        accepted: impl Fn(&CalendarExecutorSnapshot) -> bool,
+    ) -> Option<CalendarExecutorSnapshot> {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.state.lock().ok()?;
+        loop {
+            if accepted(&state.snapshot) {
+                return Some(state.snapshot.clone());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            let (next, result) = self.changed.wait_timeout(state, remaining).ok()?;
+            state = next;
+            if result.timed_out() && !accepted(&state.snapshot) {
+                return None;
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl ScriptedCalendarExecutorState {
+    fn next_script(&mut self) -> Option<CalendarExecutorScript> {
+        self.scripts.pop_front()
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl CalendarOperationExecutor for ScriptedCalendarExecutor {
+    fn destinations<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        source: &'a ActionSourceFence,
+        scope: &'a ExecutionScope,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Vec<CalendarDestinationObservation>, ActionBlockedReason>,
+    > {
+        Box::pin(async move {
+            if actor.validate().is_err() || scope.cancellation().is_cancelled() {
+                return Err(ActionBlockedReason::PolicyDenied);
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| ActionBlockedReason::ExecutorUnavailable)?;
+            state.snapshot.destinations += 1;
+            self.changed.notify_all();
+            Ok(source
+                .resources
+                .iter()
+                .map(|calendar_id| CalendarDestinationObservation {
+                    calendar_id: calendar_id.clone(),
+                    calendar_name: "Synthetic QA Calendar".into(),
+                    can_modify: true,
+                })
+                .collect())
+        })
+    }
+
+    fn prepare<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        record: &'a floe_calendar_operations::ActionRecord,
+        _: &'a [floe_calendar_operations::ActionDependencySourceFence],
+        _: &'a [floe_day::Event],
+        scope: &'a ExecutionScope,
+    ) -> floe_execution::BoxFuture<'a, Result<Box<dyn PreparedCalendarEffect>, ActionBlockedReason>>
+    {
+        Box::pin(async move {
+            if actor.validate().is_err() || scope.cancellation().is_cancelled() {
+                return Err(ActionBlockedReason::PolicyDenied);
+            }
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| ActionBlockedReason::ExecutorUnavailable)?;
+            state.snapshot.preparations += 1;
+            let script = state.next_script();
+            if script == Some(CalendarExecutorScript::PreDispatchFailure) {
+                state.snapshot.pre_dispatch_failures += 1;
+                self.changed.notify_all();
+                return Err(ActionBlockedReason::ExecutorUnavailable);
+            }
+            self.changed.notify_all();
+            Ok(Box::new(ScriptedPreparedCalendarEffect {
+                state: self.state.clone(),
+                changed: self.changed.clone(),
+                script,
+                executor_generation: actor.runtime_epoch,
+                effect: record.effect.clone(),
+            }) as Box<dyn PreparedCalendarEffect>)
+        })
+    }
+
+    fn recover<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        intent: &'a ExecutionIntent,
+        scope: &'a ExecutionScope,
+    ) -> floe_execution::BoxFuture<'a, CalendarEffectOutcome> {
+        Box::pin(async move {
+            if actor.validate().is_err() || scope.cancellation().is_cancelled() {
+                return CalendarEffectOutcome::Unknown {
+                    identity: intent.identity(),
+                    reason: ActionUnknownReason::Timeout,
+                };
+            }
+            if let Ok(mut state) = self.state.lock() {
+                state.snapshot.lookups += 1;
+                self.changed.notify_all();
+            }
+            CalendarEffectOutcome::Unknown {
+                identity: intent.identity(),
+                reason: ActionUnknownReason::NativeReceiptUnavailable,
+            }
+        })
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+struct ScriptedPreparedCalendarEffect {
+    state: Arc<Mutex<ScriptedCalendarExecutorState>>,
+    changed: Arc<Condvar>,
+    script: Option<CalendarExecutorScript>,
+    executor_generation: u64,
+    effect: floe_calendar_operations::CalendarEffect,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl Drop for ScriptedPreparedCalendarEffect {
+    fn drop(&mut self) {
+        if let Some(script) = self.script.take()
+            && let Ok(mut state) = self.state.lock()
+        {
+            state.scripts.push_front(script);
+        }
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl PreparedCalendarEffect for ScriptedPreparedCalendarEffect {
+    fn executor_generation(&self) -> u64 {
+        self.executor_generation
+    }
+
+    fn dispatch(
+        mut self: Box<Self>,
+        admission: floe_calendar_operations::DispatchAdmission,
+        _: ExecutionScope,
+    ) -> floe_execution::BoxFuture<'static, CalendarEffectOutcome> {
+        let script = self.script.take().unwrap_or(CalendarExecutorScript::Commit);
+        let state = self.state.clone();
+        let changed = self.changed.clone();
+        let effect = self.effect.clone();
+        Box::pin(async move {
+            let intent = admission.intent;
+            if let Ok(mut state) = state.lock() {
+                state.snapshot.dispatch_attempts += 1;
+                state.snapshot.effect_kinds.push(match &effect {
+                    floe_calendar_operations::CalendarEffect::Create { .. } => "create",
+                    floe_calendar_operations::CalendarEffect::Update { .. } => "update",
+                    floe_calendar_operations::CalendarEffect::Delete { .. } => "delete",
+                });
+                if matches!(
+                    script,
+                    CalendarExecutorScript::Commit
+                        | CalendarExecutorScript::ApplyThenLoseAck
+                        | CalendarExecutorScript::MissingReceipt
+                ) {
+                    state.snapshot.external_effects += 1;
+                }
+                changed.notify_all();
+            }
+            if matches!(
+                script,
+                CalendarExecutorScript::ApplyThenLoseAck | CalendarExecutorScript::MissingReceipt
+            ) {
+                return CalendarEffectOutcome::Unknown {
+                    identity: intent.identity(),
+                    reason: ActionUnknownReason::NativeReceiptUnavailable,
+                };
+            }
+            let committed_effect = match &effect {
+                floe_calendar_operations::CalendarEffect::Create {
+                    title, schedule, ..
+                } => CommittedCalendarEffect::Created {
+                    event: CalendarWriteResult {
+                        external_id: format!("qa-created-{}", intent.execution_id),
+                        external_revision:
+                            floe_day::CalendarExternalRevision::ObservationFingerprint([1; 32]),
+                        title: title.clone(),
+                        schedule: schedule.clone(),
+                        can_modify: true,
+                    },
+                },
+                floe_calendar_operations::CalendarEffect::Update {
+                    target,
+                    title,
+                    schedule,
+                    ..
+                } => CommittedCalendarEffect::Updated {
+                    target: target.clone(),
+                    event: CalendarWriteResult {
+                        external_id: match &target.original.source {
+                            floe_day::SourceRef::Calendar(source) => source.external_id.clone(),
+                            _ => "qa-updated".into(),
+                        },
+                        external_revision:
+                            floe_day::CalendarExternalRevision::ObservationFingerprint([2; 32]),
+                        title: title.clone(),
+                        schedule: schedule.clone(),
+                        can_modify: true,
+                    },
+                },
+                floe_calendar_operations::CalendarEffect::Delete { target, .. } => {
+                    CommittedCalendarEffect::Deleted {
+                        target: target.clone(),
+                    }
+                }
+            };
+            let committed_at = intent.prepared_at + chrono::Duration::milliseconds(1);
+            CalendarEffectOutcome::Committed {
+                receipt: CalendarEffectReceipt {
+                    identity: intent.identity(),
+                    effect: committed_effect,
+                    evidence: CalendarReceiptEvidence::NativeAcknowledgement {
+                        host_epoch: Uuid::new_v4(),
+                        receipt_id: Uuid::new_v4(),
+                    },
+                    committed_at,
+                },
+            }
+        })
     }
 }
 
@@ -1316,7 +1716,7 @@ pub fn wait_terminal_run(host: &AppHost<AppComposition>, run_id: RunId) -> RunRe
             Instant::now() < deadline,
             "Conversation run exceeded deadline"
         );
-        std::thread::yield_now();
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 

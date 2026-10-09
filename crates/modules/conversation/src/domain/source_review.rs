@@ -20,7 +20,7 @@ pub struct SourceReviewLink {
 /// Immutable owner evidence; never reconstructs transport or grants permission.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum BlockedReviewEvidence {
+pub enum ReviewAuditEvidence {
     ModelProjection {
         plan: PreparedModelPlan,
         review: SourceProjectionReview,
@@ -48,6 +48,14 @@ pub enum BlockedReviewEvidence {
         requirement: floe_context_contract::SourceAccessRequirement,
         target: super::NavigationOnlyTarget,
     },
+    /// A product approval whose target is an Access-owned operation review.
+    /// Its Task/Run linkage is verified from the immutable Manager journal.
+    OperationApproval {
+        execution: TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        operation_id: Uuid,
+        review: floe_access::OperationApprovalRef,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -59,23 +67,124 @@ pub struct ReviewAuditRecord {
     pub run_id: RunId,
     pub executor_generation: u64,
     pub operation_id: Uuid,
-    pub evidence: BlockedReviewEvidence,
+    pub evidence: ReviewAuditEvidence,
+}
+
+/// Evidence supplied by the product command for a selected Task artifact.
+/// The Vault verifies it against the admitted Manager journal and the
+/// Calendar Operations record in the same transaction that publishes the
+/// interaction.
+#[derive(Clone, Debug)]
+pub struct OperationApprovalPublication {
+    pub run_id: RunId,
+    pub session_id: Uuid,
+    pub execution: TaskExecutionReceiptRef,
+    pub artifact_id: Uuid,
+}
+
+#[derive(Clone, Debug)]
+pub struct OperationApprovalAdmission {
+    pub operation: floe_calendar_operations::ActionRecord,
+    pub interaction: Option<ConversationInteraction>,
+}
+
+/// Build Conversation's typed view of an immutable operation review. This is
+/// called only by the Vault transaction after authenticating Task/Run custody.
+pub fn operation_approval_interaction(
+    run: &super::RunRecord,
+    operation: &floe_calendar_operations::ActionRecord,
+) -> Result<Option<ConversationInteraction>, AgentFailure> {
+    operation.validate()?;
+    let floe_calendar_operations::ActionOrigin::Expert {
+        evidence_ref,
+        artifact_id,
+        ..
+    } = &operation.origin
+    else {
+        return Err(AgentFailure::Conflict);
+    };
+    if operation.review.policy_revision.is_none()
+        || operation.review.effect_digest != operation.effect_digest
+        || operation.review.person_id != run.person_id
+        || operation.review.device_id != run.device_id
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    let origin = super::InteractionOrigin::OperationApproval {
+        run_id: run.run_id,
+        execution: evidence_ref.clone(),
+        artifact_id: *artifact_id,
+        operation_id: operation.id,
+    };
+    let requirement = super::InteractionRequirement::OperationApproval {
+        review: operation.review.clone(),
+    };
+    let target = super::ReviewedTarget::OperationApproval(operation.review.clone());
+    let audit = ReviewAuditRecord {
+        person_id: run.person_id,
+        device_id: run.device_id.clone(),
+        session_id: run.session_id,
+        run_id: run.run_id,
+        executor_generation: run.executor_generation,
+        operation_id: operation.id,
+        evidence: ReviewAuditEvidence::OperationApproval {
+            execution: evidence_ref.clone(),
+            artifact_id: *artifact_id,
+            operation_id: operation.id,
+            review: operation.review.clone(),
+        },
+    };
+    let requirement_digest = super::canonical_requirement_digest(&requirement)?;
+    let target_digest = super::canonical_target_digest(&target)?;
+    let created_at_unix_ms = operation.review.created_at.timestamp_millis();
+    let expires_at_unix_ms = operation.review.expires_at.timestamp_millis();
+    if created_at_unix_ms < 0 || expires_at_unix_ms <= created_at_unix_ms {
+        return Err(AgentFailure::Conflict);
+    }
+    let interaction = ConversationInteraction {
+        id: super::interaction_publication_id(
+            run.run_id,
+            &origin,
+            &requirement_digest,
+            &target_digest,
+        )?,
+        person_id: run.person_id,
+        session_id: run.session_id,
+        origin_run_id: run.run_id,
+        origin_turn_id: run.run_id.as_uuid(),
+        origin,
+        audit,
+        kind: floe_agent_contract::UserInteractionKind::OperationApproval,
+        requirement,
+        requirement_digest,
+        target,
+        target_digest,
+        state: super::InteractionState::Pending,
+        revision: 1,
+        created_at_unix_ms,
+        expires_at_unix_ms,
+    };
+    interaction.validate()?;
+    Ok(Some(interaction))
 }
 
 impl ReviewAuditRecord {
     pub fn targets(&self) -> Vec<super::ReviewedTarget> {
         match &self.evidence {
-            BlockedReviewEvidence::ModelProjection { access_reviews, .. }
-            | BlockedReviewEvidence::TaskModelProjection { access_reviews, .. }
-            | BlockedReviewEvidence::SourceRead { access_reviews, .. } => access_reviews
+            ReviewAuditEvidence::ModelProjection { access_reviews, .. }
+            | ReviewAuditEvidence::TaskModelProjection { access_reviews, .. }
+            | ReviewAuditEvidence::SourceRead { access_reviews, .. } => access_reviews
                 .iter()
                 .map(|link| super::ReviewedTarget::SourceReview(link.reference.clone()))
                 .collect(),
-            BlockedReviewEvidence::ExpertBinding { review, .. } => {
+            ReviewAuditEvidence::ExpertBinding { review, .. } => {
                 vec![super::ReviewedTarget::ExpertBinding(review.clone())]
             }
-            BlockedReviewEvidence::Navigation { target, .. } => {
+            ReviewAuditEvidence::Navigation { target, .. } => {
                 vec![super::ReviewedTarget::NavigationOnly(target.clone())]
+            }
+            ReviewAuditEvidence::OperationApproval { review, .. } => {
+                vec![super::ReviewedTarget::OperationApproval(review.clone())]
             }
         }
     }
@@ -86,9 +195,9 @@ impl ReviewAuditRecord {
     ) -> bool {
         match (&self.evidence, target) {
             (
-                BlockedReviewEvidence::ModelProjection { access_reviews, .. }
-                | BlockedReviewEvidence::TaskModelProjection { access_reviews, .. }
-                | BlockedReviewEvidence::SourceRead { access_reviews, .. },
+                ReviewAuditEvidence::ModelProjection { access_reviews, .. }
+                | ReviewAuditEvidence::TaskModelProjection { access_reviews, .. }
+                | ReviewAuditEvidence::SourceRead { access_reviews, .. },
                 super::ReviewedTarget::SourceReview(reference),
             ) => access_reviews.iter().any(|link| {
                 &link.reference == reference
@@ -96,21 +205,37 @@ impl ReviewAuditRecord {
                         == super::InteractionRequirement::from_source(&link.requirement, true)
             }),
             (
-                BlockedReviewEvidence::Navigation {
+                ReviewAuditEvidence::Navigation {
                     requirement: source,
                     ..
                 },
                 super::ReviewedTarget::NavigationOnly(_),
             ) => *requirement == super::InteractionRequirement::from_source(source, false),
             (
-                BlockedReviewEvidence::ExpertBinding { .. },
-                super::ReviewedTarget::ExpertBinding(_),
+                ReviewAuditEvidence::ExpertBinding {
+                    requirement_key,
+                    review,
+                    ..
+                },
+                super::ReviewedTarget::ExpertBinding(reference),
+            ) => matches!(
+                requirement,
+                super::InteractionRequirement::ExpertBinding {
+                    requirement_key: actual_key,
+                    review: actual_review,
+                    ..
+                } if actual_key == requirement_key
+                    && actual_review == review
+                    && reference == review
+            ),
+            (
+                ReviewAuditEvidence::OperationApproval { review, .. },
+                super::ReviewedTarget::OperationApproval(reference),
             ) => {
-                requirement.kind == super::InteractionRequirementKind::ConfigureExpertBinding
-                    && !requirement.inline
-                    && requirement.source_id == "floe.expert.binding"
-                    && requirement.connection_id.is_none()
-                    && requirement.purpose == "configuration"
+                review == reference
+                    && matches!(requirement,
+                    super::InteractionRequirement::OperationApproval { review: required }
+                        if required == reference)
             }
             _ => false,
         }
@@ -129,10 +254,9 @@ impl ReviewAuditRecord {
             return Err(AgentFailure::StorageUnavailable);
         }
         match &self.evidence {
-            BlockedReviewEvidence::ModelProjection { plan, review, .. }
-            | BlockedReviewEvidence::TaskModelProjection { plan, review, .. } => {
-                if let BlockedReviewEvidence::TaskModelProjection { execution, .. } = &self.evidence
-                {
+            ReviewAuditEvidence::ModelProjection { plan, review, .. }
+            | ReviewAuditEvidence::TaskModelProjection { plan, review, .. } => {
+                if let ReviewAuditEvidence::TaskModelProjection { execution, .. } = &self.evidence {
                     execution.validate()?;
                 }
                 plan.validate()?;
@@ -150,7 +274,7 @@ impl ReviewAuditRecord {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
-            BlockedReviewEvidence::SourceRead {
+            ReviewAuditEvidence::SourceRead {
                 execution,
                 tool_call_id,
                 blockers,
@@ -164,7 +288,7 @@ impl ReviewAuditRecord {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
-            BlockedReviewEvidence::ExpertBinding {
+            ReviewAuditEvidence::ExpertBinding {
                 execution,
                 requirement_key,
                 review,
@@ -179,7 +303,7 @@ impl ReviewAuditRecord {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
-            BlockedReviewEvidence::Navigation {
+            ReviewAuditEvidence::Navigation {
                 execution,
                 requirement,
                 target,
@@ -192,7 +316,11 @@ impl ReviewAuditRecord {
                 if requirement.source_id() != target.source_id
                     || requirement.connection_id().map(|id| id.as_str()) != target.connection_id.as_deref()
                     || requirement.consumer().identifier() != target.consumer
-                    || super::InteractionRequirement::from_source(requirement, false).purpose != target.purpose
+                    || match requirement.purpose() {
+                        floe_context_contract::GrantPurpose::Assistant => "assistant",
+                        floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+                        floe_context_contract::GrantPurpose::Summarization => "summarization",
+                    } != target.purpose
                     || target.destination != match requirement.reason() {
                         floe_context_contract::SourceAccessRequirementKind::RequestSystemPermission => super::NavigationDestination::SystemPermission,
                         floe_context_contract::SourceAccessRequirementKind::SelectResource => super::NavigationDestination::ResourcePicker,
@@ -201,13 +329,31 @@ impl ReviewAuditRecord {
                     || requirement.reason() == floe_context_contract::SourceAccessRequirementKind::ReviewProcessing
                 { return Err(AgentFailure::StorageUnavailable); }
             }
+            ReviewAuditEvidence::OperationApproval {
+                execution,
+                artifact_id,
+                operation_id,
+                review,
+            } => {
+                execution.validate()?;
+                review.validate()?;
+                if artifact_id.is_nil()
+                    || operation_id.is_nil()
+                    || *operation_id != review.operation_id
+                    || *operation_id != self.operation_id
+                    || review.person_id != self.person_id
+                    || review.device_id != self.device_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+            }
         }
-        if let BlockedReviewEvidence::ModelProjection {
+        if let ReviewAuditEvidence::ModelProjection {
             review,
             access_reviews,
             ..
         }
-        | BlockedReviewEvidence::TaskModelProjection {
+        | ReviewAuditEvidence::TaskModelProjection {
             review,
             access_reviews,
             ..
@@ -215,7 +361,7 @@ impl ReviewAuditRecord {
         {
             validate_source_links(access_reviews, &review.blockers)?;
         }
-        if let BlockedReviewEvidence::SourceRead {
+        if let ReviewAuditEvidence::SourceRead {
             blockers,
             access_reviews,
             ..
@@ -347,6 +493,9 @@ impl BlockedRunCommit {
                     super::ReviewedTarget::ExpertBinding(reference) => {
                         Some(("binding", reference.id))
                     }
+                    super::ReviewedTarget::OperationApproval(reference) => {
+                        Some(("operation", reference.id))
+                    }
                     super::ReviewedTarget::NavigationOnly(_) => None,
                 };
                 if review_id.is_some_and(|id| !review_ids.insert(id)) {
@@ -426,18 +575,29 @@ pub enum OwnerResolutionReceipt {
     ExpertBinding {
         receipt: floe_experts::BindingMutationReceipt,
     },
+    CalendarOperation {
+        operation_id: Uuid,
+        decision: floe_access::OperationDecisionReceipt,
+    },
 }
 impl OwnerResolutionReceipt {
     pub fn command_id(&self) -> Uuid {
         match self {
             Self::SourceProcessing { receipt } => receipt.reservation.command_id,
             Self::ExpertBinding { receipt } => receipt.command_id.as_uuid(),
+            Self::CalendarOperation { decision, .. } => match decision {
+                floe_access::OperationDecisionReceipt::ReviewedDecision { command_id, .. } => {
+                    *command_id
+                }
+                _ => Uuid::nil(),
+            },
         }
     }
     pub fn operation_id(&self) -> Uuid {
         match self {
             Self::SourceProcessing { receipt } => receipt.reservation.operation_id,
             Self::ExpertBinding { receipt } => receipt.command_id.as_uuid(),
+            Self::CalendarOperation { operation_id, .. } => *operation_id,
         }
     }
     pub fn validate(&self) -> Result<(), AgentFailure> {
@@ -460,6 +620,16 @@ impl OwnerResolutionReceipt {
                     || receipt.binding_revision == 0
                     || receipt.registry_revision == 0
                     || receipt.committed_at_unix_ms < 0
+                {
+                    return Err(AgentFailure::InvalidInput);
+                }
+            }
+            Self::CalendarOperation {
+                operation_id,
+                decision,
+            } => {
+                if operation_id.is_nil()
+                    || !matches!(decision, floe_access::OperationDecisionReceipt::ReviewedDecision { command_id, approval_id, .. } if !command_id.is_nil() && !approval_id.is_nil())
                 {
                     return Err(AgentFailure::InvalidInput);
                 }

@@ -649,25 +649,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "floe-actions"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "floe-agent-contract",
- "floe-connections",
- "floe-context-contract",
- "floe-day",
- "floe-execution",
- "floe-kernel",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "floe-agent-contract"
 version = "0.1.0"
 dependencies = [
@@ -702,8 +683,8 @@ dependencies = [
  "apple-native-keyring-store",
  "chrono",
  "floe-access",
- "floe-actions",
  "floe-agent-contract",
+ "floe-calendar-operations",
  "floe-connections",
  "floe-context",
  "floe-context-contract",
@@ -729,6 +710,26 @@ dependencies = [
  "tracing",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "floe-calendar-operations"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "floe-access",
+ "floe-agent-contract",
+ "floe-connections",
+ "floe-context-contract",
+ "floe-day",
+ "floe-execution",
+ "floe-kernel",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -792,9 +793,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-access",
- "floe-actions",
  "floe-agent-contract",
  "floe-agent-runtime",
+ "floe-calendar-operations",
  "floe-connections",
  "floe-context",
  "floe-context-contract",
@@ -895,8 +896,8 @@ name = "floe-experts-builtin"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "floe-actions",
  "floe-agent-contract",
+ "floe-calendar-operations",
  "floe-context-contract",
  "floe-day",
  "floe-experts",
@@ -911,9 +912,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "floe-access",
- "floe-actions",
  "floe-agent-contract",
  "floe-app",
+ "floe-calendar-operations",
  "floe-connections",
  "floe-context",
  "floe-context-contract",
@@ -983,6 +984,7 @@ dependencies = [
 name = "floe-native"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "floe-context-contract",
  "floe-execution",
  "floe-kernel",
@@ -1014,8 +1016,8 @@ dependencies = [
  "base64",
  "chrono",
  "floe-access",
- "floe-actions",
  "floe-agent-contract",
+ "floe-calendar-operations",
  "floe-connections",
  "floe-context",
  "floe-context-contract",
@@ -1044,8 +1046,8 @@ dependencies = [
  "base64",
  "chrono",
  "floe-access",
- "floe-actions",
  "floe-agent-contract",
+ "floe-calendar-operations",
  "floe-connections",
  "floe-context",
  "floe-context-contract",

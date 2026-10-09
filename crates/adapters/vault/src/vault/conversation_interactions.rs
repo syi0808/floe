@@ -30,7 +30,225 @@ use super::*;
 
 const MAX_INTERACTION_PAYLOAD_BYTES: usize = 32 * 1024;
 
+fn operation_interaction_store_error(
+    failure: AgentFailure,
+) -> floe_calendar_operations::CalendarOperationStoreError {
+    use floe_calendar_operations::CalendarOperationStoreError as E;
+    match failure {
+        AgentFailure::Conflict => E::Conflict,
+        AgentFailure::NotFound => E::NotFound,
+        AgentFailure::BudgetExceeded => E::BudgetExceeded,
+        AgentFailure::VaultLocked => E::VaultLocked,
+        AgentFailure::StorageBusy => E::StorageBusy,
+        AgentFailure::InvalidInput | AgentFailure::PolicyDenied => E::InvalidRecord,
+        AgentFailure::StorageUnavailable | AgentFailure::VaultUnavailable => E::Unavailable,
+        _ => E::Unavailable,
+    }
+}
+
+fn same_operation_interaction_publication(
+    current: &ConversationInteraction,
+    expected: &ConversationInteraction,
+) -> bool {
+    current.id == expected.id
+        && current.person_id == expected.person_id
+        && current.session_id == expected.session_id
+        && current.origin_run_id == expected.origin_run_id
+        && current.origin_turn_id == expected.origin_turn_id
+        && current.origin == expected.origin
+        && current.audit == expected.audit
+        && current.kind == expected.kind
+        && current.requirement == expected.requirement
+        && current.requirement_digest == expected.requirement_digest
+        && current.target == expected.target
+        && current.target_digest == expected.target_digest
+        && current.created_at_unix_ms == expected.created_at_unix_ms
+        && current.expires_at_unix_ms == expected.expires_at_unix_ms
+}
+
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    /// Compose Calendar Operations admission and Conversation's typed review
+    /// publication under one encrypted Immediate transaction. The Manager Run
+    /// is only read as immutable Task provenance; this path never opens or
+    /// appends to its Conversation Core recorder.
+    pub async fn admit_calendar_operation_and_conversation_interaction(
+        &self,
+        admission: floe_calendar_operations::OperationAdmission,
+        publication: floe_conversation::OperationApprovalPublication,
+    ) -> Result<floe_conversation::OperationApprovalAdmission, CommandFailure<AgentFailure>> {
+        if admission.command_id.is_nil() || admission.record.person_id != self.person_id {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::CapabilityDenied));
+        }
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| {
+                CommandFailure::Indeterminate(self.registry_transaction_start_error(error))
+            })?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let result = async {
+            validate_schema(&transaction)
+                .await
+                .map_err(operation_interaction_store_error)?;
+            if super::conversations::command_occupant(&transaction, admission.command_id)
+                .await
+                .map_err(operation_interaction_store_error)?
+                .is_some()
+            {
+                prior_command = true;
+                return Err(floe_calendar_operations::CalendarOperationStoreError::Conflict);
+            }
+            let request_publication = admission.publication.clone();
+            let admitted = self
+                .actions_admit_on(
+                    &transaction,
+                    admission,
+                    &mut replay_checked,
+                    &mut prior_command,
+                )
+                .await?;
+            let operation = admitted.record;
+            if publication.session_id.is_nil()
+                || !publication.run_id.is_valid()
+                || publication.artifact_id.is_nil()
+                || publication.execution.validate().is_err()
+            {
+                return Err(floe_calendar_operations::CalendarOperationStoreError::InvalidRecord);
+            }
+            let expected_publication =
+                floe_calendar_operations::OperationApprovalPublicationContext {
+                    session_id: publication.session_id,
+                    origin_run_id: publication.run_id.as_uuid(),
+                };
+            if request_publication.as_ref() != Some(&expected_publication) {
+                return Err(floe_calendar_operations::CalendarOperationStoreError::Conflict);
+            }
+            let (receipt, artifact_id) = match &operation.origin {
+                floe_calendar_operations::ActionOrigin::Expert {
+                    evidence_ref,
+                    artifact_id,
+                    ..
+                } => (evidence_ref, artifact_id),
+                floe_calendar_operations::ActionOrigin::Direct { .. } => {
+                    return Err(
+                        floe_calendar_operations::CalendarOperationStoreError::InvalidRecord,
+                    );
+                }
+            };
+            if *receipt != publication.execution
+                || *artifact_id != publication.artifact_id
+                || operation.person_id != self.person_id
+            {
+                return Err(floe_calendar_operations::CalendarOperationStoreError::Conflict);
+            }
+            let run = self
+                .conversation_run_on(&transaction, publication.run_id)
+                .await
+                .map_err(operation_interaction_store_error)?
+                .ok_or(floe_calendar_operations::CalendarOperationStoreError::NotFound)?;
+            if run.person_id != self.person_id
+                || run.session_id != publication.session_id
+                || run.state == RunState::Working
+                || run.device_id != operation.device_id
+            {
+                return Err(floe_calendar_operations::CalendarOperationStoreError::Conflict);
+            }
+            self.verify_operation_approval_origin_on(&transaction, &run, &publication)
+                .await
+                .map_err(operation_interaction_store_error)?;
+
+            let expected = floe_conversation::operation_approval_interaction(&run, &operation)
+                .map_err(operation_interaction_store_error)?;
+            let mut interaction = None;
+            if let Some(expected) = expected {
+                let existing = read_interaction(&transaction, self.person_id, expected.id)
+                    .await
+                    .map_err(operation_interaction_store_error)?;
+                if let Some(existing) = existing {
+                    if !same_operation_interaction_publication(&existing, &expected) {
+                        return Err(
+                            floe_calendar_operations::CalendarOperationStoreError::Conflict,
+                        );
+                    }
+                    interaction = Some(existing);
+                } else if matches!(
+                    operation.state,
+                    floe_calendar_operations::ActionState::PendingReview
+                ) {
+                    if count_interactions(&transaction, run.run_id, true)
+                        .await
+                        .map_err(operation_interaction_store_error)?
+                        >= floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN as u64
+                        || count_interactions(&transaction, run.run_id, false)
+                            .await
+                            .map_err(operation_interaction_store_error)?
+                            >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN as u64
+                    {
+                        return Err(
+                            floe_calendar_operations::CalendarOperationStoreError::BudgetExceeded,
+                        );
+                    }
+                    self.store_review_audit_on(&transaction, &run, &expected.audit, false)
+                        .await
+                        .map_err(operation_interaction_store_error)?;
+                    insert_interaction(&transaction, &expected)
+                        .await
+                        .map_err(operation_interaction_store_error)?;
+                    interaction = Some(expected);
+                }
+            }
+            self.check_access()
+                .map_err(operation_interaction_store_error)?;
+            Ok(floe_conversation::OperationApprovalAdmission {
+                operation,
+                interaction,
+            })
+        }
+        .await;
+        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))
+    }
+
+    async fn verify_operation_approval_origin_on(
+        &self,
+        transaction: &Transaction<'_>,
+        run: &RunRecord,
+        publication: &floe_conversation::OperationApprovalPublication,
+    ) -> Result<(), AgentFailure> {
+        let actual = self
+            .read_execution_receipt_on(transaction, &publication.execution)
+            .await?;
+        let task = self
+            .task_on(transaction, publication.execution.execution.task_id)
+            .await?
+            .ok_or(AgentFailure::Conflict)?;
+        self.validate_conversation_task_lineage_on(transaction, run, &task)
+            .await?;
+        if task.device_id != run.device_id
+            || actual.snapshot.principal != self.person_id.to_string()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let journal = self.conversation_journal_on(transaction, run).await?;
+        if !journal.iter().any(|entry| {
+            matches!(&entry.event, JournalEvent::DelegationIntent { request }
+                if request.task_id == publication.execution.execution.task_id
+                    && request.parent_run_id == Some(run.run_id.as_uuid())
+                    && request.principal == self.person_id.to_string()
+                    && request.execution_context.session_id == run.session_id
+                    && request.execution_context.device_id == run.device_id)
+        }) || !journal.iter().any(|entry| {
+            matches!(&entry.event, JournalEvent::DelegationResult { receipt }
+                if matches!(&receipt.execution, floe_agent_contract::TaskExecutionEvidence::Admitted(stored) if stored == &actual))
+        }) {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
     pub async fn conversation_interaction(
         &self,
         interaction_id: Uuid,
@@ -148,7 +366,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
-            let next = next_state_after_decision(&current.state, &decision)?;
+            let next = if matches!(
+                current.target,
+                floe_conversation::ReviewedTarget::OperationApproval(_)
+            ) && matches!(current.state, InteractionState::Pending)
+            {
+                InteractionState::Resolving {
+                    decision_id: decision.command_id,
+                    owner_command_id: floe_conversation::decision_owner_command_id(
+                        decision.command_id,
+                    ),
+                    decision_kind: decision.kind,
+                    decided_at_unix_ms: Some(decision.decided_at_unix_ms),
+                }
+            } else {
+                next_state_after_decision(&current.state, &decision)?
+            };
             let mut updated = current;
             updated.state = next;
             updated.revision = updated
@@ -208,7 +441,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         || recorded.target_digest != resolution.target_digest
                         || recorded.principal != self.person_id.to_string()
                         || resolution.resolved_at_unix_ms < recorded.decided_at_unix_ms
-                        || !matches!(commit.owner_receipt, floe_conversation::OwnerResolutionReceipt::SourceProcessing { .. }) {
+                        || !matches!(
+                            (&current.target, &commit.owner_receipt),
+                            (
+                                floe_conversation::ReviewedTarget::SourceReview(_),
+                                floe_conversation::OwnerResolutionReceipt::SourceProcessing { .. }
+                            ) | (
+                                floe_conversation::ReviewedTarget::OperationApproval(_),
+                                floe_conversation::OwnerResolutionReceipt::CalendarOperation { .. }
+                            )
+                        )
+                    {
                         return Err(AgentFailure::Conflict);
                     }
                 }
@@ -422,9 +665,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 if matches!(
                     &record.audit.evidence,
-                    floe_conversation::BlockedReviewEvidence::ExpertBinding { .. }
-                ) && record.requirement.consumer != actual.snapshot.agent_id
-                {
+                    floe_conversation::ReviewAuditEvidence::ExpertBinding { .. }
+                ) && !matches!(
+                    &record.requirement,
+                    floe_conversation::InteractionRequirement::ExpertBinding { consumer, .. }
+                        if consumer == &actual.snapshot.agent_id
+                ) {
                     return Err(AgentFailure::Conflict);
                 }
             }
@@ -439,7 +685,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         commit: &floe_conversation::BlockedRunCommit,
     ) -> Result<(), AgentFailure> {
-        use floe_conversation::BlockedReviewEvidence as E;
+        use floe_conversation::ReviewAuditEvidence as E;
         let mut groups: std::collections::HashMap<
             floe_agent_contract::TaskExecutionKey,
             (floe_agent_contract::TaskExecutionReceiptRef, Vec<&E>),
@@ -451,6 +697,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 | E::SourceRead { execution, .. }
                 | E::ExpertBinding { execution, .. }
                 | E::Navigation { execution, .. } => execution,
+                E::OperationApproval { .. } => return Err(AgentFailure::Conflict),
             };
             let group = groups
                 .entry(execution.execution)
@@ -537,7 +784,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         audit: &ReviewAuditRecord,
         existing_only: bool,
     ) -> Result<(), AgentFailure> {
-        use floe_conversation::BlockedReviewEvidence as E;
+        use floe_conversation::ReviewAuditEvidence as E;
         audit.validate()?;
         if audit.run_id != run.run_id
             || audit.person_id != run.person_id
@@ -615,6 +862,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 None
             }
             E::Navigation { .. } => None,
+            E::OperationApproval { .. } => None,
         };
         if let Some((blockers, links, target_digest)) = source {
             for link in links {
@@ -711,6 +959,58 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 if &actual != receipt
                     || receipt.review_ref != *reference
                     || commit.resolution.resolved_at_unix_ms < receipt.committed_at_unix_ms
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                Ok(())
+            }
+            (
+                ReviewedTarget::OperationApproval(reference),
+                OwnerResolutionReceipt::CalendarOperation {
+                    operation_id,
+                    decision,
+                },
+            ) => {
+                use floe_calendar_operations::{ActionOrigin, ActionState};
+                let action = self
+                    .action_record_on_transaction(transaction, self.person_id, *operation_id)
+                    .await?
+                    .ok_or(AgentFailure::Conflict)?;
+                let expected_state = match decision {
+                    floe_access::OperationDecisionReceipt::ReviewedDecision {
+                        decision: floe_access::OperationDecisionKind::Approve,
+                        ..
+                    } => matches!(
+                        action.state,
+                        ActionState::Approved
+                            | ActionState::Blocked { .. }
+                            | ActionState::Executing { .. }
+                            | ActionState::Unknown { .. }
+                            | ActionState::Failed { .. }
+                            | ActionState::Succeeded { .. }
+                            | ActionState::Expired
+                    ),
+                    floe_access::OperationDecisionReceipt::ReviewedDecision {
+                        decision: floe_access::OperationDecisionKind::Reject,
+                        ..
+                    } => action.state == ActionState::Rejected,
+                    floe_access::OperationDecisionReceipt::ReviewedDecision {
+                        decision: floe_access::OperationDecisionKind::Cancel,
+                        ..
+                    } => action.state == ActionState::Cancelled,
+                    _ => false,
+                };
+                if action.person_id != self.person_id
+                    || action.device_id != run.device_id
+                    || action.id != reference.operation_id
+                    || action.review != *reference
+                    || action.authorization.as_ref() != Some(decision)
+                    || action.validate().is_err()
+                    || !matches!(action.origin, ActionOrigin::Expert { .. })
+                    || *operation_id != reference.operation_id
+                    || !expected_state
+                    || commit.resolution.resolved_at_unix_ms
+                        < reference.created_at.timestamp_millis()
                 {
                     return Err(AgentFailure::Conflict);
                 }

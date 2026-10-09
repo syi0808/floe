@@ -3,15 +3,17 @@
 //!
 //! Business judgment belongs to the owning module; this crate only assembles.
 
-mod action_facade;
 mod api;
 mod bootstrap;
+mod calendar_operations_facade;
 #[cfg(unix)]
 mod composition;
 mod connection_observe;
 #[cfg(unix)]
 mod context_services;
 mod core;
+#[cfg(unix)]
+mod day_context_evidence;
 mod diagnostics;
 mod error;
 mod host;
@@ -49,20 +51,18 @@ pub use floe_kernel::{AgentFailure, CommandId, PersonId, RunId};
 pub use floe_knowledge::{KnowledgeDecisionKind, MemoryOrigin, MemoryOverviewSnapshot};
 
 #[cfg(unix)]
+pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
+#[cfg(unix)]
 pub use api::{
-    ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
-    ActionProposalPreview, ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsCommand,
-    ActionsCommandResult, ActionsPage, ActionsQuery, ActionsQueryResult, ConnectionsCommand,
-    ConnectionsCommandOutcome, ConnectionsQuery, ConnectionsQueryOutcome, ConversationCommand,
-    ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome, DayCommand,
-    DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertCommand, ExpertCommandResult,
-    ExpertQuery, ExpertQueryResult, MemoryCommand, MemoryQuery, MemoryQueryResult, ProductCommand,
+    ConnectionsCommand, ConnectionsCommandOutcome, ConnectionsQuery, ConnectionsQueryOutcome,
+    ConversationCommand, ConversationCommandOutcome, ConversationQuery, ConversationQueryOutcome,
+    DayCommand, DayCommandOutcome, DayProductQuery, DayQueryOutcome, ExpertCommand,
+    ExpertCommandResult, ExpertQuery, ExpertQueryResult, MemoryCommand, MemoryQuery,
+    MemoryQueryResult, OperationAuthorizationPolicy, OperationPolicyMode, ProductCommand,
     ProductCommandDisposition, ProductCommandFailure, ProductCommandOutcome, ProductCommandRequest,
     ProductFailure, ProductObservation, ProductObservationOutcome, ProductQuery,
     ProductQueryOutcome,
 };
-#[cfg(unix)]
-pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};
 #[cfg(unix)]
 pub use composition::{
     AppComposition, AppOpenError, AppOpenOptions, AppStorageFailure, ModelProviderFactory, open,

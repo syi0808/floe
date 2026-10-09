@@ -78,6 +78,7 @@ pub type CalendarBroker = AcquisitionBroker<CalendarExchange>;
 impl AcquisitionExchange for CalendarExchange {
     type Request = CalendarAcquisitionRequest;
     type Response = CalendarAcquisitionResult;
+    type Accepted = CalendarAcquisitionResult;
 
     const MISSING_DEADLINE_EXPIRES: bool = false;
     const RESPONSE_CARRIES_HOST_EPOCH: bool = true;
@@ -107,7 +108,10 @@ impl AcquisitionExchange for CalendarExchange {
         &response.host_epoch
     }
 
-    fn admit(request: &Self::Request, response: &Self::Response) -> CompletionOutcome {
+    fn admit(
+        request: &Self::Request,
+        response: &Self::Response,
+    ) -> CompletionOutcome<Self::Accepted> {
         if !identity_matches(request, response) {
             // The answer is not to this request; the request keeps waiting.
             return CompletionOutcome::Refuse(AgentFailure::StaleContext);
@@ -120,7 +124,7 @@ impl AcquisitionExchange for CalendarExchange {
             {
                 return CompletionOutcome::RejectKeepingDeadline(AgentFailure::PolicyDenied);
             }
-            return CompletionOutcome::Accept;
+            return CompletionOutcome::Accept(response.clone());
         }
         if response.available_calendars.len() > 256
             || response
@@ -158,7 +162,7 @@ impl AcquisitionExchange for CalendarExchange {
         {
             return CompletionOutcome::RejectKeepingDeadline(AgentFailure::StaleContext);
         }
-        CompletionOutcome::Accept
+        CompletionOutcome::Accept(response.clone())
     }
 }
 

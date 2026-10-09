@@ -125,25 +125,6 @@ pub enum AppProductCommandDto {
         gateway_ref: super::GatewayRefDto,
         expected_revision: u64,
     },
-    #[serde(rename = "actions.submit")]
-    ActionsSubmit { intent: super::ActionIntentDto },
-    #[serde(rename = "actions.decide")]
-    ActionsDecide {
-        action_ref: super::ActionRefDto,
-        review_ref: super::ActionReviewRefDto,
-        decision: super::ActionDecisionKindDto,
-        expected_revision: u64,
-    },
-    #[serde(rename = "actions.reconcile")]
-    ActionsReconcile {
-        action_ref: super::ActionRefDto,
-        expected_revision: u64,
-    },
-    #[serde(rename = "actions.authority.set_calendar_create")]
-    ActionsSetAuthority {
-        mode: super::ActionAuthorityModeDto,
-        expected_revision: u64,
-    },
     #[serde(rename = "day.refresh")]
     DayRefresh { day: super::DayQueryDto },
     #[serde(rename = "day.mutate")]
@@ -151,24 +132,33 @@ pub enum AppProductCommandDto {
         day: super::DayQueryDto,
         mutation: super::DayMutationDto,
     },
+    #[serde(rename = "day.external_calendar_operation")]
+    DayExternalCalendarOperation {
+        operation: super::ManualCalendarOperationDto,
+    },
+    #[serde(rename = "day.external_calendar_operation.reconcile")]
+    DayExternalCalendarOperationReconcile {
+        operation_ref: super::OperationRefDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "memory.decide")]
     MemoryDecide {
         candidate_id: Uuid,
         decision: super::AgentMemoryReviewDecisionKindDto,
     },
-    #[serde(rename = "experts.installation.set_enabled")]
+    #[serde(rename = "conversation.experts.installation.set_enabled")]
     ExpertsSetInstallationEnabled {
         installation_ref: super::UuidRefDto,
         expected_revision: u64,
         enabled: bool,
     },
-    #[serde(rename = "experts.binding.prepare_review")]
+    #[serde(rename = "conversation.experts.binding.prepare_review")]
     ExpertsPrepareBindingReview {
         assignment_ref: super::AssignmentRefDto,
         requirement_ref: String,
         expected_binding_revision: u64,
     },
-    #[serde(rename = "experts.binding.replace")]
+    #[serde(rename = "conversation.experts.binding.replace")]
     ExpertsBindingReplace {
         review_ref: super::BindingReviewRefDto,
         expected_binding_revision: u64,
@@ -176,6 +166,11 @@ pub enum AppProductCommandDto {
     },
     #[serde(rename = "conversation.session.start")]
     ConversationSessionStart {},
+    #[serde(rename = "conversation.calendar_policy.set")]
+    ConversationSetCalendarPolicy {
+        mode: super::OperationPolicyModeDto,
+        expected_revision: u64,
+    },
     #[serde(rename = "conversation.start_turn")]
     ConversationStartTurn {
         session_id: SessionRefDto,
@@ -185,6 +180,14 @@ pub enum AppProductCommandDto {
         continuation_ref: Option<ContinuationRefDto>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_of: Option<RunRefDto>,
+    },
+    #[serde(rename = "conversation.calendar_proposal.submit")]
+    ConversationCalendarProposalSubmit {
+        session_id: SessionRefDto,
+        origin_run_id: RunRefDto,
+        receipt: super::TaskExecutionReceiptRefDto,
+        artifact_id: super::UuidRefDto,
+        destination_ref: super::UuidRefDto,
     },
     #[serde(rename = "conversation.cancel_run")]
     ConversationCancelRun { run_id: RunRefDto },
@@ -267,23 +270,12 @@ impl AppProductCommandDto {
                 review_ref.validate()
             }
             Self::ConnectionsObserveSet { mutation } => mutation.validate(),
-            Self::ActionsSubmit { intent } => intent.validate(),
-            Self::ActionsDecide {
-                review_ref,
-                expected_revision,
-                ..
-            } => {
-                validate_revision(*expected_revision)?;
-                review_ref.validate()
-            }
-            Self::ActionsReconcile {
-                expected_revision, ..
-            }
-            | Self::ActionsSetAuthority {
-                expected_revision, ..
-            } => validate_revision(*expected_revision),
             Self::DayRefresh { .. } => Ok(()),
             Self::DayMutate { mutation, .. } => mutation.validate(),
+            Self::DayExternalCalendarOperation { operation } => operation.validate(),
+            Self::DayExternalCalendarOperationReconcile {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
             Self::MemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
                     Err("command.candidate_id")
@@ -323,6 +315,9 @@ impl AppProductCommandDto {
                 Ok(())
             }
             Self::ConversationSessionStart {} => Ok(()),
+            Self::ConversationSetCalendarPolicy {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
             Self::ConversationStartTurn {
                 expected_revision,
                 text,
@@ -351,6 +346,7 @@ impl AppProductCommandDto {
                 Ok(())
             }
             Self::ConversationCancelRun { .. } => Ok(()),
+            Self::ConversationCalendarProposalSubmit { receipt, .. } => receipt.validate(),
             Self::ConversationInteractionResolve {
                 expected_revision,
                 target_digest: _,
@@ -517,28 +513,35 @@ pub enum AppCommandResultDto {
     },
     #[serde(rename = "day.refresh")]
     DayRefresh { refresh: super::DayRefreshStateDto },
-    #[serde(rename = "actions.action")]
-    Action { action: super::ActionSnapshotDto },
-    #[serde(rename = "actions.authority")]
-    ActionsAuthority {
-        authority: super::ActionsAuthorityDto,
+    #[serde(rename = "conversation.calendar_policy")]
+    ConversationCalendarPolicy {
+        policy: super::CalendarOperationPolicyDto,
     },
     DayMutation {
         command_id: Uuid,
         mutation: super::MutationResultDto,
     },
+    #[serde(rename = "day.external_calendar_operation")]
+    DayExternalCalendarOperation {
+        operation: super::ManualCalendarOperationReceiptDto,
+    },
     #[serde(rename = "memory.decision")]
     MemoryDecision {
         acknowledgement: super::MemoryDecisionAcknowledgementDto,
     },
-    #[serde(rename = "experts.directory")]
+    #[serde(rename = "conversation.experts.directory")]
     ExpertsDirectory {
         directory: super::ExpertDirectorySnapshotDto,
     },
-    #[serde(rename = "experts.binding_review")]
+    #[serde(rename = "conversation.experts.binding_review")]
     ExpertsBindingReview { review: super::BindingReviewDto },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,
+    },
+    #[serde(rename = "conversation.calendar_proposal")]
+    ConversationCalendarProposal {
+        operation: super::ActionSnapshotDto,
+        interaction: Option<super::AppInteractionSnapshotDto>,
     },
     #[serde(rename = "runtime.preparation")]
     RuntimePreparation {

@@ -7,8 +7,10 @@ pub fn validate_grant_dependency(
     grant: &DataAccessGrant,
     dependency: &ContextDependency,
 ) -> Result<(), AgentFailure> {
-    if grant.id() != dependency.grant_id()
-        || grant.state() != GrantState::Active
+    if grant.id() != dependency.grant_id() {
+        return Err(AgentFailure::Conflict);
+    }
+    if grant.state() != GrantState::Active
         || grant.review_required()
         || grant.authority() != dependency.grant_authority()
         || grant.source() != dependency.source()
@@ -25,7 +27,7 @@ pub fn validate_grant_dependency(
         || !grant.scope().consumers().contains(dependency.consumer())
         || grant.scope().processing() != dependency.processing()
     {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(())
 }

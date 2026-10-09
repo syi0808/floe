@@ -67,10 +67,13 @@ impl DependencyResolver for ContextDependencyResolver {
                         .snapshot(dependency.source().clone())
                         .await?
                         .grants;
-                    let grant = grants
+                    let mut matching = grants
                         .iter()
-                        .find(|grant| grant.id() == dependency.grant_id())
-                        .ok_or(AgentFailure::PolicyDenied)?;
+                        .filter(|grant| grant.id() == dependency.grant_id());
+                    let grant = matching.next().ok_or(AgentFailure::AccessReviewRequired)?;
+                    if matching.next().is_some() {
+                        return Err(AgentFailure::Conflict);
+                    }
                     floe_access::validate_grant_dependency(grant, dependency)?;
                     let connector = dependency.source().connector().as_str();
                     if let Some(provider) = floe_access::local_calendar_provider(connector) {

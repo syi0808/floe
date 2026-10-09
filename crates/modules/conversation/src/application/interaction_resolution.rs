@@ -5,14 +5,15 @@ use floe_kernel::{AgentFailure, CommandFailure, OwnerActor};
 use uuid::Uuid;
 
 use crate::{
-    ConversationInteraction, DecideInteractionCommand, InteractionRepository,
-    InteractionResolution, InteractionResolutionCommit, InteractionState, OwnerResolutionReceipt,
-    ReviewedTarget,
+    ConversationInteraction, DecideInteractionCommand, InteractionDecisionKind,
+    InteractionRepository, InteractionResolution, InteractionResolutionCommit, InteractionState,
+    OwnerResolutionReceipt, ReviewedTarget,
 };
 
 pub async fn apply_source_interaction<R: InteractionRepository + ?Sized>(
     interactions: &R,
     connections: &floe_connections::ConnectionsService,
+    operations: &floe_calendar_operations::CalendarOperationsService,
     actor: &OwnerActor,
     command: DecideInteractionCommand,
     now_unix_ms: i64,
@@ -30,21 +31,34 @@ pub async fn apply_source_interaction<R: InteractionRepository + ?Sized>(
     if !matches!(recorded.state, InteractionState::Resolving { .. }) {
         return Ok(recorded);
     }
-    resolve_source_record(
-        interactions,
-        connections,
-        actor,
-        recorded,
-        now_unix_ms,
-        scope,
-    )
-    .await
-    .map_err(CommandFailure::Admitted)
+    match &recorded.target {
+        ReviewedTarget::OperationApproval(_) => resolve_operation_record(
+            interactions,
+            operations,
+            actor,
+            recorded,
+            now_unix_ms,
+            scope,
+        )
+        .await
+        .map_err(CommandFailure::Admitted),
+        _ => resolve_source_record(
+            interactions,
+            connections,
+            actor,
+            recorded,
+            now_unix_ms,
+            scope,
+        )
+        .await
+        .map_err(CommandFailure::Admitted),
+    }
 }
 
 pub async fn recover_source_interaction<R: InteractionRepository + ?Sized>(
     interactions: &R,
     connections: &floe_connections::ConnectionsService,
+    operations: &floe_calendar_operations::CalendarOperationsService,
     actor: &OwnerActor,
     interaction_id: Uuid,
     now_unix_ms: i64,
@@ -58,7 +72,100 @@ pub async fn recover_source_interaction<R: InteractionRepository + ?Sized>(
     if !matches!(record.state, InteractionState::Resolving { .. }) {
         return Ok(record);
     }
-    resolve_source_record(interactions, connections, actor, record, now_unix_ms, scope).await
+    match &record.target {
+        ReviewedTarget::OperationApproval(_) => {
+            resolve_operation_record(interactions, operations, actor, record, now_unix_ms, scope)
+                .await
+        }
+        _ => {
+            resolve_source_record(interactions, connections, actor, record, now_unix_ms, scope)
+                .await
+        }
+    }
+}
+
+async fn resolve_operation_record<R: InteractionRepository + ?Sized>(
+    interactions: &R,
+    operations: &floe_calendar_operations::CalendarOperationsService,
+    actor: &OwnerActor,
+    record: ConversationInteraction,
+    now_unix_ms: i64,
+    scope: &ExecutionScope,
+) -> Result<ConversationInteraction, AgentFailure> {
+    record.validate()?;
+    let InteractionState::Resolving {
+        decision_id,
+        owner_command_id,
+        decision_kind,
+        decided_at_unix_ms,
+    } = record.state
+    else {
+        return Err(AgentFailure::Conflict);
+    };
+    let ReviewedTarget::OperationApproval(reference) = &record.target else {
+        return Err(AgentFailure::InvalidInput);
+    };
+    if record.person_id != actor.person_id || record.audit.device_id != actor.device_id {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let decided_at = decided_at_unix_ms
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .ok_or(AgentFailure::Conflict)?;
+    if decided_at.timestamp_millis() < record.created_at_unix_ms
+        || decided_at.timestamp_millis() >= record.expires_at_unix_ms
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    let decision = match decision_kind {
+        InteractionDecisionKind::Approve => floe_access::OperationDecisionKind::Approve,
+        InteractionDecisionKind::Deny => floe_access::OperationDecisionKind::Reject,
+        InteractionDecisionKind::Dismiss => floe_access::OperationDecisionKind::Cancel,
+    };
+    let (operation, access_receipt) = operations
+        .decide_with_receipt_at(
+            actor,
+            owner_command_id,
+            reference.operation_id,
+            reference.clone(),
+            decision,
+            1,
+            decided_at,
+            scope,
+        )
+        .await
+        .map_err(|failure| failure.into_failure())?;
+    if operation.action_ref != reference.operation_id || operation.review_ref != *reference {
+        return Err(AgentFailure::Conflict);
+    }
+    let owner_receipt = OwnerResolutionReceipt::CalendarOperation {
+        operation_id: reference.operation_id,
+        decision: access_receipt,
+    };
+    owner_receipt.validate()?;
+    if owner_receipt.command_id() != owner_command_id {
+        return Err(AgentFailure::Conflict);
+    }
+    interactions
+        .resolve_and_request_resume(InteractionResolutionCommit {
+            resolution: InteractionResolution {
+                interaction_id: record.id,
+                person_id: actor.person_id,
+                expected_revision: record.revision,
+                cause: crate::InteractionResolutionCause::Decision {
+                    command_id: decision_id,
+                },
+                owner_command_id,
+                owner_operation_id: reference.operation_id,
+                target_digest: record.target_digest,
+                resolved_at_unix_ms: now_unix_ms,
+            },
+            owner_receipt,
+        })
+        .await?;
+    interactions
+        .get_interaction(actor.person_id, record.id)
+        .await?
+        .ok_or(AgentFailure::StorageUnavailable)
 }
 
 async fn resolve_source_record<R: InteractionRepository + ?Sized>(
@@ -73,6 +180,7 @@ async fn resolve_source_record<R: InteractionRepository + ?Sized>(
     let InteractionState::Resolving {
         decision_id,
         owner_command_id,
+        ..
     } = record.state
     else {
         return Err(AgentFailure::Conflict);

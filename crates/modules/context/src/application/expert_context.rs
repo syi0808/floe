@@ -11,7 +11,6 @@ use floe_agent_contract::{
     SessionProtection,
 };
 use floe_context_contract::{PersonId, acquire_optional_source, record_source_issue};
-use floe_day::DayRepository;
 use floe_execution::Cancellation;
 use tokio::time::Instant;
 use uuid::Uuid;
@@ -56,7 +55,7 @@ impl ExpertContextRequest<'_> {
 /// acquired and the result authorized again.
 pub async fn prepare_expert_context(
     context: &mut AgentContext,
-    repository: &(impl DayRepository + ?Sized),
+    reader: &(impl crate::DayContextEvidenceReader + ?Sized),
     request: ExpertContextRequest<'_>,
 ) -> Result<(), AgentFailure> {
     if request.carries_personal_day() {
@@ -75,7 +74,7 @@ pub async fn prepare_expert_context(
         acquire_optional_source(
             ContextSource::Tasks,
             task_context_view(
-                repository,
+                reader,
                 request.person_id,
                 day_handle(request.person_id, b"floe.tasks"),
                 request.now,
@@ -90,7 +89,7 @@ pub async fn prepare_expert_context(
         acquire_optional_source(
             ContextSource::Notes,
             note_context_view(
-                repository,
+                reader,
                 request.person_id,
                 day_handle(request.person_id, b"floe.notes"),
                 request.now,

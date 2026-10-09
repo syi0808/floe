@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     BlockedRunCommit, ConversationInteraction, ConversationRepository, InteractionOrigin,
-    InteractionRequirement, InteractionRequirementKind, InteractionState, PriorExhaustion,
-    ReviewAuditRecord, ReviewPublication, ReviewedTarget, RunBlockOrigin, RunBlockRecord,
-    RunReceipt, RunState, RunTerminal,
+    InteractionRequirement, InteractionState, PriorExhaustion, ReviewAuditRecord,
+    ReviewPublication, ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunReceipt, RunState,
+    RunTerminal,
 };
 
 async fn prepare_publication(
@@ -119,7 +119,7 @@ async fn prepare_publication(
         executor_generation: receipt.executor_generation,
         operation_id: review.projection_operation_id,
         evidence: match &origin {
-            InteractionOrigin::Projection { .. } => crate::BlockedReviewEvidence::ModelProjection {
+            InteractionOrigin::Projection { .. } => crate::ReviewAuditEvidence::ModelProjection {
                 plan,
                 review,
                 access_reviews: access_reviews.clone(),
@@ -127,7 +127,7 @@ async fn prepare_publication(
             InteractionOrigin::Task {
                 execution,
                 capability_call_id: None,
-            } => crate::BlockedReviewEvidence::TaskModelProjection {
+            } => crate::ReviewAuditEvidence::TaskModelProjection {
                 execution: execution.clone(),
                 plan,
                 review,
@@ -302,13 +302,10 @@ pub(crate) async fn build_blocked_run_commit<R: ConversationRepository>(
                             )
                             .await?;
                         let target = ReviewedTarget::ExpertBinding(review.review_ref.clone());
-                        let requirement = InteractionRequirement {
-                            kind: InteractionRequirementKind::ConfigureExpertBinding,
-                            source_id: "floe.expert.binding".into(),
-                            connection_id: None,
+                        let requirement = InteractionRequirement::ExpertBinding {
                             consumer: actual.snapshot.agent_id.clone(),
-                            purpose: "configuration".into(),
-                            inline: false,
+                            requirement_key: key.clone(),
+                            review: review.review_ref.clone(),
                         };
                         let audit = ReviewAuditRecord {
                             person_id: actor.person_id,
@@ -317,7 +314,7 @@ pub(crate) async fn build_blocked_run_commit<R: ConversationRepository>(
                             run_id,
                             executor_generation: receipt.executor_generation,
                             operation_id,
-                            evidence: crate::BlockedReviewEvidence::ExpertBinding {
+                            evidence: crate::ReviewAuditEvidence::ExpertBinding {
                                 execution: actual.reference.clone(),
                                 requirement_key: key,
                                 review: review.review_ref,
@@ -539,10 +536,17 @@ async fn prepare_task_source_publications(
                 Reason::SelectResource => crate::NavigationDestination::ResourcePicker,
                 _ => crate::NavigationDestination::ConnectionSettings,
             },
-            source_id: requirement.source_id.clone(),
-            connection_id: requirement.connection_id.clone(),
-            consumer: requirement.consumer.clone(),
-            purpose: requirement.purpose.clone(),
+            source_id: blocker.source_id().to_owned(),
+            connection_id: blocker
+                .connection_id()
+                .map(|connection| connection.as_str().to_owned()),
+            consumer: blocker.consumer().identifier().to_owned(),
+            purpose: match blocker.purpose() {
+                floe_context_contract::GrantPurpose::Assistant => "assistant",
+                floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+                floe_context_contract::GrantPurpose::Summarization => "summarization",
+            }
+            .into(),
         };
         let operation_id = Uuid::new_v5(
             &execution.execution.execution_id,
@@ -556,7 +560,7 @@ async fn prepare_task_source_publications(
             run_id: receipt.run_id,
             executor_generation: receipt.executor_generation,
             operation_id,
-            evidence: crate::BlockedReviewEvidence::Navigation {
+            evidence: crate::ReviewAuditEvidence::Navigation {
                 execution: execution.clone(),
                 requirement: blocker.clone(),
                 target: target.clone(),
@@ -621,7 +625,7 @@ async fn prepare_task_source_publications(
             run_id: receipt.run_id,
             executor_generation: receipt.executor_generation,
             operation_id,
-            evidence: crate::BlockedReviewEvidence::SourceRead {
+            evidence: crate::ReviewAuditEvidence::SourceRead {
                 execution,
                 tool_call_id,
                 blockers,

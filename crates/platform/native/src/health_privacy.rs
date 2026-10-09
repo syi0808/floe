@@ -70,8 +70,16 @@ pub fn consume_health_transform_receipt(
     let bytes = HEALTH_TRANSFORM
         .call(&request, 8192)
         .map_err(|_| AgentFailure::CapabilityUnavailable)?;
+    decode_health_receipt(&bytes, reference, binding)
+}
+
+fn decode_health_receipt(
+    bytes: &[u8],
+    reference: &HealthTransformReceiptRef,
+    binding: &HealthTransformBinding,
+) -> Result<HealthPrivacyReceipt, AgentFailure> {
     let response: ReceiptWire =
-        serde_json::from_slice(&bytes).map_err(|_| AgentFailure::PolicyDenied)?;
+        serde_json::from_slice(bytes).map_err(|_| AgentFailure::PolicyDenied)?;
     if response.schema_version != 1
         || response.status != "receipt"
         || response.request_id != Some(reference.operation_id)
@@ -91,4 +99,76 @@ pub fn consume_health_transform_receipt(
             .expires_at_unix_ms
             .ok_or(AgentFailure::PolicyDenied)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (HealthTransformReceiptRef, HealthTransformBinding) {
+        let operation_id = Uuid::new_v4();
+        (
+            HealthTransformReceiptRef {
+                operation_id,
+                output_sha256: "ab".repeat(32),
+            },
+            HealthTransformBinding {
+                request_id: Uuid::new_v4(),
+                host_epoch: "host-epoch".into(),
+                person_id: PersonId::new(),
+                device_id: "device".into(),
+                native_subject_fingerprint: "subject".into(),
+            },
+        )
+    }
+
+    fn receipt_wire(
+        reference: &HealthTransformReceiptRef,
+        binding: &HealthTransformBinding,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "status": "receipt",
+            "request_id": reference.operation_id,
+            "output": {"capacity": "typical", "recovery": "typical"},
+            "binding": binding,
+            "output_sha256": reference.output_sha256,
+            "transformed_at_unix_ms": 1_000,
+            "expires_at_unix_ms": 2_000,
+            "availability": null,
+            "failure": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn missing_health_receipt_is_denied() {
+        let (reference, binding) = fixture();
+        let bytes = br#"{"schema_version":1,"status":"missing"}"#;
+        assert!(matches!(
+            decode_health_receipt(bytes, &reference, &binding),
+            Err(AgentFailure::PolicyDenied)
+        ));
+    }
+
+    #[test]
+    fn health_receipt_with_a_different_device_binding_is_denied() {
+        let (reference, binding) = fixture();
+        let mut returned_binding = binding.clone();
+        returned_binding.device_id = "different-device".into();
+        let bytes = receipt_wire(&reference, &returned_binding);
+        assert!(matches!(
+            decode_health_receipt(&bytes, &reference, &binding),
+            Err(AgentFailure::PolicyDenied)
+        ));
+    }
+
+    #[test]
+    fn matching_health_receipt_is_consumed() {
+        let (reference, binding) = fixture();
+        let bytes = receipt_wire(&reference, &binding);
+        let receipt = decode_health_receipt(&bytes, &reference, &binding).unwrap();
+        assert_eq!(receipt.output.capacity, "typical");
+        assert_eq!(receipt.transformed_at_unix_ms, 1_000);
+    }
 }

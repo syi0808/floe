@@ -35,6 +35,9 @@ pub struct AppOpenOptions {
     model_provider_factory: Arc<dyn ModelProviderFactory>,
     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
     expert_source_transport: Option<Arc<dyn floe_context::ExpertSourceTransport>>,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    calendar_operation_executor:
+        Option<Arc<dyn floe_calendar_operations::CalendarOperationExecutor>>,
 }
 
 impl AppOpenOptions {
@@ -52,6 +55,17 @@ impl AppOpenOptions {
         self.expert_source_transport = Some(Arc::new(transport));
         self
     }
+
+    /// Replace only external Calendar effect I/O in Linux App QA.
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    #[doc(hidden)]
+    pub fn with_qa_calendar_operation_executor(
+        mut self,
+        executor: impl floe_calendar_operations::CalendarOperationExecutor + 'static,
+    ) -> Self {
+        self.calendar_operation_executor = Some(Arc::new(executor));
+        self
+    }
 }
 
 impl Default for AppOpenOptions {
@@ -60,6 +74,8 @@ impl Default for AppOpenOptions {
             model_provider_factory: Arc::new(CompositeModelProviderFactory),
             #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
             expert_source_transport: None,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            calendar_operation_executor: None,
         }
     }
 }
@@ -291,6 +307,8 @@ fn compose(
             options.model_provider_factory,
             #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
             options.expert_source_transport,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            options.calendar_operation_executor,
         ),
     };
     AppHost::with_caller(services, caller).map_err(AppOpenError::Host)

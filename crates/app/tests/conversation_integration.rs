@@ -3,13 +3,12 @@ mod support;
 use std::time::{Duration, Instant};
 
 use floe_app::{
-    ActionAuthorityMode, ActionsCommand, ActionsCommandResult, ActionsQuery, ActionsQueryResult,
     AppComposition, AppHost, ConnectionsCommand, ConversationCommand, ConversationCommandOutcome,
     ConversationQuery, ConversationQueryOutcome, DayCommand, DayCommandOutcome, DayProductQuery,
     DayQueryOutcome, ExpertCommand, ExpertCommandResult, ExpertQuery, ExpertQueryResult,
-    MemoryCommand, MemoryQuery, MemoryQueryResult, ProductCommand, ProductCommandDisposition,
-    ProductCommandOutcome, ProductCommandRequest, ProductFailure, ProductObservation, ProductQuery,
-    ProductQueryOutcome, RuntimeReadinessState,
+    MemoryCommand, MemoryQuery, MemoryQueryResult, OperationPolicyMode, ProductCommand,
+    ProductCommandDisposition, ProductCommandOutcome, ProductCommandRequest, ProductFailure,
+    ProductObservation, ProductQuery, ProductQueryOutcome, RuntimeReadinessState,
 };
 use floe_conversation::{RunState, SessionMessage};
 use floe_inference::ModelObservationError;
@@ -33,7 +32,11 @@ const SCHEDULE_REQUEST: &str = "Review my calendar from 2026-10-01 through 2026-
 fn create_ready_app(model: &ScriptedModel) -> (IsolatedProfile, AppHost<AppComposition>) {
     let profile = IsolatedProfile::new();
     let host = profile.open(model);
-    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    assert_eq!(
+        prepare_runtime(&host),
+        RuntimeReadinessState::Ready,
+        "restore the persisted Runtime after lost proposal acknowledgement"
+    );
     (profile, host)
 }
 
@@ -69,7 +72,11 @@ fn start_exhausted_schedule_run(
 ) {
     let profile = IsolatedProfile::new();
     let host = profile.open_with_qa_source_transport(model, support::UnavailableCalendarTransport);
-    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    assert_eq!(
+        prepare_runtime(&host),
+        RuntimeReadinessState::Ready,
+        "restore the persisted Runtime after lost Access decision acknowledgement"
+    );
     support::configure_fixture_calendar(&host, "Synthetic team calendar");
     support::bind_schedule_expert(&host);
     let session_id = start_session(&host);
@@ -788,31 +795,34 @@ fn typed_day_query_remains_available_before_runtime_readiness() {
 }
 
 #[test]
-fn typed_product_router_keeps_actions_experts_and_memory_on_the_same_path() {
+fn typed_product_router_projects_calendar_policy_with_conversation() {
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let (_profile, host) = create_ready_app(&model);
 
-    let actions = host
+    let policy = host
         .request(Uuid::new_v4())
-        .expect("admit Actions query")
-        .product_query(ProductQuery::Actions(ActionsQuery::List {
-            cursor: None,
-            limit: 10,
-        }))
-        .expect("route existing Actions query");
+        .expect("admit Conversation policy query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::CalendarOperationPolicy,
+        ))
+        .expect("route assistant operation policy query");
     assert!(matches!(
-        actions,
-        ProductQueryOutcome::Actions(ActionsQueryResult::Page(_))
+        policy,
+        ProductQueryOutcome::Conversation(ConversationQueryOutcome::CalendarOperationPolicy(_))
     ));
 
     let experts = host
         .request(Uuid::new_v4())
-        .expect("admit Experts query")
-        .product_query(ProductQuery::Experts(ExpertQuery::Directory))
-        .expect("route existing Experts query");
+        .expect("admit Conversation expert-feature query")
+        .product_query(ProductQuery::Conversation(ConversationQuery::Expert(
+            ExpertQuery::Directory,
+        )))
+        .expect("route assistant Expert settings query");
     assert!(matches!(
         experts,
-        ProductQueryOutcome::Experts(ExpertQueryResult::Directory(_))
+        ProductQueryOutcome::Conversation(ConversationQueryOutcome::Expert(
+            ExpertQueryResult::Directory(_)
+        ))
     ));
 
     let memory = host
@@ -833,9 +843,14 @@ fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
     let directory = host
         .request(Uuid::new_v4())
         .expect("admit Experts directory query")
-        .product_query(ProductQuery::Experts(ExpertQuery::Directory))
+        .product_query(ProductQuery::Conversation(ConversationQuery::Expert(
+            ExpertQuery::Directory,
+        )))
         .expect("read Experts directory");
-    let ProductQueryOutcome::Experts(ExpertQueryResult::Directory(directory)) = directory else {
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Expert(
+        ExpertQueryResult::Directory(directory),
+    )) = directory
+    else {
         panic!("Experts directory query returned another result")
     };
     let installation_ref = directory
@@ -849,11 +864,13 @@ fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
             .expect("admit Experts product request")
             .product_command(ProductCommandRequest {
                 command_id,
-                command: ProductCommand::Experts(ExpertCommand::SetInstallationEnabled {
-                    installation_ref,
-                    expected_revision,
-                    enabled,
-                }),
+                command: ProductCommand::Conversation(ConversationCommand::Expert(
+                    ExpertCommand::SetInstallationEnabled {
+                        installation_ref,
+                        expected_revision,
+                        enabled,
+                    },
+                )),
             })
     };
 
@@ -865,7 +882,10 @@ fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
     let command_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
     let admitted =
         send(command_id, directory.revision, false).expect("admit Expert installation change");
-    let ProductCommandOutcome::Experts(ExpertCommandResult::Directory(updated)) = admitted else {
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Expert(
+        ExpertCommandResult::Directory(updated),
+    )) = admitted
+    else {
         panic!("Experts command returned another outcome")
     };
 
@@ -873,7 +893,9 @@ fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
         .expect("recover the exact Expert command receipt after registry revision advanced");
     assert!(matches!(
         replay,
-        ProductCommandOutcome::Experts(ExpertCommandResult::Directory(ref value))
+        ProductCommandOutcome::Conversation(ConversationCommandOutcome::Expert(
+            ExpertCommandResult::Directory(ref value)
+        ))
             if value.revision == updated.revision
     ));
 
@@ -886,26 +908,33 @@ fn experts_conflict_and_receipt_replay_keep_owner_dispositions() {
 }
 
 #[test]
-fn actions_authority_replay_checks_receipt_before_revision_validation() {
+fn conversation_calendar_policy_replay_checks_receipt_before_revision_validation() {
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let (_profile, host) = create_ready_app(&model);
     let authority = host
         .request(Uuid::new_v4())
-        .expect("admit Actions authority query")
-        .product_query(ProductQuery::Actions(ActionsQuery::Authority))
-        .expect("read Actions authority");
-    let ProductQueryOutcome::Actions(ActionsQueryResult::Authority(authority)) = authority else {
-        panic!("Actions authority query returned another result")
+        .expect("admit Conversation calendar policy query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::CalendarOperationPolicy,
+        ))
+        .expect("read Access-owned operation policy through Conversation");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::CalendarOperationPolicy(
+        authority,
+    )) = authority
+    else {
+        panic!("Conversation query returned another operation policy")
     };
     let send = |command_id, expected_revision| {
         host.request(Uuid::new_v4())
-            .expect("admit Actions product request")
+            .expect("admit Conversation product request")
             .product_command(ProductCommandRequest {
                 command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
-                command: ProductCommand::Actions(ActionsCommand::SetAuthority {
-                    mode: ActionAuthorityMode::Deny,
-                    expected_revision,
-                }),
+                command: ProductCommand::Conversation(
+                    ConversationCommand::SetCalendarOperationPolicy {
+                        mode: OperationPolicyMode::Deny,
+                        expected_revision,
+                    },
+                ),
             })
     };
 
@@ -915,15 +944,20 @@ fn actions_authority_replay_checks_receipt_before_revision_validation() {
 
     let command_id = Uuid::new_v4();
     let admitted = send(command_id, authority.revision).expect("admit authority change");
-    let ProductCommandOutcome::Actions(ActionsCommandResult::Authority(updated)) = admitted else {
-        panic!("Actions authority command returned another outcome")
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::CalendarOperationPolicy(
+        updated,
+    )) = admitted
+    else {
+        panic!("Conversation calendar policy command returned another outcome")
     };
 
     let replay = send(command_id, authority.revision)
         .expect("replay the exact authority command after its revision advanced");
     assert!(matches!(
         replay,
-        ProductCommandOutcome::Actions(ActionsCommandResult::Authority(ref value))
+        ProductCommandOutcome::Conversation(
+            ConversationCommandOutcome::CalendarOperationPolicy(ref value)
+        )
             if value.revision == updated.revision
     ));
 
@@ -933,6 +967,771 @@ fn actions_authority_replay_checks_receipt_before_revision_validation() {
         invalid_reuse.disposition,
         ProductCommandDisposition::Indeterminate
     );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn schedule_proposal_artifact(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    origin_run: floe_kernel::RunId,
+) -> (floe_agent_contract::TaskExecutionReceiptRef, Uuid) {
+    let session = read_session(host, session_id);
+    let task = session
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            floe_conversation::SessionMessage::Delegation { turn_id, task, .. }
+                if *turn_id == origin_run.as_uuid() =>
+            {
+                Some(task)
+            }
+            _ => None,
+        })
+        .expect("Conversation journal projects the exact admitted Schedule Task");
+    assert_eq!(task.state, floe_agent_contract::TaskState::Completed);
+    let receipt = task
+        .execution_receipt
+        .clone()
+        .expect("Conversation delegation retains its Task admission reference");
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.media_types.iter().any(|media_type| {
+                media_type == floe_calendar_operations::EXPERT_CALENDAR_PROPOSAL_MEDIA_TYPE
+            })
+        })
+        .expect("completed Schedule Task retains its sealed proposal artifact");
+    (receipt, artifact.artifact_id)
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn read_calendar_operation_snapshot(
+    host: &AppHost<AppComposition>,
+    operation_ref: Uuid,
+) -> Result<floe_calendar_operations::ActionSnapshot, AgentFailure> {
+    support::with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            owners
+                .calendar_operations
+                .inspect(
+                    &actor,
+                    operation_ref,
+                    &floe_app::host_scope(
+                        Uuid::new_v4(),
+                        floe_execution::Cancellation::new(),
+                        Duration::from_secs(15),
+                    ),
+                )
+                .await
+        })
+    })
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        "/focus",
+        ModelOutput::ScheduleOperationApprovalFlow,
+    );
+    let recorder = model.recorder();
+    recorder.set_model_selection_sequence(vec![
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(2),
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(1),
+        ScriptModelSelection::device(1),
+    ]);
+    let executor =
+        support::ScriptedCalendarExecutor::new([support::CalendarExecutorScript::Commit]);
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_calendar_executor(&model, executor.clone());
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let calendar = support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    support::bind_schedule_expert(&host);
+
+    let session_id = start_session(&host);
+    let turn = start_turn(&host, session_id, "/focus");
+    let run = wait_terminal_run(&host, turn.run_id);
+    assert_eq!(run.state, RunState::Completed);
+    assert_eq!(run.issue, None);
+    assert_eq!(
+        run.output.as_deref(),
+        Some("I found a time that fits the calendar.")
+    );
+    let (receipt, artifact_id) = schedule_proposal_artifact(&host, session_id, turn.run_id);
+    let destinations = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                owners
+                    .calendar_operations
+                    .destinations(
+                        &actor,
+                        &floe_app::host_scope(
+                            Uuid::new_v4(),
+                            floe_execution::Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+            })
+            .expect("read current reviewed Calendar destinations")
+    });
+    assert_eq!(
+        destinations.len(),
+        1,
+        "the real Connections/Access source is writable"
+    );
+    let preview_receipt = receipt.clone();
+    let proposal_preview = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                owners
+                    .calendar_operations
+                    .proposal_preview(
+                        &actor,
+                        preview_receipt,
+                        artifact_id,
+                        &floe_app::host_scope(
+                            Uuid::new_v4(),
+                            floe_execution::Cancellation::new(),
+                            Duration::from_secs(30),
+                        ),
+                    )
+                    .await
+            })
+            .expect("prepare destination from the real Task/Vault admission evidence")
+    });
+    let destination_ref = match proposal_preview {
+        floe_calendar_operations::ActionProposalPreview::Ready { destinations, .. } => {
+            assert_eq!(destinations.len(), 1);
+            destinations[0].destination_ref
+        }
+        other => panic!("fresh Task proposal unexpectedly replayed: {other:?}"),
+    };
+
+    let proposal_command_id = Uuid::new_v4();
+    let proposal_command =
+        ProductCommand::Conversation(ConversationCommand::SubmitCalendarProposal {
+            session_id,
+            origin_run_id: turn.run_id,
+            receipt,
+            artifact_id,
+            destination_ref,
+        });
+    support::with_ready(&host, |_services, _caller, owners| {
+        owners
+            .conversation
+            .qa_lose_next_operation_approval_admission_ack();
+    });
+    let lost_admission_ack = host
+        .request(Uuid::new_v4())
+        .expect("admit the proposal whose owner response is lost")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(proposal_command_id).unwrap(),
+            command: proposal_command.clone(),
+        })
+        .expect_err("the operation and review commit before the simulated lost response");
+    assert_eq!(
+        lost_admission_ack.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+    host.shutdown()
+        .expect("close after the committed proposal response is lost");
+    drop(host);
+    let host = profile.open_with_qa_calendar_executor(&model, executor.clone());
+    assert_eq!(
+        prepare_runtime(&host),
+        RuntimeReadinessState::Ready,
+        "restore the persisted Runtime after lost proposal acknowledgement"
+    );
+
+    let proposal_deadline = Instant::now() + Duration::from_secs(10);
+    let proposal = loop {
+        let attempt = host
+            .request(Uuid::new_v4())
+            .expect("admit Calendar proposal through Conversation product route")
+            .product_command(ProductCommandRequest {
+                command_id: floe_kernel::CommandId::from_uuid(proposal_command_id).unwrap(),
+                command: proposal_command.clone(),
+            });
+        match attempt {
+            Err(failure)
+                if matches!(
+                    &failure.failure,
+                    ProductFailure::Conversation(AgentFailure::StorageBusy)
+                ) && Instant::now() < proposal_deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            result => {
+                break result
+                    .expect("Conversation admits exact operation and typed review interaction");
+            }
+        }
+    };
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::CalendarProposal(proposal)) =
+        proposal
+    else {
+        panic!("Calendar proposal returned a different product result")
+    };
+    assert!(matches!(
+        proposal.operation.status,
+        floe_calendar_operations::ActionStatus::PendingReview
+    ));
+    let interaction = proposal
+        .interaction
+        .expect("Ask policy publishes the Access review in Conversation");
+    let review = match &interaction.target {
+        floe_conversation::InteractionTarget::OperationApproval { operation } => {
+            operation.review_ref.clone()
+        }
+        _ => panic!("Ask policy published a non-operation approval interaction"),
+    };
+    let replay = host
+        .request(Uuid::new_v4())
+        .expect("admit exact proposal replay")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(proposal_command_id).unwrap(),
+            command: proposal_command.clone(),
+        })
+        .expect("exact proposal replay precedes mutable Task/source reads");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::CalendarProposal(replay)) =
+        replay
+    else {
+        panic!("exact proposal replay returned a different result")
+    };
+    assert_eq!(replay.operation.action_ref, proposal.operation.action_ref);
+    assert_eq!(
+        replay
+            .interaction
+            .as_ref()
+            .map(|value| value.interaction_id),
+        Some(interaction.interaction_id),
+        "exact replay returns the same Conversation interaction"
+    );
+    let admitted_operations = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            owners
+                .calendar_operations
+                .list(
+                    &actor,
+                    None,
+                    100,
+                    &floe_app::host_scope(
+                        Uuid::new_v4(),
+                        floe_execution::Cancellation::new(),
+                        Duration::from_secs(15),
+                    ),
+                )
+                .await
+        })
+    })
+    .expect("read durable Calendar Operations admission page");
+    assert_eq!(admitted_operations.actions.len(), 1);
+    assert_eq!(
+        admitted_operations.actions[0].action_ref,
+        proposal.operation.action_ref
+    );
+    let admitted_interactions = host
+        .request(Uuid::new_v4())
+        .expect("admit interaction list query")
+        .product_query(ProductQuery::Conversation(
+            ConversationQuery::ListInteractions { session_id },
+        ))
+        .expect("read committed Conversation review rows");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Interactions(
+        admitted_interactions,
+    )) = admitted_interactions
+    else {
+        panic!("Conversation returned a different interaction-list result")
+    };
+    assert_eq!(admitted_interactions.len(), 1);
+    assert_eq!(
+        admitted_interactions[0].interaction_id,
+        interaction.interaction_id
+    );
+    let changed_publication_command = match proposal_command.clone() {
+        ProductCommand::Conversation(ConversationCommand::SubmitCalendarProposal {
+            session_id: _,
+            origin_run_id,
+            receipt,
+            artifact_id,
+            destination_ref,
+        }) => ProductCommand::Conversation(ConversationCommand::SubmitCalendarProposal {
+            session_id: Uuid::new_v4(),
+            origin_run_id,
+            receipt,
+            artifact_id,
+            destination_ref,
+        }),
+        _ => unreachable!(),
+    };
+    let changed_publication = host
+        .request(Uuid::new_v4())
+        .expect("admit changed proposal publication body")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(proposal_command_id).unwrap(),
+            command: changed_publication_command,
+        })
+        .expect_err("same command cannot be rebound to another Conversation session");
+    assert_eq!(
+        changed_publication.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+    assert_eq!(
+        proposal.operation.action_ref, replay.operation.action_ref,
+        "changed correlation creates no second operation"
+    );
+
+    let decision_command = Uuid::new_v4();
+    let decide = |host: &AppHost<AppComposition>, decision| {
+        let command = ProductCommand::Conversation(ConversationCommand::ResolveInteraction {
+            interaction_id: interaction.interaction_id,
+            session_id,
+            expected_revision: interaction.revision,
+            decision,
+            target_digest: interaction.target_digest,
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let attempt = host
+                .request(Uuid::new_v4())
+                .expect("admit Conversation decision command")
+                .product_command(ProductCommandRequest {
+                    command_id: floe_kernel::CommandId::from_uuid(decision_command).unwrap(),
+                    command: command.clone(),
+                });
+            match attempt {
+                Err(failure)
+                    if matches!(
+                        &failure.failure,
+                        ProductFailure::Conversation(AgentFailure::StorageBusy)
+                    ) && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                result => break result,
+            }
+        }
+    };
+    support::with_ready(&host, |services, _caller, owners| {
+        services
+            .execute_owner(async move { owners.conversation.qa_pause_recovery().await })
+            .expect("pause the old generation's recovery worker before lost-ACK crash simulation");
+    });
+    support::with_ready(&host, |_services, _caller, owners| {
+        owners
+            .calendar_operations
+            .qa_lose_next_access_decision_ack();
+    });
+    let lost_decision_ack = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
+        .expect_err("Access decision commits before its response is lost");
+    assert_eq!(
+        lost_decision_ack.disposition,
+        ProductCommandDisposition::Admitted,
+        "Conversation durably owns the exact resolving command and replays it after the Access response is lost"
+    );
+    let (owner_command_id, operation_resume) =
+        support::with_ready(&host, |services, caller, owners| {
+            let actor = caller.owner_actor();
+            let scope = floe_app::host_scope(
+                Uuid::new_v4(),
+                floe_execution::Cancellation::new(),
+                Duration::from_secs(15),
+            );
+            let interaction_id = interaction.interaction_id;
+            let review = review.clone();
+            services.execute_owner(async move {
+                let row = owners
+                    .conversation
+                    .qa_read_interaction_record(&actor, interaction_id, &scope)
+                    .await?
+                    .expect("the committed interaction remains in Conversation custody");
+                let floe_conversation::InteractionState::Resolving {
+                    owner_command_id, ..
+                } = row.state
+                else {
+                    return Err(AgentFailure::Conflict);
+                };
+                let context = owners
+                    .calendar_operations
+                    .resume_context(&actor, &review, &scope)
+                    .await?;
+                Ok::<_, AgentFailure>((owner_command_id, context))
+            })
+        })
+        .expect("inspect the committed crash cut point before closing the old generation");
+    assert_eq!(operation_resume.operation_id, proposal.operation.action_ref);
+    assert_eq!(operation_resume.review, review);
+    assert_eq!(operation_resume.decision_command_id, Some(owner_command_id));
+    assert_eq!(operation_resume.decision_approval_id, Some(review.id));
+    assert_eq!(
+        operation_resume.decision_kind,
+        Some(floe_access::OperationDecisionKind::Approve)
+    );
+    assert!(
+        matches!(
+            operation_resume.status,
+            floe_calendar_operations::ActionStatus::Approved
+        ),
+        "the Access decision committed without crossing the dispatch-intent fence: {:?}",
+        operation_resume.status
+    );
+    assert_eq!(executor.snapshot().dispatch_attempts, 0);
+    host.shutdown()
+        .expect("close after the committed Access decision response is lost");
+    drop(host);
+    let host = profile.open_with_qa_calendar_executor(&model, executor.clone());
+    assert_eq!(
+        prepare_runtime(&host),
+        RuntimeReadinessState::Ready,
+        "restore the persisted Runtime after lost Access decision acknowledgement"
+    );
+
+    let resolved = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
+        .expect("approve via Conversation and consume Access decision receipt");
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(resolved)) =
+        resolved
+    else {
+        panic!("Conversation returned a different approval outcome")
+    };
+    assert_eq!(
+        resolved.interaction.state,
+        floe_conversation::InteractionStatus::Resolved
+    );
+    let action_ref = proposal.operation.action_ref;
+    let dispatched =
+        executor.wait_for_snapshot(WAIT_TIMEOUT, |snapshot| snapshot.dispatch_attempts == 1);
+    assert!(
+        dispatched.is_some(),
+        "approved Calendar operation did not reach the scripted dispatch seam: {:?}",
+        executor.snapshot()
+    );
+    let action_deadline = Instant::now() + WAIT_TIMEOUT;
+    let action = loop {
+        let snapshot = match read_calendar_operation_snapshot(&host, action_ref) {
+            Ok(snapshot) => snapshot,
+            Err(AgentFailure::StorageBusy) if Instant::now() < action_deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(failure) => panic!("inspect the same Calendar Operations record: {failure:?}"),
+        };
+        match &snapshot.status {
+            floe_calendar_operations::ActionStatus::Succeeded { .. } => break snapshot,
+            floe_calendar_operations::ActionStatus::Blocked { .. }
+            | floe_calendar_operations::ActionStatus::Unknown { .. }
+            | floe_calendar_operations::ActionStatus::Failed { .. }
+            | floe_calendar_operations::ActionStatus::Expired
+            | floe_calendar_operations::ActionStatus::Cancelled
+            | floe_calendar_operations::ActionStatus::Rejected => panic!(
+                "approved Calendar operation terminated without success: status={:?}; executor={:?}",
+                snapshot.status,
+                executor.snapshot()
+            ),
+            _ => {}
+        }
+        assert!(
+            Instant::now() < action_deadline,
+            "approval operation did not settle: status={:?}; executor={:?}",
+            snapshot.status,
+            executor.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let replay = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
+        .expect("identical decision replays the owner receipt");
+    assert!(matches!(
+        replay,
+        ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(_))
+    ));
+    let decision_record = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let interaction_id = interaction.interaction_id;
+        services.execute_owner(async move {
+            owners
+                .conversation
+                .qa_read_interaction_record(
+                    &actor,
+                    interaction_id,
+                    &floe_app::host_scope(
+                        Uuid::new_v4(),
+                        floe_execution::Cancellation::new(),
+                        Duration::from_secs(15),
+                    ),
+                )
+                .await
+        })
+    })
+    .expect("read durable Conversation interaction resolution receipt")
+    .expect("operation review remains in Conversation custody");
+    let floe_conversation::InteractionState::Resolved { receipt } = &decision_record.state else {
+        panic!(
+            "restart recovery left an orphan Resolving interaction: {:?}",
+            decision_record.state
+        )
+    };
+    let decision_receipt = receipt.owner_receipt.clone();
+    let floe_conversation::OwnerResolutionReceipt::CalendarOperation {
+        operation_id,
+        decision: access_decision,
+    } = &decision_receipt
+    else {
+        panic!("Conversation recovered a different owner receipt")
+    };
+    assert_eq!(*operation_id, proposal.operation.action_ref);
+    let access_command = access_decision
+        .reviewed_decision_command_for(&review)
+        .expect("recovered Access receipt binds the exact operation review");
+    assert_ne!(access_command, Uuid::nil());
+    let floe_access::OperationDecisionReceipt::ReviewedDecision { approval_id, .. } =
+        access_decision
+    else {
+        panic!("linked operation used a non-review Access decision")
+    };
+    let repeated = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
+        .expect("post-restart exact decision replay returns the persisted receipt");
+    assert!(matches!(
+        repeated,
+        ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(_))
+    ));
+    let repeated_record = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let interaction_id = interaction.interaction_id;
+        services.execute_owner(async move {
+            owners
+                .conversation
+                .qa_read_interaction_record(
+                    &actor,
+                    interaction_id,
+                    &floe_app::host_scope(
+                        Uuid::new_v4(),
+                        floe_execution::Cancellation::new(),
+                        Duration::from_secs(15),
+                    ),
+                )
+                .await
+        })
+    })
+    .expect("read exact replay after recovery")
+    .expect("resolved interaction remains stored");
+    let floe_conversation::InteractionState::Resolved {
+        receipt: repeated_receipt,
+    } = repeated_record.state
+    else {
+        panic!("exact replay left Conversation in Resolving")
+    };
+    assert_eq!(repeated_receipt.owner_receipt, decision_receipt);
+    let changed_body = decide(&host, floe_conversation::InteractionDecisionKind::Deny)
+        .expect_err("the decision receipt cannot be rebound to a different body");
+    assert_eq!(
+        changed_body.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+
+    let refresh_command_id = Uuid::new_v4();
+    let refresh_deadline = Instant::now() + WAIT_TIMEOUT;
+    let linked = loop {
+        let attempt = host
+            .request(Uuid::new_v4())
+            .expect("admit Conversation resume-correlation refresh")
+            .product_command(ProductCommandRequest {
+                command_id: floe_kernel::CommandId::from_uuid(refresh_command_id).unwrap(),
+                command: ProductCommand::Conversation(ConversationCommand::RefreshInteraction {
+                    interaction_id: interaction.interaction_id,
+                    session_id,
+                    expected_revision: resolved.interaction.revision,
+                }),
+            });
+        match attempt {
+            Ok(ProductCommandOutcome::Conversation(
+                ConversationCommandOutcome::InteractionRefresh(result),
+            )) => {
+                if let Some(linked) = result.linked {
+                    break linked;
+                }
+            }
+            Err(failure)
+                if matches!(
+                    &failure.failure,
+                    ProductFailure::Conversation(AgentFailure::StorageBusy)
+                ) && Instant::now() < refresh_deadline => {}
+            result => panic!("refresh Conversation's linked operation resume: {result:?}"),
+        }
+        assert!(
+            Instant::now() < refresh_deadline,
+            "Conversation did not publish the durable linked Resume receipt"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    if !recorder.wait_for_generated_run(linked.run_id.as_uuid(), WAIT_TIMEOUT) {
+        let linked_receipt = read_run(
+            &host,
+            floe_kernel::RunId::from_uuid(linked.run_id.as_uuid()).unwrap(),
+        );
+        let linked_journal = support::read_vault_conversation_journal(&host, linked.run_id);
+        let linked_tail = linked_journal
+            .iter()
+            .rev()
+            .take(8)
+            .map(|entry| (entry.revision, entry.kind.as_str()))
+            .collect::<Vec<_>>();
+        let recorder_state = recorder.snapshot();
+        let plan_bindings = recorder_state
+            .plan_bindings
+            .iter()
+            .map(|binding| (&binding.consumer, binding.run_id, binding.task_id))
+            .collect::<Vec<_>>();
+        let generated_bindings = recorder_state
+            .generated_bindings
+            .iter()
+            .map(|binding| (&binding.consumer, binding.run_id, binding.task_id))
+            .collect::<Vec<_>>();
+        panic!(
+            "linked Resume did not reach the scripted model generation seam: receipt={linked_receipt:?}; journal={linked_tail:?}; plans={}; generated={}; plan_bindings={plan_bindings:?}; generated_bindings={generated_bindings:?}; violations={:?}",
+            recorder_state.plans.len(),
+            recorder_state.generated.len(),
+            recorder_state.violations
+        );
+    }
+    let resumed = wait_terminal_run(&host, linked.run_id);
+    let script_snapshot = recorder.snapshot();
+    let resume_journal = support::read_vault_conversation_journal(&host, linked.run_id);
+    let resume_journal_tail = resume_journal
+        .iter()
+        .rev()
+        .take(12)
+        .map(|entry| (entry.revision, entry.kind.as_str(), entry.payload.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        resumed.state,
+        RunState::Completed,
+        "linked Resume receipt did not complete: {resumed:?}; model calls={}/{}, violations={:?}; operation={:?}; journal tail={resume_journal_tail:?}",
+        script_snapshot.generated.len(),
+        script_snapshot.plans.len() / 2,
+        script_snapshot.violations,
+        action.status
+    );
+    assert_eq!(resumed.resume_of, Some(turn.run_id));
+    assert!(
+        matches!(
+            &action.status,
+            floe_calendar_operations::ActionStatus::Succeeded { .. }
+        ),
+        "the exact approved operation settled successfully: {:?}",
+        action.status
+    );
+    let after_resume = read_calendar_operation_snapshot(&host, action_ref)
+        .expect("linked Conversation Run leaves the admitted operation readable");
+    assert!(matches!(
+        &after_resume.status,
+        floe_calendar_operations::ActionStatus::Succeeded { .. }
+    ));
+    let revoked = support::disconnect_fixture_calendar(&host, &calendar);
+    assert_eq!(
+        revoked.state,
+        floe_connections::ConnectionOperationState::Completed,
+        "the already completed external write leaves a definitive stale history dependency"
+    );
+    let scripted = assert_script_clean(&recorder);
+    assert_eq!(
+        scripted.generated.len(),
+        5,
+        "Conversation resumed its linked run"
+    );
+    let resume_request = scripted
+        .generated
+        .iter()
+        .zip(&scripted.generated_bindings)
+        .find(|(_, binding)| binding.run_id == Some(linked.run_id.as_uuid()))
+        .map(|(request, _)| request)
+        .expect("capture the linked Resume's actual model request");
+    assert!(
+        resume_request
+            .envelope
+            .conversation
+            .current_turn
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                floe_agent_contract::ModelConversationEntry::User { text, .. }
+                    if text == "/focus"
+            )),
+        "the original independent input remains after the write"
+    );
+    assert!(
+        !resume_request
+            .envelope
+            .conversation
+            .history
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                floe_agent_contract::ModelConversationEntry::DelegationExchange { receipt, .. }
+                    if receipt.snapshot.result.as_deref()
+                        == Some("The selected synthetic calendar has one planning event in the requested range.")
+            )),
+        "the stale source observation is omitted as one typed Task exchange after the write"
+    );
+    let resume_preamble = resume_request
+        .envelope
+        .conversation
+        .current_turn
+        .iter()
+        .filter_map(|entry| match entry {
+            floe_agent_contract::ModelConversationEntry::Preamble { text, .. } => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let floe_conversation::InteractionTarget::OperationApproval { operation } = &interaction.target
+    else {
+        panic!("linked Resume retains the exact OperationApproval target")
+    };
+    let review = &operation.review_ref;
+    let effect_digest = review
+        .effect_digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert!(resume_preamble.contains(&action_ref.to_string()));
+    assert!(resume_preamble.contains(&review.id.to_string()));
+    assert!(resume_preamble.contains(&effect_digest));
+    assert!(resume_preamble.contains(&review.device_id));
+    assert!(resume_preamble.contains(&format!(
+        "policy revision {}",
+        review.policy_revision.unwrap()
+    )));
+    assert!(resume_preamble.contains(&review.expires_at.to_rfc3339()));
+    assert!(
+        ["Approved", "Executing", "Succeeded"].iter().any(|state| {
+            resume_preamble.contains(&format!("current Calendar Operations state {state}"))
+        }),
+        "linked Resume records a live operation state: {resume_preamble}"
+    );
+    assert!(resume_preamble.contains(&format!("Access decision command {access_command}")));
+    assert!(resume_preamble.contains(&format!("approval {approval_id}")));
+    assert!(resume_preamble.contains("Do not re-propose, recreate, or submit"));
+    assert!(resume_preamble.contains("Unknown means execution is uncertain"));
+    assert!(!resume_preamble.contains("Focus time"));
+    assert!(!resume_preamble.contains("Synthetic team calendar"));
+    let effects = executor.snapshot();
+    assert_eq!(
+        effects.dispatch_attempts, 1,
+        "one Access receipt admitted one CAS"
+    );
+    assert_eq!(effects.external_effects, 1);
+    assert_eq!(effects.effect_kinds, vec!["create"]);
 }
 
 #[test]

@@ -8,10 +8,10 @@ final class LocalOwnerGateways {
     this.runtime,
     this.registry,
     this.memory,
-    this.actions,
+    this.operationAuthorization,
   });
   final RuntimeController? runtime;
   final AgentRegistryController? registry;
   final AgentMemoryController? memory;
-  final CalendarActionGateway? actions;
+  final OperationAuthorizationGateway? operationAuthorization;
 }

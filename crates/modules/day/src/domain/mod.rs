@@ -28,9 +28,14 @@ pub use projection::{
 pub use refresh::*;
 
 mod read;
-pub use read::{DayReadQuery, DayReadSelection};
+pub use read::{DayReadAcquisitionBudget, DayReadQuery, DayReadSelection};
 
+mod manual_calendar_operation;
 mod mutation;
+pub use manual_calendar_operation::{
+    ManualCalendarDestination, ManualCalendarOperation, ManualCalendarOperationPage,
+    ManualCalendarOperationReceipt, ManualCalendarOperationStatus,
+};
 pub use mutation::{
     Classification, DayMutation, DayMutationApplied, DayMutationCommand, DayMutationPrior,
     DayMutationRequest, DayMutationResult, DayMutationTarget, MAX_DAY_COMMAND_RECEIPTS,

@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/experts/domain/agent_registry.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
-enum AgentInteractionKind { sourceAccess, expertBinding }
+enum AgentInteractionKind { sourceAccess, expertBinding, operationApproval }
 
 enum AgentInteractionState {
   pending,
@@ -27,6 +30,141 @@ enum AgentInteractionAction {
 }
 
 enum AgentInteractionDecision { approve, deny, dismiss }
+
+enum AgentSourceAccessReason {
+  enableObserve,
+  reviewChangedSource,
+  requestSystemPermission,
+  reconnect,
+  reviewProcessing,
+  selectResource,
+}
+
+sealed class AgentInteractionRequirement {
+  const AgentInteractionRequirement();
+
+  factory AgentInteractionRequirement.parse(Map<String, dynamic> json) {
+    String text(String name, int maxBytes) {
+      final value = json[name];
+      if (value is! String ||
+          value.isEmpty ||
+          value.trim() != value ||
+          utf8.encode(value).length > maxBytes ||
+          value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
+        throw FormatException('Invalid interaction requirement $name.');
+      }
+      return value;
+    }
+
+    switch (json['kind']) {
+      case 'source_access':
+        const keys = {
+          'kind',
+          'reason',
+          'source_id',
+          'connection_id',
+          'consumer',
+          'purpose',
+          'inline',
+        };
+        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
+          throw const FormatException('Invalid source access requirement.');
+        }
+        final connection = json['connection_id'];
+        final inline = json['inline'];
+        if ((connection != null && connection is! String) || inline is! bool) {
+          throw const FormatException('Invalid source access requirement.');
+        }
+        return AgentSourceAccessRequirement(
+          reason: switch (json['reason']) {
+            'enable_observe' => AgentSourceAccessReason.enableObserve,
+            'review_changed_source' => AgentSourceAccessReason.reviewChangedSource,
+            'request_system_permission' =>
+              AgentSourceAccessReason.requestSystemPermission,
+            'reconnect' => AgentSourceAccessReason.reconnect,
+            'review_processing' => AgentSourceAccessReason.reviewProcessing,
+            'select_resource' => AgentSourceAccessReason.selectResource,
+            _ => throw const FormatException('Unknown source access reason.'),
+          },
+          sourceId: text('source_id', 128),
+          connectionId: connection == null
+              ? null
+              : _validateInteractionIdentifier(connection, 'connection_id'),
+          consumer: text('consumer', 256),
+          purpose: text('purpose', 64),
+          inline: inline,
+        );
+      case 'expert_binding':
+        const keys = {'kind', 'consumer', 'requirement_key', 'review_ref'};
+        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
+          throw const FormatException('Invalid Expert binding requirement.');
+        }
+        final review = json['review_ref'];
+        if (review is! Map || review.keys.any((key) => key is! String)) {
+          throw const FormatException('Invalid Expert binding review reference.');
+        }
+        return AgentExpertBindingRequirement(
+          consumer: text('consumer', 256),
+          requirementKey: text('requirement_key', 256),
+          reviewRef: AgentBindingReviewRef.fromJson(
+            Map<String, dynamic>.from(review),
+          ),
+        );
+      case 'operation_approval':
+        const keys = {'kind', 'review_ref'};
+        if (json.length != keys.length || !json.keys.toSet().containsAll(keys)) {
+          throw const FormatException('Invalid operation approval requirement.');
+        }
+        final review = json['review_ref'];
+        if (review is! Map || review.keys.any((key) => key is! String)) {
+          throw const FormatException('Invalid operation review reference.');
+        }
+        return AgentOperationApprovalRequirement(
+          reviewRef: ActionReviewReference.fromJson(
+            Map<String, dynamic>.from(review),
+          ),
+        );
+      default:
+        throw const FormatException('Unknown interaction requirement.');
+    }
+  }
+}
+
+final class AgentSourceAccessRequirement extends AgentInteractionRequirement {
+  const AgentSourceAccessRequirement({
+    required this.reason,
+    required this.sourceId,
+    required this.connectionId,
+    required this.consumer,
+    required this.purpose,
+    required this.inline,
+  });
+
+  final AgentSourceAccessReason reason;
+  final String sourceId;
+  final String? connectionId;
+  final String consumer;
+  final String purpose;
+  final bool inline;
+}
+
+final class AgentExpertBindingRequirement extends AgentInteractionRequirement {
+  const AgentExpertBindingRequirement({
+    required this.consumer,
+    required this.requirementKey,
+    required this.reviewRef,
+  });
+
+  final String consumer;
+  final String requirementKey;
+  final AgentBindingReviewRef reviewRef;
+}
+
+final class AgentOperationApprovalRequirement extends AgentInteractionRequirement {
+  const AgentOperationApprovalRequirement({required this.reviewRef});
+
+  final ActionReviewReference reviewRef;
+}
 
 enum AgentInteractionResolveOutcome {
   pending,
@@ -102,6 +240,17 @@ sealed class AgentInteractionTarget {
             Map<String, dynamic>.from(reviewJson),
           ),
         );
+      case 'operation_approval':
+        if (json.length != 2 || !json.containsKey('operation')) {
+          throw const FormatException('Invalid operation approval target.');
+        }
+        final operation = json['operation'];
+        if (operation is! Map || operation.keys.any((key) => key is! String)) {
+          throw const FormatException('Invalid Calendar operation snapshot.');
+        }
+        return AgentOperationApprovalTarget(
+          operation: CalendarAction.fromJson(Map<String, dynamic>.from(operation)),
+        );
       default:
         throw const FormatException('Unknown interaction target.');
     }
@@ -130,6 +279,11 @@ final class AgentExpertBindingTarget extends AgentInteractionTarget {
   final AgentBindingReview review;
 }
 
+final class AgentOperationApprovalTarget extends AgentInteractionTarget {
+  const AgentOperationApprovalTarget({required this.operation});
+  final CalendarAction operation;
+}
+
 final class AgentInteractionSnapshot {
   const AgentInteractionSnapshot({
     required this.id,
@@ -141,6 +295,7 @@ final class AgentInteractionSnapshot {
     required this.targetDigest,
     required this.createdAtUnixMs,
     required this.expiresAtUnixMs,
+    required this.requirement,
     required this.target,
     required this.actions,
   });
@@ -156,6 +311,7 @@ final class AgentInteractionSnapshot {
       'target_digest',
       'created_at',
       'expires_at',
+      'requirement',
       'target',
       'actions',
     };
@@ -205,17 +361,56 @@ final class AgentInteractionSnapshot {
       throw const FormatException('Invalid interaction actions.');
     }
     final target = json['target'];
-    if (target is! Map) {
+    final requirement = json['requirement'];
+    if (target is! Map ||
+        requirement is! Map ||
+        target.keys.any((key) => key is! String) ||
+        requirement.keys.any((key) => key is! String)) {
       throw const FormatException('Invalid interaction target.');
     }
+    final typedTarget = AgentInteractionTarget.parse(
+      Map<String, dynamic>.from(target),
+    );
+    final typedRequirement = AgentInteractionRequirement.parse(
+      Map<String, dynamic>.from(requirement),
+    );
     if (number('revision') < 1 ||
         created.millisecondsSinceEpoch < 0 ||
         !expires.isAfter(created) ||
         json['interaction_kind'] == 'source_access' &&
             !{'source_review', 'navigation_only'}.contains(target['kind']) ||
         json['interaction_kind'] == 'expert_binding' &&
-            target['kind'] != 'expert_binding') {
+            target['kind'] != 'expert_binding' ||
+        json['interaction_kind'] == 'operation_approval' &&
+            target['kind'] != 'operation_approval' ||
+        json['interaction_kind'] == 'source_access' &&
+            typedRequirement is! AgentSourceAccessRequirement ||
+        json['interaction_kind'] == 'expert_binding' &&
+            typedRequirement is! AgentExpertBindingRequirement ||
+        json['interaction_kind'] == 'operation_approval' &&
+            typedRequirement is! AgentOperationApprovalRequirement) {
       throw const FormatException('Invalid interaction owner projection.');
+    }
+    if (typedRequirement case AgentExpertBindingRequirement(:final reviewRef)) {
+      if (typedTarget is! AgentExpertBindingTarget ||
+          !typedTarget.review.reviewRef.matches(reviewRef) ||
+          typedTarget.review.requirementRef != typedRequirement.requirementKey) {
+        throw const FormatException('Mismatched Expert binding requirement.');
+      }
+    }
+    if (typedRequirement case AgentOperationApprovalRequirement(:final reviewRef)) {
+      if (typedTarget is! AgentOperationApprovalTarget ||
+          typedTarget.operation.reviewRef.id != reviewRef.id ||
+          typedTarget.operation.reviewRef.operationId != reviewRef.operationId ||
+          typedTarget.operation.reviewRef.effectDigest != reviewRef.effectDigest ||
+          typedTarget.operation.reviewRef.sourceDigest != reviewRef.sourceDigest ||
+          typedTarget.operation.reviewRef.personId != reviewRef.personId ||
+          typedTarget.operation.reviewRef.deviceId != reviewRef.deviceId ||
+          typedTarget.operation.reviewRef.authorityRevision !=
+              reviewRef.authorityRevision ||
+          typedTarget.operation.reviewRef.expiresAt != reviewRef.expiresAt) {
+        throw const FormatException('Mismatched Calendar operation requirement.');
+      }
     }
     return AgentInteractionSnapshot(
       id: id('interaction_id'),
@@ -224,6 +419,7 @@ final class AgentInteractionSnapshot {
       kind: switch (json['interaction_kind']) {
         'source_access' => AgentInteractionKind.sourceAccess,
         'expert_binding' => AgentInteractionKind.expertBinding,
+        'operation_approval' => AgentInteractionKind.operationApproval,
         _ => throw const FormatException('Unknown interaction kind.'),
       },
       state: switch (json['state']) {
@@ -242,7 +438,8 @@ final class AgentInteractionSnapshot {
       targetDigest: digest,
       createdAtUnixMs: created.millisecondsSinceEpoch,
       expiresAtUnixMs: expires.millisecondsSinceEpoch,
-      target: AgentInteractionTarget.parse(Map<String, dynamic>.from(target)),
+      requirement: typedRequirement,
+      target: typedTarget,
       actions: List<AgentInteractionAction>.unmodifiable(
         actions.map(
           (action) => switch (action) {
@@ -274,6 +471,7 @@ final class AgentInteractionSnapshot {
   final String targetDigest;
   final int createdAtUnixMs;
   final int expiresAtUnixMs;
+  final AgentInteractionRequirement requirement;
   final AgentInteractionTarget target;
   final List<AgentInteractionAction> actions;
 }
@@ -426,4 +624,14 @@ AgentLinkedRun? _optionalReceipt(Object? value) {
 Map<String, dynamic> _map(Object? value, String message) {
   if (value is! Map) throw FormatException(message);
   return Map<String, dynamic>.from(value);
+}
+String _validateInteractionIdentifier(Object? value, String field) {
+  if (value is! String ||
+      value.isEmpty ||
+      value.trim() != value ||
+      utf8.encode(value).length > 256 ||
+      value.contains(RegExp(r'[\x00-\x1f\x7f]'))) {
+    throw FormatException('Invalid interaction requirement $field.');
+  }
+  return value;
 }

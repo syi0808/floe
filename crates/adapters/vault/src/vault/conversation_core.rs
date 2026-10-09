@@ -4578,9 +4578,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(ConversationStoreFailure::Transition)?;
         let open = open_receipt_on(transaction, self.person_id, run_id)
             .await?
-            .ok_or(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ))?;
+            .ok_or_else(|| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
         let fence = open.fence;
         let (_, owner_run, _) = self
             .verified_owner_evidence_on(
@@ -4597,17 +4597,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let task = self
             .task_on(transaction, reference.task_id())
             .await
-            .map_err(owner_error)?
-            .ok_or(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ))?;
+            .map_err(|failure| owner_error(failure))?
+            .ok_or_else(|| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
         let receipt_reference = task
             .receipt
             .as_ref()
             .map(|receipt| receipt.reference.clone())
-            .ok_or(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ))?;
+            .ok_or_else(|| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
         let verified = self
             .verified_task_receipt_on(transaction, &receipt_reference)
             .await?;
@@ -4626,7 +4626,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let journal = self
             .conversation_journal_on(transaction, &owner_run)
             .await
-            .map_err(owner_error)?;
+            .map_err(|failure| owner_error(failure))?;
         let mut intent: Option<floe_agent_contract::DelegationRequest> = None;
         let mut intent_revision = 0;
         let mut result: Option<Box<floe_agent_contract::TaskReceipt>> = None;
@@ -4656,12 +4656,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 _ => {}
             }
         }
-        let request = intent.ok_or(ConversationStoreFailure::Transition(
-            ConversationFailure::OwnerEvidenceMismatch,
-        ))?;
-        let receipt = result.ok_or(ConversationStoreFailure::Transition(
-            ConversationFailure::OwnerEvidenceMismatch,
-        ))?;
+        let request = intent.ok_or_else(|| {
+            ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+        })?;
+        let receipt = result.ok_or_else(|| {
+            ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+        })?;
         let expected_request_digest = floe_agent_contract::delegation_request_digest(&request);
         let expected_replay_input_digest: [u8; 32] =
             Sha256::digest(request.message.as_bytes()).into();
@@ -4726,27 +4726,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ConversationFailure::OwnerEvidenceMismatch,
                 ));
             }
-            let run_id = entry
-                .producer_run
-                .ok_or(ConversationStoreFailure::Transition(
-                    ConversationFailure::OwnerEvidenceMismatch,
-                ))?;
+            let run_id = entry.producer_run.ok_or_else(|| {
+                ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+            })?;
             let open = open_receipt_on(transaction, self.person_id, run_id)
                 .await?
-                .ok_or(ConversationStoreFailure::Transition(
-                    ConversationFailure::OwnerEvidenceMismatch,
-                ))?;
-            match open.fence.executor_domain {
-                ExecutorDomain::HostRun => {
-                    self.verified_task_reference_on(transaction, run_id, reference)
-                        .await?;
-                }
-                ExecutorDomain::TaskExecution => {
-                    self.verified_expert_task_reference_on(transaction, run_id, reference)
-                        .await
-                        .map_err(owner_error)?;
-                }
-            }
+                .ok_or_else(|| {
+                    ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+                })?;
+            let validation = match open.fence.executor_domain {
+                ExecutorDomain::HostRun => self
+                    .verified_task_reference_on(transaction, run_id, reference)
+                    .await
+                    .map(|_| ()),
+                ExecutorDomain::TaskExecution => self
+                    .verified_expert_task_reference_on(transaction, run_id, reference)
+                    .await
+                    .map_err(|failure| owner_error(failure))
+                    .map(|_| ()),
+            };
+            validation?;
         }
         Ok(())
     }
@@ -5009,7 +5008,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     let input = self
                         .expert_task_owner_for_run_on(transaction, run_id)
                         .await
-                        .map_err(owner_error)?;
+                        .map_err(|failure| owner_error(failure))?;
                     let record = self
                         .task_on(transaction, input.execution.task_id)
                         .await
@@ -5167,11 +5166,10 @@ mod tests {
         record: &RunRecord,
     ) -> floe_conversation::ConversationInteraction {
         use floe_conversation::{
-            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
-            InteractionRequirement, InteractionRequirementKind, InteractionResolutionCause,
-            InteractionResolutionReceipt, InteractionState, OwnerResolutionReceipt,
-            ReviewAuditRecord, ReviewedTarget, canonical_requirement_digest,
-            canonical_target_digest, interaction_publication_id,
+            ConversationInteraction, InteractionOrigin, InteractionRequirement,
+            InteractionResolutionCause, InteractionResolutionReceipt, InteractionState,
+            OwnerResolutionReceipt, ReviewAuditEvidence, ReviewAuditRecord, ReviewedTarget,
+            canonical_requirement_digest, canonical_target_digest, interaction_publication_id,
         };
 
         let review_ref = floe_experts::BindingReviewRef {
@@ -5193,13 +5191,10 @@ mod tests {
             capability_call_id: None,
         };
         let target = ReviewedTarget::ExpertBinding(review_ref.clone());
-        let requirement = InteractionRequirement {
-            kind: InteractionRequirementKind::ConfigureExpertBinding,
-            source_id: "floe.expert.binding".into(),
-            connection_id: None,
+        let requirement = InteractionRequirement::ExpertBinding {
             consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
-            purpose: "configuration".into(),
-            inline: false,
+            requirement_key: "calendar".into(),
+            review: review_ref.clone(),
         };
         let owner_receipt = OwnerResolutionReceipt::ExpertBinding {
             receipt: floe_experts::BindingMutationReceipt {
@@ -5227,7 +5222,7 @@ mod tests {
             run_id: record.run_id,
             executor_generation: record.executor_generation,
             operation_id: Uuid::new_v4(),
-            evidence: BlockedReviewEvidence::ExpertBinding {
+            evidence: ReviewAuditEvidence::ExpertBinding {
                 execution,
                 requirement_key: "calendar".into(),
                 review: review_ref,
@@ -5317,9 +5312,9 @@ mod tests {
         };
         use floe_conversation::SourceReviewLink;
         use floe_conversation::{
-            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
-            InteractionRequirement, InteractionState, ReviewAuditRecord, ReviewedTarget,
-            canonical_requirement_digest, canonical_target_digest, interaction_publication_id,
+            ConversationInteraction, InteractionOrigin, InteractionRequirement, InteractionState,
+            ReviewAuditEvidence, ReviewAuditRecord, ReviewedTarget, canonical_requirement_digest,
+            canonical_target_digest, interaction_publication_id,
         };
 
         let plan = PreparedModelPlan {
@@ -5362,7 +5357,7 @@ mod tests {
             run_id: run.run_id,
             executor_generation: run.executor_generation,
             operation_id: projection_operation_id,
-            evidence: BlockedReviewEvidence::ModelProjection {
+            evidence: ReviewAuditEvidence::ModelProjection {
                 plan,
                 review,
                 access_reviews: vec![SourceReviewLink {

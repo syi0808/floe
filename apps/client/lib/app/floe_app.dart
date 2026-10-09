@@ -20,7 +20,7 @@ class FloeApp extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.personId,
-    this.calendarActions,
+    this.operationAuthorization,
     this.query,
     this.agentGateway,
     this.connectionsController,
@@ -33,8 +33,8 @@ class FloeApp extends StatefulWidget {
   final DayGateway gateway;
   final String personId;
 
-  /// Proposal, approval and execution of calendar actions.
-  final CalendarActionGateway? calendarActions;
+  /// Access-owned policy for Expert-proposed Calendar changes.
+  final OperationAuthorizationGateway? operationAuthorization;
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
@@ -68,7 +68,7 @@ class _FloeAppState extends State<FloeApp> {
     final home = FloeToastHost(
       child: PersonalDayScreen(
         gateway: widget.gateway,
-        calendarActions: widget.calendarActions,
+        operationAuthorization: widget.operationAuthorization,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
         connectionsController: widget.connectionsController,

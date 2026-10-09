@@ -17,6 +17,9 @@ pub(crate) struct ReadyGeneration<Keys: VaultKeyProvider> {
     vault: Arc<EncryptedAgentVault<Keys>>,
     core: Arc<FloeCore>,
     owners: Arc<ReadyOwners>,
+    // Day keeps only a Weak port to avoid a Day <-> Calendar Operations cycle.
+    // The active generation owns the matching strong trait-object reference.
+    _day_operation_port: Arc<dyn floe_day::ExternalCalendarOperationPort>,
     retired: AtomicBool,
     generation: u64,
     #[cfg(all(test, feature = "development-storage"))]
@@ -56,6 +59,10 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         model_provider_factory: Arc<dyn ModelProviderFactory>,
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
             Arc<dyn floe_context::ExpertSourceTransport>,
+        >,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        calendar_operation_executor: Option<
+            Arc<dyn floe_calendar_operations::CalendarOperationExecutor>,
         >,
         actor: OwnerActor,
         operation_id: Uuid,
@@ -142,7 +149,9 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             grants: vault.clone(),
             personal: sources.personal.clone(),
             transport: sources.transport.clone(),
-            day: core.store.clone(),
+            day_evidence: Arc::new(crate::day_context_evidence::DayContextEvidenceAdapter::new(
+                core.store.clone(),
+            )),
             evidence: sources.evidence_reader.clone(),
             resolver: sources.dependency_resolver.clone(),
             leases: core.lease_registry.clone(),
@@ -173,13 +182,20 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 programs: floe_experts_builtin::registrations(),
             },
         )?);
-        let actions = crate::action_facade::build_actions(
+        let calendar_operations = crate::calendar_operations_facade::build_calendar_operations(
             actor.clone(),
             vault.clone(),
             core.store.clone(),
             core.day.clone(),
             task_repository,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            calendar_operation_executor,
         )?;
+        let day_operation_port: Arc<dyn floe_day::ExternalCalendarOperationPort> =
+            calendar_operations.clone();
+        core.day
+            .set_external_calendar_operations(&day_operation_port)
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         let budget = floe_conversation::AgentBudget::default();
         let manager_identity =
             floe_conversation::prompts::default_manager_identity(actor.person_id)?;
@@ -197,6 +213,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 evidence: sources.evidence_reader.clone(),
                 resolver: sources.dependency_resolver.clone(),
                 connections: sources.connections.clone(),
+                calendar_operations: calendar_operations.clone(),
                 runtime_epoch: actor.runtime_epoch,
             },
             floe_conversation::ManagerConfig {
@@ -219,12 +236,12 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             conversation,
             experts.clone(),
             knowledge.clone(),
-            actions,
+            calendar_operations,
         ));
         guard.owners = Some(owners.clone());
         sources.connections.activate(&actor, &scope).await?;
         experts.activate(&scope).await?;
-        owners.actions.activate(&actor, &scope).await?;
+        owners.calendar_operations.activate(&actor, &scope).await?;
         owners.conversation.activate(&actor, &scope).await?;
         owners.knowledge.activate(&scope).await?;
         if cancellation.is_cancelled() {
@@ -236,6 +253,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             vault,
             core,
             owners,
+            _day_operation_port: day_operation_port,
             retired: AtomicBool::new(false),
             generation: activation.executor_generation,
             #[cfg(all(test, feature = "development-storage"))]
@@ -279,7 +297,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         let (conversation, connections, actions, experts, knowledge) = tokio::join!(
             drain_owner(|| self.owners.conversation.shutdown(&scope)),
             drain_owner(|| self.owners.connections.shutdown_and_drain(&scope)),
-            drain_owner(|| self.owners.actions.shutdown_and_drain(&scope)),
+            drain_owner(|| self.owners.calendar_operations.shutdown_and_drain(&scope)),
             drain_owner(|| self.owners.experts.shutdown()),
             drain_owner(|| self.owners.knowledge.shutdown()),
         );

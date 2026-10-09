@@ -95,3 +95,166 @@ pub async fn project_model_conversation_history(
         authorized_history_dependencies,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::project_model_conversation_history;
+    use floe_access::{
+        ConnectionId, DependencyAuthorization, DependencyResolver, ExecutionOwnerId,
+        GrantAuthority, GrantConsumer, GrantDataCategory, GrantId, GrantOperation, GrantPurpose,
+        GrantSourceBinding, ProcessingRestriction, ResourceHandle, SourceAuthority,
+    };
+    use floe_agent_contract::{
+        AgentFailure, DependencyCoverage, InvocationKey, ModelConversation, ModelConversationEntry,
+        ToolCall, ToolResult,
+    };
+    use floe_context::EvidenceReader;
+    use floe_context_contract::ContextDependency;
+    use floe_execution::BoxFuture;
+    use floe_kernel::PersonId;
+    use std::{collections::BTreeMap, time::Duration};
+    use uuid::Uuid;
+
+    struct ScriptedEvidence(BTreeMap<Uuid, DependencyCoverage>);
+
+    impl EvidenceReader for ScriptedEvidence {
+        fn read_turn_coverage<'a>(
+            &'a self,
+            _session_id: Uuid,
+            turn_id: Uuid,
+        ) -> BoxFuture<'a, Result<DependencyCoverage, AgentFailure>> {
+            Box::pin(async move {
+                Ok(self
+                    .0
+                    .get(&turn_id)
+                    .cloned()
+                    .unwrap_or(DependencyCoverage::Unknown))
+            })
+        }
+    }
+
+    struct StaleResolver;
+
+    impl DependencyResolver for StaleResolver {
+        fn authorize<'a>(
+            &'a self,
+            _dependency: &'a ContextDependency,
+            _request: &'a DependencyAuthorization,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::StaleContext) })
+        }
+    }
+
+    fn dependency() -> ContextDependency {
+        let person_id = PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("fixture.connection").expect("valid connection"),
+            floe_access::ConnectorId::try_new("fixture.connector").expect("valid connector"),
+            ExecutionOwnerId::try_new("fixture.owner").expect("valid execution owner"),
+        )
+        .expect("valid source binding");
+        let now = chrono::Utc::now();
+        ContextDependency::try_new(
+            person_id,
+            GrantId::new(),
+            GrantAuthority::new(),
+            source,
+            vec![ResourceHandle::try_new("fixture.resource").expect("valid resource")],
+            SourceAuthority::new(),
+            vec![
+                ResourceHandle::try_new("fixture.source-resource").expect("valid source resource"),
+            ],
+            vec![GrantDataCategory::Content],
+            GrantOperation::Read,
+            GrantPurpose::Assistant,
+            GrantConsumer::builtin("fixture.manager").expect("valid consumer"),
+            ProcessingRestriction::DeviceOnly,
+            Uuid::new_v4(),
+            vec![b'x'; 16],
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            now,
+            now + chrono::Duration::minutes(5),
+        )
+        .expect("valid source dependency")
+    }
+
+    fn tool_exchange(call_id: Uuid, coverage: DependencyCoverage) -> ModelConversationEntry {
+        ModelConversationEntry::ToolExchange {
+            call: ToolCall {
+                call_id,
+                invocation_key: InvocationKey::new(),
+                tool_id: "fixture.tool".into(),
+                definition_revision: 1,
+                input: "{}".into(),
+            },
+            result: ToolResult {
+                call_id,
+                text: "tool output".into(),
+                artifacts: vec![],
+                coverage,
+                issue: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_tool_history_is_removed_as_one_entry_and_current_turn_is_preserved() {
+        let stale_call_id = Uuid::new_v4();
+        let independent_call_id = Uuid::new_v4();
+        let current_call_id = Uuid::new_v4();
+        let stale_coverage = DependencyCoverage::dependent(dependency())
+            .expect("valid source-dependent tool coverage");
+        let reader = ScriptedEvidence(BTreeMap::from([
+            (stale_call_id, stale_coverage.clone()),
+            (independent_call_id, DependencyCoverage::Independent),
+        ]));
+        let current_exchange = tool_exchange(current_call_id, DependencyCoverage::Independent);
+        let conversation = ModelConversation {
+            history: vec![
+                ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "retain the person's own input".into(),
+                },
+                tool_exchange(stale_call_id, stale_coverage),
+                tool_exchange(independent_call_id, DependencyCoverage::Independent),
+            ],
+            current_turn: vec![
+                ModelConversationEntry::User {
+                    message_id: Uuid::new_v4(),
+                    text: "current input".into(),
+                },
+                current_exchange,
+            ],
+        };
+        let authorization = DependencyAuthorization {
+            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+            cancellation: floe_execution::Cancellation::new(),
+        };
+        let projected = project_model_conversation_history(
+            &reader,
+            Uuid::new_v4(),
+            &conversation,
+            Some(&StaleResolver),
+            &authorization,
+        )
+        .await
+        .expect("stale history is filtered without rewriting the current turn");
+
+        assert_eq!(projected.conversation.history.len(), 2);
+        assert!(matches!(
+            projected.conversation.history[0],
+            ModelConversationEntry::User { .. }
+        ));
+        assert!(matches!(
+            &projected.conversation.history[1],
+            ModelConversationEntry::ToolExchange { call, result }
+                if call.call_id == independent_call_id && result.call_id == independent_call_id
+        ));
+        assert_eq!(
+            projected.conversation.current_turn,
+            conversation.current_turn
+        );
+    }
+}

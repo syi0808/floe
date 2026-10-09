@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use floe_agent_contract::{
     AgentMessage, DependencyCoverage, EngineRequest, EngineResumeState, EngineStep, MessageRole,
@@ -21,6 +21,39 @@ use super::recovery::{
     project_transcript_history, reconcile_resume_lineage,
 };
 
+const PRE_DISPATCH_STORAGE_RETRY_DELAY: Duration = Duration::from_millis(20);
+
+/// StorageBusy before the first model/tool call is safe to retry: no external
+/// dispatch has started. Re-run the complete local observation while the
+/// admitted Run remains Working, then fail only on cancellation/deadline or a
+/// non-transient owner result.
+async fn retry_pre_dispatch_storage_busy<T, Attempt, AttemptFuture>(
+    scope: &ExecutionScope,
+    mut attempt: Attempt,
+) -> Result<T, AgentFailure>
+where
+    Attempt: FnMut() -> AttemptFuture,
+    AttemptFuture: Future<Output = Result<T, AgentFailure>>,
+{
+    loop {
+        if scope.cancellation().is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        if tokio::time::Instant::now() >= scope.deadline() {
+            return Err(AgentFailure::DeadlineExceeded);
+        }
+        match attempt().await {
+            Err(AgentFailure::StorageBusy) => {
+                tokio::select! {
+                    _ = scope.cancellation().cancelled() => return Err(AgentFailure::Cancelled),
+                    _ = tokio::time::sleep(PRE_DISPATCH_STORAGE_RETRY_DELAY) => {}
+                }
+            }
+            result => return result,
+        }
+    }
+}
+
 pub(super) enum RunAdmission {
     Existing(RunReceipt),
     Created(PreparedRun),
@@ -38,6 +71,7 @@ pub(super) struct RunCoordinator<Repository> {
     engine: Engine,
     config: ManagerConfig,
     connections: Arc<floe_connections::ConnectionsService>,
+    operations: Arc<floe_calendar_operations::CalendarOperationsService>,
     experts: Arc<dyn floe_experts::ExpertsOwner>,
 }
 
@@ -46,6 +80,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         repository: Arc<Repository>,
         config: ManagerConfig,
         connections: Arc<floe_connections::ConnectionsService>,
+        operations: Arc<floe_calendar_operations::CalendarOperationsService>,
         experts: Arc<dyn floe_experts::ExpertsOwner>,
     ) -> Result<Self, AgentFailure> {
         config.validate()?;
@@ -54,6 +89,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             engine: Engine::default(),
             config,
             connections,
+            operations,
             experts,
         })
     }
@@ -317,7 +353,19 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                 )
                 .await;
         }
-        let journal = match self.repository.journal(run_id) {
+        // This scope exists before any post-admission reads so transient Vault
+        // writer contention remains pre-dispatch and can be retried safely.
+        let resume_scope = ExecutionScope::root(
+            request.cancellation.clone(),
+            request.deadline,
+            BudgetLedger::new(self.config.budget, Default::default()).work_lease(),
+            TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
+        );
+        let journal = match retry_pre_dispatch_storage_busy(&resume_scope, || {
+            std::future::ready(self.repository.journal(run_id))
+        })
+        .await
+        {
             Ok(journal) => journal,
             Err(failure) => {
                 return self
@@ -339,11 +387,13 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         let resume_context = match &resume_origin {
             None => None,
             Some(origin) => {
-                let group = match super::interactions::list_run_interactions(
-                    self.repository.as_ref(),
-                    &request.principal,
-                    origin.run_id,
-                )
+                let group = match retry_pre_dispatch_storage_busy(&resume_scope, || {
+                    super::interactions::list_run_interactions(
+                        self.repository.as_ref(),
+                        &request.principal,
+                        origin.run_id,
+                    )
+                })
                 .await
                 {
                     Ok(group) => group,
@@ -358,7 +408,24 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                             .await;
                     }
                 };
-                Some((origin.user_message_id, resume_marker_text(origin, &group)))
+                let marker = match retry_pre_dispatch_storage_busy(&resume_scope, || {
+                    self.resume_marker_text(actor, origin, &group, &resume_scope)
+                })
+                .await
+                {
+                    Ok(marker) => marker,
+                    Err(failure) => {
+                        return self
+                            .repository
+                            .finish_run(
+                                run_id,
+                                expected_aggregate_revision,
+                                RunTerminal::from_failure(failure),
+                            )
+                            .await;
+                    }
+                };
+                Some((origin.user_message_id, marker))
             }
         };
         let completed_iterations = continuation
@@ -709,6 +776,108 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
         }
         Ok(origin)
     }
+
+    async fn resume_marker_text(
+        &self,
+        actor: &floe_kernel::OwnerActor,
+        origin: &RunReceipt,
+        group: &[ConversationInteraction],
+        scope: &ExecutionScope,
+    ) -> Result<String, AgentFailure> {
+        const MAX_MARKER_ENTRIES: usize = 8;
+        let depth = origin
+            .resume()
+            .map_or(origin.resume_lineage, |link| link.lineage);
+        let mut marker = format!(
+            "Linked resume of run {} at depth {depth}. The person finished reviewing its interactions; re-derive every read under current authority.",
+            origin.run_id.as_uuid(),
+        );
+        for interaction in group.iter().take(MAX_MARKER_ENTRIES) {
+            if let crate::ReviewedTarget::OperationApproval(review) = &interaction.target {
+                let context = self.operations.resume_context(actor, review, scope).await?;
+                if context.operation_id != review.operation_id || context.review != *review {
+                    return Err(AgentFailure::Conflict);
+                }
+                let interaction_state = match &interaction.state {
+                    InteractionState::Resolved { .. } => "resolved",
+                    InteractionState::Denied { .. } => "denied: unavailable",
+                    InteractionState::Cancelled { .. } => "cancelled: unavailable",
+                    InteractionState::Superseded { .. } => "superseded: unavailable",
+                    InteractionState::Expired => "expired: unavailable",
+                    InteractionState::Pending | InteractionState::Resolving { .. } => {
+                        "still pending owner review"
+                    }
+                };
+                let decision = match (
+                    context.decision_command_id,
+                    context.decision_approval_id,
+                    context.decision_kind,
+                ) {
+                    (Some(command), Some(approval), Some(kind)) => format!(
+                        "Access decision command {command}, approval {approval}, choice {kind:?}"
+                    ),
+                    (None, None, None) => match &interaction.state {
+                        InteractionState::Resolving {
+                            owner_command_id, ..
+                        } => format!(
+                            "Access decision is being reconciled under command {owner_command_id}"
+                        ),
+                        _ => "No Access decision receipt is recorded".into(),
+                    },
+                    _ => return Err(AgentFailure::Conflict),
+                };
+                let effect_digest: String = context
+                    .review
+                    .effect_digest
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                marker.push_str(&format!(
+                    "\nCalendar operation {}: review {}; effect digest {}; actor person {} device {}; policy revision {}; expires {}; interaction {interaction_state}; current Calendar Operations state {:?}. {decision}.",
+                    context.operation_id,
+                    context.review.id,
+                    effect_digest,
+                    context.review.person_id,
+                    context.review.device_id,
+                    context.review.policy_revision.map_or_else(|| "none".into(), |revision| revision.to_string()),
+                    context.review.expires_at.to_rfc3339(),
+                    context.status,
+                ));
+                marker.push_str(
+                    " Use this existing operation ID and its owner state. Do not re-propose, recreate, or submit this Calendar write. Approved is not evidence of success; Unknown means execution is uncertain and must remain so until the owner reconciles it.",
+                );
+                continue;
+            }
+            let status = match &interaction.state {
+                InteractionState::Resolved { .. } => "resolved",
+                InteractionState::Denied { .. } => "denied: unavailable",
+                InteractionState::Cancelled { .. } => "cancelled: unavailable",
+                InteractionState::Superseded { .. } => "superseded: unavailable",
+                InteractionState::Expired => "expired: unavailable",
+                InteractionState::Pending | InteractionState::Resolving { .. } => {
+                    "still pending review: do not wait for it"
+                }
+            };
+            let digest: String = interaction.target_digest[..8]
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            marker.push_str(&format!(
+                "\nInteraction {} ({:?}, target {digest}): {status}.",
+                interaction.id, interaction.kind,
+            ));
+        }
+        if group.len() > MAX_MARKER_ENTRIES {
+            marker.push_str(&format!(
+                "\nAnd {} more reviewed interactions.",
+                group.len() - MAX_MARKER_ENTRIES
+            ));
+        }
+        marker.push_str(
+            "\nProceed with resolved and still-authorized information. Do not retry unavailable interactions, and do not re-ask the person about them.",
+        );
+        Ok(marker)
+    }
 }
 
 pub async fn continuation<Repository: ConversationRepository>(
@@ -933,55 +1102,6 @@ fn verify_existing(
         return Err(AgentFailure::Conflict);
     }
     Ok(())
-}
-
-/// The host-owned marker that opens a linked resume turn.
-///
-/// Model-safe linkage only: the origin identity, the chain depth, and each
-/// reviewed interaction's opaque id, kind and terminal status. Resolved
-/// cards name a target-digest prefix so the fresh Manager can tell them
-/// apart; anything the person did not resolve stays unavailable by
-/// instruction, never by re-prompting in a loop. Bounded: at most eight
-/// entries name ids, the rest count.
-fn resume_marker_text(origin: &RunReceipt, group: &[ConversationInteraction]) -> String {
-    const MAX_MARKER_ENTRIES: usize = 8;
-    let depth = origin
-        .resume()
-        .map_or(origin.resume_lineage, |link| link.lineage);
-    let mut marker = format!(
-        "Linked resume of run {} at depth {depth}. The person finished reviewing its interactions; re-derive every read under current authority.",
-        origin.run_id.as_uuid(),
-    );
-    for interaction in group.iter().take(MAX_MARKER_ENTRIES) {
-        let status = match &interaction.state {
-            InteractionState::Resolved { .. } => "resolved",
-            InteractionState::Denied { .. } => "denied: unavailable",
-            InteractionState::Cancelled { .. } => "cancelled: unavailable",
-            InteractionState::Superseded { .. } => "superseded: unavailable",
-            InteractionState::Expired => "expired: unavailable",
-            InteractionState::Pending | InteractionState::Resolving { .. } => {
-                "still pending review: do not wait for it"
-            }
-        };
-        let digest: String = interaction.target_digest[..8]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        marker.push_str(&format!(
-            "\nInteraction {} ({:?}, target {digest}): {status}.",
-            interaction.id, interaction.kind,
-        ));
-    }
-    if group.len() > MAX_MARKER_ENTRIES {
-        marker.push_str(&format!(
-            "\nAnd {} more reviewed interactions.",
-            group.len() - MAX_MARKER_ENTRIES
-        ));
-    }
-    marker.push_str(
-        "\nProceed with resolved and still-authorized information. Do not retry unavailable interactions, and do not re-ask the person about them.",
-    );
-    marker
 }
 
 /// A slot rejoin across commands: the receipt is the canonical child the

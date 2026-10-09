@@ -6,6 +6,14 @@ import 'package:floe_client/features/conversation/application/agent_conversation
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
+import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
+
+final class CalendarProposalSubmission {
+  const CalendarProposalSubmission({required this.operation, this.interaction});
+  final CalendarAction operation;
+  final AgentInteractionSnapshot? interaction;
+}
 
 final class ConversationTurnCompletion {
   const ConversationTurnCompletion({required this.run, required this.session});
@@ -16,6 +24,15 @@ final class ConversationTurnCompletion {
 
 abstract interface class ConversationRuntimeGateway {
   AppReadModel get readModel;
+
+  Future<CalendarProposalSubmission> submitCalendarProposal({
+    required String commandId,
+    required String sessionId,
+    required String originRunId,
+    required Map<String, Object?> receipt,
+    required String artifactId,
+    required String destinationRef,
+  });
 
   /// Wait for a prior stopped observer's bounded admission handshake before
   /// choosing a Session snapshot. This cannot dispatch or cancel owner work.
@@ -89,6 +106,23 @@ final class NativeConversationRuntimeGateway
   final Future<void> Function()? _beforeStartTurn;
   final Duration _observationInterval;
   _ActiveConversationTurn? _active;
+
+  @override
+  Future<CalendarProposalSubmission> submitCalendarProposal({
+    required String commandId,
+    required String sessionId,
+    required String originRunId,
+    required Map<String, Object?> receipt,
+    required String artifactId,
+    required String destinationRef,
+  }) => _client.submitCalendarProposal(
+    commandId: commandId,
+    sessionId: sessionId,
+    originRunId: originRunId,
+    receipt: receipt,
+    artifactId: artifactId,
+    destinationRef: destinationRef,
+  );
 
   @override
   Future<void> awaitStoppedObservation({

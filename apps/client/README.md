@@ -146,9 +146,10 @@ Pass Flutter run arguments to target another Apple device, for example
 `./scripts/run-local.sh -d <apple-device>`. Stopping either process stops the other.
 
 The app supplies `AppWireDayGateway` for Day reads, local mutations and explicit
-owner-backed refresh, and `CalendarActionFacade` for the Actions flow. Rust owns
-acquisition, authority, durable operation identity and reconciliation. Dart does
-not publish source evidence, import mirrors or run a separate acquisition policy.
+owner-backed refresh. Conversation presents the exact operation review and
+correlates the linked resume; Rust owns Access authorization, durable operation
+identity, execution and reconciliation. Dart does not publish source evidence,
+import mirrors or run a separate acquisition policy.
 This describes the current owner-backed composition, not a build or behavior qualification claim.
 
 ## Linux desktop QA

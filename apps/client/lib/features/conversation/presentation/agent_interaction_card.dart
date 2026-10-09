@@ -6,7 +6,6 @@ import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
-import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
 /// One durable review card, rendered from the backend snapshot only.
@@ -19,14 +18,14 @@ final class AgentInteractionCard extends StatefulWidget {
   const AgentInteractionCard({
     super.key,
     required this.controller,
-    required this.message,
+    required this.interactionId,
     this.onOpenSourceReview,
     this.onOpenConnections,
     this.onOpenExpertSettings,
   });
 
   final ConversationController controller;
-  final AgentInteractionMessage message;
+  final String interactionId;
   final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
@@ -49,7 +48,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
   @override
   void didUpdateWidget(AgentInteractionCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.message.interactionId != widget.message.interactionId) {
+    if (oldWidget.interactionId != widget.interactionId) {
       _ensure();
     }
   }
@@ -57,7 +56,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
   void _ensure() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.controller.ensureInteraction(widget.message.interactionId);
+      widget.controller.ensureInteraction(widget.interactionId);
     });
   }
 
@@ -67,10 +66,10 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
     builder: (context, _) {
       final strings = AppLocalizations.of(context);
       final controller = widget.controller;
-      final snapshot = controller.interactionFor(widget.message.interactionId);
-      final busy = controller.interactionBusyFor(widget.message.interactionId);
+      final snapshot = controller.interactionFor(widget.interactionId);
+      final busy = controller.interactionBusyFor(widget.interactionId);
       final failure = controller.interactionFailureFor(
-        widget.message.interactionId,
+        widget.interactionId,
       );
       if (snapshot == null) {
         return FloeSquircle(
@@ -125,6 +124,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
                       strings.agentInteractionSourceTitle,
                     AgentInteractionKind.expertBinding =>
                       strings.agentInteractionExpertBindingTitle,
+                    AgentInteractionKind.operationApproval =>
+                      'Calendar change approval',
                   }, style: FloeType.label),
                 ),
                 FloeBadge(
@@ -213,6 +214,15 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
         'Reviewed options',
         review.candidates.map((candidate) => candidate.label).join(', '),
       ),
+    ],
+    AgentOperationApprovalTarget(:final operation) => [
+      _row('Calendar', operation.destinationLabel),
+      _row('Change', operation.title),
+      _row(
+        'Time',
+        '${operation.schedule.startsAt.toLocal()} – ${operation.schedule.endsAt.toLocal()}',
+      ),
+      _row('Operation status', operation.status.state.name),
     ],
   };
 

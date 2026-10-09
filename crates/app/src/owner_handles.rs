@@ -20,7 +20,7 @@ pub struct ReadyOwners {
     pub conversation: Arc<dyn floe_conversation::ConversationOwner>,
     pub experts: Arc<dyn floe_experts::ExpertsOwner>,
     pub knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
-    pub actions: Arc<floe_actions::ActionsService>,
+    pub calendar_operations: Arc<floe_calendar_operations::CalendarOperationsService>,
 }
 impl ReadyOwners {
     pub(crate) fn new(
@@ -29,7 +29,7 @@ impl ReadyOwners {
         conversation: Arc<dyn floe_conversation::ConversationOwner>,
         experts: Arc<dyn floe_experts::ExpertsOwner>,
         knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
-        actions: Arc<floe_actions::ActionsService>,
+        calendar_operations: Arc<floe_calendar_operations::CalendarOperationsService>,
     ) -> Self {
         Self {
             actor,
@@ -38,7 +38,7 @@ impl ReadyOwners {
             conversation,
             experts,
             knowledge,
-            actions,
+            calendar_operations,
         }
     }
     pub(crate) fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
@@ -57,12 +57,12 @@ impl ReadyOwners {
         let conversation = close_owner(|| self.conversation.close_admission());
         let experts = close_owner(|| self.experts.close_admission());
         let knowledge = close_owner(|| self.knowledge.close_admission());
-        let actions = close_owner(|| self.actions.shutdown());
+        let calendar_operations = close_owner(|| self.calendar_operations.shutdown());
         let connections = close_owner(|| self.connections.shutdown());
         conversation
             .and(experts)
             .and(knowledge)
-            .and(actions)
+            .and(calendar_operations)
             .and(connections)
     }
 }

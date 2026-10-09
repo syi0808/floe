@@ -134,7 +134,7 @@ pub fn admit_remote_view_binding(
             .iter()
             .any(|item| item.as_str() == resource)
     {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(())
 }
@@ -153,9 +153,11 @@ pub fn remote_dependency_live(
         || dependency.operation() != GrantOperation::Read
         || dependency.purpose() != GrantPurpose::Assistant
         || dependency.source().execution_owner().as_str().is_empty()
-        || now >= dependency.expires_at()
     {
         return Err(AgentFailure::PolicyDenied);
+    }
+    if now >= dependency.expires_at() {
+        return Err(AgentFailure::StaleContext);
     }
     Ok(())
 }
@@ -175,7 +177,7 @@ pub fn remote_dependency_resource<'a>(
         || !grant.scope().consumers().contains(dependency.consumer())
         || grant.scope().resources().len() != 1
     {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::AccessReviewRequired);
     }
     Ok(grant.scope().resources()[0].as_str())
 }

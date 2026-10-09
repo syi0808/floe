@@ -48,7 +48,7 @@ pub enum AgentMemoryOriginDto {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ActionAuthorityModeDto {
+pub enum OperationPolicyModeDto {
     Allow,
     Ask,
     Deny,

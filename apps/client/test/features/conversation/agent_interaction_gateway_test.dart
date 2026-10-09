@@ -106,6 +106,14 @@ final AgentInteractionSnapshot _snapshot = AgentInteractionSnapshot(
   targetDigest: List<String>.filled(64, 'a').join(),
   createdAtUnixMs: 1,
   expiresAtUnixMs: 2,
+  requirement: const AgentSourceAccessRequirement(
+    reason: AgentSourceAccessReason.reconnect,
+    sourceId: 'floe.source.calendar',
+    connectionId: null,
+    consumer: 'manager',
+    purpose: 'assistant',
+    inline: false,
+  ),
   target: const AgentNavigationTarget(
     destination: 'connection_settings',
     sourceLabel: 'Test calendar',

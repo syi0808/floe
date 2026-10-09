@@ -194,8 +194,8 @@
     },
     {
       "id": "actions",
-      "package": "floe-actions",
-      "path": "crates/modules/actions",
+      "package": "floe-calendar-operations",
+      "path": "crates/modules/calendar_operations",
       "responsibility": "Proposal review, idempotent actions, reconciliation",
       "group": "modules",
       "allowed_internal_dependencies": [

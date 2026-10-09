@@ -122,6 +122,9 @@ pub(crate) struct RuntimePreparationHost {
     model_provider_factory: Arc<dyn ModelProviderFactory>,
     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
     expert_source_transport: Option<Arc<dyn floe_context::ExpertSourceTransport>>,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+    calendar_operation_executor:
+        Option<Arc<dyn floe_calendar_operations::CalendarOperationExecutor>>,
     state: Mutex<BridgeState>,
     drained: Condvar,
     published: Arc<Mutex<Published>>,
@@ -137,6 +140,10 @@ impl RuntimePreparationHost {
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
             Arc<dyn floe_context::ExpertSourceTransport>,
         >,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        calendar_operation_executor: Option<
+            Arc<dyn floe_calendar_operations::CalendarOperationExecutor>,
+        >,
     ) -> Self {
         Self {
             root: PathBuf::from(format!("{database_path}.agent-vaults")),
@@ -147,6 +154,8 @@ impl RuntimePreparationHost {
             model_provider_factory,
             #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
             expert_source_transport,
+            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+            calendar_operation_executor,
             state: Mutex::new(BridgeState::default()),
             drained: Condvar::new(),
             published: Arc::new(Mutex::new(Published::default())),
@@ -419,6 +428,8 @@ impl RuntimePreparationHost {
                     self.model_provider_factory.clone(),
                     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
                     self.expert_source_transport.clone(),
+                    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                    self.calendar_operation_executor.clone(),
                 )
                 .map_err(RuntimePreparationCommandFailure::NotAdmitted)?,
             );
@@ -595,6 +606,10 @@ impl Worker {
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
             Arc<dyn floe_context::ExpertSourceTransport>,
         >,
+        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+        calendar_operation_executor: Option<
+            Arc<dyn floe_calendar_operations::CalendarOperationExecutor>,
+        >,
     ) -> Result<Self, AgentFailure> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -663,6 +678,8 @@ impl Worker {
                                         &model_provider_factory,
                                         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
                                         &expert_source_transport,
+                                        #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                                        &calendar_operation_executor,
                                         &mut current,
                                         &job,
                                     ),
@@ -988,6 +1005,9 @@ async fn execute(
     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: &Option<
         Arc<dyn floe_context::ExpertSourceTransport>,
     >,
+    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] calendar_operation_executor: &Option<
+        Arc<dyn floe_calendar_operations::CalendarOperationExecutor>,
+    >,
     current: &mut Option<OpenGeneration>,
     job: &Job,
 ) -> Result<(), AgentFailure> {
@@ -1049,6 +1069,8 @@ async fn execute(
                     model_provider_factory.clone(),
                     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
                     expert_source_transport.clone(),
+                    #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                    calendar_operation_executor.clone(),
                     job.caller.owner_actor(),
                     job.id,
                     job.cancellation.clone(),

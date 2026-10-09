@@ -11,16 +11,19 @@ os-keyring = ["floe-vault/os-keyring"]
 development-storage = ["floe-vault/development-storage"]
 qa-fixtures = [
     "development-storage",
+    "floe-vault/qa-fixtures",
     "floe-access/qa-fixtures",
+    "floe-calendar-operations/qa-fixtures",
     "floe-connections/qa-fixtures",
     "floe-context/qa-fixtures",
+    "floe-conversation/qa-fixtures",
     "floe-provider-adapters/qa-fixtures",
 ]
 
 [dependencies]
 chrono.workspace = true
 floe-access = { path = "../modules/access" }
-floe-actions = { path = "../modules/actions" }
+floe-calendar-operations = { path = "../modules/calendar_operations" }
 floe-agent-contract = { path = "../contracts/agent" }
 floe-connections = { path = "../modules/connections" }
 floe-context = { path = "../modules/context" }

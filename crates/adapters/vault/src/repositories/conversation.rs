@@ -276,6 +276,24 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         })
     }
 
+    fn admit_operation_approval<'a>(
+        &'a self,
+        admission: floe_calendar_operations::OperationAdmission,
+        publication: floe_conversation::OperationApprovalPublication,
+    ) -> BoxFuture<
+        'a,
+        Result<
+            floe_conversation::OperationApprovalAdmission,
+            floe_kernel::CommandFailure<AgentFailure>,
+        >,
+    > {
+        Box::pin(async move {
+            self.vault
+                .admit_calendar_operation_and_conversation_interaction(admission, publication)
+                .await
+        })
+    }
+
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,
@@ -751,10 +769,24 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationJournal<Keys> {
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         Box::pin(async move {
-            let revision = self
-                .vault
-                .record_manager_conversation_journal(self.run_id, phase, event)
-                .await?;
+            // StorageBusy is returned only after a transaction start/body
+            // failure whose rollback was confirmed. Retry this exact local
+            // journal append; commit failures are OutcomeUnknown and are not
+            // retried here.
+            let mut attempt = 0u32;
+            let revision = loop {
+                match self
+                    .vault
+                    .record_manager_conversation_journal(self.run_id, phase, event.clone())
+                    .await
+                {
+                    Err(AgentFailure::StorageBusy) if attempt < 3 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(25 << attempt)).await;
+                        attempt += 1;
+                    }
+                    result => break result?,
+                }
+            };
             Ok(JournalAck::Accepted { revision })
         })
     }

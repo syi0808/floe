@@ -88,7 +88,7 @@ class _DataPrivacyState extends State<_DataPrivacy> {
         ),
         const SizedBox(height: FloeSpace.sm),
         Text(
-          'Manage source access from Connections. External actions use separate Action permissions, and source reviews control whether processing stays on this device or may use your verified Gateway.',
+          'Manage source access from Connections. Expert-suggested Calendar events use the separate Expert Calendar policy, and source reviews control whether processing stays on this device or may use your verified Gateway.',
           style: FloeType.body.copyWith(
             color: FloePalette.neutral600,
             height: 1.5,

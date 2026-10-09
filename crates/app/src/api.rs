@@ -23,63 +23,7 @@ pub trait HostServices: Send + Sync + 'static {
     fn shutdown(&self) -> Result<(), HostError>;
 }
 
-pub use floe_actions::{
-    ActionAuthorityMode, ActionDecisionKind, ActionDestinationChoice, ActionIntent,
-    ActionProposalPreview, ActionReviewRef, ActionSnapshot, ActionsAuthority, ActionsPage,
-};
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionsCommand {
-    Submit {
-        intent: ActionIntent,
-    },
-    Decide {
-        action_ref: Uuid,
-        review_ref: ActionReviewRef,
-        decision: ActionDecisionKind,
-        expected_revision: u64,
-    },
-    Reconcile {
-        action_ref: Uuid,
-        expected_revision: u64,
-    },
-    SetAuthority {
-        mode: ActionAuthorityMode,
-        expected_revision: u64,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionsQuery {
-    Destinations,
-    ProposalPreview {
-        receipt: floe_agent_contract::TaskExecutionReceiptRef,
-        artifact_id: Uuid,
-    },
-    Authority,
-    Inspect {
-        action_ref: Uuid,
-    },
-    List {
-        cursor: Option<Uuid>,
-        limit: u16,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionsCommandResult {
-    Action(ActionSnapshot),
-    Authority(ActionsAuthority),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ActionsQueryResult {
-    Destinations(Vec<ActionDestinationChoice>),
-    ProposalPreview(ActionProposalPreview),
-    Authority(ActionsAuthority),
-    Action(ActionSnapshot),
-    Page(ActionsPage),
-}
+pub use floe_access::{OperationAuthorizationPolicy, OperationPolicyMode};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpertCommand {
@@ -125,15 +69,12 @@ pub enum ExpertQueryResult {
     BindingReview(floe_experts::BindingReview),
 }
 
-/// The admitted product command groups that share the App runtime dispatch
-/// path. Actions and Experts remain here until their planned owner cutovers.
+/// Product command groups admitted through the App runtime dispatch path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductCommand {
     Conversation(ConversationCommand),
     Connections(ConnectionsCommand),
     Day(DayCommand),
-    Actions(ActionsCommand),
-    Experts(ExpertCommand),
     Memory(MemoryCommand),
 }
 
@@ -146,12 +87,24 @@ pub struct ProductCommandRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationCommand {
     StartSession,
+    Expert(ExpertCommand),
+    SetCalendarOperationPolicy {
+        mode: OperationPolicyMode,
+        expected_revision: u64,
+    },
     StartTurn {
         session_id: Uuid,
         expected_revision: u64,
         text: String,
         continuation_id: Option<Uuid>,
         retry_of: Option<floe_kernel::RunId>,
+    },
+    SubmitCalendarProposal {
+        session_id: Uuid,
+        origin_run_id: floe_kernel::RunId,
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        destination_ref: Uuid,
     },
     CancelRun {
         run_id: floe_kernel::RunId,
@@ -237,6 +190,13 @@ pub enum DayCommand {
         day: floe_day::DayQuery,
         mutation: floe_day::DayMutation,
     },
+    ExternalCalendarOperation {
+        operation: floe_day::ManualCalendarOperation,
+    },
+    ReconcileExternalCalendarOperation {
+        operation_ref: Uuid,
+        expected_revision: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,13 +212,13 @@ pub enum ProductQuery {
     Conversation(ConversationQuery),
     Connections(ConnectionsQuery),
     Day(DayProductQuery),
-    Actions(ActionsQuery),
-    Experts(ExpertQuery),
     Memory(MemoryQuery),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQuery {
+    CalendarOperationPolicy,
+    Expert(ExpertQuery),
     ResumeSession,
     GetSession {
         session_id: Uuid,
@@ -296,6 +256,9 @@ pub enum ConnectionsQuery {
 pub enum DayProductQuery {
     Snapshot(floe_day::DayQuery),
     RefreshGet { operation_ref: Uuid },
+    ExternalCalendarOperationGet { operation_ref: Uuid },
+    ExternalCalendarOperations { cursor: Option<Uuid>, limit: u16 },
+    ExternalCalendarDestinations,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -309,15 +272,16 @@ pub enum ProductCommandOutcome {
     Conversation(ConversationCommandOutcome),
     Connections(ConnectionsCommandOutcome),
     Day(DayCommandOutcome),
-    Actions(ActionsCommandResult),
-    Experts(ExpertCommandResult),
     Memory(floe_knowledge::MemoryDecisionAcknowledgement),
 }
 
 #[derive(Clone, Debug)]
 pub enum ConversationCommandOutcome {
     Session(floe_conversation::SessionSnapshot),
+    CalendarOperationPolicy(OperationAuthorizationPolicy),
+    Expert(ExpertCommandResult),
     Turn(floe_conversation::CommandReceipt),
+    CalendarProposal(floe_conversation::CalendarProposalResult),
     CancelRun(floe_conversation::CancelRunReceipt),
     Interaction(floe_conversation::InteractionResult),
     InteractionRefresh(floe_conversation::InteractionResult),
@@ -340,6 +304,8 @@ pub enum ConnectionsCommandOutcome {
 pub enum DayCommandOutcome {
     Refresh(floe_day::DayRefreshSnapshot),
     Mutation(floe_day::DayMutationResult),
+    ExternalCalendarOperation(floe_day::ManualCalendarOperationReceipt),
+    ReconciledExternalCalendarOperation(floe_day::ManualCalendarOperationReceipt),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -347,13 +313,13 @@ pub enum ProductQueryOutcome {
     Conversation(ConversationQueryOutcome),
     Connections(ConnectionsQueryOutcome),
     Day(DayQueryOutcome),
-    Actions(ActionsQueryResult),
-    Experts(ExpertQueryResult),
     Memory(MemoryQueryResult),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQueryOutcome {
+    CalendarOperationPolicy(OperationAuthorizationPolicy),
+    Expert(ExpertQueryResult),
     Session(Option<floe_conversation::SessionSnapshot>),
     Command(Option<floe_conversation::RunReceipt>),
     Run(Option<floe_conversation::RunReceipt>),
@@ -377,6 +343,9 @@ pub enum ConnectionsQueryOutcome {
 pub enum DayQueryOutcome {
     Snapshot(floe_day::DaySnapshot),
     Refresh(floe_day::DayRefreshSnapshot),
+    ExternalCalendarDestinations(Vec<floe_day::ManualCalendarDestination>),
+    ExternalCalendarOperation(floe_day::ManualCalendarOperationReceipt),
+    ExternalCalendarOperations(floe_day::ManualCalendarOperationPage),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -409,8 +378,6 @@ pub enum ProductCommandDisposition {
 pub enum ProductFailure {
     Conversation(floe_kernel::AgentFailure),
     Connections(floe_kernel::AgentFailure),
-    Actions(floe_kernel::AgentFailure),
-    Experts(floe_kernel::AgentFailure),
     Memory(floe_kernel::AgentFailure),
     Day(crate::CoreError),
 }

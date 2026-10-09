@@ -76,7 +76,7 @@ impl TimedScheduleDto {
         Ok((starts_at, ends_at))
     }
 
-    /// New action writes use the policy frozen by Actions.
+    /// New Calendar operation inputs use the bounded owner schedule contract.
     pub fn validate_new_action(&self) -> Result<(), &'static str> {
         let (starts_at, ends_at) = self.parsed_bounds()?;
         if !bounded_trimmed_text(&self.timezone, 128)

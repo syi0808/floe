@@ -211,19 +211,6 @@ impl NativeHostCommands for crate::LocalContextHost {
                 if result.host_epoch != registration.host_epoch {
                     return Err(AgentFailure::PolicyDenied);
                 }
-                match (result.mode, result.view.as_ref()) {
-                    (AttentionAcquisitionMode::ReadProjection, Some(view)) => {
-                        let view: floe_context::AttentionView =
-                            serde_json::from_value(view.clone())
-                                .map_err(|_| AgentFailure::InvalidInput)?;
-                        floe_context::validate_attention_view(
-                            &view,
-                            chrono::Utc::now().timestamp_millis(),
-                        )?;
-                    }
-                    (AttentionAcquisitionMode::InspectSubject, None) => {}
-                    _ => return Err(AgentFailure::InvalidInput),
-                }
                 host.attention()
                     .complete(person, &registration.host_epoch, result.bind(caller))?;
             }
@@ -244,51 +231,6 @@ impl NativeHostCommands for crate::LocalContextHost {
                 if result.host_epoch != registration.host_epoch {
                     return Err(AgentFailure::PolicyDenied);
                 }
-                if result.mode != PersonalAcquisitionMode::ReadProjection
-                    && (result.view.is_some() || result.transform_operation_id.is_some())
-                {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                if result.mode != PersonalAcquisitionMode::InspectCatalog
-                    && (!result.resources.is_empty() || result.catalog_complete)
-                {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                if result.mode == PersonalAcquisitionMode::ReadProjection && result.view.is_none() {
-                    return Err(AgentFailure::InvalidInput);
-                }
-                if let Some(value) = &result.view {
-                    match result.domain {
-                        PersonalDomain::People => {
-                            if result.transform_operation_id.is_some() {
-                                return Err(AgentFailure::PolicyDenied);
-                            }
-                            let view: floe_context::PeopleView =
-                                serde_json::from_value(value.clone())
-                                    .map_err(|_| AgentFailure::InvalidInput)?;
-                            floe_context::validate_people_view(
-                                &view,
-                                chrono::Utc::now().timestamp_millis(),
-                            )?;
-                        }
-                        PersonalDomain::Wellbeing => {
-                            if result.transform_operation_id.is_none_or(|id| id.is_nil()) {
-                                return Err(AgentFailure::PolicyDenied);
-                            }
-                            let view: floe_context::WellbeingView =
-                                serde_json::from_value(value.clone())
-                                    .map_err(|_| AgentFailure::InvalidInput)?;
-                            floe_context::validate_wellbeing_view(
-                                &view,
-                                chrono::Utc::now().timestamp_millis(),
-                            )?;
-                        }
-                    }
-                } else if result.transform_operation_id.is_some() {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                // The provider subsequently consumes the exact native ABI transform
-                // receipt before returning any Health view to Context.
                 host.personal()
                     .complete(person, &registration.host_epoch, result.bind(caller))?;
             }
@@ -344,5 +286,115 @@ impl NativeHostQueries for AppComposition {
         query: NativeHostQuery,
     ) -> Result<NativeHostOutcome, AgentFailure> {
         self.local_context.query_native_host(caller, query)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{LocalContextHost, LocalIdentityClaim};
+
+    fn caller(person_id: Uuid, runtime_epoch: u64) -> CallerContext {
+        CallerContext::verified(
+            LocalIdentityClaim {
+                person_id,
+                device_id: "verified-device".into(),
+            },
+            runtime_epoch,
+        )
+        .unwrap()
+    }
+
+    fn registration(
+        host: &LocalContextHost,
+        caller: &CallerContext,
+        kind: NativeHostKind,
+    ) -> NativeHostRegistrationRef {
+        let NativeHostOutcome::Registered(registration) = host
+            .apply_native_host(caller, NativeHostCommand::Register { kind })
+            .unwrap()
+        else {
+            panic!("host registration must return its reference");
+        };
+        registration
+    }
+
+    #[test]
+    fn personal_completion_keeps_caller_and_runtime_epoch_fences() {
+        let host = LocalContextHost::default();
+        let person_id = Uuid::new_v4();
+        let caller_ctx = caller(person_id, 3);
+        let registration = registration(&host, &caller_ctx, NativeHostKind::Personal);
+        let completion = || NativeHostCommand::CompletePersonal {
+            registration: registration.clone(),
+            result: Box::new(PersonalCompletion {
+                request_id: Uuid::new_v4(),
+                host_epoch: registration.host_epoch.clone(),
+                domain: PersonalDomain::People,
+                mode: PersonalAcquisitionMode::InspectSubject,
+                native_subject_fingerprint_before: "subject".into(),
+                native_subject_fingerprint_after: "subject".into(),
+                permission_class: "authorized".into(),
+                provider: "apple".into(),
+                view: None,
+                transform_operation_id: None,
+                resources: Vec::new(),
+                catalog_complete: false,
+            }),
+        };
+
+        let wrong_runtime = caller(person_id, 4);
+        assert!(matches!(
+            host.apply_native_host(&wrong_runtime, completion()),
+            Err(AgentFailure::PolicyDenied)
+        ));
+
+        let mut stale_epoch = completion();
+        let NativeHostCommand::CompletePersonal { result, .. } = &mut stale_epoch else {
+            unreachable!();
+        };
+        result.host_epoch = "stale-host-epoch".into();
+        assert!(matches!(
+            host.apply_native_host(&caller_ctx, stale_epoch),
+            Err(AgentFailure::PolicyDenied)
+        ));
+    }
+
+    #[test]
+    fn attention_completion_keeps_verified_person_and_device_fence() {
+        let host = LocalContextHost::default();
+        let person_id = Uuid::new_v4();
+        let caller_ctx = caller(person_id, 5);
+        let registration = registration(&host, &caller_ctx, NativeHostKind::Attention);
+        let command = || NativeHostCommand::CompleteAttention {
+            registration: registration.clone(),
+            result: Box::new(AttentionCompletion {
+                request_id: Uuid::new_v4(),
+                host_epoch: "host-epoch".into(),
+                mode: AttentionAcquisitionMode::InspectSubject,
+                native_subject_fingerprint_before: "subject".into(),
+                native_subject_fingerprint_after: "subject".into(),
+                permission_class: "session_observation".into(),
+                view: None,
+            }),
+        };
+        let wrong_person = caller(Uuid::new_v4(), 5);
+        let wrong_device = CallerContext::verified(
+            LocalIdentityClaim {
+                person_id,
+                device_id: "different-device".into(),
+            },
+            5,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            host.apply_native_host(&wrong_person, command()),
+            Err(AgentFailure::PolicyDenied)
+        ));
+        assert!(matches!(
+            host.apply_native_host(&wrong_device, command()),
+            Err(AgentFailure::PolicyDenied)
+        ));
     }
 }

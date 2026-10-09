@@ -5,6 +5,9 @@ mod data_access_grant;
 mod ports;
 
 pub use application::attention_consumer;
+pub use application::calendar_grant_review::{
+    CalendarGrantReviewClassification, classify_calendar_grant_review,
+};
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
 pub use application::fixture_calendar_execution_owner;
 pub use application::model_dispatch::{
@@ -89,4 +92,11 @@ pub use application::product_calendar_read::ProductCalendarReadAuthority;
 pub use domain::product_calendar_read::*;
 pub use ports::product_source_authority::ProductSourceAuthority;
 
+pub use domain::operation_authorization::{
+    OperationApprovalRef, OperationAuthorizationPolicy, OperationDecisionKind,
+    OperationDecisionReceipt, OperationDigest, OperationPolicyChange, OperationPolicyDecision,
+    OperationPolicyMode, OperationSubject, change_operation_policy, direct_operation_receipt,
+    evaluate_operation_policy, reviewed_operation_receipt, standing_policy_receipt,
+    validate_operation_receipt, validate_operation_receipt_binding,
+};
 pub use domain::product_calendar_authorization::*;

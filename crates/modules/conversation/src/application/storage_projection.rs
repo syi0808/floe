@@ -124,6 +124,8 @@ pub fn contract_message(
                 match interaction_kind {
                     floe_agent_contract::UserInteractionKind::SourceAccess => "source_access",
                     floe_agent_contract::UserInteractionKind::ExpertBinding => "expert_binding",
+                    floe_agent_contract::UserInteractionKind::OperationApproval =>
+                        "operation_approval",
                 }
             ),
             None,

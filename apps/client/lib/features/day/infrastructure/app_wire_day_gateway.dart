@@ -25,6 +25,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   final AppRuntime _runtime;
   final DateTime Function() _clock;
   _PendingDayMutation? _pendingMutation;
+  _PendingExternalCalendarOperation? _pendingExternalCalendarOperation;
   final Map<String, _PendingRefreshCommand> _pendingRefreshes = {};
 
   @override
@@ -137,6 +138,204 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   }
 
   @override
+  Future<List<ManualCalendarDestination>> loadExternalCalendarDestinations()
+  async {
+    final result = await ownerQuery(
+      _runtime.wireTransport,
+      newAgentRequestId(),
+      const {'kind': 'day.calendar_destinations'},
+    );
+    _requireKeys(result, const {'kind', 'destinations'}, 'Day destinations');
+    if (result['kind'] != 'day.calendar_destinations' ||
+        result['destinations'] is! List ||
+        (result['destinations'] as List).length > 64) {
+      throw const FormatException('Invalid Day Calendar destinations.');
+    }
+    final raw = result['destinations'] as List;
+    final destinations = raw.map((value) {
+      final item = _asMap(value, 'Calendar destination');
+      _requireKeys(
+        item,
+        const {'destination_ref', 'label'},
+        'Calendar destination',
+      );
+      if (item['destination_ref'] is! String ||
+          item['label'] is! String ||
+          (item['label'] as String).trim().isEmpty ||
+          (item['label'] as String).length > 512) {
+        throw const FormatException('Invalid Day Calendar destination.');
+      }
+      return ManualCalendarDestination(
+        destinationRef: item['destination_ref'] as String,
+        label: item['label'] as String,
+      );
+    }).toList(growable: false);
+    if (destinations.map((value) => value.destinationRef).toSet().length !=
+        destinations.length) {
+      throw const FormatException('Duplicate Day Calendar destinations.');
+    }
+    return List.unmodifiable(destinations);
+  }
+
+  @override
+  Future<ManualCalendarOperationPage> loadExternalCalendarOperations({
+    String? cursor,
+    int limit = 100,
+  }) async {
+    if (limit < 1 || limit > 100) {
+      throw ArgumentError.value(limit, 'limit');
+    }
+    if (cursor != null && !_uuidPattern.hasMatch(cursor)) {
+      throw ArgumentError.value(cursor, 'cursor');
+    }
+    final result = await ownerQuery(
+      _runtime.wireTransport,
+      newAgentRequestId(),
+      {'kind': 'day.external_calendar_operations', 'cursor': cursor, 'limit': limit},
+    );
+    _requireKeys(result, const {'kind', 'operations'}, 'Day operations');
+    if (result['kind'] != 'day.external_calendar_operations' ||
+        result['operations'] is! Map) {
+      throw const FormatException('Invalid Day Calendar operations.');
+    }
+    final payload = _asMap(result['operations'], 'Day operations');
+    _requireKeys(payload, const {'operations', 'next_cursor'}, 'Day operations');
+    final raw = payload['operations'];
+    if (raw is! List || raw.length > limit) {
+      throw const FormatException('Invalid Day Calendar operation list.');
+    }
+    final values = raw
+        .map((item) => ManualCalendarOperationReceipt.fromJson(
+              _asMap(item, 'Day operation'),
+            ))
+        .toList(growable: false);
+    if (values.map((value) => value.operationRef).toSet().length != values.length) {
+      throw const FormatException('Duplicate Day Calendar operation.');
+    }
+    final nextCursor = payload['next_cursor'] == null
+        ? null
+        : _requiredUuid(payload['next_cursor'], 'operations.next_cursor');
+    if (nextCursor != null &&
+        (values.isEmpty || values.last.operationRef != nextCursor)) {
+      throw const FormatException('Invalid Day Calendar operation cursor.');
+    }
+    return ManualCalendarOperationPage(
+      operations: List.unmodifiable(values),
+      nextCursor: nextCursor,
+    );
+  }
+
+  @override
+  Future<ManualCalendarOperationReceipt> inspectExternalCalendarOperation(
+    String operationRef,
+  ) async {
+    if (!_uuidPattern.hasMatch(operationRef)) {
+      throw ArgumentError.value(operationRef, 'operationRef');
+    }
+    final result = await ownerQuery(
+      _runtime.wireTransport,
+      newAgentRequestId(),
+      {'kind': 'day.external_calendar_operation.get', 'operation_ref': operationRef},
+    );
+    _requireKeys(result, const {'kind', 'operation'}, 'Day operation');
+    if (result['kind'] != 'day.external_calendar_operation') {
+      throw const FormatException('Invalid Day Calendar operation kind.');
+    }
+    final receipt = ManualCalendarOperationReceipt.fromJson(
+      _asMap(result['operation'], 'Day operation'),
+    );
+    if (receipt.operationRef != operationRef) {
+      throw const FormatException('Day Calendar operation identity changed.');
+    }
+    return receipt;
+  }
+
+  @override
+  Future<ManualCalendarOperationReceipt> reconcileExternalCalendarOperation(
+    String operationRef,
+    int expectedRevision,
+  ) async {
+    if (!_uuidPattern.hasMatch(operationRef) || expectedRevision <= 0 ||
+        expectedRevision > _maxRevision) {
+      throw ArgumentError('Invalid Day Calendar operation identity or revision.');
+    }
+    final result = await ownerCommand(
+      _runtime.wireTransport,
+      newAgentRequestId(),
+      {
+        'kind': 'day.external_calendar_operation.reconcile',
+        'operation_ref': operationRef,
+        'expected_revision': expectedRevision,
+      },
+    );
+    _requireKeys(result, const {'kind', 'operation'}, 'Day operation');
+    if (result['kind'] != 'day.external_calendar_operation') {
+      throw const FormatException('Invalid Day Calendar operation kind.');
+    }
+    final receipt = ManualCalendarOperationReceipt.fromJson(
+      _asMap(result['operation'], 'Day operation'),
+    );
+    if (receipt.operationRef != operationRef) {
+      throw const FormatException('Day Calendar operation identity changed.');
+    }
+    return receipt;
+  }
+
+  @override
+  Future<ManualCalendarOperationReceipt> executeExternalCalendarOperation(
+    ManualCalendarOperationIntent operation,
+  ) async {
+    final encoded = jsonEncode(_canonicalJson(operation.toJson(_timestamp)));
+    var active = _pendingExternalCalendarOperation;
+    if (active == null) {
+      if (_pendingExternalCalendarOperation != null) {
+        throw StateError('An external Calendar command is unresolved.');
+      }
+      active = _PendingExternalCalendarOperation(
+        commandId: newAgentRequestId(),
+        intent: encoded,
+        operation: Map<String, dynamic>.unmodifiable(
+          jsonDecode(encoded) as Map<String, dynamic>,
+        ),
+      );
+      _pendingExternalCalendarOperation = active;
+    } else if (active.intent != encoded) {
+      throw StateError(
+        'A prior Calendar command is unresolved; retry that exact command first.',
+      );
+    }
+    final previouslySubmitted = active.submitted;
+    active.submitted = true;
+    try {
+      final result = await ownerCommand(
+        _runtime.wireTransport,
+        active.commandId,
+        {
+          'kind': 'day.external_calendar_operation',
+          'operation': active.operation,
+        },
+      );
+      _requireKeys(result, const {'kind', 'operation'}, 'Day Calendar result');
+      if (result['kind'] != 'day.external_calendar_operation') {
+        throw const FormatException('Invalid Day Calendar result kind.');
+      }
+      final receipt = ManualCalendarOperationReceipt.fromJson(
+        _asMap(result['operation'], 'Day Calendar operation'),
+      );
+      _pendingExternalCalendarOperation = null;
+      return receipt;
+    } on AppWireTransportException catch (error) {
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
+        _pendingExternalCalendarOperation = null;
+      }
+      throw _runtimeError(error);
+    }
+  }
+
+  @override
   Future<CaptureReceipt> submitCapture(String input, DayQuery query) => _mutate(
     query,
     {
@@ -184,7 +383,9 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   @override
   Future<DaySnapshot> deleteItem(DayItem item, DayQuery query) {
     if (item is EventItem && item.source is CalendarDayItemSource) {
-      throw StateError('Calendar events must be deleted through Actions.');
+      throw StateError(
+        'External Calendar events must be deleted through Calendar activity.',
+      );
     }
     return _mutate(query, {
       'type': 'delete_item',
@@ -332,6 +533,19 @@ final class _PendingDayMutation {
   final String mutationIntent;
   final Map<String, dynamic> day;
   final Map<String, dynamic> mutation;
+  bool submitted = false;
+}
+
+final class _PendingExternalCalendarOperation {
+  _PendingExternalCalendarOperation({
+    required this.commandId,
+    required this.intent,
+    required this.operation,
+  });
+
+  final String commandId;
+  final String intent;
+  final Map<String, dynamic> operation;
   bool submitted = false;
 }
 

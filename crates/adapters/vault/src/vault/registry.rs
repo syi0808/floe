@@ -74,6 +74,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     self.unavailable.store(true, Ordering::Release);
                     return Err(AgentFailure::VaultUnavailable);
                 }
+                // A transaction-begin StorageBusy is safe to retry and a
+                // changed-body command conflict is a durable semantic result;
+                // neither means the Vault itself became unreadable.
                 if matches!(
                     failure,
                     AgentFailure::StorageUnavailable
@@ -123,7 +126,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         AgentFailure::StorageUnavailable
                             | AgentFailure::VaultUnavailable
                             | AgentFailure::UnsupportedVersion
-                    ) | CommandFailure::Indeterminate(_)
+                    ) | CommandFailure::Indeterminate(
+                        AgentFailure::StorageUnavailable
+                            | AgentFailure::VaultUnavailable
+                            | AgentFailure::UnsupportedVersion
+                    )
                 ) {
                     self.unavailable.store(true, Ordering::Release);
                 }

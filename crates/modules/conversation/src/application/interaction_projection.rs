@@ -1,5 +1,8 @@
 //! Interaction display and action policy, owned by Conversation.
-use crate::{ConversationInteraction, InteractionState, NavigationDestination, ReviewedTarget};
+use crate::{
+    ConversationInteraction, InteractionRequirement, InteractionState, NavigationDestination,
+    ReviewedTarget,
+};
 use floe_agent_contract::UserInteractionKind;
 use floe_execution::ExecutionScope;
 use floe_kernel::{AgentFailure, OwnerActor, RunId};
@@ -42,6 +45,9 @@ pub enum InteractionTarget {
     ExpertBinding {
         review: floe_experts::BindingReview,
     },
+    OperationApproval {
+        operation: floe_calendar_operations::ActionSnapshot,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct InteractionSnapshot {
@@ -54,6 +60,7 @@ pub struct InteractionSnapshot {
     pub target_digest: [u8; 32],
     pub created_at_unix_ms: i64,
     pub expires_at_unix_ms: i64,
+    pub requirement: InteractionRequirement,
     pub replacement_id: Option<Uuid>,
     pub target: InteractionTarget,
     pub allowed_actions: Vec<InteractionAction>,
@@ -62,6 +69,7 @@ pub struct InteractionSnapshot {
 pub(super) async fn project_interaction(
     connections: &floe_connections::ConnectionsService,
     experts: &dyn floe_experts::ExpertsOwner,
+    operations: &floe_calendar_operations::CalendarOperationsService,
     actor: &OwnerActor,
     record: &ConversationInteraction,
     now_unix_ms: i64,
@@ -110,6 +118,16 @@ pub(super) async fn project_interaction(
                 .inspect_binding_review(actor, reference.clone(), scope)
                 .await?,
         },
+        ReviewedTarget::OperationApproval(reference) => {
+            let operation = operations
+                .inspect(actor, reference.operation_id, scope)
+                .await?;
+            if operation.review_ref != *reference || operation.action_ref != reference.operation_id
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            InteractionTarget::OperationApproval { operation }
+        }
     };
     let allowed_actions = match (state, &target) {
         (InteractionStatus::Pending, InteractionTarget::SourceReview { review }) => {
@@ -137,6 +155,28 @@ pub(super) async fn project_interaction(
             InteractionAction::Refresh,
             InteractionAction::Dismiss,
         ],
+        (InteractionStatus::Pending, InteractionTarget::OperationApproval { operation }) => {
+            let mut actions = Vec::new();
+            if operation
+                .allowed_actions
+                .contains(&floe_calendar_operations::ActionAllowedAction::Approve)
+            {
+                actions.push(InteractionAction::Allow);
+            }
+            if operation
+                .allowed_actions
+                .contains(&floe_calendar_operations::ActionAllowedAction::Reject)
+            {
+                actions.push(InteractionAction::Deny);
+            }
+            if operation
+                .allowed_actions
+                .contains(&floe_calendar_operations::ActionAllowedAction::Cancel)
+            {
+                actions.push(InteractionAction::Dismiss);
+            }
+            actions
+        }
         (InteractionStatus::Resolving, _) => {
             vec![InteractionAction::Refresh, InteractionAction::Dismiss]
         }
@@ -152,6 +192,7 @@ pub(super) async fn project_interaction(
         target_digest: record.target_digest,
         created_at_unix_ms: record.created_at_unix_ms,
         expires_at_unix_ms: record.expires_at_unix_ms,
+        requirement: record.requirement.clone(),
         replacement_id: match record.state {
             InteractionState::Superseded { superseded_by } => superseded_by,
             _ => None,

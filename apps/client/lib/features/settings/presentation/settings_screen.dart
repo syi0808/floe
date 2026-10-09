@@ -22,16 +22,16 @@ import 'package:floe_client/features/actions/application/calendar_action_control
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
 part 'data_privacy.dart';
-part 'action_permissions.dart';
+part 'operation_policy_settings.dart';
 part 'navigation.dart';
 
-enum _SettingsPage { actions, dataPrivacy, experts, memory, remoteServer }
+enum _SettingsPage { operationPolicy, dataPrivacy, experts, memory, remoteServer }
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
     required this.connectionsController,
-    this.actionController,
+    this.operationPolicyController,
     this.runtime,
     this.registryController,
     this.memoryController,
@@ -41,7 +41,7 @@ class SettingsScreen extends StatefulWidget {
   });
 
   final ConnectionsController? connectionsController;
-  final CalendarActionController? actionController;
+  final OperationPolicyController? operationPolicyController;
   final RuntimeController? runtime;
   final AgentRegistryController? registryController;
   final AgentMemoryController? memoryController;
@@ -61,7 +61,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final contentScrollController = ScrollController();
 
   List<_SettingsPage> get _availablePages => [
-    if (widget.actionController != null) _SettingsPage.actions,
+    if (widget.operationPolicyController != null) _SettingsPage.operationPolicy,
     if (widget.memoryController != null && widget.runtime != null)
       _SettingsPage.dataPrivacy,
     if (widget.registryController != null && widget.runtime != null)
@@ -91,8 +91,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _content() => switch (selectedPage) {
-    _SettingsPage.actions => _ActionPermissions(
-      controller: widget.actionController!,
+    _SettingsPage.operationPolicy => _OperationPolicySettings(
+      controller: widget.operationPolicyController!,
     ),
     _SettingsPage.dataPrivacy => _DataPrivacy(
       runtime: widget.runtime!,

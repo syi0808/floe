@@ -9,12 +9,6 @@ use tokio::time::Instant;
 
 use crate::{ContextService, SelectedSourceReader, SourceView};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CalendarReviewClassification {
-    pub reason: floe_context_contract::SourceAccessRequirementKind,
-    pub observed: Option<floe_context_contract::ObservedGrant>,
-}
-
 pub fn current_calendar_connector(connection: &floe_connections::SourceConnection) -> Option<&str> {
     let connector = connection.connector_id().as_str();
     if floe_access::local_calendar_provider(connector).is_some()
@@ -26,66 +20,6 @@ pub fn current_calendar_connector(connection: &floe_connections::SourceConnectio
     } else {
         None
     }
-}
-
-pub fn observe_calendar_binding(
-    grants: &[floe_access::DataAccessGrant],
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<Option<floe_context_contract::ObservedGrant>, AgentFailure> {
-    let grant = current_calendar_grant(grants, person_id, connector_id, connection_id)?;
-    grant
-        .map(|grant| {
-            floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
-                .map_err(|_| AgentFailure::StaleContext)
-        })
-        .transpose()
-}
-
-fn current_calendar_grant<'a>(
-    grants: &'a [floe_access::DataAccessGrant],
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<Option<&'a floe_access::DataAccessGrant>, AgentFailure> {
-    let mut binding = grants.iter().filter(|grant| {
-        grant.state() != floe_access::GrantState::Revoked
-            && grant.source().person_id() == person_id
-            && grant.source().connector().as_str() == connector_id
-            && grant.source().connection_id().as_str() == connection_id
-    });
-    let grant = binding.next();
-    if binding.next().is_some() {
-        return Err(AgentFailure::PolicyDenied);
-    }
-    Ok(grant)
-}
-
-pub fn classify_calendar_review(
-    grants: &[floe_access::DataAccessGrant],
-    person_id: PersonId,
-    connector_id: &str,
-    connection_id: &str,
-) -> Result<CalendarReviewClassification, AgentFailure> {
-    let grant = current_calendar_grant(grants, person_id, connector_id, connection_id)?;
-    let observed = grant
-        .map(|grant| {
-            floe_context_contract::ObservedGrant::try_new(grant.id(), grant.authority())
-                .map_err(|_| AgentFailure::StaleContext)
-        })
-        .transpose()?;
-    let reason = match grant {
-        None => floe_context_contract::SourceAccessRequirementKind::EnableObserve,
-        Some(grant) => {
-            if grant.state() == floe_access::GrantState::Paused {
-                floe_context_contract::SourceAccessRequirementKind::EnableObserve
-            } else {
-                floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource
-            }
-        }
-    };
-    Ok(CalendarReviewClassification { reason, observed })
 }
 
 pub struct DeclaredSourceRequirement<'a> {

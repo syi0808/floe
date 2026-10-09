@@ -67,7 +67,7 @@ pub struct ExpertContextDependencies {
     pub grants: Arc<dyn GrantRepository>,
     pub personal: Arc<dyn PersonalSourceDriver + Send>,
     pub transport: Arc<dyn ExpertSourceTransport>,
-    pub day: Arc<dyn floe_day::DayRepository>,
+    pub day_evidence: Arc<dyn crate::DayContextEvidenceReader>,
     pub evidence: Arc<dyn EvidenceReader>,
     pub resolver: Arc<dyn DependencyResolver>,
     pub leases: Arc<SourceLeaseRegistry>,
@@ -359,7 +359,7 @@ impl floe_experts::ExpertProjectionPort for ContextExpertProjection {
             scope
                 .run(crate::prepare_expert_context(
                     &mut input.context,
-                    dependencies.day.as_ref(),
+                    dependencies.day_evidence.as_ref(),
                     crate::ExpertContextRequest {
                         person_id: input.actor.person_id,
                         policy: &policy,
@@ -849,7 +849,7 @@ impl LocalExpertSourceDriver for LocalSources<'_> {
                 LocalExpertSource::Tasks => {
                     crate::validate_local_source_selection(singleton()?, &actor.device_id)?;
                     let view = crate::task_context_view(
-                        self.dependencies.day.as_ref(),
+                        self.dependencies.day_evidence.as_ref(),
                         actor.person_id,
                         Uuid::new_v5(&actor.person_id.0, b"floe.tasks"),
                         Utc::now(),
@@ -1056,13 +1056,13 @@ impl LocalSources<'_> {
             connection.execution_owner_id().clone(),
         )
         .map_err(|_| AgentFailure::InvalidInput)?;
-        let grants = self.dependencies.grants.snapshot(source).await?.grants;
-        let review = crate::classify_calendar_review(
-            &grants,
-            self.dependencies.actor.person_id,
-            connection.connector_id().as_str(),
-            connection.connection_id().as_str(),
-        )?;
+        let grants = self
+            .dependencies
+            .grants
+            .snapshot(source.clone())
+            .await?
+            .grants;
+        let review = floe_access::classify_calendar_grant_review(&grants, &source)?;
         let reason = if failure == AgentFailure::CredentialExpired {
             floe_context_contract::SourceAccessRequirementKind::Reconnect
         } else {

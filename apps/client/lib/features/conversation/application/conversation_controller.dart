@@ -157,6 +157,8 @@ final class ConversationController extends ChangeNotifier {
 
   AgentInteractionSnapshot? interactionFor(String interactionId) =>
       _interactions[interactionId];
+  List<AgentInteractionSnapshot> get interactionSnapshots =>
+      List.unmodifiable(_interactions.values);
   bool interactionBusyFor(String interactionId) =>
       _interactionBusy.contains(interactionId);
   String? interactionFailureFor(String interactionId) =>
@@ -266,6 +268,33 @@ final class ConversationController extends ChangeNotifier {
         _notify();
       }
     }
+  }
+
+  Future<CalendarProposalSubmission> submitCalendarProposal({
+    required String commandId,
+    required String originRunId,
+    required Map<String, Object?> receipt,
+    required String artifactId,
+    required String destinationRef,
+  }) async {
+    final current = session;
+    if (current == null || current.personId != personId ||
+        _busy || _sealed || _disposed || !runtimeController.ready) {
+      throw StateError('Conversation is not ready to submit this proposal.');
+    }
+    final result = await gateway.conversationRuntime.submitCalendarProposal(
+      commandId: commandId,
+      sessionId: current.id,
+      originRunId: originRunId,
+      receipt: receipt,
+      artifactId: artifactId,
+      destinationRef: destinationRef,
+    );
+    if (result.interaction case final snapshot?) {
+      _acceptInteractionSnapshot(snapshot, current);
+      _notify();
+    }
+    return result;
   }
 
   Future<void> decideInteraction(

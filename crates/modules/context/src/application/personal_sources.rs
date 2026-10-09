@@ -119,16 +119,15 @@ pub async fn authorize_personal_dependency(
     let connection = connections
         .load(person_id, &selected.connection_id)
         .await?
-        .ok_or(AgentFailure::PolicyDenied)?;
-    crate::validate_personal_source_selection(&selected, &connection, person_id, device_id)
-        .map_err(|_| AgentFailure::PolicyDenied)?;
+        .ok_or(AgentFailure::StaleContext)?;
+    crate::validate_personal_source_selection(&selected, &connection, person_id, device_id)?;
     let source = GrantSourceBinding::try_new(
         person_id,
         connection.connection_id().clone(),
         connection.connector_id().clone(),
         connection.execution_owner_id().clone(),
     )
-    .map_err(|_| AgentFailure::PolicyDenied)?;
+    .map_err(|_| AgentFailure::InvalidInput)?;
     if dependency.source() != &source
         || dependency.source_authority() != connection.source_authority()
         || dependency.source_resources()
@@ -138,7 +137,7 @@ pub async fn authorize_personal_dependency(
                 .map(|resource| resource.handle().clone())
                 .collect::<Vec<_>>()
     {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::StaleContext);
     }
     let requirement = PersonalReadRequirement {
         source: &source,
@@ -149,23 +148,20 @@ pub async fn authorize_personal_dependency(
     let grant = active_read_grant(
         &records.snapshot(source.clone()).await?.grants,
         &requirement,
-    )
-    .map_err(|_| AgentFailure::PolicyDenied)?;
+    )?;
     if dependency.grant_id() != grant.id() || dependency.grant_authority() != grant.authority() {
-        return Err(AgentFailure::PolicyDenied);
+        return Err(AgentFailure::AccessReviewRequired);
     }
     let subject = connection
         .native_subject_fingerprint()
-        .ok_or(AgentFailure::PolicyDenied)?;
+        .ok_or(AgentFailure::AccessReviewRequired)?;
     if view == floe_context_contract::ATTENTION_VIEW_ID {
-        let (current_view, observation_subject) = driver
-            .trusted_attention_observation(
-                person_id,
-                device_id,
-                dependency.observation_id(),
-                dependency.process_incarnation_id(),
-            )
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let (current_view, observation_subject) = driver.trusted_attention_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )?;
         if observation_subject != subject
             || dependency.observed_at().timestamp_millis() != current_view.observed_at_unix_ms
             || dependency.expires_at().timestamp_millis() != current_view.expires_at_unix_ms
@@ -178,7 +174,7 @@ pub async fn authorize_personal_dependency(
                     dependency.process_incarnation_id(),
                 )
         {
-            return Err(AgentFailure::PolicyDenied);
+            return Err(AgentFailure::Conflict);
         }
         let probe = driver
             .acquire_attention(
@@ -192,38 +188,34 @@ pub async fn authorize_personal_dependency(
                 },
                 cancellation.clone(),
             )
-            .await
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+            .await?;
         if probe.subject_before != subject || probe.subject_after != subject {
-            return Err(AgentFailure::PolicyDenied);
+            return Err(AgentFailure::AccessReviewRequired);
         }
         let current = connections
             .load(person_id, connection.connection_id())
             .await?
-            .ok_or(AgentFailure::PolicyDenied)?;
-        standing_source_unchanged(&connection, &current).map_err(|_| AgentFailure::PolicyDenied)?;
+            .ok_or(AgentFailure::StaleContext)?;
+        standing_source_unchanged(&connection, &current)?;
         let current_grant = active_read_grant(
             &records.snapshot(source.clone()).await?.grants,
             &requirement,
-        )
-        .map_err(|_| AgentFailure::PolicyDenied)?;
-        grant_unchanged(&grant, &current_grant).map_err(|_| AgentFailure::PolicyDenied)?;
+        )?;
+        grant_unchanged(&grant, &current_grant).map_err(|_| AgentFailure::AccessReviewRequired)?;
     } else {
-        let observation = driver
-            .trusted_personal_observation(
-                person_id,
-                device_id,
-                dependency.observation_id(),
-                dependency.process_incarnation_id(),
-            )
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+        let observation = driver.trusted_personal_observation(
+            person_id,
+            device_id,
+            dependency.observation_id(),
+            dependency.process_incarnation_id(),
+        )?;
         if observation.native_subject_fingerprint != subject
             || dependency.observed_at().timestamp_millis() != observation.observed_at_unix_ms
             || dependency.expires_at().timestamp_millis() != observation.expires_at_unix_ms
             || dependency.query_fingerprint() != observation.query_fingerprint
             || dependency.health_transform() != observation.health_transform.as_ref()
         {
-            return Err(AgentFailure::PolicyDenied);
+            return Err(AgentFailure::Conflict);
         }
     }
     if view == floe_context_contract::WELLBEING_VIEW_ID {

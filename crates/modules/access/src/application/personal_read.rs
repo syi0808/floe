@@ -39,7 +39,7 @@ pub fn active_read_grant(
         .filter(|grant| grant.state() != GrantState::Revoked && grant.source() == source);
     let grant = live.next().ok_or(AgentFailure::AccessReviewRequired)?;
     if requirement.reject_ambiguous && live.next().is_some() {
-        return Err(AgentFailure::AccessReviewRequired);
+        return Err(AgentFailure::Conflict);
     }
     if grant.state() != GrantState::Active
         || grant.review_required()
@@ -106,4 +106,64 @@ pub fn attention_consumer(value: &str) -> Result<GrantConsumer, AgentFailure> {
         return Err(AgentFailure::PolicyDenied);
     }
     GrantConsumer::builtin(value).map_err(|_| AgentFailure::InvalidInput)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PersonalReadRequirement, active_read_grant};
+    use crate::DataAccessGrant;
+    use floe_context_contract::{
+        ConnectionId, ConnectorId, ExecutionOwnerId, GrantConsumer, GrantDataCategory, GrantId,
+        GrantOperation, GrantPurpose, GrantScope, GrantSourceBinding, ProcessingRestriction,
+        ResourceHandle,
+    };
+    use floe_kernel::{AgentFailure, PersonId};
+    use uuid::Uuid;
+
+    #[test]
+    fn ambiguous_live_grants_remain_a_conflict_for_history_reauthorization() {
+        let person_id = PersonId::new();
+        let source = GrantSourceBinding::try_new(
+            person_id,
+            ConnectionId::try_new("fixture.connection").unwrap(),
+            ConnectorId::try_new("fixture.connector").unwrap(),
+            ExecutionOwnerId::try_new("fixture.device").unwrap(),
+        )
+        .unwrap();
+        let consumer = GrantConsumer::builtin("fixture.manager").unwrap();
+        let scope = GrantScope::try_new(
+            vec![ResourceHandle::try_new("fixture.resource").unwrap()],
+            vec![GrantDataCategory::Derived],
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![consumer.clone()],
+            ProcessingRestriction::DeviceOnly,
+        )
+        .unwrap();
+        let active_grant = || {
+            let mut grant = DataAccessGrant::new(
+                GrantId::new(),
+                Uuid::new_v4(),
+                source.clone(),
+                scope.clone(),
+            )
+            .unwrap();
+            grant
+                .activate_review(grant.authority(), scope.clone())
+                .unwrap();
+            grant
+        };
+        let requirement = PersonalReadRequirement {
+            source: &source,
+            resource: "fixture.resource",
+            consumer: &consumer,
+            reject_ambiguous: true,
+        };
+
+        assert_eq!(
+            active_read_grant(&[active_grant(), active_grant()], &requirement),
+            Err(AgentFailure::Conflict),
+            "ambiguous authority is not silently omitted as stale history"
+        );
+    }
 }

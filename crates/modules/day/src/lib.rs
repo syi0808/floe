@@ -7,5 +7,5 @@ pub use application::{DayService, range_bounds};
 pub use domain::*;
 pub use ports::{
     CalendarAcquisitionPort, DayClock, DayError, DayErrorCode, DayRefreshRepository, DayRepository,
-    SystemDayClock,
+    ExternalCalendarOperationPort, SystemDayClock,
 };

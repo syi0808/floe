@@ -12,7 +12,7 @@ mod personal;
 
 pub use attention::{
     AttentionAcquisitionMode, AttentionAcquisitionRequest, AttentionAcquisitionResult,
-    AttentionBroker, attention_failure,
+    AttentionBroker, ValidatedAttentionAcquisitionResult, attention_failure,
 };
 pub use calendar::{
     CalendarAcquisitionMode, CalendarAcquisitionRequest, CalendarAcquisitionResult, CalendarBroker,
@@ -20,7 +20,8 @@ pub use calendar::{
 };
 pub use personal::{
     NativeResourceGroup, NativeSourceResource, PersonalAcquisitionMode, PersonalAcquisitionRequest,
-    PersonalAcquisitionResult, PersonalBroker, PersonalDomain, personal_failure,
+    PersonalAcquisitionResult, PersonalBroker, PersonalDomain, ValidatedPersonalAcquisitionResult,
+    ValidatedPersonalProjection, personal_failure,
 };
 
 use std::{
@@ -40,8 +41,8 @@ pub const MAX_ACQUISITION_PENDING: usize = 16;
 pub const MAX_ACQUISITION_DEADLINE_MS: i64 = 30_000;
 
 /// What the host's answer is worth, once the request it names is found.
-pub enum CompletionOutcome {
-    Accept,
+pub enum CompletionOutcome<Accepted> {
+    Accept(Accepted),
     /// Clear the request, its deadline and the in-flight slot, then fail the
     /// waiter.
     Reject(AgentFailure),
@@ -56,6 +57,7 @@ pub enum CompletionOutcome {
 pub trait AcquisitionExchange {
     type Request: Clone + Send + 'static;
     type Response: Send + 'static;
+    type Accepted: Send + 'static;
 
     fn request_id(request: &Self::Request) -> Uuid;
     fn request_host_epoch(request: &Self::Request) -> &str;
@@ -67,7 +69,10 @@ pub trait AcquisitionExchange {
 
     /// Whether the host's answer is an answer to this request, and what to do
     /// when it is not.
-    fn admit(request: &Self::Request, response: &Self::Response) -> CompletionOutcome;
+    fn admit(
+        request: &Self::Request,
+        response: &Self::Response,
+    ) -> CompletionOutcome<Self::Accepted>;
 
     /// Whether a request with no recorded deadline counts as already expired.
     const MISSING_DEADLINE_EXPIRES: bool;
@@ -83,7 +88,7 @@ struct BrokerState<Exchange: AcquisitionExchange> {
     host_person: Option<PersonId>,
     pending: VecDeque<Uuid>,
     requests: HashMap<Uuid, Exchange::Request>,
-    waiters: HashMap<Uuid, tokio::sync::oneshot::Sender<Result<Exchange::Response, AgentFailure>>>,
+    waiters: HashMap<Uuid, tokio::sync::oneshot::Sender<Result<Exchange::Accepted, AgentFailure>>>,
     deadlines: HashMap<Uuid, Instant>,
     in_flight: Option<Uuid>,
 }
@@ -259,8 +264,8 @@ impl<Exchange: AcquisitionExchange> AcquisitionBroker<Exchange> {
         let Some(request) = state.requests.get(&request_id) else {
             return Err(AgentFailure::StaleContext);
         };
-        match Exchange::admit(request, &response) {
-            CompletionOutcome::Accept => {}
+        let accepted = match Exchange::admit(request, &response) {
+            CompletionOutcome::Accept(accepted) => accepted,
             CompletionOutcome::Refuse(failure) => return Err(failure),
             CompletionOutcome::Reject(failure) => {
                 Self::reject_locked(&mut state, request_id, failure, true);
@@ -270,13 +275,13 @@ impl<Exchange: AcquisitionExchange> AcquisitionBroker<Exchange> {
                 Self::reject_locked(&mut state, request_id, failure, false);
                 return Err(failure);
             }
-        }
+        };
         let waiter = state.waiters.remove(&request_id);
         state.requests.remove(&request_id);
         state.deadlines.remove(&request_id);
         state.in_flight = None;
         if let Some(waiter) = waiter {
-            let _ = waiter.send(Ok(response));
+            let _ = waiter.send(Ok(accepted));
         }
         Ok(())
     }
@@ -358,7 +363,7 @@ impl<Exchange: AcquisitionExchange> AcquisitionBroker<Exchange> {
         request: Exchange::Request,
         wall_now_unix_ms: i64,
         cancellation: Cancellation,
-    ) -> Result<Exchange::Response, AgentFailure> {
+    ) -> Result<Exchange::Accepted, AgentFailure> {
         let deadline_unix_ms = Exchange::request_deadline_unix_ms(&request);
         if deadline_unix_ms <= wall_now_unix_ms {
             return Err(AgentFailure::DeadlineExceeded);

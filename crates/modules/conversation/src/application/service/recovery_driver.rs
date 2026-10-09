@@ -56,6 +56,22 @@ where
 
     async fn drive_recovery(self: Arc<Self>, actor: OwnerActor) {
         loop {
+            #[cfg(feature = "qa-fixtures")]
+            if self.recovery_pause_requested.load(Ordering::Acquire) {
+                self.recovery_pause_acknowledged
+                    .store(true, Ordering::Release);
+                self.recovery_pause_ack.notify_one();
+                tokio::select! {
+                    _ = self.shutdown.cancelled() => return,
+                    _ = self.recovery_wake.notified() => {},
+                    _ = tokio::time::sleep(REOBSERVE_DELAY) => {},
+                }
+                continue;
+            } else {
+                #[cfg(feature = "qa-fixtures")]
+                self.recovery_pause_acknowledged
+                    .store(false, Ordering::Release);
+            }
             let mut run_after = None;
             let mut interaction_after = None;
             let mut resume_after = None;
@@ -115,6 +131,7 @@ where
                                     .run(recover_source_interaction(
                                         self.dependencies.repository.as_ref(),
                                         self.dependencies.connections.as_ref(),
+                                        self.dependencies.calendar_operations.as_ref(),
                                         &actor,
                                         record.id,
                                         chrono::Utc::now().timestamp_millis(),

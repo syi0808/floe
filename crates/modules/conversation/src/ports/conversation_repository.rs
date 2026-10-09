@@ -54,6 +54,14 @@ pub trait ConversationRepository: Send + Sync {
         commit: crate::BlockedRunCommit,
     ) -> BoxFuture<'a, Result<RunReceipt, AgentFailure>>;
 
+    /// Commit one normalized Calendar operation and, for Access Ask, its
+    /// typed Conversation approval in the same encrypted Vault transaction.
+    fn admit_operation_approval<'a>(
+        &'a self,
+        admission: floe_calendar_operations::OperationAdmission,
+        publication: crate::OperationApprovalPublication,
+    ) -> BoxFuture<'a, Result<crate::OperationApprovalAdmission, CommandFailure<AgentFailure>>>;
+
     fn find_command<'a>(
         &'a self,
         query: CommandQuery,

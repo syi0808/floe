@@ -9,12 +9,13 @@ rust-version.workspace = true
 default = ["os-keyring"]
 os-keyring = ["dep:keyring-core", "dep:apple-native-keyring-store"]
 development-storage = []
+qa-fixtures = ["development-storage"]
 
 [dependencies]
 base64 = "0.22.1"
 chrono.workspace = true
 floe-access = { path = "../../modules/access" }
-floe-actions = { path = "../../modules/actions" }
+floe-calendar-operations = { path = "../../modules/calendar_operations" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context = { path = "../../modules/context" }
 floe-context-contract = { path = "../../contracts/context" }

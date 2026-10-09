@@ -12,6 +12,13 @@ use uuid::Uuid;
 pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<ConversationCommand> {
     Ok(match value {
         AppProductCommandDto::ConversationSessionStart {} => ConversationCommand::StartSession,
+        AppProductCommandDto::ConversationSetCalendarPolicy {
+            mode,
+            expected_revision,
+        } => ConversationCommand::SetCalendarOperationPolicy {
+            mode: crate::calendar_operations_wire::authority_mode_in(mode),
+            expected_revision,
+        },
         AppProductCommandDto::ConversationStartTurn {
             session_id,
             expected_revision,
@@ -28,6 +35,20 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
                     RunId::from_uuid(reference.get()).ok_or_else(|| validation("command.retry_of"))
                 })
                 .transpose()?,
+        },
+        AppProductCommandDto::ConversationCalendarProposalSubmit {
+            session_id,
+            origin_run_id,
+            receipt,
+            artifact_id,
+            destination_ref,
+        } => ConversationCommand::SubmitCalendarProposal {
+            session_id: session_id.get(),
+            origin_run_id: RunId::from_uuid(origin_run_id.get())
+                .ok_or_else(|| validation("command.origin_run_id"))?,
+            receipt: crate::calendar_operations_wire::task_receipt_in(receipt)?,
+            artifact_id: artifact_id.get(),
+            destination_ref: destination_ref.get(),
         },
         AppProductCommandDto::ConversationCancelRun { run_id } => ConversationCommand::CancelRun {
             run_id: RunId::from_uuid(run_id.get()).ok_or_else(|| validation("command.run_id"))?,
@@ -62,6 +83,11 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
             session_id: session_id.get(),
             expected_revision,
         },
+        command @ (AppProductCommandDto::ExpertsSetInstallationEnabled { .. }
+        | AppProductCommandDto::ExpertsPrepareBindingReview { .. }
+        | AppProductCommandDto::ExpertsBindingReplace { .. }) => {
+            ConversationCommand::Expert(crate::experts_wire::command_in(command)?)
+        }
         _ => return Err(validation("command.kind")),
     })
 }
@@ -81,12 +107,39 @@ pub(crate) fn command_out(
                 session: session_snapshot(session)?,
             }
         }
+        (
+            ConversationCommand::SetCalendarOperationPolicy { .. },
+            ConversationCommandOutcome::CalendarOperationPolicy(value),
+        ) => AppCommandResultDto::ConversationCalendarPolicy {
+            policy: crate::calendar_operations_wire::authority_out(value, caller)?,
+        },
+        (ConversationCommand::Expert(command), ConversationCommandOutcome::Expert(value)) => {
+            return crate::experts_wire::command_out(command, value);
+        }
         (ConversationCommand::StartTurn { .. }, ConversationCommandOutcome::Turn(receipt)) => {
             if receipt.command_id.as_uuid() != command_id {
                 return Err(internal_error());
             }
             AppCommandResultDto::CommandReceipt {
                 receipt: command_receipt(&receipt, caller.runtime_epoch())?,
+            }
+        }
+        (
+            ConversationCommand::SubmitCalendarProposal { session_id, .. },
+            ConversationCommandOutcome::CalendarProposal(value),
+        ) => {
+            if value.operation.origin != floe_calendar_operations::ActionOriginKind::Expert
+                || value.operation.action_ref.is_nil()
+                || value
+                    .interaction
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.session_id != *session_id)
+            {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::ConversationCalendarProposal {
+                operation: crate::calendar_operations_wire::snapshot_out(value.operation)?,
+                interaction: value.interaction.map(interaction_snapshot).transpose()?,
             }
         }
         (
@@ -147,6 +200,14 @@ pub(crate) fn command_out(
 pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQuery> {
     Ok(match value {
         AppProductQueryDto::ConversationSessionResume {} => ConversationQuery::ResumeSession,
+        AppProductQueryDto::ConversationCalendarPolicy {} => {
+            ConversationQuery::CalendarOperationPolicy
+        }
+        query @ (AppProductQueryDto::ExpertsDirectory { .. }
+        | AppProductQueryDto::ExpertsInspectBinding { .. }
+        | AppProductQueryDto::ExpertsInspectBindingReview { .. }) => {
+            ConversationQuery::Expert(crate::experts_wire::query_in(query)?)
+        }
         AppProductQueryDto::ConversationSessionGet {
             session_id,
             before_message_id,
@@ -188,6 +249,15 @@ pub(crate) fn query_out(
     result: ConversationQueryOutcome,
 ) -> AppWireResult<AppQueryResultDto> {
     Ok(match (query, result) {
+        (
+            ConversationQuery::CalendarOperationPolicy,
+            ConversationQueryOutcome::CalendarOperationPolicy(value),
+        ) => AppQueryResultDto::ConversationCalendarPolicy {
+            policy: crate::calendar_operations_wire::authority_out(value, caller)?,
+        },
+        (ConversationQuery::Expert(query), ConversationQueryOutcome::Expert(value)) => {
+            return crate::experts_wire::query_out(query, value);
+        }
         (ConversationQuery::ResumeSession, ConversationQueryOutcome::Session(Some(session))) => {
             if session.person_id.0 != caller.person_id() {
                 return Err(internal_error());
@@ -512,6 +582,9 @@ fn interaction_kind_dto(kind: floe_agent_contract::UserInteractionKind) -> AppIn
         floe_agent_contract::UserInteractionKind::ExpertBinding => {
             AppInteractionKindDto::ExpertBinding
         }
+        floe_agent_contract::UserInteractionKind::OperationApproval => {
+            AppInteractionKindDto::OperationApproval
+        }
     }
 }
 fn interaction_snapshot(
@@ -547,6 +620,57 @@ fn interaction_snapshot(
             .ok_or_else(internal_error)?,
         expires_at: chrono::DateTime::from_timestamp_millis(value.expires_at_unix_ms)
             .ok_or_else(internal_error)?,
+        requirement: match value.requirement {
+            floe_conversation::InteractionRequirement::SourceAccess {
+                requirement,
+                inline,
+            } => AppInteractionRequirementDto::SourceAccess {
+                reason: match requirement.reason() {
+                    floe_context_contract::SourceAccessRequirementKind::EnableObserve => {
+                        AppSourceAccessReasonDto::EnableObserve
+                    }
+                    floe_context_contract::SourceAccessRequirementKind::ReviewChangedSource => {
+                        AppSourceAccessReasonDto::ReviewChangedSource
+                    }
+                    floe_context_contract::SourceAccessRequirementKind::RequestSystemPermission => {
+                        AppSourceAccessReasonDto::RequestSystemPermission
+                    }
+                    floe_context_contract::SourceAccessRequirementKind::Reconnect => {
+                        AppSourceAccessReasonDto::Reconnect
+                    }
+                    floe_context_contract::SourceAccessRequirementKind::ReviewProcessing => {
+                        AppSourceAccessReasonDto::ReviewProcessing
+                    }
+                    floe_context_contract::SourceAccessRequirementKind::SelectResource => {
+                        AppSourceAccessReasonDto::SelectResource
+                    }
+                },
+                source_id: requirement.source_id().to_owned(),
+                connection_id: requirement.connection_id().map(|id| id.as_str().to_owned()),
+                consumer: requirement.consumer().identifier().to_owned(),
+                purpose: match requirement.purpose() {
+                    floe_context_contract::GrantPurpose::Assistant => "assistant",
+                    floe_context_contract::GrantPurpose::Scheduling => "scheduling",
+                    floe_context_contract::GrantPurpose::Summarization => "summarization",
+                }
+                .into(),
+                inline,
+            },
+            floe_conversation::InteractionRequirement::ExpertBinding {
+                consumer,
+                requirement_key,
+                review,
+            } => AppInteractionRequirementDto::ExpertBinding {
+                consumer,
+                requirement_key,
+                review_ref: crate::experts_wire::binding_review_ref_to_dto(review)?,
+            },
+            floe_conversation::InteractionRequirement::OperationApproval { review } => {
+                AppInteractionRequirementDto::OperationApproval {
+                    review_ref: crate::calendar_operations_wire::review_out(review)?,
+                }
+            }
+        },
         target: match value.target {
             T::SourceReview { review } => AppInteractionTargetDto::SourceReview {
                 review: crate::connections_wire::observe_review(review)?,
@@ -577,6 +701,9 @@ fn interaction_snapshot(
             },
             T::ExpertBinding { review } => AppInteractionTargetDto::ExpertBinding {
                 review: crate::experts_wire::binding_review_to_dto(review)?,
+            },
+            T::OperationApproval { operation } => AppInteractionTargetDto::OperationApproval {
+                operation: crate::calendar_operations_wire::snapshot_out(operation)?,
             },
         },
         actions: value

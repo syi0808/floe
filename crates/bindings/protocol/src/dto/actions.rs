@@ -1,14 +1,10 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 
 use super::day::TimedScheduleDto;
-use super::{ActionAuthorityModeDto, ActionRefDto, DigestHex64Dto, TaskRefDto, UuidRefDto};
+use super::{ActionRefDto, DigestHex64Dto, OperationPolicyModeDto, TaskRefDto, UuidRefDto};
 
 const MAX_ACTION_TITLE_BYTES: usize = 1_024;
 const MAX_DESTINATION_LABEL_BYTES: usize = 512;
-const MAX_ACTION_PAGE_ITEMS: usize = 100;
-const MAX_ACTION_DESTINATIONS: usize = 256;
 const MAX_NEXT_OBSERVATION_AFTER_MS: u64 = 60_000;
 const MAX_TASK_JOURNAL_REVISION: u64 = 512;
 const MAX_ACTION_REVISION: u64 = i64::MAX as u64;
@@ -45,102 +41,13 @@ impl TaskExecutionReceiptRefDto {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ActionIntentDto {
-    DirectCreate {
-        destination_ref: UuidRefDto,
-        title: String,
-        schedule: TimedScheduleDto,
-    },
-    DirectUpdate {
-        event_ref: UuidRefDto,
-        expected_revision: u64,
-        title: String,
-        schedule: TimedScheduleDto,
-    },
-    DirectDelete {
-        event_ref: UuidRefDto,
-        expected_revision: u64,
-    },
-    ExpertProposal {
-        receipt: TaskExecutionReceiptRefDto,
-        artifact_id: UuidRefDto,
-        destination_ref: UuidRefDto,
-    },
-}
-
-impl ActionIntentDto {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        match self {
-            Self::DirectCreate {
-                title, schedule, ..
-            } => {
-                validate_new_title(title)?;
-                schedule.validate_new_action()
-            }
-            Self::DirectUpdate {
-                expected_revision,
-                title,
-                schedule,
-                ..
-            } => {
-                positive_revision(*expected_revision, "actions.expected_revision")?;
-                validate_new_title(title)?;
-                schedule.validate_new_action()
-            }
-            Self::DirectDelete {
-                expected_revision, ..
-            } => positive_revision(*expected_revision, "actions.expected_revision"),
-            Self::ExpertProposal { receipt, .. } => {
-                receipt.validate()?;
-                Ok(())
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ActionDestinationChoiceDto {
-    pub destination_ref: UuidRefDto,
-    pub label: String,
-}
-
-impl ActionDestinationChoiceDto {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if !bounded_trimmed_text(&self.label, MAX_DESTINATION_LABEL_BYTES) {
-            return Err("actions.destination.label");
-        }
-        Ok(())
-    }
-}
-
-/// Validates the bounded owner-projected destination list without interpreting
-/// its opaque compare-only references as authority.
-pub fn validate_action_destination_choices(
-    choices: &[ActionDestinationChoiceDto],
-) -> Result<(), &'static str> {
-    if choices.len() > MAX_ACTION_DESTINATIONS {
-        return Err("actions.destinations");
-    }
-    let mut references = HashSet::with_capacity(choices.len());
-    for choice in choices {
-        choice.validate()?;
-        if !references.insert(choice.destination_ref) {
-            return Err("actions.destinations.duplicate");
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionsAuthorityDto {
+pub struct CalendarOperationPolicyDto {
     pub revision: u64,
-    pub calendar_create: ActionAuthorityModeDto,
+    pub calendar_create: OperationPolicyModeDto,
 }
 
-impl ActionsAuthorityDto {
+impl CalendarOperationPolicyDto {
     pub fn validate(&self) -> Result<(), &'static str> {
         positive_revision(self.revision, "actions.authority.revision")
     }
@@ -150,20 +57,33 @@ impl ActionsAuthorityDto {
 #[serde(deny_unknown_fields)]
 pub struct ActionReviewRefDto {
     pub id: UuidRefDto,
-    pub action_id: ActionRefDto,
+    pub operation_id: ActionRefDto,
     pub effect_digest: DigestHex64Dto,
     pub source_digest: DigestHex64Dto,
-    pub authority_revision: u64,
+    pub person_id: UuidRefDto,
+    pub device_id: String,
+    pub policy_revision: Option<u64>,
+    pub created_at: String,
     pub expires_at: String,
 }
 
 impl ActionReviewRefDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        positive_revision(
-            self.authority_revision,
-            "actions.review_ref.authority_revision",
-        )?;
-        parse_instant(&self.expires_at, "actions.review_ref.expires_at")?;
+        if let Some(revision) = self.policy_revision {
+            positive_revision(revision, "actions.review_ref.policy_revision")?;
+        }
+        if self.device_id.is_empty()
+            || self.device_id.len() > 256
+            || self.device_id.trim() != self.device_id
+            || self.device_id.chars().any(char::is_control)
+        {
+            return Err("actions.review_ref.device_id");
+        }
+        let created_at = parse_instant(&self.created_at, "actions.review_ref.created_at")?;
+        let expires_at = parse_instant(&self.expires_at, "actions.review_ref.expires_at")?;
+        if created_at >= expires_at {
+            return Err("actions.review_ref.expires_at");
+        }
         Ok(())
     }
 }
@@ -345,14 +265,19 @@ impl ActionSnapshotDto {
         positive_revision(self.revision, "actions.snapshot.revision")?;
         self.effect.validate()?;
         self.review_ref.validate()?;
-        if self.review_ref.action_id != self.action_ref {
-            return Err("actions.snapshot.review_ref.action_id");
+        if self.review_ref.operation_id != self.action_ref {
+            return Err("actions.snapshot.review_ref.operation_id");
         }
         let created_at = parse_instant(&self.created_at, "actions.snapshot.created_at")?;
         let expires_at = parse_instant(&self.expires_at, "actions.snapshot.expires_at")?;
+        let review_created_at =
+            parse_instant(&self.review_ref.created_at, "actions.review_ref.created_at")?;
         let review_expires_at =
             parse_instant(&self.review_ref.expires_at, "actions.review_ref.expires_at")?;
-        if expires_at <= created_at || expires_at != review_expires_at {
+        if expires_at <= created_at
+            || expires_at != review_expires_at
+            || created_at != review_created_at
+        {
             return Err("actions.snapshot.expires_at");
         }
         if self.allowed_actions.len() > 4 {
@@ -368,29 +293,6 @@ impl ActionSnapshotDto {
             .is_some_and(|value| value == 0 || value > MAX_NEXT_OBSERVATION_AFTER_MS)
         {
             return Err("actions.snapshot.next_observation_after_ms");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ActionsPageDto {
-    pub actions: Vec<ActionSnapshotDto>,
-    pub next_cursor: Option<ActionRefDto>,
-}
-
-impl ActionsPageDto {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if self.actions.len() > MAX_ACTION_PAGE_ITEMS {
-            return Err("actions.page.actions");
-        }
-        let mut references = HashSet::with_capacity(self.actions.len());
-        for action in &self.actions {
-            action.validate()?;
-            if !references.insert(action.action_ref) {
-                return Err("actions.page.actions.duplicate");
-            }
         }
         Ok(())
     }
@@ -452,33 +354,4 @@ fn parse_instant(
                 Err(field)
             }
         })
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum ActionProposalPreviewDto {
-    Ready {
-        title: String,
-        schedule: TimedScheduleDto,
-        destinations: Vec<ActionDestinationChoiceDto>,
-    },
-    Existing {
-        action: ActionSnapshotDto,
-    },
-}
-impl ActionProposalPreviewDto {
-    pub fn validate(&self) -> Result<(), &'static str> {
-        match self {
-            Self::Ready {
-                title,
-                schedule,
-                destinations,
-            } => {
-                validate_new_title(title)?;
-                schedule.validate_new_action()?;
-                validate_action_destination_choices(destinations)
-            }
-            Self::Existing { action } => action.validate(),
-        }
-    }
 }

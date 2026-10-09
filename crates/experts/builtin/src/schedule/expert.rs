@@ -134,7 +134,7 @@ impl ExpertProgram for ScheduleProgram {
                     starts_at_unix_ms,
                     ends_at_unix_ms,
                 });
-                proposal = Some(floe_actions::ExpertCalendarProposalDraft {
+                proposal = Some(floe_calendar_operations::ExpertCalendarProposalDraft {
                     starts_at_unix_ms,
                     ends_at_unix_ms,
                 });
@@ -169,8 +169,8 @@ impl ExpertProgram for ScheduleProgram {
             output
                 .payload
                 .artifacts
-                .push(floe_actions::seal_expert_calendar_proposal(
-                    floe_actions::ExpertProposalContext {
+                .push(floe_calendar_operations::seal_expert_calendar_proposal(
+                    floe_calendar_operations::ExpertProposalContext {
                         person_id: request.actor.person_id,
                         instance_id: request.admission.registry_instance_id,
                         assignment_id: request.admission.assignment_id,

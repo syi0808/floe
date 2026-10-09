@@ -17,6 +17,7 @@ import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
+import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 
@@ -24,16 +25,16 @@ class AgentPanel extends StatefulWidget {
   const AgentPanel({
     super.key,
     required this.controller,
+    required this.dayGateway,
     required this.onClose,
-    this.onOpenAction,
     this.onOpenSourceReview,
     this.onOpenConnections,
     this.onOpenExpertSettings,
   });
 
   final ConversationController controller;
+  final DayGateway dayGateway;
   final VoidCallback onClose;
-  final Future<void> Function(String actionId)? onOpenAction;
   final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
@@ -85,19 +86,19 @@ class _AgentPanelState extends State<AgentPanel> {
     final ready = controller.runtimeController.ready;
     if (_wasReady && !ready) _sessionRequested = false;
     _wasReady = ready;
-    if (!ready ||
-        controller.busy ||
-        _sessionRequested ||
-        controller.session != null)
-      return;
+    if (!ready || controller.busy || _sessionRequested) return;
     _sessionRequested = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted &&
           identical(controller, widget.controller) &&
           controller.runtimeController.ready &&
-          controller.session == null &&
           !controller.busy) {
-        controller.load();
+        Future<void>(() async {
+          if (controller.session == null) await controller.load();
+          if (mounted && identical(controller, widget.controller)) {
+            await controller.refreshInteractions();
+          }
+        });
       }
     });
   }
@@ -230,7 +231,14 @@ class _AgentPanelState extends State<AgentPanel> {
                     constraints.maxHeight < 650 ||
                     MediaQuery.textScalerOf(context).scale(14) > 20;
                 final messages = controller.messages;
-                final content = messages.isEmpty
+                final represented = messages
+                    .whereType<AgentInteractionMessage>()
+                    .map((message) => message.interactionId)
+                    .toSet();
+                final extraInteractions = controller.interactionSnapshots
+                    .where((snapshot) => !represented.contains(snapshot.id))
+                    .toList(growable: false);
+                final content = messages.isEmpty && extraInteractions.isEmpty
                     ? Padding(
                         padding: const EdgeInsets.all(FloeSpace.base),
                         child: Text(
@@ -249,6 +257,7 @@ class _AgentPanelState extends State<AgentPanel> {
                         padding: const EdgeInsets.all(FloeSpace.base),
                         itemCount:
                             messages.length +
+                            extraInteractions.length +
                             (controller.hasEarlierMessages ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
@@ -275,7 +284,18 @@ class _AgentPanelState extends State<AgentPanel> {
                                   Text(failure),
                               ],
                             );
-                          return _message(strings, messages[index - offset]);
+                          final contentIndex = index - offset;
+                          if (contentIndex < messages.length) {
+                            return _message(strings, messages[contentIndex]);
+                          }
+                          return AgentInteractionCard(
+                            key: ValueKey(extraInteractions[contentIndex - messages.length].id),
+                            controller: controller,
+                            interactionId: extraInteractions[contentIndex - messages.length].id,
+                            onOpenSourceReview: widget.onOpenSourceReview,
+                            onOpenConnections: widget.onOpenConnections,
+                            onOpenExpertSettings: widget.onOpenExpertSettings,
+                          );
                         },
                       );
                 if (compact) {
@@ -333,7 +353,7 @@ class _AgentPanelState extends State<AgentPanel> {
     AgentInteractionMessage(:final interactionId) => AgentInteractionCard(
       key: ValueKey(interactionId),
       controller: widget.controller,
-      message: message,
+      interactionId: interactionId,
       onOpenSourceReview: widget.onOpenSourceReview,
       onOpenConnections: widget.onOpenConnections,
       onOpenExpertSettings: widget.onOpenExpertSettings,
@@ -365,7 +385,7 @@ class _AgentPanelState extends State<AgentPanel> {
           AgentProposalCard(
             controller: widget.controller,
             message: message,
-            onOpenAction: widget.onOpenAction,
+            dayGateway: widget.dayGateway,
           ),
         ],
       ],

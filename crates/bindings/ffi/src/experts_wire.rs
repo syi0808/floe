@@ -246,7 +246,7 @@ fn availability_to_dto(
     }
 }
 
-fn binding_review_ref_to_dto(
+pub(crate) fn binding_review_ref_to_dto(
     reference: floe_experts::BindingReviewRef,
 ) -> AppWireResult<BindingReviewRefDto> {
     reference.validate().map_err(|_| internal_error())?;
