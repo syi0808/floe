@@ -25,8 +25,8 @@ use floe_agent_contract::TaskExecutionReceiptRef;
 #[cfg(test)]
 use floe_conversation::TypedAgentMessageProvenance;
 use floe_conversation::{
-    CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState, TurnAdmissionRequest,
-    TurnInput, TurnMode,
+    BlockedRunCommit, CanonicalTurnIntent, ResumeChildAdmission, RunRecord, RunState, RunTerminal,
+    TurnAdmissionRequest, TurnInput, TurnMode,
 };
 use floe_conversation_contract::{
     AdmissionDisposition, AdmissionResult, AdmissionTarget, AgentIdentity, ConversationBranchId,
@@ -72,6 +72,27 @@ pub(super) enum CoreComposedRunAdmission {
     /// The enclosing transaction must commit this outcome; report Conflict
     /// only after that commit succeeds.
     ResumeSuperseded,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum CoreComposedSettlementRequest {
+    Finish {
+        run_id: RunId,
+        expected_aggregate_revision: u64,
+        terminal: RunTerminal,
+    },
+    Blocked(BlockedRunCommit),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CoreComposedSettlementResult {
+    Settled {
+        record: RunRecord,
+        close: RecorderCloseReceipt,
+    },
+    /// Owner settlement was deliberately deferred. The Run remains Working
+    /// and its existing Core recorder remains open until its effects settle.
+    Pending { record: RunRecord },
 }
 
 #[derive(Clone, Debug)]
@@ -157,6 +178,19 @@ pub(super) fn owner_error(error: AgentFailure) -> ConversationStoreFailure {
             ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
         }
         _ => unavailable(),
+    }
+}
+
+fn owner_evidence_mismatch() -> ConversationStoreFailure {
+    ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
+}
+
+fn terminal_owner_error(error: AgentFailure) -> ConversationStoreFailure {
+    match error {
+        AgentFailure::InvalidInput => {
+            ConversationStoreFailure::Transition(ConversationFailure::InvalidInput)
+        }
+        other => owner_error(other),
     }
 }
 
@@ -1885,6 +1919,269 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
+    /// Compose Host Run terminal settlement and recorder close in the caller's
+    /// Vault transaction. This is the internal cutover boundary; production
+    /// Manager callers remain on their existing path until their later caller
+    /// migration.
+    pub(super) async fn settle_conversation_run_with_core_on(
+        &self,
+        transaction: &Transaction<'_>,
+        request: CoreComposedSettlementRequest,
+    ) -> Result<CoreComposedSettlementResult, ConversationStoreFailure> {
+        let run_id = match &request {
+            CoreComposedSettlementRequest::Finish {
+                run_id, terminal, ..
+            } => {
+                terminal.validate().map_err(terminal_owner_error)?;
+                if terminal.state == RunState::Blocked {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::InvalidInput,
+                    ));
+                }
+                *run_id
+            }
+            CoreComposedSettlementRequest::Blocked(commit) => {
+                commit.validate().map_err(terminal_owner_error)?;
+                if commit.person_id != self.person_id {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+                commit.run_id
+            }
+        };
+        let current = self
+            .conversation_run_on(transaction, run_id)
+            .await
+            .map_err(owner_error)?
+            .ok_or_else(owner_evidence_mismatch)?;
+
+        if current.state.is_terminal() {
+            // Owner request identity is checked before any current-generation
+            // fence. A replay must then present the exact close receipt created
+            // by the same transaction; a missing receipt is never synthesized.
+            let record = match &request {
+                CoreComposedSettlementRequest::Finish {
+                    run_id,
+                    expected_aggregate_revision,
+                    terminal,
+                } => self
+                    .finish_conversation_run_on(
+                        transaction,
+                        *run_id,
+                        *expected_aggregate_revision,
+                        terminal.clone(),
+                    )
+                    .await
+                    .map_err(owner_error)?,
+                CoreComposedSettlementRequest::Blocked(commit) => self
+                    .finish_conversation_run_on(
+                        transaction,
+                        commit.run_id,
+                        commit.expected_aggregate_revision,
+                        commit.terminal.clone(),
+                    )
+                    .await
+                    .map_err(owner_error)?,
+            };
+            let close = self
+                .replay_settled_recorder_close_on(transaction, &record)
+                .await?;
+            let record = match request {
+                CoreComposedSettlementRequest::Finish { .. } => record,
+                CoreComposedSettlementRequest::Blocked(commit) => self
+                    .finish_blocked_conversation_run_on(transaction, commit)
+                    .await
+                    .map_err(owner_error)?,
+            };
+            return Ok(CoreComposedSettlementResult::Settled { record, close });
+        }
+
+        // A nonterminal Run may only start settlement with its exact committed
+        // open receipt and no prior close/retirement evidence.
+        let open = open_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if close_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .is_some()
+            || retirement_receipt_on(transaction, self.person_id, run_id)
+                .await?
+                .is_some()
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        self.validate_active_settlement_recorder_on(transaction, &current, &open)
+            .await?;
+
+        let record = match request {
+            CoreComposedSettlementRequest::Finish {
+                run_id,
+                expected_aggregate_revision,
+                terminal,
+            } => self
+                .finish_conversation_run_on(
+                    transaction,
+                    run_id,
+                    expected_aggregate_revision,
+                    terminal,
+                )
+                .await
+                .map_err(owner_error)?,
+            CoreComposedSettlementRequest::Blocked(commit) => self
+                .finish_blocked_conversation_run_on(transaction, commit)
+                .await
+                .map_err(owner_error)?,
+        };
+
+        if record.state == RunState::Working && record.pending_terminal.is_some() {
+            return Ok(CoreComposedSettlementResult::Pending { record });
+        }
+        if !record.state.is_terminal() {
+            return Err(owner_evidence_mismatch());
+        }
+
+        #[cfg(test)]
+        if self
+            .conversation_core_fault_after_owner_settlement
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(ConversationStoreFailure::NotCommitted);
+        }
+
+        let close = self
+            .close_conversation_recorder_on(transaction, open.fence)
+            .await?;
+        Ok(CoreComposedSettlementResult::Settled { record, close })
+    }
+
+    async fn validate_active_settlement_recorder_on(
+        &self,
+        transaction: &Transaction<'_>,
+        expected_run: &RunRecord,
+        open: &RecorderOpenReceipt,
+    ) -> Result<(), ConversationStoreFailure> {
+        let fence = &open.fence;
+        let scope = Scope::from_identity(
+            self.person_id,
+            &fence.identity,
+            fence.conversation_id,
+            fence.branch_id,
+        );
+        if fence.run_id != expected_run.run_id
+            || fence.identity.person_id != self.person_id
+            || fence.executor_domain != ExecutorDomain::HostRun
+            || fence.executor_generation != expected_run.executor_generation
+            || fence.execution_task.is_some()
+            || open.opened_head_revision == 0
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let active = active_recorder_on(transaction, scope).await?;
+        if active.as_ref() != Some(fence) {
+            return Err(owner_evidence_mismatch());
+        }
+
+        let loaded_head = load_head_on(transaction, scope)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if fence.recorder_epoch != loaded_head.state.recorder_epoch
+            || open.opened_head_revision > loaded_head.state.head_revision
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let (receipt, input_message) = input_receipt_on(transaction, scope, fence.input.message_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        let input_entry = entry_on(transaction, scope, fence.input.sequence)
+            .await?
+            .filter(|entry| entry.reference == fence.input)
+            .ok_or_else(owner_evidence_mismatch)?;
+        if receipt.receipt.transcript != fence.input
+            || receipt.receipt.task_id.is_some()
+            || input_message != input_entry.message
+        {
+            return Err(owner_evidence_mismatch());
+        }
+
+        let (owner, run, _) = self
+            .verified_owner_evidence_on(
+                transaction,
+                fence.run_id,
+                &fence.identity,
+                fence.conversation_id,
+                fence.branch_id,
+                fence.input,
+                fence.executor_domain,
+                fence.executor_generation,
+            )
+            .await?;
+        let expected_owner_state = if expected_run.pending_terminal.is_some() {
+            OwnerRunState::PendingTerminal
+        } else {
+            OwnerRunState::Working
+        };
+        if run != *expected_run
+            || owner.state != expected_owner_state
+            || owner.run_id != expected_run.run_id
+            || owner.person_id != expected_run.person_id
+            || owner.input != fence.input
+            || owner.executor_generation != expected_run.executor_generation
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        // Do not compare this retained fence with the mutable current executor
+        // generation: an exact PendingTerminal replay remains an observation
+        // of the original active custody. New owner transitions enforce their
+        // own generation fence in finish_conversation_run_on.
+        Ok(())
+    }
+
+    async fn replay_settled_recorder_close_on(
+        &self,
+        transaction: &Transaction<'_>,
+        record: &RunRecord,
+    ) -> Result<RecorderCloseReceipt, ConversationStoreFailure> {
+        let run_id = record.run_id;
+        let open = open_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        let close = close_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if retirement_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .is_some()
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &open.fence.identity,
+            open.fence.conversation_id,
+            open.fence.branch_id,
+        );
+        if active_recorder_on(transaction, scope)
+            .await?
+            .is_some_and(|active| active.run_id == run_id)
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let transition = replay_close_recording(open.fence, close)
+            .map_err(ConversationStoreFailure::Transition)?;
+        let terminal_text = super::conversations::terminal_receipt_on(transaction, run_id)
+            .await
+            .map_err(owner_error)?
+            .ok_or_else(owner_evidence_mismatch)?;
+        let terminal_digest = parse_digest(&terminal_text)?;
+        if transition.receipt.terminal_receipt_digest != terminal_digest
+            || transition.receipt.owner_aggregate_revision != record.aggregate_revision
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        Ok(transition.receipt)
+    }
+
     /// Host composition primitive. Current Vault owner records do not yet
     /// expose verified transcript settlement/protection roots, so this close
     /// persists an unchanged settled prefix and never infers one from queue data.
@@ -3173,6 +3470,382 @@ mod tests {
             .await
     }
 
+    async fn compose_owner_core_settlement(
+        vault: &EncryptedAgentVault<TestKeys>,
+        request: CoreComposedSettlementRequest,
+    ) -> Result<CoreComposedSettlementResult, ConversationStoreFailure> {
+        let mut connection = vault.connection().map_err(start_error)?;
+        let (guard, transaction) = vault
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = vault
+            .settle_conversation_run_with_core_on(&transaction, request)
+            .await;
+        vault
+            .finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    async fn pending_projection_interaction_for_source(
+        scenario: &Scenario,
+        run: &RunRecord,
+        source: floe_context_contract::SourceAccessRequirement,
+    ) -> floe_conversation::ConversationInteraction {
+        use floe_agent_contract::{
+            ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+            PreparedModelPlan, ProcessingBoundary, SourceProjectionReview,
+        };
+        use floe_conversation::SourceReviewLink;
+        use floe_conversation::{
+            BlockedReviewEvidence, ConversationInteraction, InteractionOrigin,
+            InteractionRequirement, InteractionState, ReviewAuditRecord, ReviewedTarget,
+            canonical_requirement_digest, canonical_target_digest, interaction_publication_id,
+        };
+
+        let plan = PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: run.person_id.to_string(),
+            device_id: run.device_id.clone(),
+            purpose: "everyday_assistance".into(),
+            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([91; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([92; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        };
+        let projection_operation_id = Uuid::new_v4();
+        let blockers = floe_context_contract::SourceAccessBlockers::try_new(vec![source.clone()])
+            .expect("valid model projection blocker set");
+        let target_digest: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(&plan, projection_operation_id, &blockers))
+                .expect("encode model projection review evidence"),
+        )
+        .into();
+        let review = SourceProjectionReview {
+            projection_operation_id,
+            target_digest,
+            blockers,
+        };
+        let reference = persist_projection_source_review(scenario, run, &review, &source).await;
+        let requirement = InteractionRequirement::from_source(&source, true);
+        let target = ReviewedTarget::SourceReview(reference.clone());
+        let origin = InteractionOrigin::Projection {
+            run_id: run.run_id,
+            projection_operation_id,
+            target_digest,
+        };
+        let audit = ReviewAuditRecord {
+            person_id: run.person_id,
+            device_id: run.device_id.clone(),
+            session_id: run.session_id,
+            run_id: run.run_id,
+            executor_generation: run.executor_generation,
+            operation_id: projection_operation_id,
+            evidence: BlockedReviewEvidence::ModelProjection {
+                plan,
+                review,
+                access_reviews: vec![SourceReviewLink {
+                    reference,
+                    requirement: source,
+                }],
+            },
+        };
+        let requirement_digest = canonical_requirement_digest(&requirement)
+            .expect("canonical blocked projection requirement");
+        let target_digest =
+            canonical_target_digest(&target).expect("canonical blocked projection target");
+        let id =
+            interaction_publication_id(run.run_id, &origin, &requirement_digest, &target_digest)
+                .expect("canonical blocked projection publication id");
+        let interaction = ConversationInteraction {
+            id,
+            person_id: run.person_id,
+            session_id: run.session_id,
+            origin_run_id: run.run_id,
+            origin_turn_id: run.run_id.as_uuid(),
+            origin,
+            audit,
+            kind: floe_agent_contract::UserInteractionKind::SourceAccess,
+            requirement,
+            requirement_digest,
+            target,
+            target_digest,
+            state: InteractionState::Pending,
+            revision: 1,
+            created_at_unix_ms: 1,
+            expires_at_unix_ms: 1 + floe_conversation::INTERACTION_PENDING_LIFETIME_MS,
+        };
+        interaction
+            .validate()
+            .expect("valid blocked projection interaction fixture");
+        interaction
+    }
+
+    async fn persist_projection_source_review(
+        scenario: &Scenario,
+        run: &RunRecord,
+        projection: &floe_agent_contract::SourceProjectionReview,
+        requirement: &floe_context_contract::SourceAccessRequirement,
+    ) -> floe_access::ReviewRef {
+        use floe_access::{
+            ConnectionReview, DataAccessGrant, ExpectedGrant, GrantRepository, ReviewedView,
+            SourceExpectation,
+        };
+        use floe_context_contract::{
+            ExecutionOwnerId, GrantDataCategory, GrantId, GrantOperation, GrantPurpose, GrantScope,
+            GrantSourceBinding, ProcessingRestriction, SourceAuthority,
+        };
+
+        let connection_id = requirement
+            .connection_id()
+            .expect("projection blocker carries a connection")
+            .clone();
+        let connector = requirement
+            .connector_id()
+            .expect("projection blocker carries a connector")
+            .clone();
+        let source_binding = GrantSourceBinding::try_new(
+            run.person_id,
+            connection_id.clone(),
+            connector,
+            ExecutionOwnerId::try_new(
+                floe_access::local_calendar_execution_owner_for_connector(
+                    requirement
+                        .connector_id()
+                        .expect("projection blocker carries a connector")
+                        .as_str(),
+                    &run.device_id,
+                )
+                .expect("fixture connector has a local execution owner"),
+            )
+            .expect("valid local execution owner"),
+        )
+        .expect("valid source binding");
+        let resource = requirement
+            .resources()
+            .first()
+            .expect("review requires one resource")
+            .clone();
+        let consumer = requirement.consumer().clone();
+        let categories = vec![GrantDataCategory::Content, GrantDataCategory::Metadata];
+        let scope = GrantScope::try_new(
+            vec![resource.clone()],
+            categories.clone(),
+            vec![GrantOperation::Read],
+            vec![GrantPurpose::Assistant],
+            vec![consumer.clone()],
+            ProcessingRestriction::DeviceOnly,
+        )
+        .expect("valid reviewed grant scope");
+        let categories = scope.categories().to_vec();
+        let mut successor = DataAccessGrant::new(
+            GrantId::new(),
+            Uuid::new_v4(),
+            source_binding.clone(),
+            scope.clone(),
+        )
+        .expect("valid successor grant");
+        successor
+            .activate_review(successor.authority(), scope)
+            .expect("activate reviewed successor fixture");
+        let authority = SourceAuthority::new();
+        let source = SourceExpectation {
+            source: source_binding,
+            revision: None,
+            provider_revision: None,
+            authority,
+            physical_resources: vec![resource.clone()],
+            subject_fingerprint: "fixture-source-subject".into(),
+            gateway: None,
+        };
+        let origin = floe_access::ProjectionReviewOrigin::for_requirements(
+            run.run_id,
+            projection.projection_operation_id,
+            projection.target_digest,
+            connection_id.clone(),
+            std::slice::from_ref(requirement),
+        )
+        .expect("valid persisted projection review origin");
+        let command_hash: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(
+                "floe.access.projection-review.v1",
+                run.run_id,
+                projection.projection_operation_id,
+                projection.target_digest,
+                &connection_id,
+            ))
+            .expect("encode projection review command identity"),
+        )
+        .into();
+        let mut command_id_bytes = [0; 16];
+        command_id_bytes.copy_from_slice(&command_hash[..16]);
+        command_id_bytes[6] = (command_id_bytes[6] & 15) | 64;
+        command_id_bytes[8] = (command_id_bytes[8] & 63) | 128;
+        let command_id = Uuid::from_bytes(command_id_bytes);
+        let intent_digest: [u8; 32] = Sha256::digest(
+            serde_json::to_vec(&(run.person_id, &run.device_id, &origin))
+                .expect("encode projection review intent"),
+        )
+        .into();
+        let view_id =
+            floe_context_contract::split_connection_view_resource(&resource, &connection_id)
+                .expect("source resource is a connection view");
+        let data_class = floe_context_contract::source_view_data_class(view_id)
+            .expect("known source view has a data class");
+        let mut review = ConnectionReview {
+            reference: floe_access::ReviewRef {
+                id: command_id,
+                revision: 1,
+                digest: [0; 32],
+            },
+            command_id,
+            intent_digest,
+            person_id: run.person_id,
+            device_id: run.device_id.clone(),
+            source,
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(15),
+            views: vec![ReviewedView {
+                view_id: view_id.to_owned(),
+                data_class,
+                expected: ExpectedGrant::Absent {
+                    resource: resource.clone(),
+                },
+                consumers: vec![consumer],
+                purpose: GrantPurpose::Assistant,
+                categories,
+                current_processing: None,
+                requested_processing: ProcessingRestriction::DeviceOnly,
+                successor,
+            }],
+            policy_digest: [94; 32],
+        };
+        review.reference.digest = review.digest().expect("digest exact access review");
+        review.validate().expect("valid persisted access review");
+        scenario
+            .vault()
+            .store_review(review)
+            .await
+            .expect("persist the exact access review used by the blocked publication")
+    }
+
+    async fn blocked_run_commit(
+        scenario: &Scenario,
+        admitted: &RunRecord,
+    ) -> floe_conversation::BlockedRunCommit {
+        use floe_agent_contract::{UserInteractionRef, UserInteractionStatus};
+        use floe_context_contract::{
+            ConnectionId, ConnectorId, GrantConsumer, GrantOperation, GrantPurpose,
+            SourceAccessRequirement, SourceAccessRequirementKind,
+        };
+        use floe_conversation::{
+            BlockedInteractionLink, BlockedRunCommit, ReviewPublication, RunBlockOrigin,
+            RunBlockRecord, RunTerminal,
+        };
+
+        let connection_id = ConnectionId::new();
+        let resource =
+            floe_context_contract::connection_view_resource("calendar.timeline", &connection_id)
+                .expect("valid fixture calendar resource");
+        let source = SourceAccessRequirement::try_new(
+            "floe.source.calendar",
+            Some(ConnectorId::try_new("calendar.event_kit").expect("valid calendar connector")),
+            Some(connection_id),
+            GrantOperation::Read,
+            GrantConsumer::builtin("manager").expect("valid manager consumer"),
+            GrantPurpose::Assistant,
+            vec![resource],
+            None,
+            SourceAccessRequirementKind::EnableObserve,
+            None,
+            None,
+            true,
+        )
+        .expect("valid source blocker");
+        let current = scenario
+            .vault()
+            .conversation_run(admitted.run_id)
+            .await
+            .expect("read owner Run for blocked projection")
+            .expect("blocked owner Run remains stored");
+        let interaction =
+            pending_projection_interaction_for_source(scenario, &current, source).await;
+
+        let connection = scenario.vault().connection().expect("connect to Vault");
+        let journal = scenario
+            .vault()
+            .conversation_journal_on(&connection, &current)
+            .await
+            .expect("read exact blocked owner journal");
+        drop(connection);
+        let steps = journal
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                floe_agent_contract::JournalEvent::ToolResult { result } => {
+                    Some(floe_agent_contract::EngineStep::Tool(result.clone()))
+                }
+                floe_agent_contract::JournalEvent::DelegationResult { receipt } => {
+                    Some(floe_agent_contract::EngineStep::Delegation(receipt.clone()))
+                }
+                floe_agent_contract::JournalEvent::Output { text, artifacts } => {
+                    Some(floe_agent_contract::EngineStep::Answer {
+                        text: text.clone(),
+                        artifacts: artifacts.clone(),
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let link = BlockedInteractionLink {
+            interaction_id: interaction.id,
+            origin: RunBlockOrigin {
+                session_id: current.session_id,
+                person_id: current.person_id,
+                device_id: current.device_id.clone(),
+                run_id: current.run_id,
+                executor_generation: current.executor_generation,
+                origin: interaction.origin.clone(),
+            },
+            target: interaction.target.clone(),
+        };
+        let terminal = RunTerminal {
+            state: RunState::Blocked,
+            output: None,
+            steps,
+            coverage: DependencyCoverage::Independent,
+            issue: None,
+            blocked: Some(RunBlockRecord {
+                review_group_id: Uuid::new_v4(),
+                interactions: vec![link],
+                prior_exhaustion: None,
+            }),
+            interactions: vec![UserInteractionRef {
+                interaction_id: interaction.id,
+                kind: interaction.kind,
+                status: UserInteractionStatus::Pending,
+            }],
+        };
+        let commit = BlockedRunCommit {
+            run_id: current.run_id,
+            session_id: current.session_id,
+            person_id: current.person_id,
+            expected_session_revision: current.session_revision,
+            expected_aggregate_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
+            executor_generation: current.executor_generation,
+            terminal,
+            publications: vec![ReviewPublication {
+                record: interaction.audit.clone(),
+                interactions: vec![interaction],
+            }],
+        };
+        commit
+            .validate()
+            .expect("valid blocked owner transaction input");
+        commit
+    }
+
     async fn compose_typed_recording(
         vault: &EncryptedAgentVault<TestKeys>,
         request: TypedConversationRecordingRequest,
@@ -3583,7 +4256,7 @@ mod tests {
                 .expect("append owner journal fixture event");
         }
 
-        async fn complete_owner_run(&mut self, run: &RunRecord) -> RunRecord {
+        async fn prepare_completed_terminal(&self, run: &RunRecord) -> RunTerminal {
             use floe_agent_contract::{
                 BatchCursor, EngineStep, JournalEvent, ModelBindingDigest, ModelBudgetProfile,
                 ModelCapabilities, ModelSelectionCommitment, ModelStep, ModelUsage,
@@ -3673,24 +4346,25 @@ mod tests {
                 },
             )
             .await;
+            RunTerminal {
+                state: RunState::Completed,
+                output: Some(text.clone()),
+                steps: vec![EngineStep::Answer {
+                    text,
+                    artifacts: Vec::new(),
+                }],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                blocked: None,
+                interactions: vec![],
+            }
+        }
+
+        async fn complete_owner_run(&mut self, run: &RunRecord) -> RunRecord {
+            let terminal = self.prepare_completed_terminal(run).await;
             let completed = self
                 .vault()
-                .finish_conversation_run(
-                    run.run_id,
-                    run.aggregate_revision,
-                    RunTerminal {
-                        state: RunState::Completed,
-                        output: Some(text.clone()),
-                        steps: vec![EngineStep::Answer {
-                            text,
-                            artifacts: Vec::new(),
-                        }],
-                        coverage: DependencyCoverage::Independent,
-                        issue: None,
-                        blocked: None,
-                        interactions: vec![],
-                    },
-                )
+                .finish_conversation_run(run.run_id, run.aggregate_revision, terminal)
                 .await
                 .expect("finish synthetic owner Run through the Vault API");
             if let Some(recorder) = self
@@ -3911,7 +4585,7 @@ mod tests {
                 },
             )
             .await;
-            let task_messages = ["Task A input", "Task B input"];
+            let task_messages = vec!["Task A input", "Task B input"];
             let batch = ValidatedModelBatch {
                 execution_id,
                 attempt_id,

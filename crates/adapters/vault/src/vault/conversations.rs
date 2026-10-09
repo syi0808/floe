@@ -960,118 +960,152 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
             .map_err(|error| self.registry_transaction_start_error(error))?;
-        let result = async {
-            validate_schema(&transaction).await?;
-            super::conversation_interactions::validate_schema(&transaction).await?;
-            let current = self
-                .conversation_run_on(&transaction, commit.run_id)
+        let result = self
+            .finish_blocked_conversation_run_on(&transaction, commit)
+            .await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
+    }
+
+    /// Apply the existing blocked owner publication and settlement inside a
+    /// caller-owned transaction. Core settlement composes this primitive so
+    /// its close receipt commits with the same audit, interactions, Run,
+    /// Session, terminal receipt and any Resume request.
+    pub(super) async fn finish_blocked_conversation_run_on(
+        &self,
+        transaction: &Transaction<'_>,
+        commit: BlockedRunCommit,
+    ) -> Result<RunRecord, AgentFailure> {
+        validate_schema(transaction).await?;
+        super::conversation_interactions::validate_schema(transaction).await?;
+        let current = self
+            .conversation_run_on(transaction, commit.run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        let replay = current.state == RunState::Blocked;
+
+        // On replay, prove the exact terminal request before checking owner
+        // fences. The Core composer also validates the immutable close receipt
+        // before calling this helper.
+        if replay {
+            self.finish_conversation_run_on(
+                transaction,
+                commit.run_id,
+                commit.expected_aggregate_revision,
+                commit.terminal.clone(),
+            )
+            .await?;
+        }
+
+        if !replay
+            && (current.person_id != commit.person_id
+                || current.session_id != commit.session_id
+                || current.executor_generation != commit.executor_generation
+                || current.journal_revision != commit.expected_journal_revision
+                || current.state != RunState::Working
+                || current.session_revision != commit.expected_session_revision
+                || current.aggregate_revision != commit.expected_aggregate_revision)
+        {
+            return Err(AgentFailure::Conflict);
+        }
+
+        let block = commit
+            .terminal
+            .blocked
+            .as_ref()
+            .ok_or(AgentFailure::InvalidInput)?;
+        self.validate_blocked_task_audits_on(transaction, &commit)
+            .await?;
+        for publication in &commit.publications {
+            if publication.record.device_id != current.device_id {
+                return Err(AgentFailure::Conflict);
+            }
+            self.store_review_audit_on(transaction, &current, &publication.record, replay)
+                .await?;
+            for interaction in &publication.interactions {
+                let link = block
+                    .interactions
+                    .iter()
+                    .find(|link| link.interaction_id == interaction.id)
+                    .ok_or(AgentFailure::Conflict)?;
+                let origin = &link.origin;
+                if origin.run_id != current.run_id
+                    || origin.session_id != current.session_id
+                    || origin.person_id != current.person_id
+                    || origin.device_id != current.device_id
+                    || origin.executor_generation != current.executor_generation
+                    || origin.origin != interaction.origin
+                    || link.target != interaction.target
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                if let Some(existing) = super::conversation_interactions::read_interaction(
+                    transaction,
+                    self.person_id,
+                    interaction.id,
+                )
                 .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let replay = current.state == RunState::Blocked;
+                {
+                    if !same_publication(&existing, interaction) {
+                        return Err(AgentFailure::Conflict);
+                    }
+                } else {
+                    if replay {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    self.check_interaction_origin_on(transaction, interaction)
+                        .await?;
+                    let stored = super::conversation_interactions::count_interactions(
+                        transaction,
+                        current.run_id,
+                        false,
+                    )
+                    .await?;
+                    let active = super::conversation_interactions::count_interactions(
+                        transaction,
+                        current.run_id,
+                        true,
+                    )
+                    .await?;
+                    if stored >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN as u64
+                        || active >= floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN as u64
+                    {
+                        return Err(AgentFailure::BudgetExceeded);
+                    }
+                    super::conversation_interactions::insert_interaction(transaction, interaction)
+                        .await?;
+                }
+            }
+        }
+
+        if replay {
             if current.person_id != commit.person_id
                 || current.session_id != commit.session_id
                 || current.executor_generation != commit.executor_generation
                 || current.journal_revision != commit.expected_journal_revision
-                || (!replay
-                    && (current.state != RunState::Working
-                        || current.session_revision != commit.expected_session_revision
-                        || current.aggregate_revision != commit.expected_aggregate_revision))
-                || (replay
-                    && (current.session_revision
-                        != commit
-                            .expected_session_revision
-                            .checked_add(1)
-                            .ok_or(AgentFailure::Conflict)?
-                        || current.aggregate_revision
-                            != commit
-                                .expected_aggregate_revision
-                                .checked_add(1)
-                                .ok_or(AgentFailure::Conflict)?))
+                || current.session_revision
+                    != commit
+                        .expected_session_revision
+                        .checked_add(1)
+                        .ok_or(AgentFailure::Conflict)?
+                || current.aggregate_revision
+                    != commit
+                        .expected_aggregate_revision
+                        .checked_add(1)
+                        .ok_or(AgentFailure::Conflict)?
             {
                 return Err(AgentFailure::Conflict);
             }
-            let block = commit
-                .terminal
-                .blocked
-                .as_ref()
-                .ok_or(AgentFailure::InvalidInput)?;
-            self.validate_blocked_task_audits_on(&transaction, &commit)
-                .await?;
-            for publication in &commit.publications {
-                if publication.record.device_id != current.device_id {
-                    return Err(AgentFailure::Conflict);
-                }
-                self.store_review_audit_on(&transaction, &current, &publication.record, replay)
-                    .await?;
-                for interaction in &publication.interactions {
-                    let link = block
-                        .interactions
-                        .iter()
-                        .find(|link| link.interaction_id == interaction.id)
-                        .ok_or(AgentFailure::Conflict)?;
-                    let origin = &link.origin;
-                    if origin.run_id != current.run_id
-                        || origin.session_id != current.session_id
-                        || origin.person_id != current.person_id
-                        || origin.device_id != current.device_id
-                        || origin.executor_generation != current.executor_generation
-                        || origin.origin != interaction.origin
-                        || link.target != interaction.target
-                    {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    if let Some(existing) = super::conversation_interactions::read_interaction(
-                        &transaction,
-                        self.person_id,
-                        interaction.id,
-                    )
-                    .await?
-                    {
-                        if !same_publication(&existing, interaction) {
-                            return Err(AgentFailure::Conflict);
-                        }
-                    } else {
-                        if replay {
-                            return Err(AgentFailure::StorageUnavailable);
-                        }
-                        self.check_interaction_origin_on(&transaction, interaction)
-                            .await?;
-                        let stored = super::conversation_interactions::count_interactions(
-                            &transaction,
-                            current.run_id,
-                            false,
-                        )
-                        .await?;
-                        let active = super::conversation_interactions::count_interactions(
-                            &transaction,
-                            current.run_id,
-                            true,
-                        )
-                        .await?;
-                        if stored >= floe_conversation::MAX_STORED_INTERACTIONS_PER_RUN as u64
-                            || active >= floe_conversation::MAX_ACTIVE_INTERACTIONS_PER_RUN as u64
-                        {
-                            return Err(AgentFailure::BudgetExceeded);
-                        }
-                        super::conversation_interactions::insert_interaction(
-                            &transaction,
-                            interaction,
-                        )
-                        .await?;
-                    }
-                }
-            }
-            self.finish_conversation_run_on(
-                &transaction,
-                commit.run_id,
-                commit.expected_aggregate_revision,
-                commit.terminal,
-            )
-            .await
+            return Ok(current);
         }
-        .await;
-        self.finish_registry_transaction_checked(transaction, result)
-            .await
+
+        self.finish_conversation_run_on(
+            transaction,
+            commit.run_id,
+            commit.expected_aggregate_revision,
+            commit.terminal,
+        )
+        .await
     }
 
     pub(super) async fn conversation_journal_on(

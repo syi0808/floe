@@ -9,6 +9,428 @@ use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
 
+async fn append_unresolved_delegation(scenario: &Scenario, run: &RunRecord) {
+    use floe_agent_contract::{
+        AgentContext, BatchCursor, DelegationExecutionContext, DelegationRequest, InvocationKey,
+        JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelStep, PinnedAgentRevision, PreparedModelPlan,
+        ProcessingBoundary, ProjectionRef, ValidatedModelBatch,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let context = DelegationExecutionContext {
+        session_id: run.session_id,
+        device_id: run.device_id.clone(),
+        agent_context: AgentContext {
+            projection_version: 1,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
+        max_output_bytes: floe_agent_contract::MAX_OUTPUT_BYTES,
+        projection_coverage: DependencyCoverage::Independent,
+    };
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([81; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([82; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: floe_agent_contract::ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::Delegate {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                        message: "unresolved delegated work".into(),
+                        context_refs: vec![],
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![PinnedAgentRevision {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                    }],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: Some(context.clone()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    let execution_id = run.run_id.as_uuid();
+    let task_id = floe_kernel::TaskId::from_uuid(Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:0:task").as_bytes(),
+    ))
+    .expect("derive stable unresolved TaskId");
+    let invocation_key = InvocationKey::from_uuid(Uuid::new_v5(
+        &execution_id,
+        format!("{execution_id}:{batch_id}:0:delegation").as_bytes(),
+    ))
+    .expect("derive stable unresolved invocation");
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::DelegationIntent {
+                request: DelegationRequest {
+                    task_id,
+                    parent_run_id: Some(run.run_id.as_uuid()),
+                    principal: scenario.person_id.to_string(),
+                    invocation_key,
+                    selected_agent_id: "fixture.expert".into(),
+                    selected_definition_revision: 1,
+                    message: "unresolved delegated work".into(),
+                    context_refs: vec![],
+                    execution_context: context,
+                },
+            },
+        )
+        .await;
+}
+
+async fn run_settlement_counts(
+    scenario: &Scenario,
+    run: RunId,
+) -> (i64, i64, i64, i64, i64, i64, i64) {
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect for settlement counts");
+    let closes = table_count(&connection, "agent_conversation_core_v3_close_receipts").await;
+    let active = table_count(&connection, "agent_conversation_core_v3_active_recorders").await;
+    let audits = table_count(&connection, "agent_conversation_review_audits").await;
+    let interactions = table_count(&connection, "agent_conversation_interactions").await;
+    let terminal_receipts = table_count(&connection, "agent_conversation_terminal_receipts").await;
+    let resume_requests = table_count(&connection, "agent_conversation_resume_requests").await;
+    let coverage = table_count(&connection, "agent_context_dependency_coverage").await;
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+        .await
+        .expect("start per Run settlement count");
+    let scoped_close = close_receipt_on(&transaction, scenario.person_id, run)
+        .await
+        .expect("read exact close receipt")
+        .is_some();
+    let scoped_active = active_recorder_on(
+        &transaction,
+        Scope::from_identity(
+            scenario.person_id,
+            &scenario.identity,
+            scenario.conversation_id,
+            scenario.branch_id,
+        ),
+    )
+    .await
+    .expect("read active recorder")
+    .is_some_and(|fence| fence.run_id == run);
+    transaction.commit().await.expect("finish count snapshot");
+    assert_eq!(scoped_close, closes == 1);
+    assert_eq!(scoped_active, active == 1);
+    (
+        closes,
+        active,
+        audits,
+        interactions,
+        terminal_receipts,
+        resume_requests,
+        coverage,
+    )
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SettlementCustodySnapshot {
+    run: Option<RunRecord>,
+    journal: Vec<super::super::super::conversations::VaultConversationJournalEntry>,
+    session: (i64, String),
+    input_binding: Option<OwnerInputBinding>,
+    coverage: Option<(i64, String)>,
+    terminal_receipt: Option<String>,
+    resume_rows: Vec<(String, String, String, String, Option<String>, String)>,
+    review_audits: Vec<(String, String, String, String)>,
+    interactions: Vec<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        i64,
+        i64,
+        String,
+    )>,
+    head: Option<(ConversationHead, String)>,
+    entries: Vec<(
+        i64,
+        String,
+        String,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    )>,
+    input_receipts: Vec<(String, i64, String)>,
+    open_receipt: Option<RecorderOpenReceipt>,
+    active_recorder: Option<RecorderFence>,
+    close_receipt: Option<RecorderCloseReceipt>,
+    retirement_receipt: Option<RecorderRetirementReceipt>,
+}
+
+async fn settlement_custody_snapshot(
+    scenario: &Scenario,
+    run_id: RunId,
+) -> SettlementCustodySnapshot {
+    let run = scenario
+        .vault()
+        .conversation_run(run_id)
+        .await
+        .expect("read owner Run snapshot");
+    let journal = scenario
+        .vault()
+        .conversation_journal(run_id)
+        .await
+        .expect("read owner journal snapshot");
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect for complete settlement snapshot");
+    let session = session_storage_snapshot(&connection, scenario.session_id).await;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Deferred)
+        .await
+        .expect("start exact settlement snapshot");
+    let scope = Scope::from_identity(
+        scenario.person_id,
+        &scenario.identity,
+        scenario.conversation_id,
+        scenario.branch_id,
+    );
+    let input_binding = owner_input_binding_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read exact Run input binding");
+    let mut rows = transaction
+        .query(
+            "SELECT version, payload FROM agent_context_dependency_coverage WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (scenario.person_id.to_string(), scenario.session_id.to_string(), run_id.as_uuid().to_string()),
+        )
+        .await
+        .expect("read exact Run coverage");
+    let coverage = rows
+        .next()
+        .await
+        .expect("read exact Run coverage row")
+        .map(|row| {
+            (
+                row.get::<i64>(0).expect("coverage version type"),
+                row.get::<String>(1).expect("coverage payload type"),
+            )
+        });
+    assert!(
+        rows.next()
+            .await
+            .expect("check coverage row uniqueness")
+            .is_none()
+    );
+    let terminal_receipt =
+        super::super::super::conversations::terminal_receipt_on(&transaction, run_id)
+            .await
+            .expect("read exact terminal receipt");
+
+    let mut rows = transaction
+        .query(
+            "SELECT origin_run_id, person_id, session_id, state, child_run_id, payload FROM agent_conversation_resume_requests WHERE origin_run_id = ? ORDER BY origin_run_id",
+            [run_id.as_uuid().to_string()],
+        )
+        .await
+        .expect("read exact Resume queue row");
+    let mut resume_rows = Vec::new();
+    while let Some(row) = rows.next().await.expect("read Resume queue row") {
+        resume_rows.push((
+            row.get::<String>(0).expect("Resume origin type"),
+            row.get::<String>(1).expect("Resume person type"),
+            row.get::<String>(2).expect("Resume Session type"),
+            row.get::<String>(3).expect("Resume state type"),
+            row.get::<Option<String>>(4).expect("Resume child type"),
+            row.get::<String>(5).expect("Resume payload type"),
+        ));
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT operation_id, run_id, person_id, payload FROM agent_conversation_review_audits WHERE run_id = ? ORDER BY operation_id",
+            [run_id.as_uuid().to_string()],
+        )
+        .await
+        .expect("read exact review audit rows");
+    let mut review_audits = Vec::new();
+    while let Some(row) = rows.next().await.expect("read review audit row") {
+        review_audits.push((
+            row.get::<String>(0).expect("audit operation type"),
+            row.get::<String>(1).expect("audit Run type"),
+            row.get::<String>(2).expect("audit Person type"),
+            row.get::<String>(3).expect("audit payload type"),
+        ));
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT interaction_id, session_id, person_id, origin_run_id, requirement_digest, target_digest, state, revision, created_at, expires_at, payload FROM agent_conversation_interactions WHERE origin_run_id = ? ORDER BY interaction_id",
+            [run_id.as_uuid().to_string()],
+        )
+        .await
+        .expect("read exact publication rows");
+    let mut interactions = Vec::new();
+    while let Some(row) = rows.next().await.expect("read publication row") {
+        interactions.push((
+            row.get::<String>(0).expect("interaction id type"),
+            row.get::<String>(1).expect("interaction Session type"),
+            row.get::<String>(2).expect("interaction Person type"),
+            row.get::<String>(3).expect("interaction Run type"),
+            row.get::<String>(4)
+                .expect("interaction requirement digest type"),
+            row.get::<String>(5)
+                .expect("interaction target digest type"),
+            row.get::<String>(6).expect("interaction state type"),
+            row.get::<i64>(7).expect("interaction revision type"),
+            row.get::<i64>(8).expect("interaction creation type"),
+            row.get::<i64>(9).expect("interaction expiry type"),
+            row.get::<String>(10).expect("interaction payload type"),
+        ));
+    }
+    let head = load_head_on(&transaction, scope)
+        .await
+        .expect("read exact Core head")
+        .map(|loaded| (loaded.state, loaded.identity_json));
+    let mut rows = transaction
+        .query(
+            "SELECT sequence, message_id, message_json, message_bytes, entry_kind, producer_run_id, contribution_id, producing_task_json, prefix_digest FROM agent_conversation_core_v3_entries WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY sequence",
+            scope.sql(),
+        )
+        .await
+        .expect("read exact Core entries");
+    let mut entries = Vec::new();
+    while let Some(row) = rows.next().await.expect("read Core entry") {
+        entries.push((
+            row.get::<i64>(0).expect("entry sequence type"),
+            row.get::<String>(1).expect("entry message id type"),
+            row.get::<String>(2).expect("entry message type"),
+            row.get::<i64>(3).expect("entry message bytes type"),
+            row.get::<String>(4).expect("entry kind type"),
+            row.get::<Option<String>>(5)
+                .expect("entry producer Run type"),
+            row.get::<Option<String>>(6)
+                .expect("entry contribution type"),
+            row.get::<Option<String>>(7).expect("entry Task type"),
+            row.get::<String>(8).expect("entry prefix digest type"),
+        ));
+    }
+    let mut rows = transaction
+        .query(
+            "SELECT message_id, sequence, receipt_json FROM agent_conversation_core_v3_input_receipts WHERE person_id = ? AND conversation_id = ? AND branch_id = ? ORDER BY sequence",
+            scope.sql(),
+        )
+        .await
+        .expect("read exact Core input receipts");
+    let mut input_receipts = Vec::new();
+    while let Some(row) = rows.next().await.expect("read Core input receipt") {
+        input_receipts.push((
+            row.get::<String>(0).expect("input receipt message id type"),
+            row.get::<i64>(1).expect("input receipt sequence type"),
+            row.get::<String>(2).expect("input receipt payload type"),
+        ));
+    }
+    let open_receipt = open_receipt_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read exact open receipt");
+    let active_recorder = active_recorder_on(&transaction, scope)
+        .await
+        .expect("read exact active recorder");
+    let close_receipt = close_receipt_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read exact close receipt");
+    let retirement_receipt = retirement_receipt_on(&transaction, scenario.person_id, run_id)
+        .await
+        .expect("read exact retirement receipt");
+    transaction
+        .commit()
+        .await
+        .expect("finish exact settlement snapshot");
+    SettlementCustodySnapshot {
+        run,
+        journal,
+        session,
+        input_binding,
+        coverage,
+        terminal_receipt,
+        resume_rows,
+        review_audits,
+        interactions,
+        head,
+        entries,
+        input_receipts,
+        open_receipt,
+        active_recorder,
+        close_receipt,
+        retirement_receipt,
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct ComposedAdmissionSnapshot {
     run: Option<RunRecord>,
@@ -479,6 +901,616 @@ async fn run_output_composition_rolls_back_after_journal_typed_core_and_link_wri
             "typed owner family creation rolls back with every write stage"
         );
     }
+}
+
+#[tokio::test]
+async fn composed_terminal_settlement_closes_completed_failed_and_cancelled_runs() {
+    for terminal_kind in ["completed", "failed", "cancelled"] {
+        let mut scenario = Scenario::new().await;
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("composed {terminal_kind} terminal"))
+            .await;
+        let terminal = match terminal_kind {
+            "completed" => scenario.prepare_completed_terminal(&run).await,
+            "failed" => RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+            _ => RunTerminal::from_failure(AgentFailure::Cancelled),
+        };
+        let expected_state = terminal.state;
+        let result = compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal,
+            },
+        )
+        .await
+        .expect("owner terminal and Core close commit atomically");
+        let CoreComposedSettlementResult::Settled { record, close } = result else {
+            panic!("a terminal outcome must close its recorder");
+        };
+        assert_eq!(record.state, expected_state);
+        assert_eq!(close.fence.run_id, run.run_id);
+        assert_eq!(
+            run_settlement_counts(&scenario, run.run_id).await,
+            (1, 0, 0, 0, 1, 0, 1)
+        );
+    }
+}
+
+#[tokio::test]
+async fn blocked_composed_settlement_replays_exact_publication_after_ack_loss() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("atomic blocked settlement")
+        .await;
+    let commit = blocked_run_commit(&scenario, &run).await;
+    let replay = commit.clone();
+    scenario
+        .vault()
+        .conversation_core_ack_loss
+        .store(true, Ordering::Release);
+    assert_eq!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Blocked(commit),
+        )
+        .await
+        .expect_err("commit acknowledgement loss is uncertain"),
+        ConversationStoreFailure::OutcomeUnknown
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance mutable executor fence after committed settlement");
+    let result = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Blocked(replay.clone()),
+    )
+    .await
+    .expect("exact blocked request replays after reopen and fence movement");
+    let CoreComposedSettlementResult::Settled { record, close } = result else {
+        panic!("blocked terminal must be settled");
+    };
+    assert_eq!(record.state, RunState::Blocked);
+    assert_eq!(close.fence.run_id, run.run_id);
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (1, 0, 1, 1, 1, 0, 1)
+    );
+
+    let mut changed_fence = replay;
+    changed_fence.expected_session_revision += 1;
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Blocked(changed_fence),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (1, 0, 1, 1, 1, 0, 1)
+    );
+}
+
+#[tokio::test]
+async fn pending_delegated_terminal_retains_recorder_custody_across_reopen() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("pending delegated terminal")
+        .await;
+    append_unresolved_delegation(&scenario, &run).await;
+    let request = CoreComposedSettlementRequest::Finish {
+        run_id: run.run_id,
+        expected_aggregate_revision: run.aggregate_revision,
+        terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+    };
+    let result = compose_owner_core_settlement(scenario.vault(), request.clone())
+        .await
+        .expect("unresolved delegation defers terminal and commits pending state");
+    let CoreComposedSettlementResult::Pending { record } = result else {
+        panic!("pending delegation must not be reported as closed");
+    };
+    assert_eq!(record.state, RunState::Working);
+    assert_eq!(
+        record
+            .pending_terminal
+            .as_ref()
+            .map(|pending| pending.failure),
+        Some(AgentFailure::Cancelled)
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 0, 0, 1)
+    );
+
+    scenario.reopen().await;
+    let activation = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance mutable executor generation before pending replay");
+    assert!(activation.executor_generation > run.executor_generation);
+    let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    let result = compose_owner_core_settlement(scenario.vault(), request)
+        .await
+        .expect("exact deferred request replays against its retained active fence");
+    assert!(matches!(
+        result,
+        CoreComposedSettlementResult::Pending { .. }
+    ));
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_replay,
+        "pending replay is observational after generation movement"
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 0, 0, 1)
+    );
+}
+
+#[tokio::test]
+async fn settlement_rejects_missing_active_recorder_without_mutating_owner_or_core() {
+    let mut scenario = Scenario::new().await;
+    let (admitted, _) = scenario
+        .admit_run_and_append_input("missing active recorder before settlement")
+        .await;
+    append_unresolved_delegation(&scenario, &admitted).await;
+    let run = scenario
+        .vault()
+        .conversation_run(admitted.run_id)
+        .await
+        .expect("read Run with unresolved delegated work")
+        .expect("Run remains stored");
+    assert!(run.pending_terminal.is_none());
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to remove active recorder evidence");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start active recorder corruption fixture");
+    let changed = transaction
+        .execute(
+            "DELETE FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+            (
+                scenario.person_id.to_string(),
+                scenario.conversation_id.as_uuid().to_string(),
+                scenario.branch_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("remove active recorder row");
+    assert_eq!(changed, 1);
+    transaction
+        .commit()
+        .await
+        .expect("commit missing active recorder fixture");
+    let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before.open_receipt.is_some());
+    assert!(before.active_recorder.is_none());
+
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+            },
+        )
+        .await
+        .is_err()
+    );
+    let after = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(
+        after
+            .run
+            .as_ref()
+            .is_some_and(|record| record.pending_terminal.is_none())
+    );
+    assert_eq!(
+        after, before,
+        "missing active custody cannot defer the terminal or write Session, coverage, or Core evidence"
+    );
+}
+
+#[tokio::test]
+async fn settlement_rejects_mismatched_active_recorder_without_mutating_owner_or_core() {
+    let mut scenario = Scenario::new().await;
+    let (admitted, _) = scenario
+        .admit_run_and_append_input("mismatched active recorder before settlement")
+        .await;
+    append_unresolved_delegation(&scenario, &admitted).await;
+    let run = scenario
+        .vault()
+        .conversation_run(admitted.run_id)
+        .await
+        .expect("read Run with unresolved delegated work")
+        .expect("Run remains stored");
+    assert!(run.pending_terminal.is_none());
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to alter active recorder evidence");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start mismatched active recorder fixture");
+    let scope = Scope::from_identity(
+        scenario.person_id,
+        &scenario.identity,
+        scenario.conversation_id,
+        scenario.branch_id,
+    );
+    let mut fence = active_recorder_on(&transaction, scope)
+        .await
+        .expect("read active recorder")
+        .expect("active recorder exists");
+    fence.recorder_epoch += 1;
+    let changed = transaction
+        .execute(
+            "UPDATE agent_conversation_core_v3_active_recorders SET fence_json = ? WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+            (
+                serde_json::to_string(&fence).expect("encode altered active fence"),
+                scenario.person_id.to_string(),
+                scenario.conversation_id.as_uuid().to_string(),
+                scenario.branch_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("alter active recorder fence");
+    assert_eq!(changed, 1);
+    transaction
+        .commit()
+        .await
+        .expect("commit mismatched active recorder fixture");
+    let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before.open_receipt.is_some());
+    assert!(before.active_recorder.is_some());
+    assert_ne!(
+        before.open_receipt.as_ref().map(|receipt| &receipt.fence),
+        before.active_recorder.as_ref()
+    );
+
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+            },
+        )
+        .await
+        .is_err()
+    );
+    let after = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(
+        after
+            .run
+            .as_ref()
+            .is_some_and(|record| record.pending_terminal.is_none())
+    );
+    assert_eq!(
+        after, before,
+        "mismatched active custody cannot defer the terminal or write Session, coverage, or Core evidence"
+    );
+}
+
+#[tokio::test]
+async fn settlement_rejects_altered_open_receipt_without_mutating_owner_or_core() {
+    let mut scenario = Scenario::new().await;
+    let (admitted, _) = scenario
+        .admit_run_and_append_input("altered open receipt before settlement")
+        .await;
+    append_unresolved_delegation(&scenario, &admitted).await;
+    let run = scenario
+        .vault()
+        .conversation_run(admitted.run_id)
+        .await
+        .expect("read Run with unresolved delegated work")
+        .expect("Run remains stored");
+    assert!(run.pending_terminal.is_none());
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to alter immutable open receipt");
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .expect("start altered open receipt fixture");
+    let mut open = open_receipt_on(&transaction, scenario.person_id, run.run_id)
+        .await
+        .expect("read open receipt")
+        .expect("open receipt exists");
+    open.opened_head_revision += 1;
+    let changed = transaction
+        .execute(
+            "UPDATE agent_conversation_core_v3_open_receipts SET receipt_json = ? WHERE person_id = ? AND run_id = ?",
+            (
+                serde_json::to_string(&open).expect("encode altered open receipt"),
+                scenario.person_id.to_string(),
+                run.run_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("alter immutable open receipt payload");
+    assert_eq!(changed, 1);
+    transaction
+        .commit()
+        .await
+        .expect("commit altered open receipt fixture");
+    let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before.open_receipt.as_ref().is_some_and(|receipt| {
+        receipt.opened_head_revision
+            > before
+                .head
+                .as_ref()
+                .expect("Core head exists")
+                .0
+                .head_revision
+    }));
+    assert_eq!(
+        before.active_recorder.as_ref(),
+        before.open_receipt.as_ref().map(|receipt| &receipt.fence)
+    );
+
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+            },
+        )
+        .await
+        .is_err()
+    );
+    let after = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(
+        after
+            .run
+            .as_ref()
+            .is_some_and(|record| record.pending_terminal.is_none())
+    );
+    assert_eq!(
+        after, before,
+        "altered open evidence cannot defer the terminal or write Session, coverage, or Core evidence"
+    );
+}
+
+#[tokio::test]
+async fn normal_settlement_ack_loss_replays_exact_request_before_mutable_fences() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("settlement acknowledgement loss")
+        .await;
+    let request = CoreComposedSettlementRequest::Finish {
+        run_id: run.run_id,
+        expected_aggregate_revision: run.aggregate_revision,
+        terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+    };
+    scenario
+        .vault()
+        .conversation_core_ack_loss
+        .store(true, Ordering::Release);
+    assert_eq!(
+        compose_owner_core_settlement(scenario.vault(), request.clone())
+            .await
+            .expect_err("committed settlement acknowledgement is lost"),
+        ConversationStoreFailure::OutcomeUnknown
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance current executor fence before exact replay");
+    let result = compose_owner_core_settlement(scenario.vault(), request.clone())
+        .await
+        .expect("exact terminal request and close receipt replay despite generation movement");
+    assert!(matches!(
+        result,
+        CoreComposedSettlementResult::Settled { .. }
+    ));
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (1, 0, 0, 0, 1, 0, 1)
+    );
+
+    let CoreComposedSettlementRequest::Finish {
+        run_id,
+        expected_aggregate_revision,
+        terminal,
+    } = request
+    else {
+        unreachable!()
+    };
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id,
+                expected_aggregate_revision,
+                terminal: RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+            },
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id,
+                expected_aggregate_revision: expected_aggregate_revision + 1,
+                terminal,
+            },
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run_id).await,
+        (1, 0, 0, 0, 1, 0, 1)
+    );
+}
+
+#[tokio::test]
+async fn composed_settlement_never_repairs_a_missing_close_receipt() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("missing immutable close evidence")
+        .await;
+    let terminal = RunTerminal::from_failure(AgentFailure::Cancelled);
+    scenario
+        .vault()
+        .finish_conversation_run(run.run_id, run.aggregate_revision, terminal.clone())
+        .await
+        .expect("write the separately settled owner receipt fixture");
+    assert!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal,
+            },
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 1, 0, 1)
+    );
+}
+
+#[tokio::test]
+async fn composed_settlement_rolls_back_owner_terminal_before_core_close() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("rollback between owner and Core settlement")
+        .await;
+    let before_connection = scenario
+        .vault()
+        .connection()
+        .expect("connect before injected settlement fault");
+    let before_session = session_storage_snapshot(&before_connection, scenario.session_id).await;
+    drop(before_connection);
+    scenario
+        .vault()
+        .conversation_core_fault_after_owner_settlement
+        .store(true, Ordering::Release);
+    let request = CoreComposedSettlementRequest::Finish {
+        run_id: run.run_id,
+        expected_aggregate_revision: run.aggregate_revision,
+        terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+    };
+    assert_eq!(
+        compose_owner_core_settlement(scenario.vault(), request.clone())
+            .await
+            .expect_err("injected boundary fault aborts the shared transaction"),
+        ConversationStoreFailure::NotCommitted
+    );
+    let after_rollback = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read owner after rollback")
+        .expect("Run remains stored");
+    assert_eq!(after_rollback.state, RunState::Working);
+    assert!(after_rollback.pending_terminal.is_none());
+    let after_connection = scenario
+        .vault()
+        .connection()
+        .expect("connect after injected settlement fault");
+    assert_eq!(
+        session_storage_snapshot(&after_connection, scenario.session_id).await,
+        before_session,
+        "Session changes roll back with Run, coverage and terminal receipt"
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 0, 0, 1)
+    );
+
+    assert!(matches!(
+        compose_owner_core_settlement(scenario.vault(), request)
+            .await
+            .expect("retry commits complete settlement"),
+        CoreComposedSettlementResult::Settled { .. }
+    ));
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (1, 0, 0, 0, 1, 0, 1)
+    );
+}
+
+#[tokio::test]
+async fn blocked_settlement_rolls_back_publication_and_owner_state_before_core_close() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("blocked owner transaction rollback")
+        .await;
+    let commit = blocked_run_commit(&scenario, &run).await;
+    let retry = commit.clone();
+    let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before.review_audits.is_empty());
+    assert!(before.interactions.is_empty());
+    assert!(before.terminal_receipt.is_none());
+    assert!(before.resume_rows.is_empty());
+
+    scenario
+        .vault()
+        .conversation_core_fault_after_owner_settlement
+        .store(true, Ordering::Release);
+    assert_eq!(
+        compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Blocked(commit),
+        )
+        .await
+        .expect_err("fault after blocked owner settlement aborts the shared transaction"),
+        ConversationStoreFailure::NotCommitted
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before,
+        "publication, audit, Run, Session, coverage, terminal receipt, Resume queue, and Core all roll back"
+    );
+
+    let result = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Blocked(retry),
+    )
+    .await
+    .expect("retry shared blocked owner and Core settlement");
+    let CoreComposedSettlementResult::Settled { record, close } = result else {
+        panic!("blocked terminal must close after the owner transaction commits");
+    };
+    assert_eq!(record.state, RunState::Blocked);
+    assert_eq!(close.fence.run_id, run.run_id);
+    let after_retry = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert_eq!(after_retry.run.as_ref(), Some(&record));
+    assert_eq!(after_retry.review_audits.len(), 1);
+    assert_eq!(after_retry.interactions.len(), 1);
+    assert!(after_retry.terminal_receipt.is_some());
+    assert!(after_retry.close_receipt.is_some());
+    assert!(after_retry.active_recorder.is_none());
+    assert!(after_retry.resume_rows.is_empty());
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (1, 0, 1, 1, 1, 0, 1)
+    );
 }
 
 #[tokio::test]
