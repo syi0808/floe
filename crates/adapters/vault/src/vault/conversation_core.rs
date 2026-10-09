@@ -21,7 +21,7 @@ use super::owner_custody::{
 };
 use super::{EncryptedAgentVault, VaultKeyProvider, database_failure};
 use crate::write_fence::JournalWriteGuard;
-use floe_agent_contract::TaskExecutionReceiptRef;
+use floe_agent_contract::{TaskExecutionReceiptRef, TaskReceipt};
 #[cfg(test)]
 use floe_conversation::TypedAgentMessageProvenance;
 use floe_conversation::{
@@ -45,7 +45,8 @@ use floe_conversation_core::{
     advance_core_prefix_digest, append_input_transition, apply_checkpoint_transition,
     close_recording_transition, open_recording_transition, record_entry_transition,
     recording_content_digest, replay_close_recording, replay_open_recording,
-    replay_recording_entry, retire_stale_recording_transition, validate_reference_target,
+    replay_recording_entry, replay_retirement, retire_stale_recording_transition,
+    validate_reference_target,
 };
 use floe_kernel::{AgentFailure, PersonId, RunId};
 use serde::{Serialize, de::DeserializeOwned};
@@ -54,6 +55,13 @@ use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 const MAX_STORED_MESSAGE_BYTES: usize = 132_096;
+
+#[cfg(test)]
+pub(super) const CONVERSATION_RECOVERY_FAULT_AFTER_RESULT_JOURNAL: u8 = 1;
+#[cfg(test)]
+pub(super) const CONVERSATION_RECOVERY_FAULT_AFTER_OWNER_TERMINAL: u8 = 2;
+#[cfg(test)]
+pub(super) const CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY: u8 = 3;
 
 #[derive(Clone, Debug)]
 pub(super) enum CoreComposedOwnerIntent {
@@ -90,9 +98,28 @@ pub(super) enum CoreComposedSettlementResult {
         record: RunRecord,
         close: RecorderCloseReceipt,
     },
-    /// Owner settlement was deliberately deferred. The Run remains Working
-    /// and its existing Core recorder remains open until its effects settle.
-    Pending { record: RunRecord },
+    /// The Host Run terminal outcome is still deferred in `pending_terminal`,
+    /// so the Run remains Working while its Task evidence settles.
+    OwnerOutcomeDeferred { record: RunRecord },
+    /// The Host Run outcome committed, but unresolved owner effects keep the
+    /// exact Core recorder active. The Run itself may already be terminal.
+    CustodyPending { record: RunRecord },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum CoreComposedRecoveryResult {
+    /// Core recorder custody remains active. The owner Run may still be
+    /// Working with a deferred terminal outcome, or terminal with unresolved
+    /// owner effects such as an uncertain model attempt.
+    CustodyPending { record: RunRecord },
+    Closed {
+        record: RunRecord,
+        close: RecorderCloseReceipt,
+    },
+    Retired {
+        record: RunRecord,
+        retirement: RecorderRetirementReceipt,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1919,10 +1946,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    /// Compose Host Run terminal settlement and recorder close in the caller's
-    /// Vault transaction. This is the internal cutover boundary; production
-    /// Manager callers remain on their existing path until their later caller
-    /// migration.
+    /// Compose Host Run terminal settlement with its recorder custody decision
+    /// in the caller's Vault transaction. Unresolved owner effects preserve the
+    /// active recorder; settled effects permit the existing close transition.
+    /// This is internal until the separate Manager caller cutover.
     pub(super) async fn settle_conversation_run_with_core_on(
         &self,
         transaction: &Transaction<'_>,
@@ -1958,15 +1985,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
         if current.state.is_terminal() {
             // Owner request identity is checked before any current-generation
-            // fence. A replay must then present the exact close receipt created
-            // by the same transaction; a missing receipt is never synthesized.
-            let record = match &request {
+            // fence. A settled replay must present its exact Core receipt. A
+            // terminal owner replay with unresolved effects instead proves
+            // that the original recorder is still active.
+            let (record, blocked_commit) = match &request {
                 CoreComposedSettlementRequest::Finish {
                     run_id,
                     expected_aggregate_revision,
                     terminal,
-                } => self
-                    .finish_conversation_run_on(
+                } => (
+                    self.finish_conversation_run_on(
                         transaction,
                         *run_id,
                         *expected_aggregate_revision,
@@ -1974,8 +2002,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     )
                     .await
                     .map_err(owner_error)?,
-                CoreComposedSettlementRequest::Blocked(commit) => self
-                    .finish_conversation_run_on(
+                    None,
+                ),
+                CoreComposedSettlementRequest::Blocked(commit) => (
+                    self.finish_conversation_run_on(
                         transaction,
                         commit.run_id,
                         commit.expected_aggregate_revision,
@@ -1983,18 +2013,49 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     )
                     .await
                     .map_err(owner_error)?,
+                    Some(commit.clone()),
+                ),
             };
-            let close = self
-                .replay_settled_recorder_close_on(transaction, &record)
-                .await?;
-            let record = match request {
-                CoreComposedSettlementRequest::Finish { .. } => record,
-                CoreComposedSettlementRequest::Blocked(commit) => self
-                    .finish_blocked_conversation_run_on(transaction, commit)
-                    .await
-                    .map_err(owner_error)?,
-            };
-            return Ok(CoreComposedSettlementResult::Settled { record, close });
+            match (
+                close_receipt_on(transaction, self.person_id, run_id).await?,
+                retirement_receipt_on(transaction, self.person_id, run_id).await?,
+            ) {
+                (Some(_), Some(_)) | (None, Some(_)) => return Err(owner_evidence_mismatch()),
+                (Some(_), None) => {
+                    let close = self
+                        .replay_settled_recorder_close_on(transaction, &record)
+                        .await?;
+                    let record = if let Some(commit) = blocked_commit {
+                        self.finish_blocked_conversation_run_on(transaction, commit)
+                            .await
+                            .map_err(owner_error)?
+                    } else {
+                        record
+                    };
+                    return Ok(CoreComposedSettlementResult::Settled { record, close });
+                }
+                (None, None) => {
+                    let open = open_receipt_on(transaction, self.person_id, run_id)
+                        .await?
+                        .ok_or_else(owner_evidence_mismatch)?;
+                    let owner = self
+                        .active_recorder_owner_evidence_on(transaction, &record, &open)
+                        .await?;
+                    if !owner.unresolved_effects.is_empty() {
+                        let record = if let Some(commit) = blocked_commit {
+                            self.finish_blocked_conversation_run_on(transaction, commit)
+                                .await
+                                .map_err(owner_error)?
+                        } else {
+                            record
+                        };
+                        return Ok(CoreComposedSettlementResult::CustodyPending { record });
+                    }
+                    // Never retrofit a close for a terminal owner replay whose
+                    // prior Core composition evidence is absent.
+                    return Err(owner_evidence_mismatch());
+                }
+            }
         }
 
         // A nonterminal Run may only start settlement with its exact committed
@@ -2011,7 +2072,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(owner_evidence_mismatch());
         }
-        self.validate_active_settlement_recorder_on(transaction, &current, &open)
+        self.active_recorder_owner_evidence_on(transaction, &current, &open)
             .await?;
 
         let record = match request {
@@ -2035,7 +2096,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
 
         if record.state == RunState::Working && record.pending_terminal.is_some() {
-            return Ok(CoreComposedSettlementResult::Pending { record });
+            let owner = self
+                .active_recorder_owner_evidence_on(transaction, &record, &open)
+                .await?;
+            if owner.unresolved_effects.is_empty() {
+                return Err(owner_evidence_mismatch());
+            }
+            return Ok(CoreComposedSettlementResult::OwnerOutcomeDeferred { record });
         }
         if !record.state.is_terminal() {
             return Err(owner_evidence_mismatch());
@@ -2049,18 +2116,177 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(ConversationStoreFailure::NotCommitted);
         }
 
+        let owner = self
+            .active_recorder_owner_evidence_on(transaction, &record, &open)
+            .await?;
+        if !owner.unresolved_effects.is_empty() {
+            return Ok(CoreComposedSettlementResult::CustodyPending { record });
+        }
+
         let close = self
             .close_conversation_recorder_on(transaction, open.fence)
             .await?;
         Ok(CoreComposedSettlementResult::Settled { record, close })
     }
 
-    async fn validate_active_settlement_recorder_on(
+    /// Recovery composition for the later Manager caller cutover. Task result
+    /// authentication/journaling and the pending Host Run outcome remain in
+    /// their owner primitives; this boundary only ends the matching Core
+    /// custody in the same transaction when the owner proves terminality.
+    pub(super) async fn reconcile_conversation_delegation_with_core(
+        &self,
+        run_id: RunId,
+        receipt: TaskReceipt,
+    ) -> Result<CoreComposedRecoveryResult, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = async {
+            let (record, replay) = self
+                .reconcile_conversation_delegation_on(&transaction, run_id, receipt)
+                .await
+                .map_err(terminal_owner_error)?;
+            self.finish_recovered_conversation_custody_on(&transaction, record, replay)
+                .await
+        }
+        .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    /// Recover an interrupted stale Working Run or finish an existing pending
+    /// terminal outcome. Close or retire its exact recorder only after all
+    /// owner effects are settled; otherwise retain active custody. This remains
+    /// internal until the separate Manager caller cutover.
+    pub(super) async fn settle_pending_conversation_terminal_with_core(
+        &self,
+        actor: &floe_kernel::OwnerActor,
+        run_id: RunId,
+    ) -> Result<CoreComposedRecoveryResult, ConversationStoreFailure> {
+        let mut connection = self.connection().map_err(start_error)?;
+        let (guard, transaction) = self
+            .journal_transaction(&mut connection)
+            .await
+            .map_err(start_error)?;
+        let result = async {
+            let (record, replay) = self
+                .prepare_pending_conversation_terminal_on(&transaction, actor, run_id)
+                .await
+                .map_err(terminal_owner_error)?;
+            self.finish_recovered_conversation_custody_on(&transaction, record, replay)
+                .await
+        }
+        .await;
+        self.finish_conversation_core_transaction(guard, transaction, result)
+            .await
+    }
+
+    async fn finish_recovered_conversation_custody_on(
+        &self,
+        transaction: &Transaction<'_>,
+        record: RunRecord,
+        replay: bool,
+    ) -> Result<CoreComposedRecoveryResult, ConversationStoreFailure> {
+        let run_id = record.run_id;
+        let open = open_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if open.fence.run_id != run_id
+            || open.fence.executor_generation != record.executor_generation
+        {
+            return Err(owner_evidence_mismatch());
+        }
+
+        let close = close_receipt_on(transaction, self.person_id, run_id).await?;
+        let retirement = retirement_receipt_on(transaction, self.person_id, run_id).await?;
+        match (close, retirement) {
+            (Some(_), Some(_)) => return Err(owner_evidence_mismatch()),
+            (Some(_), None) if record.state.is_terminal() => {
+                let close = self
+                    .replay_settled_recorder_close_on(transaction, &record)
+                    .await?;
+                return Ok(CoreComposedRecoveryResult::Closed { record, close });
+            }
+            (None, Some(_)) if record.state.is_terminal() => {
+                let retirement = self
+                    .replay_settled_recorder_retirement_on(transaction, &record, &open)
+                    .await?;
+                return Ok(CoreComposedRecoveryResult::Retired { record, retirement });
+            }
+            (Some(_), None) | (None, Some(_)) => return Err(owner_evidence_mismatch()),
+            (None, None) => {}
+        }
+
+        // The open-recorder branch validates the exact active Core fence and
+        // the owner's full accounting projection, including both unresolved
+        // model attempts and delegated Task effects. Uncertainty keeps custody
+        // active even if the Host Run has already reached its terminal state.
+        let owner = self
+            .active_recorder_owner_evidence_on(transaction, &record, &open)
+            .await?;
+        if !record.state.is_terminal() || !owner.unresolved_effects.is_empty() {
+            return Ok(CoreComposedRecoveryResult::CustodyPending { record });
+        }
+
+        if replay {
+            // The owner-only path may have committed this exact result without
+            // Core custody. Do not retrofit a close/retirement during replay.
+            return Err(owner_evidence_mismatch());
+        }
+
+        let active_generation = self
+            .active_conversation_executor_generation(transaction)
+            .await
+            .map_err(owner_error)?;
+        if record.executor_generation == active_generation {
+            let close = self
+                .close_conversation_recorder_on(transaction, open.fence)
+                .await?;
+            #[cfg(test)]
+            if self.take_conversation_recovery_fault(CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY)
+            {
+                return Err(unavailable());
+            }
+            Ok(CoreComposedRecoveryResult::Closed { record, close })
+        } else if record.executor_generation < active_generation {
+            let retirement = self
+                .retire_conversation_recorder_on(transaction, open.fence)
+                .await?;
+            #[cfg(test)]
+            if self.take_conversation_recovery_fault(CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY)
+            {
+                return Err(unavailable());
+            }
+            Ok(CoreComposedRecoveryResult::Retired { record, retirement })
+        } else {
+            Err(owner_evidence_mismatch())
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_conversation_recovery_fault(&self, stage: u8) -> bool {
+        self.conversation_recovery_fault_stage
+            .compare_exchange(
+                stage,
+                0,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Validate the exact active recorder and the full authenticated owner
+    /// projection for a Run, including unresolved attempts and delegations.
+    /// This intentionally does not compare the retained fence with the
+    /// mutable current executor generation.
+    async fn active_recorder_owner_evidence_on(
         &self,
         transaction: &Transaction<'_>,
         expected_run: &RunRecord,
         open: &RecorderOpenReceipt,
-    ) -> Result<(), ConversationStoreFailure> {
+    ) -> Result<OwnerRunEvidence, ConversationStoreFailure> {
         let fence = &open.fence;
         let scope = Scope::from_identity(
             self.person_id,
@@ -2118,8 +2344,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await?;
         let expected_owner_state = if expected_run.pending_terminal.is_some() {
             OwnerRunState::PendingTerminal
-        } else {
+        } else if expected_run.state.is_terminal() {
+            OwnerRunState::Terminal
+        } else if expected_run.state == RunState::Working {
             OwnerRunState::Working
+        } else {
+            return Err(owner_evidence_mismatch());
         };
         if run != *expected_run
             || owner.state != expected_owner_state
@@ -2130,11 +2360,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(owner_evidence_mismatch());
         }
-        // Do not compare this retained fence with the mutable current executor
-        // generation: an exact PendingTerminal replay remains an observation
-        // of the original active custody. New owner transitions enforce their
-        // own generation fence in finish_conversation_run_on.
-        Ok(())
+        Ok(owner)
     }
 
     async fn replay_settled_recorder_close_on(
@@ -2167,19 +2393,98 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(owner_evidence_mismatch());
         }
+        let (owner, verified_record, terminal_digest) = self
+            .verified_owner_evidence_on(
+                transaction,
+                run_id,
+                &open.fence.identity,
+                open.fence.conversation_id,
+                open.fence.branch_id,
+                open.fence.input,
+                open.fence.executor_domain,
+                open.fence.executor_generation,
+            )
+            .await?;
         let transition = replay_close_recording(open.fence, close)
             .map_err(ConversationStoreFailure::Transition)?;
-        let terminal_text = super::conversations::terminal_receipt_on(transaction, run_id)
-            .await
-            .map_err(owner_error)?
-            .ok_or_else(owner_evidence_mismatch)?;
-        let terminal_digest = parse_digest(&terminal_text)?;
-        if transition.receipt.terminal_receipt_digest != terminal_digest
+        if verified_record != *record
+            || owner.state != OwnerRunState::Terminal
+            || !owner.unresolved_effects.is_empty()
+            || terminal_digest != Some(transition.receipt.terminal_receipt_digest)
             || transition.receipt.owner_aggregate_revision != record.aggregate_revision
         {
             return Err(owner_evidence_mismatch());
         }
         Ok(transition.receipt)
+    }
+
+    async fn replay_settled_recorder_retirement_on(
+        &self,
+        transaction: &Transaction<'_>,
+        record: &RunRecord,
+        open: &RecorderOpenReceipt,
+    ) -> Result<RecorderRetirementReceipt, ConversationStoreFailure> {
+        let run_id = record.run_id;
+        let receipt = retirement_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if close_receipt_on(transaction, self.person_id, run_id)
+            .await?
+            .is_some()
+            || receipt.fence != open.fence
+            || receipt.fence.executor_generation != record.executor_generation
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let scope = Scope::from_identity(
+            self.person_id,
+            &open.fence.identity,
+            open.fence.conversation_id,
+            open.fence.branch_id,
+        );
+        if active_recorder_on(transaction, scope)
+            .await?
+            .is_some_and(|active| active.run_id == run_id)
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        let head = load_head_on(transaction, scope)
+            .await?
+            .ok_or_else(owner_evidence_mismatch)?;
+        if head.state.state_revision < receipt.retirement_state_revision {
+            return Err(owner_evidence_mismatch());
+        }
+        let (owner, verified_record, terminal_digest) = self
+            .verified_owner_evidence_on(
+                transaction,
+                run_id,
+                &open.fence.identity,
+                open.fence.conversation_id,
+                open.fence.branch_id,
+                open.fence.input,
+                open.fence.executor_domain,
+                open.fence.executor_generation,
+            )
+            .await?;
+        let expected_generation_fence = owner_generation_fence(
+            open.fence.executor_domain,
+            run_id,
+            open.fence.executor_generation,
+            receipt.generation_fence.current_generation,
+        )?;
+        if verified_record != *record
+            || owner.state != OwnerRunState::Terminal
+            || !owner.unresolved_effects.is_empty()
+            || terminal_digest.is_none()
+            || owner.record_digest != receipt.owner_evidence_digest
+            || receipt.generation_fence != expected_generation_fence
+            || receipt.generation_fence_digest != expected_generation_fence.evidence_digest
+        {
+            return Err(owner_evidence_mismatch());
+        }
+        replay_retirement(open.fence.clone(), receipt)
+            .map(|transition| transition.receipt)
+            .map_err(ConversationStoreFailure::Transition)
     }
 
     /// Host composition primitive. Current Vault owner records do not yet
@@ -4518,7 +4823,11 @@ mod tests {
             &self,
             run: &RunRecord,
             executor_generation: u64,
-        ) -> Vec<TaskExecutionReceiptRef> {
+            record_parent_results: bool,
+        ) -> (
+            Vec<TaskExecutionReceiptRef>,
+            Vec<floe_agent_contract::TaskReceipt>,
+        ) {
             use floe_agent_contract::InvocationKey;
             use floe_agent_contract::{
                 AgentContext, DelegationExecutionContext, DelegationRequest, JournalEvent,
@@ -4585,7 +4894,11 @@ mod tests {
                 },
             )
             .await;
-            let task_messages = vec!["Task A input", "Task B input"];
+            let task_messages = if record_parent_results {
+                vec!["Task A input", "Task B input"]
+            } else {
+                vec!["Task A input"]
+            };
             let batch = ValidatedModelBatch {
                 execution_id,
                 attempt_id,
@@ -4628,6 +4941,7 @@ mod tests {
             .await;
 
             let mut references = Vec::new();
+            let mut task_receipts = Vec::new();
             for (ordinal, message) in task_messages.iter().enumerate() {
                 let ordinal = ordinal as u32;
                 let task_id = TaskId::from_uuid(Uuid::new_v5(
@@ -4748,15 +5062,18 @@ mod tests {
                     replay: None,
                     execution: TaskExecutionEvidence::Admitted(receipt.clone()),
                 };
-                self.append_owner_event(
-                    run.run_id,
-                    JournalEvent::DelegationResult {
-                        receipt: Box::new(task_receipt),
-                    },
-                )
-                .await;
+                if record_parent_results {
+                    self.append_owner_event(
+                        run.run_id,
+                        JournalEvent::DelegationResult {
+                            receipt: Box::new(task_receipt.clone()),
+                        },
+                    )
+                    .await;
+                }
+                task_receipts.push(task_receipt);
                 references.push(receipt.reference.clone());
-                if ordinal == 0 {
+                if record_parent_results && ordinal == 0 {
                     self.append_owner_event(
                         run.run_id,
                         JournalEvent::BatchProgress {
@@ -4769,17 +5086,19 @@ mod tests {
                     .await;
                 }
             }
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::BatchProgress {
-                    cursor: floe_agent_contract::BatchCursor {
-                        batch_id,
-                        next_step_index: task_messages.len() as u32,
+            if record_parent_results {
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::BatchProgress {
+                        cursor: floe_agent_contract::BatchCursor {
+                            batch_id,
+                            next_step_index: task_messages.len() as u32,
+                        },
                     },
-                },
-            )
-            .await;
-            references
+                )
+                .await;
+            }
+            (references, task_receipts)
         }
 
         async fn cancel_owner_run(&mut self, run: &RunRecord) -> RunRecord {
@@ -6681,9 +7000,11 @@ mod tests {
             .await
             .expect("activate Task owner")
             .executor_generation;
-        let task_receipts = scenario.terminal_task_receipts(&run, task_generation).await;
-        let receipt_a = task_receipts[0].clone();
-        let receipt_b = task_receipts[1].clone();
+        let (task_receipt_references, _) = scenario
+            .terminal_task_receipts(&run, task_generation, true)
+            .await;
+        let receipt_a = task_receipt_references[0].clone();
+        let receipt_b = task_receipt_references[1].clone();
         assert_ne!(receipt_a.execution.task_id, receipt_b.execution.task_id);
         let task_reference_a =
             task_evidence_reference(&receipt_a).expect("bind exact Task A receipt reference");

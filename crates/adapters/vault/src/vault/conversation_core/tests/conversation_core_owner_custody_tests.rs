@@ -9,6 +9,42 @@ use floe_conversation_core::{
     ConversationReadTarget, TranscriptEntryLookup, TranscriptReadBoundary, TranscriptReadCursor,
 };
 
+async fn append_unresolved_model_attempt(scenario: &Scenario, run: &RunRecord) -> Uuid {
+    use floe_agent_contract::{
+        JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, PreparedModelPlan, ProcessingBoundary, ProjectionRef,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref: ProjectionRef::new(),
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([61; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    attempt_id
+}
+
 async fn append_unresolved_delegation(scenario: &Scenario, run: &RunRecord) {
     use floe_agent_contract::{
         AgentContext, BatchCursor, DelegationExecutionContext, DelegationRequest, InvocationKey,
@@ -141,6 +177,50 @@ async fn append_unresolved_delegation(scenario: &Scenario, run: &RunRecord) {
             },
         )
         .await;
+}
+
+async fn actual_terminal_task_for_recovery(
+    scenario: &Scenario,
+    run: &RunRecord,
+) -> floe_agent_contract::TaskReceipt {
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate actual Task owner")
+        .executor_generation;
+    let (_, receipts) = scenario
+        .terminal_task_receipts(run, generation, false)
+        .await;
+    receipts
+        .into_iter()
+        .next()
+        .expect("one actual terminal Task")
+}
+
+async fn actual_terminal_task_with_parent_result_for_recovery(
+    scenario: &Scenario,
+    run: &RunRecord,
+) -> floe_agent_contract::TaskReceipt {
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .expect("activate actual Task owner")
+        .executor_generation;
+    let (_, receipts) = scenario.terminal_task_receipts(run, generation, true).await;
+    receipts
+        .into_iter()
+        .next()
+        .expect("one actual terminal Task with its owner result")
+}
+
+fn recovery_actor(scenario: &Scenario) -> floe_kernel::OwnerActor {
+    floe_kernel::OwnerActor {
+        person_id: scenario.person_id,
+        device_id: "device-core-custody-test".into(),
+        runtime_epoch: 1,
+    }
 }
 
 async fn run_settlement_counts(
@@ -939,6 +1019,68 @@ async fn composed_terminal_settlement_closes_completed_failed_and_cancelled_runs
 }
 
 #[tokio::test]
+async fn composed_cancellation_commits_owner_outcome_while_unresolved_model_keeps_custody() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("cancel with unresolved model intent")
+        .await;
+    let unresolved_attempt = append_unresolved_model_attempt(&scenario, &run).await;
+    let request = CoreComposedSettlementRequest::Finish {
+        run_id: run.run_id,
+        expected_aggregate_revision: run.aggregate_revision,
+        terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+    };
+
+    let result = compose_owner_core_settlement(scenario.vault(), request.clone())
+        .await
+        .expect("Host cancellation commits while uncertain model evidence retains Core custody");
+    let CoreComposedSettlementResult::CustodyPending { record } = result else {
+        panic!("terminal owner uncertainty must retain recorder custody");
+    };
+    assert_eq!(record.state, RunState::Cancelled);
+    assert!(record.pending_terminal.is_none());
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 1, 0, 1),
+        "owner terminal evidence commits without closing or releasing the recorder"
+    );
+
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .expect("read unresolved model evidence");
+    let events = journal
+        .iter()
+        .map(|entry| serde_json::from_str::<floe_agent_contract::JournalEvent>(&entry.payload))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("decode unresolved model journal");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+
+    let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert_eq!(
+        compose_owner_core_settlement(scenario.vault(), request)
+            .await
+            .expect("exact cancellation replay returns retained custody"),
+        CoreComposedSettlementResult::CustodyPending { record },
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_replay,
+        "exact owner settlement replay adds no rows or recorder transition"
+    );
+}
+
+#[tokio::test]
 async fn blocked_composed_settlement_replays_exact_publication_after_ack_loss() {
     let mut scenario = Scenario::new().await;
     let (run, _) = scenario
@@ -1012,7 +1154,7 @@ async fn pending_delegated_terminal_retains_recorder_custody_across_reopen() {
     let result = compose_owner_core_settlement(scenario.vault(), request.clone())
         .await
         .expect("unresolved delegation defers terminal and commits pending state");
-    let CoreComposedSettlementResult::Pending { record } = result else {
+    let CoreComposedSettlementResult::OwnerOutcomeDeferred { record } = result else {
         panic!("pending delegation must not be reported as closed");
     };
     assert_eq!(record.state, RunState::Working);
@@ -1041,7 +1183,7 @@ async fn pending_delegated_terminal_retains_recorder_custody_across_reopen() {
         .expect("exact deferred request replays against its retained active fence");
     assert!(matches!(
         result,
-        CoreComposedSettlementResult::Pending { .. }
+        CoreComposedSettlementResult::OwnerOutcomeDeferred { .. }
     ));
     assert_eq!(
         settlement_custody_snapshot(&scenario, run.run_id).await,
@@ -1052,6 +1194,865 @@ async fn pending_delegated_terminal_retains_recorder_custody_across_reopen() {
         run_settlement_counts(&scenario, run.run_id).await,
         (0, 1, 0, 0, 0, 0, 1)
     );
+}
+
+#[tokio::test]
+async fn actual_task_result_finishes_pending_current_run_and_closes_core_atomically() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("recover actual Task result")
+        .await;
+    let task_result = actual_terminal_task_for_recovery(&scenario, &run).await;
+    assert_eq!(
+        task_result.snapshot.state,
+        floe_agent_contract::TaskState::Interrupted
+    );
+    let before_pending = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read Run after actual Task admission")
+        .expect("Run remains present");
+    let pending = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: before_pending.aggregate_revision,
+            terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+        },
+    )
+    .await
+    .expect("unresolved Task defers the requested host cancellation");
+    let CoreComposedSettlementResult::OwnerOutcomeDeferred {
+        record: pending_record,
+    } = pending
+    else {
+        panic!("unresolved actual Task keeps the Run pending");
+    };
+    assert_eq!(pending_record.state, RunState::Working);
+    assert_eq!(
+        pending_record
+            .pending_terminal
+            .as_ref()
+            .map(|value| value.failure),
+        Some(AgentFailure::Cancelled),
+        "Task interruption does not replace the Host Run cancellation"
+    );
+    let open = scenario
+        .last_core_recorder
+        .as_ref()
+        .expect("composed Run has its original recorder")
+        .clone();
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 0, 0, 1),
+        "pending Task evidence leaves the exact recorder active"
+    );
+
+    let result = scenario
+        .vault()
+        .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+        .await
+        .expect("actual Task receipt, owner cancellation and Core close share one commit");
+    let CoreComposedRecoveryResult::Closed { record, close } = result else {
+        panic!("the final Task result closes current-generation custody");
+    };
+    assert_eq!(record.state, RunState::Cancelled);
+    assert!(record.pending_terminal.is_none());
+    assert_eq!(close.fence, open.fence);
+    assert_eq!(
+        close.settled_prefix, 0,
+        "recovery does not invent a settled prefix"
+    );
+    assert_eq!(close.owner_aggregate_revision, record.aggregate_revision);
+    let task = scenario
+        .vault()
+        .task(task_result.task_id)
+        .await
+        .expect("read actual Task owner record")
+        .expect("Task owner record remains durable");
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Interrupted
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .accounted_conversation_receipt(run.run_id)
+            .await
+            .expect("read owner accounting from the committed transaction")
+            .expect("Run receipt remains available")
+            .task_refs
+            .len(),
+        1,
+        "Task evidence is accounted once"
+    );
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .expect("read Run journal after custody close");
+    let events = journal
+        .iter()
+        .map(|entry| serde_json::from_str::<floe_agent_contract::JournalEvent>(&entry.payload))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("decode owner journal evidence");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            floe_agent_contract::JournalEvent::ModelResult { accounting, .. }
+                if accounting.unknown_tokens && accounting.unknown_cost
+        )),
+        "uncertain model accounting evidence remains intact"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                floe_agent_contract::JournalEvent::DelegationResult { .. }
+            ))
+            .count(),
+        1,
+        "Core recovery does not duplicate the Task result"
+    );
+
+    let mut changed_result = task_result.clone();
+    changed_result.snapshot.coverage = DependencyCoverage::Independent;
+    let before_bad_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, changed_result)
+            .await
+            .is_err(),
+        "a changed Task result cannot replace the immutable owner result"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_bad_replay,
+        "changed-result rejection is read-only"
+    );
+
+    scenario.reopen().await;
+    let later = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance generation after current custody already closed")
+        .executor_generation;
+    assert!(later > open.fence.executor_generation);
+    assert_eq!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+            .await
+            .expect("exact close replay precedes later executor-generation checks"),
+        CoreComposedRecoveryResult::Closed { record, close }
+    );
+}
+
+#[tokio::test]
+async fn actual_task_result_commits_once_but_unresolved_model_keeps_current_custody() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("Task result with separate uncertain model attempt")
+        .await;
+    let task_result = actual_terminal_task_with_parent_result_for_recovery(&scenario, &run).await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            floe_agent_contract::JournalEvent::Checkpoint { iteration: 1 },
+        )
+        .await;
+    let unresolved_attempt = append_unresolved_model_attempt(&scenario, &run).await;
+    let open = scenario
+        .last_core_recorder
+        .as_ref()
+        .expect("composed Run has its original recorder")
+        .clone();
+    let current = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read Run before cancellation")
+        .expect("Run remains present");
+    let settled = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: current.aggregate_revision,
+            terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+        },
+    )
+    .await
+    .expect("Host cancellation commits while the model attempt retains custody");
+    let CoreComposedSettlementResult::CustodyPending {
+        record: owner_record,
+    } = settled
+    else {
+        panic!("terminal owner uncertainty must retain Core custody");
+    };
+    assert_eq!(owner_record.state, RunState::Cancelled);
+
+    let result = scenario
+        .vault()
+        .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+        .await
+        .expect("exact actual Task evidence replay preserves model uncertainty and Core custody");
+    let CoreComposedRecoveryResult::CustodyPending { record } = result else {
+        panic!("an unresolved model attempt keeps current-generation custody active");
+    };
+    assert_eq!(record.state, RunState::Cancelled);
+    assert!(record.pending_terminal.is_none());
+    let after_task_result = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert_eq!(after_task_result.active_recorder, Some(open.fence.clone()));
+    assert!(after_task_result.close_receipt.is_none());
+    assert!(after_task_result.retirement_receipt.is_none());
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 1, 0, 1),
+        "Task evidence remains committed without releasing the original recorder"
+    );
+    let task = scenario
+        .vault()
+        .task(task_result.task_id)
+        .await
+        .expect("read actual Task owner record")
+        .expect("terminal Task remains durable");
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Interrupted
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .accounted_conversation_receipt(run.run_id)
+            .await
+            .expect("read authenticated Task accounting")
+            .expect("Host Run receipt remains available")
+            .task_refs
+            .len(),
+        2,
+        "the actual terminal Task pair is accounted once each"
+    );
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .expect("read owner journal after Task result");
+    let events = journal
+        .iter()
+        .map(|entry| serde_json::from_str::<floe_agent_contract::JournalEvent>(&entry.payload))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("decode actual owner journal");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            floe_agent_contract::JournalEvent::ModelResult { accounting, .. }
+                if accounting.unknown_tokens && accounting.unknown_cost
+        )),
+        "Task result processing preserves separate unknown model accounting"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                floe_agent_contract::JournalEvent::DelegationResult { receipt }
+                    if receipt.task_id == task_result.task_id
+            ))
+            .count(),
+        1,
+        "the replayed Task result has exactly one journal entry"
+    );
+
+    scenario.reopen().await;
+    let later = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance generation while the uncertain attempt retains custody")
+        .executor_generation;
+    assert!(later > open.fence.executor_generation);
+    let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect before exact result replay");
+    let task_rows = table_count(&connection, "agent_tasks").await;
+    let task_journal_rows = table_count(&connection, "agent_task_journal").await;
+    drop(connection);
+    assert_eq!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+            .await
+            .expect("exact replay returns pending custody before generation-sensitive transitions"),
+        CoreComposedRecoveryResult::CustodyPending { record }
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_replay,
+        "exact replay adds no owner, accounting, or Core rows"
+    );
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect after exact result replay");
+    assert_eq!(table_count(&connection, "agent_tasks").await, task_rows);
+    assert_eq!(
+        table_count(&connection, "agent_task_journal").await,
+        task_journal_rows,
+        "replay does not redispatch or create another Task execution"
+    );
+    drop(connection);
+}
+
+#[tokio::test]
+async fn stale_working_recovery_keeps_custody_until_task_evidence_then_retires_and_replays() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("recover interrupted old Run")
+        .await;
+    let task_result = actual_terminal_task_for_recovery(&scenario, &run).await;
+    let open = scenario
+        .last_core_recorder
+        .as_ref()
+        .expect("composed Run has its original recorder")
+        .clone();
+    scenario.reopen().await;
+    let later = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("durably fence the abandoned Host Run generation")
+        .executor_generation;
+    assert!(later > run.executor_generation);
+
+    let actor = recovery_actor(&scenario);
+    let before_denied_actor = settlement_custody_snapshot(&scenario, run.run_id).await;
+    for denied_actor in [
+        floe_kernel::OwnerActor {
+            person_id: floe_kernel::PersonId::new(),
+            device_id: actor.device_id.clone(),
+            runtime_epoch: actor.runtime_epoch,
+        },
+        floe_kernel::OwnerActor {
+            person_id: actor.person_id,
+            device_id: "another-device".into(),
+            runtime_epoch: actor.runtime_epoch,
+        },
+    ] {
+        assert!(
+            scenario
+                .vault()
+                .settle_pending_conversation_terminal_with_core(&denied_actor, run.run_id)
+                .await
+                .is_err(),
+            "Person and device checks remain mandatory"
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, run.run_id).await,
+            before_denied_actor,
+            "rejected recovery actor cannot mutate owner or Core state"
+        );
+    }
+    let pending = scenario
+        .vault()
+        .settle_pending_conversation_terminal_with_core(&actor, run.run_id)
+        .await
+        .expect("interrupt old Working Run but preserve unresolved Task custody");
+    let CoreComposedRecoveryResult::CustodyPending { record } = pending else {
+        panic!("generation movement alone cannot retire unresolved work");
+    };
+    assert_eq!(record.state, RunState::Working);
+    assert_eq!(
+        record.pending_terminal.as_ref().map(|value| value.failure),
+        Some(AgentFailure::Interrupted)
+    );
+    let before_task_result = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert_eq!(before_task_result.active_recorder, Some(open.fence.clone()));
+    assert!(before_task_result.retirement_receipt.is_none());
+
+    scenario.vault().conversation_recovery_fault_stage.store(
+        CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY,
+        Ordering::Release,
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+            .await,
+        Err(ConversationStoreFailure::NotCommitted),
+        "rollback after retirement receipt also removes the owner Task result and terminal writes"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_task_result,
+        "retirement rollback preserves Pending, accounting and the original active fence"
+    );
+
+    let settled = scenario
+        .vault()
+        .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+        .await
+        .expect(
+            "final actual Task result settles the interrupted Host Run and retires old custody",
+        );
+    let CoreComposedRecoveryResult::Retired { record, retirement } = settled else {
+        panic!("an old-generation recorder uses retirement rather than close");
+    };
+    assert_eq!(record.state, RunState::Interrupted);
+    assert!(record.pending_terminal.is_none());
+    assert_eq!(retirement.fence, open.fence);
+    assert_eq!(
+        retirement.generation_fence.old_generation,
+        run.executor_generation
+    );
+    assert_eq!(retirement.generation_fence.current_generation, later);
+    assert_eq!(retirement.owner_evidence_digest.len(), 32);
+    let task = scenario
+        .vault()
+        .task(task_result.task_id)
+        .await
+        .expect("read Task owner result")
+        .expect("actual Task persists");
+    assert_eq!(
+        task.snapshot.state,
+        floe_agent_contract::TaskState::Interrupted
+    );
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await.1,
+        0,
+        "retirement releases only the recorder after terminal Task evidence"
+    );
+
+    scenario.reopen().await;
+    let newest = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance beyond the generation captured by retirement")
+        .executor_generation;
+    assert!(newest > later);
+    assert_eq!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+            .await
+            .expect("exact retirement replay validates stored owner and generation evidence"),
+        CoreComposedRecoveryResult::Retired {
+            record,
+            retirement: retirement.clone()
+        }
+    );
+
+    let mut bad_fence = retirement.clone();
+    bad_fence.fence.recorder_epoch = bad_fence.fence.recorder_epoch.saturating_add(1);
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("tamper recovery receipt fixture");
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+        .await
+        .expect("start contradictory retirement receipt fixture");
+    transaction
+        .execute(
+            "UPDATE agent_conversation_core_v3_retirement_receipts SET receipt_json = ? WHERE person_id = ? AND run_id = ?",
+            (
+                serde_json::to_string(&bad_fence).expect("encode changed fence fixture"),
+                scenario.person_id.to_string(),
+                run.run_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("change only the stored retirement fence for rejection test");
+    transaction
+        .commit()
+        .await
+        .expect("commit contradictory fixture");
+    drop(connection);
+    let before_contradiction = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+            .await
+            .is_err(),
+        "a changed stored fence cannot replay the original retirement"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_contradiction,
+        "contradictory retirement evidence fails without owner mutation"
+    );
+}
+
+#[tokio::test]
+async fn stale_working_recovery_keeps_old_custody_for_unresolved_model_after_task_result() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("old Run with separate uncertain model attempt")
+        .await;
+    let task_result = actual_terminal_task_with_parent_result_for_recovery(&scenario, &run).await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            floe_agent_contract::JournalEvent::Checkpoint { iteration: 1 },
+        )
+        .await;
+    let unresolved_attempt = append_unresolved_model_attempt(&scenario, &run).await;
+    let open = scenario
+        .last_core_recorder
+        .as_ref()
+        .expect("composed Run has its original recorder")
+        .clone();
+    scenario.reopen().await;
+    let later = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("durably fence the old Host Run generation")
+        .executor_generation;
+    assert!(later > run.executor_generation);
+
+    let pending = scenario
+        .vault()
+        .settle_pending_conversation_terminal_with_core(&recovery_actor(&scenario), run.run_id)
+        .await
+        .expect("old Working Run becomes interrupted while Task evidence remains pending");
+    let CoreComposedRecoveryResult::CustodyPending {
+        record: pending_record,
+    } = pending
+    else {
+        panic!("stale Host recovery must retain custody for the unresolved model attempt");
+    };
+    assert_eq!(pending_record.state, RunState::Interrupted);
+    assert!(pending_record.pending_terminal.is_none());
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id)
+            .await
+            .active_recorder,
+        Some(open.fence.clone())
+    );
+
+    let settled = scenario
+        .vault()
+        .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+        .await
+        .expect("exact Task result replay leaves old recorder custody for model uncertainty");
+    let CoreComposedRecoveryResult::CustodyPending { record } = settled else {
+        panic!("unresolved model evidence must prevent old-generation retirement");
+    };
+    assert_eq!(record.state, RunState::Interrupted);
+    assert!(record.pending_terminal.is_none());
+    let after_task_result = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert_eq!(after_task_result.active_recorder, Some(open.fence.clone()));
+    assert!(after_task_result.close_receipt.is_none());
+    assert!(after_task_result.retirement_receipt.is_none());
+    assert_eq!(
+        run_settlement_counts(&scenario, run.run_id).await,
+        (0, 1, 0, 0, 1, 0, 1),
+        "old custody remains active until all owner uncertainty has proof"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .task(task_result.task_id)
+            .await
+            .expect("read terminal Task")
+            .expect("Task owner record persists")
+            .snapshot
+            .state,
+        floe_agent_contract::TaskState::Interrupted
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .accounted_conversation_receipt(run.run_id)
+            .await
+            .expect("read committed owner accounting")
+            .expect("Host Run remains accounted")
+            .task_refs
+            .len(),
+        2,
+        "both authentic terminal Tasks are accounted once"
+    );
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .expect("read Host Run journal after Task result");
+    let events = journal
+        .iter()
+        .map(|entry| serde_json::from_str::<floe_agent_contract::JournalEvent>(&entry.payload))
+        .collect::<Result<Vec<_>, _>>()
+        .expect("decode Host Run journal");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelIntent { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        floe_agent_contract::JournalEvent::ModelResult { attempt_id, .. }
+            if *attempt_id == unresolved_attempt
+    )));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            floe_agent_contract::JournalEvent::ModelResult { accounting, .. }
+                if accounting.unknown_tokens && accounting.unknown_cost
+        )),
+        "unknown model accounting evidence remains durable"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(
+                event,
+                floe_agent_contract::JournalEvent::DelegationResult { receipt }
+                    if receipt.task_id == task_result.task_id
+            ))
+            .count(),
+        1,
+        "the replayed Task result has exactly one journal entry"
+    );
+
+    scenario.reopen().await;
+    let newest = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .expect("advance beyond the previously fenced generation")
+        .executor_generation;
+    assert!(newest > later);
+    let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect before exact old-generation replay");
+    let task_rows = table_count(&connection, "agent_tasks").await;
+    let task_journal_rows = table_count(&connection, "agent_task_journal").await;
+    drop(connection);
+    assert_eq!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+            .await
+            .expect("exact replay preserves retained old custody after newer fencing"),
+        CoreComposedRecoveryResult::CustodyPending { record }
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_replay,
+        "exact replay does not add owner rows or fabricate retirement evidence"
+    );
+    let connection = scenario
+        .vault()
+        .connection()
+        .expect("connect after exact old-generation replay");
+    assert_eq!(table_count(&connection, "agent_tasks").await, task_rows);
+    assert_eq!(
+        table_count(&connection, "agent_task_journal").await,
+        task_journal_rows,
+        "replay cannot redispatch or settle the actual Task a second time"
+    );
+    drop(connection);
+}
+
+#[tokio::test]
+async fn recovery_replay_does_not_retrofit_absent_core_custody_receipt() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("owner-only result must not retrofit Core")
+        .await;
+    let task_result = actual_terminal_task_for_recovery(&scenario, &run).await;
+    let current = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read Run before deferred owner terminal")
+        .expect("Run remains present");
+    compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: current.aggregate_revision,
+            terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+        },
+    )
+    .await
+    .expect("unresolved actual Task stores pending owner outcome");
+    scenario
+        .vault()
+        .reconcile_conversation_delegation(run.run_id, task_result.clone())
+        .await
+        .expect("existing owner-only recovery path remains available before caller cutover");
+    let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before_replay.close_receipt.is_none());
+    assert!(before_replay.retirement_receipt.is_none());
+    assert!(before_replay.active_recorder.is_some());
+    assert!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+            .await
+            .is_err(),
+        "an exact owner-only Task replay cannot manufacture missing Core close evidence"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_replay,
+        "absent custody evidence remains absent"
+    );
+}
+
+#[tokio::test]
+async fn recovery_missing_active_recorder_rolls_back_task_and_terminal_writes() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("recovery must reject missing active recorder")
+        .await;
+    let task_result = actual_terminal_task_for_recovery(&scenario, &run).await;
+    let current = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .expect("read Run before pending settlement")
+        .expect("Run remains present");
+    let result = compose_owner_core_settlement(
+        scenario.vault(),
+        CoreComposedSettlementRequest::Finish {
+            run_id: run.run_id,
+            expected_aggregate_revision: current.aggregate_revision,
+            terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+        },
+    )
+    .await
+    .expect("pending Task keeps the owner outcome deferred");
+    assert!(matches!(
+        result,
+        CoreComposedSettlementResult::OwnerOutcomeDeferred { .. }
+    ));
+    let open = scenario
+        .last_core_recorder
+        .as_ref()
+        .expect("Run has its original Core recorder")
+        .clone();
+    let mut connection = scenario
+        .vault()
+        .connection()
+        .expect("connect to remove active recorder evidence");
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+        .await
+        .expect("start missing active-recorder fixture");
+    transaction
+        .execute(
+            "DELETE FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ? AND run_id = ?",
+            (
+                scenario.person_id.to_string(),
+                open.fence.conversation_id.as_uuid().to_string(),
+                open.fence.branch_id.as_uuid().to_string(),
+                run.run_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .expect("remove only the Run's active recorder row");
+    transaction
+        .commit()
+        .await
+        .expect("commit deliberately missing recorder evidence");
+    drop(connection);
+    let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+    assert!(before.active_recorder.is_none());
+    assert!(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+            .await
+            .is_err(),
+        "missing active Core custody rejects recovery"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before,
+        "a missing active recorder cannot partially commit Task or Host Run mutations"
+    );
+}
+
+#[tokio::test]
+async fn recovery_rolls_back_journal_terminal_accounting_and_close_at_each_injected_stage() {
+    for stage in [
+        CONVERSATION_RECOVERY_FAULT_AFTER_RESULT_JOURNAL,
+        CONVERSATION_RECOVERY_FAULT_AFTER_OWNER_TERMINAL,
+        CONVERSATION_RECOVERY_FAULT_AFTER_CORE_CUSTODY,
+    ] {
+        let mut scenario = Scenario::new().await;
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("rollback recovery stage {stage}"))
+            .await;
+        let task_result = actual_terminal_task_for_recovery(&scenario, &run).await;
+        let current = scenario
+            .vault()
+            .conversation_run(run.run_id)
+            .await
+            .expect("read Run before pending settlement")
+            .expect("Run remains present");
+        let pending = compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: current.aggregate_revision,
+                terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+            },
+        )
+        .await
+        .expect("retain the unresolved Task under a pending cancellation");
+        assert!(matches!(
+            pending,
+            CoreComposedSettlementResult::OwnerOutcomeDeferred { .. }
+        ));
+        let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+        scenario
+            .vault()
+            .conversation_recovery_fault_stage
+            .store(stage, Ordering::Release);
+        assert_eq!(
+            scenario
+                .vault()
+                .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
+                .await,
+            Err(ConversationStoreFailure::NotCommitted),
+            "injected recovery stage {stage} proves the transaction rolls back"
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, run.run_id).await,
+            before,
+            "stage {stage} leaves journal, Session accounting, terminal and Core state unchanged"
+        );
+        assert!(matches!(
+            scenario
+                .vault()
+                .reconcile_conversation_delegation_with_core(run.run_id, task_result)
+                .await
+                .expect("retry after confirmed rollback commits once"),
+            CoreComposedRecoveryResult::Closed { .. }
+        ));
+    }
 }
 
 #[tokio::test]
@@ -3091,7 +4092,9 @@ async fn typed_delegation_requires_actual_task_snapshot_receipt_and_owner_journa
         .await
         .expect("activate Task evidence owner")
         .executor_generation;
-    let task_receipts = scenario.terminal_task_receipts(&run, generation).await;
+    let (task_receipts, _) = scenario
+        .terminal_task_receipts(&run, generation, true)
+        .await;
     let accepted_reference = task_receipts[0].clone();
     let task = scenario
         .vault()
@@ -3447,8 +4450,9 @@ async fn typed_interaction_requires_current_valid_owner_row_and_stays_textless()
         ))
         .await;
     let foreign_task = scenario
-        .terminal_task_receipts(&foreign_run, task_generation)
+        .terminal_task_receipts(&foreign_run, task_generation, true)
         .await
+        .0
         .into_iter()
         .next()
         .expect("foreign Run has a real owner Task receipt");
@@ -3482,8 +4486,9 @@ async fn typed_interaction_requires_current_valid_owner_row_and_stays_textless()
     );
 
     let owner_task = scenario
-        .terminal_task_receipts(&run, task_generation)
+        .terminal_task_receipts(&run, task_generation, true)
         .await
+        .0
         .into_iter()
         .next()
         .expect("origin Run has a real owner Task receipt");
@@ -3776,8 +4781,9 @@ async fn delegated_contribution_replay_after_continue_preserves_original_task_pr
         .expect("activate Task evidence owner")
         .executor_generation;
     let original_task_receipt = scenario
-        .terminal_task_receipts(&run, task_generation)
+        .terminal_task_receipts(&run, task_generation, true)
         .await
+        .0
         .into_iter()
         .next()
         .expect("first owner Run Task receipt");
@@ -3830,8 +4836,9 @@ async fn delegated_contribution_replay_after_continue_preserves_original_task_pr
         .await
         .expect("open Continue recorder for the same owner input");
     let current_task_receipt = scenario
-        .terminal_task_receipts(&continued, task_generation)
+        .terminal_task_receipts(&continued, task_generation, true)
         .await
+        .0
         .into_iter()
         .next()
         .expect("current recorder Task receipt");
