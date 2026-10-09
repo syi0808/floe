@@ -3,7 +3,7 @@ package integrations
 import (
 	"context"
 	"floe/server/internal/trust"
-	"floe/server/internal/views"
+	viewcontracts "floe/server/internal/views/contracts"
 )
 
 type Trust interface {
@@ -77,12 +77,12 @@ type SnapshotSource interface {
 
 // Runtime is scoped to one immutable credential binding and selected resource set.
 type ReaderRegistration struct {
-	Reader     views.Reader
-	Descriptor views.ViewDescriptor
+	Reader     viewcontracts.Reader
+	Descriptor viewcontracts.ViewDescriptor
 }
 type Runtime struct {
 	Descriptor        Descriptor
-	Readers           map[views.ID]ReaderRegistration
+	Readers           map[viewcontracts.ID]ReaderRegistration
 	Setup             Setup
 	Identity          IdentityVerifier
 	IdentitySupported bool

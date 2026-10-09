@@ -38,6 +38,12 @@ OS / provider / storage
 
 Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts are extensions and may depend on owner APIs; business modules must not depend on the built-in package.
 
+## Go server owner boundaries
+
+The bounded Go View slice follows the same ownership direction. `server/internal/contracts/source` contains the pure source identity, snapshot, descriptor and bounds values shared by source readers and authorization. `server/internal/views` owns generic View preview, admission, query parsing, bounded read/validation and release orchestration, including its admitted query and selected-reader state. `server/internal/authority` owns signed admission/release enforcement, proof checks, one-use state, staging limits and source-fence enforcement; it implements the inward Views enforcement port and does not import the Views application package or select a reader. `server/internal/integrations` resolves current source identity, selects a registered reader and implements the Authority source fence. `server/internal/node` composes those owners, while `server/internal/transport/http` owns source request/response DTOs, JSON projection and HTTP status mapping.
+
+Product Calendar Mirror remains a specialized Views workflow over the product query and page contract. Authority validates and signs its distinct product permit through a Views-owned enforcement port; the generic Assistant View permit cannot authorize it. Repository/storage inversions, concrete adapter relocation and the remaining typed integration/trust/model-catalog work are still active P5 work.
+
 ## Read next
 
 | Need | Document |

@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"strings"
 
-	"floe/server/internal/authority"
 	"floe/server/internal/inference"
 	"floe/server/internal/integrations"
 	"floe/server/internal/modelcatalog"
 	"floe/server/internal/operation"
 	"floe/server/internal/pairing"
 	"floe/server/internal/trust"
+	"floe/server/internal/views"
 )
 
 type RouteRequest struct {
@@ -46,8 +46,8 @@ type Handler struct {
 	Setup         HostedSetup
 	Pairing       *pairing.Operations
 	Integrations  *integrations.Service
-	Sources       *authority.SourceService
-	Mirror        *authority.CalendarMirrorService
+	Sources       *views.Service
+	Mirror        *views.CalendarMirrorService
 	Configuration *inference.Configuration
 	Accounts      *inference.AccountManagement
 	Clients       *trust.ClientAdministration

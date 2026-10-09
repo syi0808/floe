@@ -3,9 +3,9 @@ package integrations
 import (
 	"context"
 	"errors"
-	"floe/server/internal/authority"
+	sourcecontract "floe/server/internal/contracts/source"
 	"floe/server/internal/trust"
-	"floe/server/internal/views"
+	viewcontracts "floe/server/internal/views/contracts"
 	"reflect"
 	"sort"
 	"strings"
@@ -31,26 +31,26 @@ func sourceResources(r Record) []string {
 	}
 	return out
 }
-func (s *Service) sourceSnapshotLocked(r Record, id views.ID, owner string) (views.SourceSnapshot, views.Reader, error) {
+func (s *Service) sourceSnapshotLocked(r Record, id viewcontracts.ID, owner string) (viewcontracts.SourceSnapshot, viewcontracts.Reader, error) {
 	runtime, ok := s.runtimes[r.ConnectionID]
 	if !ok || runtime.Identity == nil || !runtime.IdentitySupported || r.IdentityUnverified || r.ProviderIdentity == "" {
-		return views.SourceSnapshot{}, nil, errors.New("source identity unavailable")
+		return viewcontracts.SourceSnapshot{}, nil, errors.New("source identity unavailable")
 	}
 	registered, ok := runtime.Readers[id]
 	if !ok || registered.Reader == nil {
-		return views.SourceSnapshot{}, nil, errors.New("view unavailable")
+		return viewcontracts.SourceSnapshot{}, nil, errors.New("view unavailable")
 	}
 	reader, descriptor := registered.Reader, registered.Descriptor
 	if descriptor.SchemaVersion != 1 || descriptor.MaxItems < 1 || descriptor.MaxItems > 128 || descriptor.MaxBytes < 1 || descriptor.MaxBytes > 1<<20 {
-		return views.SourceSnapshot{}, nil, errors.New("view descriptor unavailable")
+		return viewcontracts.SourceSnapshot{}, nil, errors.New("view descriptor unavailable")
 	}
 	device := ""
 	if r.Device != nil {
 		device = r.Device.DeviceID
 	}
-	return views.SourceSnapshot{SourceReference: views.SourceReference{ConnectorID: r.ConnectorID, ConnectionID: r.ConnectionID, ExecutionOwner: owner, Incarnation: r.Incarnation, Epoch: r.Epoch}, ConnectionRevision: r.Revision, PersonID: r.PersonID, DeviceID: device, ProviderIdentity: r.ProviderIdentity, IdentityGeneration: 1, Resources: sourceResources(r), Active: true, Descriptor: descriptor}, reader, nil
+	return viewcontracts.SourceSnapshot{SourceReference: viewcontracts.SourceReference{ConnectorID: r.ConnectorID, ConnectionID: r.ConnectionID, ExecutionOwner: owner, Incarnation: r.Incarnation, Epoch: r.Epoch}, ConnectionRevision: r.Revision, PersonID: r.PersonID, DeviceID: device, ProviderIdentity: r.ProviderIdentity, IdentityGeneration: 1, Resources: sourceResources(r), Active: true, Descriptor: descriptor}, reader, nil
 }
-func (s *Service) ResolveSource(ctx context.Context, p trust.Principal, target views.SourceTarget) (out authority.ResolvedSource, err error) {
+func (s *Service) ResolveSource(ctx context.Context, p trust.Principal, target viewcontracts.SourceTarget) (out viewcontracts.ResolvedSource, err error) {
 	if err = ctx.Err(); err != nil {
 		return out, err
 	}
@@ -75,12 +75,12 @@ func (s *Service) ResolveSource(ctx context.Context, p trust.Principal, target v
 		if err != nil {
 			return err
 		}
-		out = authority.ResolvedSource{Snapshot: snapshot, Reader: reader, Limits: views.Bounds{MaxItems: uint32(snapshot.Descriptor.MaxItems), MaxBytes: uint32(snapshot.Descriptor.MaxBytes)}}
+		out = viewcontracts.ResolvedSource{Snapshot: snapshot, Reader: reader, Limits: viewcontracts.Bounds{MaxItems: uint32(snapshot.Descriptor.MaxItems), MaxBytes: uint32(snapshot.Descriptor.MaxBytes)}}
 		return nil
 	})
 	return out, err
 }
-func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expected views.SourceSnapshot) error {
+func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expected viewcontracts.SourceSnapshot) error {
 	if err := s.check(p); err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expect
 	}
 	s.mu.RLock()
 	r, ok := s.state.Connections[expected.ConnectionID]
-	current, _, snapshotErr := s.sourceSnapshotLocked(r, views.ID(expected.Descriptor.ID), metadata.ExecutionOwner)
+	current, _, snapshotErr := s.sourceSnapshotLocked(r, viewcontracts.ID(expected.Descriptor.ID), metadata.ExecutionOwner)
 	s.mu.RUnlock()
 	if !ok || snapshotErr != nil || !reflect.DeepEqual(current, expected) {
 		return errors.New("source changed")
@@ -98,9 +98,9 @@ func (s *Service) PreflightSource(ctx context.Context, p trust.Principal, expect
 	if err := s.preflight(ctx, r); err != nil {
 		return err
 	}
-	return s.WithCurrentSource(p, expected, func(views.SourceSnapshot) error { return nil })
+	return s.WithCurrentSource(p, expected, func(viewcontracts.SourceSnapshot) error { return nil })
 }
-func (s *Service) WithCurrentSource(p trust.Principal, expected views.SourceSnapshot, consume func(views.SourceSnapshot) error) error {
+func (s *Service) WithCurrentSource(p trust.Principal, expected sourcecontract.Snapshot, consume func(sourcecontract.Snapshot) error) error {
 	if consume == nil {
 		return errors.New("source callback required")
 	}
@@ -118,7 +118,7 @@ func (s *Service) WithCurrentSource(p trust.Principal, expected views.SourceSnap
 		if !ok || r.PersonID != p.PersonID() || r.Device != nil && r.Device.DeviceID != p.DeviceID() {
 			return errors.New("source changed")
 		}
-		current, _, err := s.sourceSnapshotLocked(r, views.ID(expected.Descriptor.ID), metadata.ExecutionOwner)
+		current, _, err := s.sourceSnapshotLocked(r, viewcontracts.ID(expected.Descriptor.ID), metadata.ExecutionOwner)
 		if err != nil || !reflect.DeepEqual(current, expected) {
 			return errors.New("source changed")
 		}

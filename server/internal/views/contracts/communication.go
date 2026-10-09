@@ -1,4 +1,4 @@
-package views
+package contracts
 
 type CommunicationItem struct {
 	EvidenceHandle string   `json:"evidence_handle"`

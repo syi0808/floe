@@ -10,8 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	sourcecontract "floe/server/internal/contracts/source"
 	"floe/server/internal/trust"
-	"floe/server/internal/views"
+	viewcontracts "floe/server/internal/views/contracts"
 	"fmt"
 	"reflect"
 	"strings"
@@ -38,12 +39,14 @@ const (
 )
 
 var (
-	ErrInvalid     = errors.New("invalid authorization message")
-	ErrDenied      = errors.New("authorization denied")
-	ErrExpired     = errors.New("authorization challenge expired")
-	ErrReplay      = errors.New("authorization challenge already used")
-	ErrUnavailable = errors.New("authorization persistence unavailable")
-	ErrConflict    = errors.New("authorization state conflict")
+	ErrInvalid         = errors.New("invalid authorization message")
+	ErrDenied          = errors.New("authorization denied")
+	ErrExpired         = errors.New("authorization challenge expired")
+	ErrReplay          = errors.New("authorization challenge already used")
+	ErrUnavailable     = errors.New("authorization persistence unavailable")
+	ErrConflict        = errors.New("authorization state conflict")
+	ErrCapacity        = errors.New("authorization admission capacity reached")
+	ErrClaimInProgress = errors.New("authorization proof claim in progress")
 )
 
 type Operation string
@@ -82,11 +85,11 @@ type GrantReference struct {
 
 // Request retains exactly one closed authority policy and a full source fence.
 type Request struct {
-	Source views.SourceSnapshot
+	Source sourcecontract.Snapshot
 	policy requestPolicy
 }
 type requestPolicy interface {
-	requestBounds() views.Bounds
+	requestBounds() sourcecontract.Bounds
 	clonePolicy() requestPolicy
 }
 type assistantPolicy struct {
@@ -97,16 +100,16 @@ type assistantPolicy struct {
 	MaxItems, MaxBytes          uint32
 }
 
-func (p assistantPolicy) requestBounds() views.Bounds {
-	return views.Bounds{MaxItems: p.MaxItems, MaxBytes: p.MaxBytes}
+func (p assistantPolicy) requestBounds() sourcecontract.Bounds {
+	return sourcecontract.Bounds{MaxItems: p.MaxItems, MaxBytes: p.MaxBytes}
 }
 func (p assistantPolicy) clonePolicy() requestPolicy {
 	p.Resources = append([]string(nil), p.Resources...)
 	return p
 }
-func (r Request) bounds() views.Bounds {
+func (r Request) bounds() sourcecontract.Bounds {
 	if r.policy == nil {
-		return views.Bounds{}
+		return sourcecontract.Bounds{}
 	}
 	return r.policy.requestBounds()
 }
@@ -220,7 +223,7 @@ func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceFence
 		return Challenge{}, err
 	}
 	consumed := false
-	err = source.WithCurrentSource(p, r.Source, func(s views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, r.Source, func(s sourcecontract.Snapshot) error {
 		consumed = true
 		if !sourceMatches(p, r.Source, s) {
 			return ErrDenied
@@ -228,25 +231,42 @@ func (e *Engine) IssueAdmission(p trust.Principal, r Request, source SourceFence
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.sweepExpiredLocked()
+		if e.challengeIDInUseLocked(challenge.ID) {
+			return ErrConflict
+		}
 		if e.clientCountLocked(p.ClientID()) >= MaxPendingPerClient {
-			return ErrDenied
+			return ErrCapacity
 		}
 		e.pending[challenge.ID] = &pendingChallenge{wire: append([]byte(nil), wire...), operation: OperationAdmission, principal: p, request: r, keyID: issuer.KeyID, deadline: e.clock.Monotonic() + challenge.ExpiresAt.Sub(e.clock.Now()), deadlineWall: challenge.ExpiresAt}
 		return nil
 	})
+	if errors.Is(err, ErrCapacity) {
+		return Challenge{}, ErrCapacity
+	}
+	if errors.Is(err, ErrConflict) {
+		return Challenge{}, ErrConflict
+	}
 	if err != nil || !consumed {
 		return Challenge{}, ErrDenied
 	}
 	return challenge, nil
 }
-func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.Proof, source SourceFence) (string, Request, error) {
+func (e *Engine) ClaimAdmission(p trust.Principal, viewID sourcecontract.ID, proof trust.Proof, source SourceFence) (string, Request, error) {
 	if source == nil || !p.Valid() {
 		return "", Request{}, ErrDenied
 	}
 	e.mu.Lock()
 	e.sweepExpiredLocked()
 	c, ok := e.pending[proof.ChallengeID]
-	if !ok || c.state != challengePending || !p.Same(c.principal) || c.request.Source.Descriptor.ID != string(viewID) {
+	if !ok || !p.Same(c.principal) || c.request.Source.Descriptor.ID != string(viewID) {
+		e.mu.Unlock()
+		return "", Request{}, ErrReplay
+	}
+	if c.state == challengeChecking {
+		e.mu.Unlock()
+		return "", Request{}, ErrClaimInProgress
+	}
+	if c.state != challengePending {
 		e.mu.Unlock()
 		return "", Request{}, ErrReplay
 	}
@@ -260,11 +280,16 @@ func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.
 		return trust.VerifyProof(proof, proof.ChallengeID, copy.keyID, copy.wire, issuer.PublicKey)
 	})
 	if err != nil || !verified {
-		e.CancelAdmission(proof.ChallengeID)
+		if verified {
+			e.retryAdmissionClaim(proof.ChallengeID, c)
+		} else {
+			e.cancelAdmissionClaim(proof.ChallengeID, c, nil)
+		}
 		return "", Request{}, ErrDenied
 	}
 	consumed := false
-	err = source.WithCurrentSource(p, copy.request.Source, func(s views.SourceSnapshot) error {
+	var claimed *admission
+	err = source.WithCurrentSource(p, copy.request.Source, func(s sourcecontract.Snapshot) error {
 		consumed = true
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -272,15 +297,16 @@ func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.
 		if !ok || live != c || live.state != challengeChecking {
 			return ErrReplay
 		}
-		delete(e.pending, proof.ChallengeID)
 		if e.expired(live.deadline) || !sourceMatches(p, copy.request.Source, s) {
 			return ErrDenied
 		}
-		e.admissions[proof.ChallengeID] = &admission{p, cloneRequest(copy.request), copy.keyID, copy.deadline}
+		delete(e.pending, proof.ChallengeID)
+		claimed = &admission{p, cloneRequest(copy.request), copy.keyID, copy.deadline}
+		e.admissions[proof.ChallengeID] = claimed
 		return nil
 	})
 	if err != nil || !consumed {
-		e.CancelAdmission(proof.ChallengeID)
+		e.cancelAdmissionClaim(proof.ChallengeID, c, claimed)
 		if err == nil {
 			err = ErrDenied
 		}
@@ -288,12 +314,25 @@ func (e *Engine) ClaimAdmission(p trust.Principal, viewID views.ID, proof trust.
 	}
 	return proof.ChallengeID, cloneRequest(copy.request), nil
 }
-func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []byte, count uint32, source SourceFence) (Release, error) {
-	if source == nil || !p.Valid() || validateRequest(r) != nil || len(result) > MaxStageBytesPerResult || len(result) > int(r.bounds().MaxBytes) || count > r.bounds().MaxItems {
+func (e *Engine) StageResult(id string, p trust.Principal, result []byte, count uint32, source SourceFence) (Release, error) {
+	if source == nil || !p.Valid() || len(result) > MaxStageBytesPerResult {
+		return Release{}, ErrDenied
+	}
+	e.mu.Lock()
+	e.sweepExpiredLocked()
+	admitted, ok := e.admissions[id]
+	if !ok || !p.Same(admitted.principal) {
+		e.mu.Unlock()
+		return Release{}, ErrDenied
+	}
+	r := cloneRequest(admitted.request)
+	keyID := admitted.keyID
+	e.mu.Unlock()
+	if validateRequest(r) != nil || len(result) > int(r.bounds().MaxBytes) || count > r.bounds().MaxItems {
 		return Release{}, ErrDenied
 	}
 	issuer, err := e.trust.ActiveIssuer(p)
-	if err != nil {
+	if err != nil || issuer.KeyID != keyID {
 		return Release{}, ErrDenied
 	}
 	hash := sha256.Sum256(result)
@@ -303,15 +342,18 @@ func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []b
 		return Release{}, err
 	}
 	var out Release
-	err = source.WithCurrentSource(p, r.Source, func(current views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, r.Source, func(current sourcecontract.Snapshot) error {
 		if !sourceMatches(p, r.Source, current) {
 			return ErrDenied
 		}
 		e.mu.Lock()
 		defer e.mu.Unlock()
 		e.sweepExpiredLocked()
+		if e.challengeIDInUseLocked(challenge.ID) {
+			return ErrConflict
+		}
 		a, ok := e.admissions[id]
-		if !ok || !p.Same(a.principal) || a.keyID != issuer.KeyID || !requestsEqual(a.request, r) {
+		if !ok || a != admitted || !p.Same(a.principal) || a.keyID != issuer.KeyID || !requestsEqual(a.request, r) {
 			return ErrDenied
 		}
 		if e.stagedBytes+len(result) > MaxStageBytesGlobal {
@@ -325,14 +367,22 @@ func (e *Engine) StageResult(id string, p trust.Principal, r Request, result []b
 	})
 	return out, err
 }
-func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID views.ID, proof trust.Proof, resolver SourceResolver, source SourceFence) ([]byte, error) {
-	if resolver == nil || source == nil || !p.Valid() {
+func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID sourcecontract.ID, proof trust.Proof, source SourceFence) ([]byte, error) {
+	if source == nil || !p.Valid() {
 		return nil, ErrDenied
 	}
 	e.mu.Lock()
 	e.sweepExpiredLocked()
 	s, ok := e.stages[proof.ChallengeID]
-	if !ok || s.state != challengePending || !p.Same(s.principal) {
+	if !ok || !p.Same(s.principal) {
+		e.mu.Unlock()
+		return nil, ErrReplay
+	}
+	if s.state == challengeChecking {
+		e.mu.Unlock()
+		return nil, ErrClaimInProgress
+	}
+	if s.state != challengePending {
 		e.mu.Unlock()
 		return nil, ErrReplay
 	}
@@ -346,16 +396,20 @@ func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID vie
 		return trust.VerifyProof(proof, proof.ChallengeID, copy.keyID, copy.challenge, issuer.PublicKey)
 	})
 	if err != nil || !verified {
-		e.CancelRelease(proof.ChallengeID)
+		if verified {
+			e.retryReleaseClaim(proof.ChallengeID, s)
+		} else {
+			e.cancelReleaseClaim(proof.ChallengeID, s)
+		}
 		return nil, ErrDenied
 	}
-	if copy.request.Source.Descriptor.ID != string(viewID) || resolver.PreflightSource(ctx, p, copy.request.Source) != nil {
-		e.CancelRelease(proof.ChallengeID)
+	if copy.request.Source.Descriptor.ID != string(viewID) || ctx.Err() != nil {
+		e.cancelReleaseClaim(proof.ChallengeID, s)
 		return nil, ErrDenied
 	}
 	var out []byte
 	consumed := false
-	err = source.WithCurrentSource(p, copy.request.Source, func(current views.SourceSnapshot) error {
+	err = source.WithCurrentSource(p, copy.request.Source, func(current sourcecontract.Snapshot) error {
 		consumed = true
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -371,7 +425,7 @@ func (e *Engine) ClaimRelease(ctx context.Context, p trust.Principal, viewID vie
 		return nil
 	})
 	if err != nil || !consumed {
-		e.CancelRelease(proof.ChallengeID)
+		e.cancelReleaseClaim(proof.ChallengeID, s)
 		if err == nil {
 			err = ErrDenied
 		}
@@ -391,6 +445,65 @@ func (e *Engine) CancelAdmission(id string) {
 	defer e.mu.Unlock()
 	delete(e.pending, id)
 	delete(e.admissions, id)
+}
+
+func (e *Engine) cancelAdmissionClaim(id string, expected *pendingChallenge, claimed *admission) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if live, ok := e.pending[id]; ok && live == expected {
+		delete(e.pending, id)
+	}
+	if claimed != nil {
+		if live, ok := e.admissions[id]; ok && live == claimed {
+			delete(e.admissions, id)
+		}
+	}
+}
+
+func (e *Engine) cancelReleaseClaim(id string, expected *stage) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if live, ok := e.stages[id]; ok && live == expected {
+		e.dropStageLocked(live)
+	}
+}
+
+func (e *Engine) challengeIDInUseLocked(id string) bool {
+	if _, ok := e.pending[id]; ok {
+		return true
+	}
+	if _, ok := e.admissions[id]; ok {
+		return true
+	}
+	_, ok := e.stages[id]
+	return ok
+}
+
+func (e *Engine) retryAdmissionClaim(id string, expected *pendingChallenge) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	live, ok := e.pending[id]
+	if !ok || live != expected || live.state != challengeChecking {
+		return
+	}
+	if e.expired(live.deadline) {
+		delete(e.pending, id)
+		return
+	}
+	live.state = challengePending
+}
+func (e *Engine) retryReleaseClaim(id string, expected *stage) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	live, ok := e.stages[id]
+	if !ok || live != expected || live.state != challengeChecking {
+		return
+	}
+	if e.expired(live.deadline) {
+		e.dropStageLocked(live)
+		return
+	}
+	live.state = challengePending
 }
 func (e *Engine) expired(deadline time.Duration) bool { return e.clock.Monotonic() >= deadline }
 func (e *Engine) dropStageLocked(s *stage)            { delete(e.stages, s.id); e.stagedBytes -= len(s.result) }
@@ -623,7 +736,7 @@ func validateWire(wire challengeWire) error {
 
 func requestsEqual(a, b Request) bool { return reflect.DeepEqual(a, b) }
 func cloneRequest(r Request) Request {
-	r.Source = views.CloneSource(r.Source)
+	r.Source = sourcecontract.Clone(r.Source)
 	if r.policy != nil {
 		r.policy = r.policy.clonePolicy()
 	}
@@ -638,7 +751,7 @@ func validateRequest(r Request) error {
 	}
 	switch policy := r.policy.(type) {
 	case assistantPolicy:
-		if r.Source.Descriptor.ID == string(views.CalendarMirror) || validateBoundString(policy.Audience, MaxAudienceBytes) != nil || !validPurpose(policy.Purpose) || validateBoundString(policy.Consumer, MaxConsumerBytes) != nil || validateGrant(grantWire{policy.Grant.ID, policy.Grant.Incarnation, policy.Grant.Epoch}) != nil || len(policy.Resources) == 0 || len(policy.Resources) > MaxResources {
+		if r.Source.Descriptor.ID == string(viewcontracts.CalendarMirror) || validateBoundString(policy.Audience, MaxAudienceBytes) != nil || !validPurpose(policy.Purpose) || validateBoundString(policy.Consumer, MaxConsumerBytes) != nil || validateGrant(grantWire{policy.Grant.ID, policy.Grant.Incarnation, policy.Grant.Epoch}) != nil || len(policy.Resources) == 0 || len(policy.Resources) > MaxResources {
 			return ErrInvalid
 		}
 		previous := ""
@@ -649,7 +762,7 @@ func validateRequest(r Request) error {
 			previous = resource
 		}
 	case productCalendarPolicy:
-		if r.Source.Descriptor.ID != string(views.CalendarMirror) || policy.validateSource(r.Source) != nil {
+		if r.Source.Descriptor.ID != string(viewcontracts.CalendarMirror) || policy.validateSource(r.Source) != nil {
 			return ErrInvalid
 		}
 	default:
@@ -699,7 +812,7 @@ func validateGrant(g grantWire) error {
 	}
 	return nil
 }
-func sourceMatches(p trust.Principal, want, got views.SourceSnapshot) bool {
+func sourceMatches(p trust.Principal, want, got sourcecontract.Snapshot) bool {
 	return got.Active && got.PersonID == p.PersonID() && (got.DeviceID == "" || got.DeviceID == p.DeviceID()) && got.ConnectionRevision > 0 && got.ProviderIdentity != "" && got.IdentityGeneration > 0 && reflect.DeepEqual(want, got)
 }
 func validatePrincipal(p trust.Principal) error {

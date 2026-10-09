@@ -13,6 +13,7 @@ import (
 	"floe/server/internal/pairing"
 	httptransport "floe/server/internal/transport/http"
 	"floe/server/internal/trust"
+	"floe/server/internal/views"
 	"net"
 	"net/http"
 	"os"
@@ -62,6 +63,8 @@ func New(config Config) (*Node, error) {
 		return nil, err
 	}
 	failed := true
+	var viewService *views.Service
+	var mirrorService *views.CalendarMirrorService
 	defer func() {
 		if failed {
 			storageRoot.Close()
@@ -119,17 +122,33 @@ func New(config Config) (*Node, error) {
 	}
 	defer func() {
 		if failed {
+			if mirrorService != nil {
+				mirrorService.Close()
+			}
+			if viewService != nil {
+				viewService.Close()
+			}
 			sources.Close()
 		}
 	}()
-	reader, err := authority.NewSourceService(engine, t, sources, sources)
+	enforcement, err := authority.NewViewEnforcer(engine, t, sources)
 	if err != nil {
 		return nil, err
 	}
-	mirror, err := authority.NewCalendarMirrorService(engine, t, sources, sources)
+	reader, err := views.NewService(enforcement, t, sources)
 	if err != nil {
 		return nil, err
 	}
+	viewService = reader
+	mirrorEnforcement, err := authority.NewCalendarMirrorEnforcer(engine, t, sources)
+	if err != nil {
+		return nil, err
+	}
+	mirror, err := views.NewCalendarMirrorService(mirrorEnforcement, t, sources)
+	if err != nil {
+		return nil, err
+	}
+	mirrorService = mirror
 	pairing := pairing.NewOperations(t, vault, nil)
 	clients := trust.NewClientAdministration(t, sources, pairing)
 	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, ModelCatalog: modelCatalog, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, ModelCatalog: modelCatalog, Address: config.Address}}
@@ -169,6 +188,8 @@ func (n *Node) Close() {
 		}
 		n.handler.Inference.Service.DenyConfiguration()
 		n.active.Wait()
+		n.handler.Mirror.Close()
+		n.handler.Sources.Close()
 		n.clients.Close()
 		n.integrations.Close()
 		n.runtime.Close()
