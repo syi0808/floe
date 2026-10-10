@@ -278,8 +278,12 @@ final class ConversationController extends ChangeNotifier {
     required String destinationRef,
   }) async {
     final current = session;
-    if (current == null || current.personId != personId ||
-        _busy || _sealed || _disposed || !runtimeController.ready) {
+    if (current == null ||
+        current.personId != personId ||
+        _busy ||
+        _sealed ||
+        _disposed ||
+        !runtimeController.ready) {
       throw StateError('Conversation is not ready to submit this proposal.');
     }
     final result = await gateway.conversationRuntime.submitCalendarProposal(
@@ -791,8 +795,9 @@ final class ConversationController extends ChangeNotifier {
         loadingEarlier ||
         current == null ||
         messages.isEmpty ||
-        !hasEarlierMessages)
+        !hasEarlierMessages) {
       return;
+    }
     final before = messages.first.messageId;
     final generation = _historyGeneration;
     loadingEarlier = true;
@@ -810,29 +815,34 @@ final class ConversationController extends ChangeNotifier {
           generation != _historyGeneration ||
           session?.id != current.id ||
           messages.isEmpty ||
-          messages.first.messageId != before)
+          messages.first.messageId != before) {
         return;
-      if (page.id != current.id ||
-          page.personId != personId ||
-          page.revision < current.revision ||
-          page.messages.any((message) => message.messageId == before) ||
-          (page.messages.isEmpty && page.hasEarlierMessages)) {
-        throw const FormatException('Invalid Conversation history page.');
       }
       final existing = messages.map((message) => message.messageId).toSet();
-      final earlier = page.messages
-          .where((message) => !existing.contains(message.messageId))
-          .toList();
-      if (earlier.isEmpty && page.hasEarlierMessages)
+      if (page.id != current.id ||
+          page.personId != personId ||
+          page.revision < current.revision) {
+        throw const FormatException('Invalid Conversation history page.');
+      }
+      if (page.messages.any(
+        (message) => existing.contains(message.messageId),
+      )) {
+        throw const FormatException(
+          'Conversation history page overlaps the current window.',
+        );
+      }
+      if (page.messages.isEmpty && page.hasEarlierMessages) {
         throw const FormatException('History cursor did not advance.');
-      messages = [...earlier, ...messages];
+      }
+      messages = [...page.messages, ...messages];
       _historyHasEarlier = page.hasEarlierMessages;
     } on Object catch (error) {
       if (!_disposed && generation == _historyGeneration) {
         earlierFailure = 'Earlier messages could not be loaded. Try again.';
         final owner = _ownerFailure(error);
-        if (owner != null && (owner.reloadRequired || owner.sealSession))
+        if (owner != null && (owner.reloadRequired || owner.sealSession)) {
           _applyOwnerFailure(owner);
+        }
       }
     } finally {
       if (!_disposed && generation == _historyGeneration) {
