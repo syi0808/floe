@@ -13,39 +13,39 @@ import (
 
 // Recover is an explicit authenticated operator decision. Polling never calls
 // this path. A lost activation acknowledgment is read before any mutation.
-func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincipal, in RecoveryRequest) operation.Result {
+func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincipal, in RecoveryRequest) (StateResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if in.SchemaVersion != 1 || !trust.ValidID(in.PairingID) || len(in.Fingerprint) != 64 || (in.Action != "resume" && in.Action != "abort") {
-		return operation.Reject(operation.Invalid, "validation")
+		return stateFailure(operation.Invalid, "validation")
 	}
 	if err := o.trust.WithCurrentOperator(operator, func() error { return ctx.Err() }); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	if err := o.lock(ctx); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	defer o.unlock()
 	p, err := o.find(ctx, in.PairingID)
 	if err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	if p == nil || p.IssuerFingerprint != in.Fingerprint {
-		return operation.Reject(operation.Conflict, "pairing_operation_conflict")
+		return stateFailure(operation.Conflict, "pairing_operation_conflict")
 	}
 	receipt, committed, err := o.trust.InspectPairing(ctx, p.ID, p.proof)
 	if err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	if committed {
 		if !sameActivation(p, receipt) {
-			return operation.Reject(operation.Conflict, "pairing_repair_required")
+			return stateFailure(operation.Conflict, "pairing_repair_required")
 		}
 		// Activation wins both recovery choices. Missing delivery credentials
 		// remain an explicit repair fact, never permission to replace the token.
 		token, readErr := o.credentials.ReadPairingToken(ctx, PairingID(p.ID))
 		if readErr != nil {
-			return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
+			return stateFailure(operation.Unavailable, "pairing_credential_unavailable")
 		}
 		delivery := "available"
 		if token == "" || trust.Digest(token) != receipt.TokenHash {
@@ -55,22 +55,22 @@ func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincip
 		next.AdminApproved = true
 		next.status = "approved"
 		if err = o.save(ctx, &next); err != nil {
-			return trust.Result(err)
+			return stateError(err)
 		}
 		o.pending = &next
-		return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": "approved", "credential_delivery": delivery})
+		return stateResultWithDelivery(p.ID, "approved", delivery), nil
 	}
 	if p.status == "aborted" && in.Action == "abort" {
-		return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": "aborted"})
+		return StateResult{SchemaVersion: 1, PairingID: p.ID, Status: "aborted"}, nil
 	}
 	if p.status != "activating" || p.AdminApproved {
-		return operation.Reject(operation.Conflict, "pairing_repair_required")
+		return stateFailure(operation.Conflict, "pairing_repair_required")
 	}
 	if err = o.validateRecoveryReceipt(p); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	if err = o.trust.WithCurrentOperator(operator, func() error { return ctx.Err() }); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	if in.Action == "abort" {
 		// A pending native write keeps the global credential lane. This save
@@ -78,41 +78,45 @@ func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincip
 		next := *p
 		next.status = "aborted"
 		if err = o.save(ctx, &next); err != nil {
-			return trust.Result(err)
+			return stateError(err)
 		}
 		o.pending = &next
-		return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": "aborted"})
+		return StateResult{SchemaVersion: 1, PairingID: p.ID, Status: "aborted"}, nil
 	}
 	if !p.Expires.After(o.clock()) {
-		return operation.Reject(operation.Conflict, "pairing_recovery_expired")
+		return stateFailure(operation.Conflict, "pairing_recovery_expired")
 	}
 	hash, err := hex.DecodeString(p.activationTokenHash)
 	if err != nil || len(hash) != 32 || hex.EncodeToString(hash) != p.activationTokenHash {
-		return operation.Reject(operation.Conflict, "pairing_recovery_token_missing")
+		return stateFailure(operation.Conflict, "pairing_recovery_token_missing")
 	}
 	token, err := o.credentials.ReadPairingToken(ctx, PairingID(p.ID))
 	if err != nil {
-		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
+		return stateFailure(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	if token == "" || trust.Digest(token) != p.activationTokenHash {
-		return operation.Reject(operation.Conflict, "pairing_recovery_token_missing")
+		return stateFailure(operation.Conflict, "pairing_recovery_token_missing")
 	}
 	key, err := trust.DecodeBase64(p.IssuerPublicKey, ed25519.PublicKeySize)
 	if err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	activation := trust.PairingActivation{PairingID: p.ID, PersonID: p.PersonID, DeviceID: p.DeviceID, Producer: p.producer, IssuerKeyID: p.IssuerKeyID, IssuerFingerprint: p.IssuerFingerprint, IssuerPublicKey: key, ChallengeID: p.challengeID, ChallengeBytes: append([]byte(nil), p.challengeBytes...), LocalProof: p.localProof, AdminFingerprint: in.Fingerprint, ExpectedRevision: p.expectedRevision, TokenHash: p.activationTokenHash, PollProofHash: trust.Digest(p.proof), Operator: operator}
 	if _, err = o.trust.ActivatePairing(ctx, activation); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	next := *p
 	next.AdminApproved = true
 	next.status = "approved"
 	if err = o.save(ctx, &next); err != nil {
-		return trust.Result(err)
+		return stateError(err)
 	}
 	o.pending = &next
-	return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "status": "approved"})
+	return StateResult{SchemaVersion: 1, PairingID: p.ID, Status: "approved"}, nil
+}
+
+func stateResultWithDelivery(pairingID, status, delivery string) StateResult {
+	return StateResult{SchemaVersion: 1, PairingID: pairingID, Status: status, CredentialDelivery: &delivery}
 }
 func sameActivation(p *Pending, r trust.PairingReadback) bool {
 	return r.ClientID == p.ID && r.PersonID == p.PersonID && r.DeviceID == p.DeviceID && r.Producer == p.producer && r.IssuerKeyID == p.IssuerKeyID && r.IssuerPublicKey == p.IssuerPublicKey && r.IssuerFingerprint == p.IssuerFingerprint && r.EnrollmentID == p.challengeID && (p.activationTokenHash == "" || r.TokenHash == p.activationTokenHash)

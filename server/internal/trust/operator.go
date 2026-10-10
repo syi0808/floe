@@ -40,7 +40,7 @@ func (sessions *operatorSessions) Delete(token string) {
 	delete(sessions.active, Digest(token))
 }
 
-func (sessions *operatorSessions) Login(credential string) (string, operation.Result) {
+func (sessions *operatorSessions) Login(credential string) (string, error) {
 	sessions.mu.Lock()
 	defer sessions.mu.Unlock()
 	now := time.Now()
@@ -49,10 +49,10 @@ func (sessions *operatorSessions) Login(credential string) (string, operation.Re
 	}
 	sessions.loginAttempts++
 	if sessions.loginAttempts > 10 {
-		return "", operation.Reject(operation.Limited, "try_later")
+		return "", operation.Fail(operation.Limited, "try_later")
 	}
 	if subtle.ConstantTimeCompare([]byte(Digest(credential)), []byte(sessions.adminHash)) != 1 {
-		return "", operation.Reject(operation.Unauthenticated, "unauthorized")
+		return "", operation.Fail(operation.Unauthenticated, "unauthorized")
 	}
 	for key, value := range sessions.active {
 		if !value.Expires.After(now) {
@@ -60,11 +60,11 @@ func (sessions *operatorSessions) Login(credential string) (string, operation.Re
 		}
 	}
 	if len(sessions.active) >= 8 {
-		return "", operation.Reject(operation.Limited, "too_many_sessions")
+		return "", operation.Fail(operation.Limited, "too_many_sessions")
 	}
 	token := rand.Text() + rand.Text()
 	sessions.active[Digest(token)] = OperatorSession{CSRF: rand.Text() + rand.Text(), Expires: now.Add(12 * time.Hour)}
-	return token, operation.Accept(map[string]bool{"ok": true})
+	return token, nil
 }
 
 // OperatorPrincipal cannot be used as an app principal or acquire source authority.
@@ -74,7 +74,7 @@ type OperatorPrincipal struct {
 	expires   time.Time
 }
 
-func (s *Service) LoginOperator(credential string) (string, operation.Result) {
+func (s *Service) LoginOperator(credential string) (string, error) {
 	return s.operators.Login(credential)
 }
 func (s *Service) LogoutOperator(cookie string) { s.operators.Delete(cookie) }

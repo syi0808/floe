@@ -1,5 +1,7 @@
 package operation
 
+import "errors"
+
 type Category string
 
 const (
@@ -16,20 +18,6 @@ const (
 	Internal        Category = "internal"
 )
 
-type Result struct {
-	Category Category
-	Value    any
-	Code     string
-}
-
-func Accept(value any) Result {
-	return Result{Category: Ready, Value: value}
-}
-
-func Reject(category Category, code string) Result {
-	return Result{Category: category, Code: code}
-}
-
 // Error exposes only a stable category and code; provider and storage details stay private.
 type Error struct {
 	Category Category
@@ -38,3 +26,24 @@ type Error struct {
 
 func (e Error) Error() string                   { return e.Code }
 func Fail(category Category, code string) error { return Error{Category: category, Code: code} }
+
+// Normalize preserves an existing operation error and maps an unclassified
+// failure to the caller's safe, stable fallback.
+func Normalize(err error, category Category, code string) error {
+	if err == nil {
+		return nil
+	}
+	var failure Error
+	if errors.As(err, &failure) {
+		return failure
+	}
+	return Error{Category: category, Code: code}
+}
+
+func ErrorOf(err error) (Error, bool) {
+	var failure Error
+	if errors.As(err, &failure) {
+		return failure, true
+	}
+	return Error{}, false
+}

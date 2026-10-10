@@ -55,13 +55,12 @@ func InvalidConnectorToken(token string) bool {
 	return token != "" && len(token) < 8 || len(token) > 4096 || strings.ContainsAny(token, "\r\n\x00")
 }
 
-func ConnectorCapabilities(definition Definition) map[string]any {
-	return map[string]any{
-		"connect":      true,
-		"cancel":       IsOAuthAuthKind(definition.AuthKind),
-		"disconnect":   true,
-		"scope_update": len(definition.ScopeFields) > 0,
-	}
+type CapabilitySet struct {
+	Connect, Cancel, Disconnect, ScopeUpdate bool
+}
+
+func CapabilitiesFor(definition Definition) CapabilitySet {
+	return CapabilitySet{Connect: true, Cancel: IsOAuthAuthKind(definition.AuthKind), Disconnect: true, ScopeUpdate: len(definition.ScopeFields) > 0}
 }
 
 func IsOAuthAuthKind(value string) bool {

@@ -141,7 +141,7 @@ func TestRepositoryCommitOutcomesFenceAdoptionAndRecoverAfterReopen(t *testing.T
 	if err != nil || reopenedMetadata.KeyID != originalMetadata.KeyID || reopenedMetadata.PublicKey != originalMetadata.PublicKey || reopenedMetadata.Fingerprint != originalMetadata.Fingerprint {
 		t.Fatalf("producer identity changed after reopen: got=%#v err=%v", reopenedMetadata, err)
 	}
-	if _, login := reopened.LoginOperator(adminToken); login.Code != "" {
-		t.Fatalf("administrator credential did not read back: %s", login.Code)
+	if _, login := reopened.LoginOperator(adminToken); login != nil {
+		t.Fatalf("administrator credential did not read back: %v", login)
 	}
 }

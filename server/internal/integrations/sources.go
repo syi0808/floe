@@ -11,13 +11,13 @@ import (
 
 // List publishes owned, cached metadata and closes concurrent lifecycle changes
 // before returning. Provider results never determine connection ownership.
-func (s *Service) List(ctx context.Context, p trust.Principal) operation.Result {
+func (s *Service) List(ctx context.Context, p trust.Principal) (ConnectionsResult, error) {
 	if err := s.check(p); err != nil {
-		return trust.Result(err)
+		return ConnectionsResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	metadata, err := s.trust.ProducerMetadata()
 	if err != nil {
-		return trust.Result(err)
+		return ConnectionsResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	s.mu.RLock()
 	state := clone(s.state)
@@ -33,16 +33,16 @@ func (s *Service) List(ctx context.Context, p trust.Principal) operation.Result 
 	snapshots := make([]Snapshot, 0, len(ids))
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return operation.Reject(operation.Unavailable, "cancelled")
+			return ConnectionsResult{}, operation.Fail(operation.Unavailable, "cancelled")
 		}
 		r := state.Connections[id]
 		runtime, ok := runtimes[id]
 		if !ok || runtime.Snapshot == nil {
-			return operation.Reject(operation.Unavailable, "connections_unavailable")
+			return ConnectionsResult{}, operation.Fail(operation.Unavailable, "connections_unavailable")
 		}
 		snapshot, err := runtime.Snapshot.Snapshot(ctx)
 		if err != nil || snapshot.Descriptor.ID != r.ConnectorID || snapshot.Connection.ConnectorID != r.ConnectorID {
-			return operation.Reject(operation.Unavailable, "connection_snapshot_invalid")
+			return ConnectionsResult{}, operation.Fail(operation.Unavailable, "connection_snapshot_invalid")
 		}
 		snapshot = cloneSnapshot(snapshot)
 		snapshot.Connection.ConnectionID = r.ConnectionID
@@ -67,14 +67,9 @@ func (s *Service) List(ctx context.Context, p trust.Principal) operation.Result 
 		return ctx.Err()
 	})
 	if err != nil {
-		return trust.Result(err)
+		return ConnectionsResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
-	return operation.Accept(struct {
-		SchemaVersion int        `json:"schema_version"`
-		PersonID      string     `json:"person_id"`
-		DeviceID      string     `json:"device_id"`
-		Connections   []Snapshot `json:"connections"`
-	}{1, p.PersonID(), p.DeviceID(), snapshots})
+	return ConnectionsResult{SchemaVersion: 1, PersonID: p.PersonID(), DeviceID: p.DeviceID(), Connections: snapshots}, nil
 }
 func (s *Service) preflight(ctx context.Context, expected Record) error {
 	if err := ctx.Err(); err != nil {

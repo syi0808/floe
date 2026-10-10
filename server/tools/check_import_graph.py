@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,77 @@ def violations(graph: dict[str, set[str]]) -> list[tuple[str, str, str]]:
     return found
 
 
+def matching_paren(source: str, opening: int) -> int | None:
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(opening, len(source)):
+        character = source[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in ('"', "'", '`'):
+            quote = character
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def source_contract_violations(root: Path) -> list[tuple[str, str, str]]:
+    """Guard owner result boundaries in addition to the Go import graph."""
+    found: list[tuple[str, str, str]] = []
+    function_start = re.compile(
+        r"(?m)^[ \t]*func[ \t]+(?:\([^()\n]*\)[ \t]*)?([A-Za-z_]\w*)[ \t]*\("
+    )
+    dynamic_schema_maps = {
+        "internal/integrations/definitions.go:ValidatedConnectorScope",
+        "internal/integrations/definitions.go:CloneConnectorScope",
+    }
+    for path in sorted((root / "internal").rglob("*.go")):
+        if path.name.endswith("_test.go"):
+            continue
+        relative = path.relative_to(root).as_posix()
+        source = path.read_text(encoding="utf-8")
+        if re.search(r"\boperation\.(?:Result|Accept)\b", source):
+            found.append(("generic-operation-result", relative, "references operation.Result or operation.Accept"))
+        if relative.startswith("internal/operation/"):
+            if re.search(r"(?m)^\s*type\s+Result\s+struct\b", source):
+                found.append(("generic-operation-result", relative, "declares operation.Result"))
+            if re.search(r"(?m)^\s*Value\s+any\b", source):
+                found.append(("generic-operation-result", relative, "declares an any success payload"))
+            if re.search(r"(?m)^\s*func\s+Accept\s*\(", source):
+                found.append(("generic-operation-result", relative, "declares operation.Accept"))
+
+        owner_response_map = relative.startswith(
+            ("internal/trust/", "internal/pairing/", "internal/integrations/", "internal/inference/")
+        )
+        if not owner_response_map:
+            continue
+        for match in function_start.finditer(source):
+            name = match.group(1)
+            opening = match.end() - 1
+            closing = matching_paren(source, opening)
+            if closing is None:
+                continue
+            body = source.find("{", closing + 1)
+            if body < 0:
+                continue
+            result_type = source[closing + 1 : body]
+            if re.search(r"\bmap\s*\[\s*string\s*\]\s*(?:any|interface\s*\{\s*\})", result_type):
+                if f"{relative}:{name}" not in dynamic_schema_maps:
+                    found.append(("owner-response-map", relative, f"{name} returns a dynamic map"))
+    return found
+
+
 def fixture_files() -> dict[str, str]:
     return {
         "internal/contracts/source/source.go": "package source\ntype ID string\n",
@@ -151,6 +223,11 @@ def fixture_files() -> dict[str, str]:
         "internal/integrations/integrations.go": (
             "package integrations\nimport \"floe/server/internal/trust\"\n"
             "type Descriptor struct{}\nvar _ trust.Principal\n"
+        ),
+        "internal/integrations/definitions.go": (
+            "package integrations\n"
+            "func ValidatedConnectorScope(scope map[string]any) (map[string]any, error) { return scope, nil }\n"
+            "func CloneConnectorScope(scope map[string]any) map[string]any { return scope }\n"
         ),
         "internal/inference/inference.go": (
             "package inference\nimport \"floe/server/internal/trust\"\n"
@@ -238,6 +315,8 @@ def run_fixtures() -> int:
             positive_graph = go_list_graph(positive_root)
             if violations(positive_graph):
                 raise RuntimeError("positive owner-contract and adapter-to-owner fixture was rejected")
+            if source_contract_violations(positive_root):
+                raise RuntimeError("positive typed-result and dynamic-scope source fixture was rejected")
 
         forbidden = [
             (f"{INTERNAL}/authority", f"{INTERNAL}/adapters/storage", "owner-imports-concrete-adapter"),
@@ -262,7 +341,34 @@ def run_fixtures() -> int:
                     raise RuntimeError(f"forbidden fixture did not trigger {expected_rule}: {importer} -> {target}")
         with tempfile.TemporaryDirectory(dir=base, prefix="cycle-") as cycle:
             run_cycle_fixture(Path(cycle))
-    return len(forbidden) + 1
+        source_forbidden = [
+            (
+                "internal/operation/result.go",
+                "package operation\ntype Result struct { Value any }\nfunc Accept(value any) Result { return Result{Value: value} }\n",
+                "generic-operation-result",
+            ),
+            (
+                "internal/pairing/pairing.go",
+                "package pairing\nimport operation \"floe/server/internal/operation\"\nfunc (s *Operations) Execute() (operation.Result, error) { return operation.Result{}, nil }\n",
+                "generic-operation-result",
+            ),
+            (
+                "internal/integrations/results.go",
+                "package integrations\nfunc catalogResponse() map[string]any { return nil }\n",
+                "owner-response-map",
+            ),
+        ]
+        for index, (relative, contents, expected_rule) in enumerate(source_forbidden):
+            with tempfile.TemporaryDirectory(dir=base, prefix=f"source-negative-{index}-") as fixture:
+                fixture_root = Path(fixture)
+                write_fixture(fixture_root)
+                source_path = fixture_root / relative
+                source_path.parent.mkdir(parents=True, exist_ok=True)
+                source_path.write_text(contents, encoding="utf-8")
+                found = source_contract_violations(fixture_root)
+                if not any(rule == expected_rule for rule, _, _ in found):
+                    raise RuntimeError(f"forbidden source fixture did not trigger {expected_rule}: {relative}")
+    return len(forbidden) + len(source_forbidden) + 1
 
 
 def main() -> int:
@@ -272,11 +378,17 @@ def main() -> int:
     try:
         negative_fixtures = run_fixtures()
         if not args.fixtures_only:
-            graph = go_list_graph(Path(__file__).resolve().parents[1])
+            server_root = Path(__file__).resolve().parents[1]
+            graph = go_list_graph(server_root)
             found = violations(graph)
             if found:
                 for rule, importer, target in found:
                     print(f"{rule}: {importer} imports {target}", file=sys.stderr)
+                return 1
+            source_found = source_contract_violations(server_root)
+            if source_found:
+                for rule, path, detail in source_found:
+                    print(f"{rule}: {path}: {detail}", file=sys.stderr)
                 return 1
     except Exception as error:  # noqa: BLE001 - report a concise gate failure
         print(f"Go import-graph gate failed: {error}", file=sys.stderr)
@@ -285,7 +397,7 @@ def main() -> int:
     owners = ", ".join(prefix.rsplit("/", 1)[-1] for prefix in OWNER_ROOTS)
     print(
         f"Go import-graph gate passed ({scope}; owner roots: {owners} and nested packages; "
-        f"positive adapter-to-owner fixture and {negative_fixtures} negative fixtures)."
+        f"positive adapter-to-owner and typed-result fixtures and {negative_fixtures} negative fixtures)."
     )
     return 0
 

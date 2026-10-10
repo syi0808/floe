@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -360,6 +361,48 @@ func TestConsoleSessionGuardsAndLogoutInvalidation(t *testing.T) {
 	}
 }
 
+func TestConsoleTargetCommandKeepsImmutableOperationReplay(t *testing.T) {
+	fixture := newConsoleFixture(t)
+	cookie, csrf := fixture.login(t)
+	input := TargetRequest{
+		OperationID:  trust.NewID(),
+		ID:           "synthetic-http-target",
+		Provider:     "openai_compatible",
+		BaseURL:      "https://example.invalid",
+		Model:        "synthetic-model-a",
+		APIKey:       "synthetic-http-replay-key",
+		Capabilities: []string{inference.ChatCapability},
+	}
+	request := func(command TargetRequest) *httptest.ResponseRecorder {
+		return fixture.request(http.MethodPost, "/manage/api/target", command, cookie, "http://"+fixture.address, csrf, "")
+	}
+	first := request(input)
+	if first.Code != http.StatusOK || bytes.Contains(first.Body.Bytes(), []byte(input.APIKey)) {
+		t.Fatalf("target command returned %d or exposed its credential: %s", first.Code, first.Body.String())
+	}
+	var firstBody struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil || !firstBody.OK {
+		t.Fatalf("target command returned an unexpected response %q (decode error %v)", first.Body.String(), err)
+	}
+
+	replay := request(input)
+	if replay.Code != first.Code || replay.Body.String() != first.Body.String() {
+		t.Fatalf("exact HTTP replay changed response: first=%d %q replay=%d %q", first.Code, first.Body.String(), replay.Code, replay.Body.String())
+	}
+
+	changed := input
+	changed.Model = "synthetic-model-b"
+	conflict := request(changed)
+	if conflict.Code != http.StatusConflict || responseCode(t, conflict) != "operation_id_reused" {
+		t.Fatalf("changed request reused its operation ID: status=%d code=%q body=%s", conflict.Code, responseCode(t, conflict), conflict.Body.String())
+	}
+	if bytes.Contains(conflict.Body.Bytes(), []byte(input.APIKey)) {
+		t.Fatal("operation conflict response exposed the submitted credential")
+	}
+}
+
 type pairingStartResponse struct {
 	PairingID         string `json:"pairing_id"`
 	Proof             string `json:"proof"`
@@ -490,13 +533,35 @@ func TestConsolePairApprovalUsesSignedEnrollmentAndExactFingerprint(t *testing.T
 		t.Fatalf("unexpected approval response %#v (decode error %v)", approval, err)
 	}
 
-	poll := fixture.request(http.MethodPost, "/pair/poll", pairing.Request{
+	pollInput := pairing.Request{
 		SchemaVersion: 1,
 		PairingID:     enrollment.start.PairingID,
 		Proof:         enrollment.start.Proof,
-	}, nil, "", "", "")
+	}
+	credentialSnapshot := func() map[string]string {
+		fixture.credentials.mu.Lock()
+		defer fixture.credentials.mu.Unlock()
+		copy := make(map[string]string, len(fixture.credentials.values))
+		for key, value := range fixture.credentials.values {
+			copy[key] = value
+		}
+		return copy
+	}
+	credentialsBeforePoll := credentialSnapshot()
+	// Treat the first response as lost to the client, then retry the same committed poll.
+	lostPollResponse := fixture.request(http.MethodPost, "/pair/poll", pollInput, nil, "", "", "")
+	if lostPollResponse.Code != http.StatusOK {
+		t.Fatalf("poll after approval returned %d", lostPollResponse.Code)
+	}
+	poll := fixture.request(http.MethodPost, "/pair/poll", pollInput, nil, "", "", "")
 	if poll.Code != http.StatusOK {
-		t.Fatalf("poll after approval returned %d: %s", poll.Code, poll.Body.String())
+		t.Fatalf("replayed poll after approval returned %d", poll.Code)
+	}
+	if !bytes.Equal(lostPollResponse.Body.Bytes(), poll.Body.Bytes()) {
+		t.Fatal("committed poll replay changed the delivered credential or identity")
+	}
+	if !reflect.DeepEqual(credentialsBeforePoll, credentialSnapshot()) {
+		t.Fatal("committed poll replay changed pairing credential storage")
 	}
 	var delivery struct {
 		Status string `json:"status"`

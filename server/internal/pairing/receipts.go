@@ -134,8 +134,8 @@ func (o *Operations) find(ctx context.Context, id string) (*Pending, error) {
 	}
 	return nil, nil
 }
-func startResult(p *Pending) operation.Result {
-	return operation.Accept(map[string]any{"schema_version": 1, "pairing_id": p.ID, "code": p.Code, "proof": p.proof, "expires_at_unix_ms": p.Expires.UnixMilli(), "person_id": p.PersonID, "device_id": p.DeviceID, "producer": p.producer, "issuer": issuer(p), "challenge_id": p.challengeID, "challenge_b64url": p.challengeB64, "producer_signature": base64.RawURLEncoding.EncodeToString(p.producerSignature)})
+func startResult(p *Pending) StartResult {
+	return StartResult{SchemaVersion: 1, PairingID: p.ID, Code: p.Code, Proof: p.proof, ExpiresAtUnixMS: p.Expires.UnixMilli(), PersonID: p.PersonID, DeviceID: p.DeviceID, Producer: p.producer, Issuer: issuer(p), ChallengeID: p.challengeID, Challenge: p.challengeB64, ProducerSignature: base64.RawURLEncoding.EncodeToString(p.producerSignature)}
 }
 
 func decodeReceipt(raw []byte, out any) error {

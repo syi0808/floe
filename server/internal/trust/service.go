@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -543,14 +542,6 @@ func (s *Service) Issuers() ([]IssuerSnapshot, error) {
 	}
 	return out, nil
 }
-func Result(err error) operation.Result {
-	var e operation.Error
-	if errors.As(err, &e) {
-		return operation.Reject(e.Category, e.Code)
-	}
-	return operation.Reject(operation.Unavailable, "operation_unavailable")
-}
-
 func validDigest(s string) bool {
 	b, e := hex.DecodeString(s)
 	return e == nil && len(b) == 32 && hex.EncodeToString(b) == s

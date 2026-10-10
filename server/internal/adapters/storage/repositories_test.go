@@ -53,8 +53,8 @@ func TestTrustRepositoryKeepsFilesAndCredentialsAcrossReopen(t *testing.T) {
 	if err != nil || metadataAfterReopen != metadata {
 		t.Fatalf("producer identity changed across reopen: got=%#v err=%v", metadataAfterReopen, err)
 	}
-	if _, login := second.LoginOperator(token); login.Code != "" {
-		t.Fatalf("administrator credential did not authenticate after reopen: %s", login.Code)
+	if _, login := second.LoginOperator(token); login != nil {
+		t.Fatalf("administrator credential did not authenticate after reopen: %v", login)
 	}
 
 	identityBytes, err := files.Read("producer-identity.json", 4096)

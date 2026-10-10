@@ -26,15 +26,21 @@ type ClientAdministration struct {
 	active  sync.WaitGroup
 }
 
+// RevocationResult reports the owner cleanup state after the client generation
+// has been revoked. HTTP wording is projected by the transport.
+type RevocationResult struct {
+	CleanupPending bool
+}
+
 func NewClientAdministration(t *Service, cleanup RevocationCleanup, pairing PairingCleanup) *ClientAdministration {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ClientAdministration{trust: t, cleanup: cleanup, pairing: pairing, ctx: ctx, cancel: cancel}
 }
-func (a *ClientAdministration) Revoke(ctx context.Context, p OperatorPrincipal, id string) operation.Result {
+func (a *ClientAdministration) Revoke(ctx context.Context, p OperatorPrincipal, id string) (RevocationResult, error) {
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
-		return operation.Reject(operation.Unavailable, "closing")
+		return RevocationResult{}, operation.Fail(operation.Unavailable, "closing")
 	}
 	a.active.Add(1)
 	a.mu.Unlock()
@@ -46,11 +52,11 @@ func (a *ClientAdministration) Revoke(ctx context.Context, p OperatorPrincipal, 
 		return err
 	})
 	if err != nil {
-		return Result(err)
+		return RevocationResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	credentialErr := a.pairing.ClearClient(ctx, id)
 	if err = a.cleanup.ApplyRevocation(ctx, receipt.Cleanup); err != nil {
-		return operation.Reject(operation.Unavailable, "connection_cleanup_pending")
+		return RevocationResult{}, operation.Fail(operation.Unavailable, "connection_cleanup_pending")
 	}
 	a.mu.Lock()
 	if !a.closed {
@@ -64,9 +70,9 @@ func (a *ClientAdministration) Revoke(ctx context.Context, p OperatorPrincipal, 
 	}
 	a.mu.Unlock()
 	if credentialErr != nil {
-		return operation.Reject(operation.Unavailable, "pairing_credential_cleanup_pending")
+		return RevocationResult{}, operation.Fail(operation.Unavailable, "pairing_credential_cleanup_pending")
 	}
-	return operation.Accept(map[string]any{"ok": true, "cleanup": "pending"})
+	return RevocationResult{CleanupPending: true}, nil
 }
 func (a *ClientAdministration) Close() {
 	a.mu.Lock()

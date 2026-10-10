@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -85,8 +86,12 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 				failure(writer, http.StatusNotFound, "not_found")
 				return
 			}
-			dispatch(writer, request, func(input pairing.Request) operation.Result {
-				return handler.Pairing.Execute(request.Context(), strings.TrimPrefix(request.URL.Path, "/pair/"), input)
+			dispatch(writer, request, func(input pairing.Request) (any, error) {
+				result, err := handler.Pairing.Execute(request.Context(), strings.TrimPrefix(request.URL.Path, "/pair/"), input)
+				if err != nil {
+					return nil, err
+				}
+				return pairingProjection(result)
 			})
 		} else {
 			handler.serveClient(writer, request)
@@ -125,11 +130,15 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			failure(writer, http.StatusBadRequest, "validation")
 			return
 		}
-		token, result := handler.Trust.LoginOperator(input.Token)
-		if result.Code == "" {
+		token, err := handler.Trust.LoginOperator(input.Token)
+		if err == nil {
 			http.SetCookie(writer, &http.Cookie{Name: "floe_management", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
 		}
-		writeResult(writer, result)
+		if err != nil {
+			writeOperationError(writer, err)
+		} else {
+			reply(writer, http.StatusOK, acknowledgementDTO{OK: true})
+		}
 		return
 	}
 	cookie, err := request.Cookie("floe_management")
@@ -144,7 +153,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	}
 	operator, authErr := handler.Trust.AuthenticateOperatorSession(request.Context(), cookie.Value, request.Header.Get("X-Floe-CSRF"), request.Method != http.MethodGet)
 	if authErr != nil {
-		writeResult(writer, trust.Result(authErr))
+		writeOperationError(writer, authErr)
 		return
 	}
 	handler.manage(writer, request, cookie.Value, current, operator)
@@ -158,7 +167,7 @@ func (handler *Handler) serveClient(writer http.ResponseWriter, request *http.Re
 	}
 	principal, err := handler.Trust.AuthenticateBearer(request.Context(), strings.TrimPrefix(auth, "Bearer "))
 	if err != nil {
-		writeResult(writer, trust.Result(err))
+		writeOperationError(writer, err)
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/calendar/mirror/") {
@@ -174,7 +183,12 @@ func (handler *Handler) serveClient(writer http.ResponseWriter, request *http.Re
 			failure(writer, http.StatusNotFound, "not_found")
 			return
 		}
-		writeResult(writer, handler.Integrations.List(request.Context(), principal))
+		result, err := handler.Integrations.List(request.Context(), principal)
+		if err != nil {
+			writeOperationError(writer, err)
+			return
+		}
+		reply(writer, http.StatusOK, connectionsProjection(result))
 		return
 	}
 	if strings.HasPrefix(request.URL.Path, "/v1/views/") {
@@ -190,11 +204,13 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if request.URL.Path == "/manage/api/state" && request.Method == http.MethodGet {
-		result := handler.managementState(request, operator)
-		if result.Code == "" {
-			result.Value.(map[string]any)["csrf"] = current.CSRF
+		result, err := handler.managementState(request, operator)
+		if err != nil {
+			writeOperationError(writer, err)
+			return
 		}
-		writeResult(writer, result)
+		result.CSRF = current.CSRF
+		reply(writer, http.StatusOK, result)
 		return
 	}
 	if request.Method != http.MethodPost {
@@ -211,42 +227,58 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		http.SetCookie(writer, &http.Cookie{Name: "floe_management", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		reply(writer, http.StatusOK, map[string]bool{"ok": true})
 	case "/manage/api/pair/approve":
-		dispatch(writer, request, func(in pairing.ApprovalRequest) operation.Result {
-			return handler.Pairing.Approve(request.Context(), operator, in)
+		dispatch(writer, request, func(in pairing.ApprovalRequest) (pairingStateDTO, error) {
+			result, err := handler.Pairing.Approve(request.Context(), operator, in)
+			if err != nil {
+				return pairingStateDTO{}, err
+			}
+			return pairingStateProjection(result), nil
 		})
 	case "/manage/api/pair/recover":
-		dispatch(writer, request, func(in pairing.RecoveryRequest) operation.Result {
-			return handler.Pairing.Recover(request.Context(), operator, in)
+		dispatch(writer, request, func(in pairing.RecoveryRequest) (pairingStateDTO, error) {
+			result, err := handler.Pairing.Recover(request.Context(), operator, in)
+			if err != nil {
+				return pairingStateDTO{}, err
+			}
+			return pairingStateProjection(result), nil
 		})
 	case "/manage/api/pair/reject":
-		dispatch(writer, request, func(in pairing.RejectionRequest) operation.Result {
-			return handler.Pairing.Reject(request.Context(), operator, in)
+		dispatch(writer, request, func(in pairing.RejectionRequest) (pairingStateDTO, error) {
+			result, err := handler.Pairing.Reject(request.Context(), operator, in)
+			if err != nil {
+				return pairingStateDTO{}, err
+			}
+			return pairingStateProjection(result), nil
 		})
 	case "/manage/api/route":
-		dispatch(writer, request, func(in RouteRequest) operation.Result {
+		dispatchCommand(writer, request, func(in RouteRequest) error {
 			return handler.Configuration.UpdateRoute(request.Context(), operator, inference.RouteUpdate{OperationID: in.OperationID, Purpose: in.Purpose, Enabled: in.Enabled, Target: in.Target, ReasoningEffort: in.ReasoningEffort})
 		})
 	case "/manage/api/target":
-		dispatch(writer, request, func(in TargetRequest) operation.Result {
+		dispatchCommand(writer, request, func(in TargetRequest) error {
 			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{OperationID: in.OperationID, ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities, BudgetOverride: in.BudgetOverride})
 		})
 	case "/manage/api/provider":
-		dispatch(writer, request, func(in ProviderRequest) operation.Result {
+		dispatchCommand(writer, request, func(in ProviderRequest) error {
 			return handler.Configuration.UpdateProvider(request.Context(), operator, inference.ProviderUpdate{OperationID: in.OperationID, Provider: in.Provider, BaseURL: in.BaseURL, APIKey: in.APIKey, Purposes: in.Purposes})
 		})
 	case "/manage/api/inference/recover":
 		dispatch(writer, request, func(in struct {
 			OperationID string `json:"operation_id"`
-		}) operation.Result {
-			return handler.Configuration.RecoverOperation(request.Context(), operator, in.OperationID)
+		}) (inferenceRecoveryDTO, error) {
+			result, err := handler.Configuration.RecoverOperation(request.Context(), operator, in.OperationID)
+			if err != nil {
+				return inferenceRecoveryDTO{}, err
+			}
+			return inferenceRecoveryDTO{OK: true, Recovered: result.Recovered, Status: result.Status, Category: result.Category, Code: result.Code}, nil
 		})
 	case "/manage/api/test":
-		dispatch(writer, request, func(input TestRequest) operation.Result {
+		dispatch(writer, request, func(input TestRequest) (inferenceProbeDTO, error) {
 			result, err := handler.Inference.Service.ProbeTarget(request.Context(), operator, input.ID)
 			if err != nil {
-				return operation.Reject(operation.Upstream, "model_unavailable")
+				return inferenceProbeDTO{}, operation.Fail(operation.Upstream, "model_unavailable")
 			}
-			return operation.Accept(map[string]any{"ok": true, "elapsed_ms": result.ElapsedMS, "trace_id": result.TraceID})
+			return inferenceProbeDTO{OK: true, ElapsedMS: result.ElapsedMS, TraceID: result.TraceID}, nil
 		})
 	case "/manage/api/client/delete", "/manage/api/target/delete":
 		var input struct {
@@ -258,26 +290,66 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		if request.URL.Path == "/manage/api/client/delete" {
-			writeResult(writer, handler.Clients.Revoke(request.Context(), operator, input.ID))
+			result, err := handler.Clients.Revoke(request.Context(), operator, input.ID)
+			if err != nil {
+				writeOperationError(writer, err)
+				return
+			}
+			cleanup := ""
+			if result.CleanupPending {
+				cleanup = "pending"
+			}
+			reply(writer, http.StatusOK, struct {
+				OK      bool   `json:"ok"`
+				Cleanup string `json:"cleanup"`
+			}{true, cleanup})
 		} else {
-			writeResult(writer, handler.Configuration.DeleteTarget(request.Context(), operator, input.ID, input.OperationID))
+			err := handler.Configuration.DeleteTarget(request.Context(), operator, input.ID, input.OperationID)
+			if err != nil {
+				writeOperationError(writer, err)
+			} else {
+				reply(writer, http.StatusOK, acknowledgementDTO{OK: true})
+			}
 		}
 	default:
 		if strings.HasPrefix(request.URL.Path, "/manage/api/codex/") {
-			writeResult(writer, handler.Accounts.Execute(request.Context(), operator, inference.AccountCommand(strings.TrimPrefix(request.URL.Path, "/manage/api/codex/"))))
+			progress, err := handler.Accounts.Execute(request.Context(), operator, inference.AccountCommand(strings.TrimPrefix(request.URL.Path, "/manage/api/codex/")))
+			if err != nil {
+				writeOperationError(writer, err)
+			} else {
+				reply(writer, http.StatusOK, accountProgressDTO{Status: progress.Status, AuthorizationURL: progress.AuthorizationURL, InferenceEnabled: progress.InferenceEnabled})
+			}
 			return
 		}
 		failure(writer, http.StatusNotFound, "not_found")
 	}
 }
 
-func dispatch[Input any](writer http.ResponseWriter, request *http.Request, execute func(Input) operation.Result) {
+func dispatch[Input, Output any](writer http.ResponseWriter, request *http.Request, execute func(Input) (Output, error)) {
 	var input Input
 	if !decode(writer, request, &input) {
 		failure(writer, http.StatusBadRequest, "validation")
 		return
 	}
-	writeResult(writer, execute(input))
+	value, err := execute(input)
+	if err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	reply(writer, http.StatusOK, value)
+}
+
+func dispatchCommand[Input any](writer http.ResponseWriter, request *http.Request, execute func(Input) error) {
+	var input Input
+	if !decode(writer, request, &input) {
+		failure(writer, http.StatusBadRequest, "validation")
+		return
+	}
+	if err := execute(input); err != nil {
+		writeOperationError(writer, err)
+		return
+	}
+	reply(writer, http.StatusOK, acknowledgementDTO{OK: true})
 }
 
 func decode(writer http.ResponseWriter, request *http.Request, output any) bool {
@@ -292,7 +364,13 @@ func decode(writer http.ResponseWriter, request *http.Request, output any) bool 
 	return trust.DecodeStrict(data, output, 16384, 32) == nil
 }
 
-func writeResult(writer http.ResponseWriter, result operation.Result) {
+func writeOperationError(writer http.ResponseWriter, err error) {
+	err = operation.Normalize(err, operation.Unavailable, "operation_unavailable")
+	var failureValue operation.Error
+	if !errors.As(err, &failureValue) {
+		failure(writer, http.StatusInternalServerError, "operation_unavailable")
+		return
+	}
 	statuses := map[operation.Category]int{
 		operation.Ready: http.StatusOK, operation.Created: http.StatusCreated,
 		operation.Invalid: http.StatusBadRequest, operation.Unauthenticated: http.StatusUnauthorized,
@@ -301,51 +379,51 @@ func writeResult(writer http.ResponseWriter, result operation.Result) {
 		operation.Unavailable: http.StatusServiceUnavailable, operation.Upstream: http.StatusBadGateway,
 		operation.Internal: http.StatusInternalServerError,
 	}
-	status, ok := statuses[result.Category]
+	status, ok := statuses[failureValue.Category]
 	if !ok {
 		failure(writer, http.StatusInternalServerError, "operation_unavailable")
 		return
 	}
-	if result.Code != "" {
-		failure(writer, status, result.Code)
-		return
-	}
-	reply(writer, status, result.Value)
+	failure(writer, status, failureValue.Code)
 }
 
 // managementState is a redacted transport projection of owner snapshots.
-func (handler *Handler) managementState(request *http.Request, operator trust.OperatorPrincipal) operation.Result {
+func (handler *Handler) managementState(request *http.Request, operator trust.OperatorPrincipal) (managementStateDTO, error) {
 	config, err := handler.Configuration.Snapshot(request.Context(), operator)
 	if err != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return managementStateDTO{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	clients, err := handler.Trust.Clients()
 	if err != nil {
-		return trust.Result(err)
+		return managementStateDTO{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	ids := []string{}
-	scopes := map[string]any{}
+	scopes := map[string]clientScopeDTO{}
 	for _, client := range clients {
 		ids = append(ids, client.ClientID)
-		scopes[client.ClientID] = map[string]string{"person_id": client.PersonID, "device_id": client.DeviceID}
+		scopes[client.ClientID] = clientScopeDTO{PersonID: client.PersonID, DeviceID: client.DeviceID}
 	}
 	traces, err := handler.Inference.Service.Traces(operator, 20)
 	if err != nil {
-		return trust.Result(err)
+		return managementStateDTO{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
-	var inventory any = config.Inventory
+	var inventory *inference.PurposeInventory
 	if !config.InventoryAvailable {
 		inventory = nil
+	} else {
+		value := config.Inventory
+		inventory = &value
 	}
 	pending, err := handler.Pairing.Pending(request.Context())
 	if err != nil {
-		return trust.Result(err)
+		return managementStateDTO{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
-	var catalog any
+	var catalog *modelcatalog.Projection
 	if handler.ModelCatalog != nil {
-		catalog = handler.ModelCatalog.Projection()
+		value := handler.ModelCatalog.Projection()
+		catalog = &value
 	}
-	return operation.Accept(map[string]any{"providers": config.Profiles, "clients": ids, "client_scopes": scopes, "pairing": pending, "address": "http://" + handler.Address, "traces": traces, "inventory": inventory, "model_catalog": catalog})
+	return managementStateDTO{Providers: providerProfilesProjection(config.Profiles), Clients: ids, ClientScopes: scopes, Pairing: pairingPendingProjection(pending), Address: "http://" + handler.Address, Traces: traces, Inventory: inventory, ModelCatalog: catalog}, nil
 }
 
 func (handler *Handler) ServeUnavailable(writer http.ResponseWriter) {

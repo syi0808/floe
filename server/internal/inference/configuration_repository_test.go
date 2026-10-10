@@ -27,6 +27,11 @@ type configurationTestRepository struct {
 	writes              int
 }
 
+func matchesOperationError(err error, category operation.Category, code string) bool {
+	failure, ok := operation.ErrorOf(err)
+	return ok && failure.Category == category && (code == "" || failure.Code == code)
+}
+
 func (repository *configurationTestRepository) LoadConfig() ConfigReadOutcome {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
@@ -324,8 +329,8 @@ func TestRecoveryWithInvalidAuthoritativeSnapshotKeepsEngineDenied(t *testing.T)
 	repository.mu.Lock()
 	repository.loadDisposition = ConfigReadInvalid
 	repository.mu.Unlock()
-	result := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, trust.NewID())
-	if result.Category != operation.Unavailable || owner.RequiredError() == nil {
+	_, result := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, trust.NewID())
+	if !matchesOperationError(result, operation.Unavailable, "") || owner.RequiredError() == nil {
 		t.Fatalf("invalid authoritative snapshot did not keep configuration denied: result=%#v required=%v", result, owner.RequiredError())
 	}
 	if _, _, _, err := engine.current(context.Background(), QuickResponse); err == nil {
@@ -355,7 +360,7 @@ func TestConfigurationSaveDispositionControlsAdoptionAndReopen(t *testing.T) {
 			next.Routes[QuickResponse] = PurposeRoute{TargetID: "target-b", ReasoningEffort: "high", Enabled: true}
 			repository.nextWrite = &ConfigWriteOutcome{Disposition: test.disposition, Cause: errors.New("synthetic repository outcome")}
 			result := owner.commitOperation(context.Background(), trust.NewID(), trust.Digest("synthetic-configuration-commit"), configurationContent(next))
-			if result.Category != operation.Unavailable {
+			if !matchesOperationError(result, operation.Unavailable, "") {
 				t.Fatalf("save failure did not return unavailable: %#v", result)
 			}
 			if owner.state.Routes[QuickResponse].TargetID != "target-a" {
@@ -397,7 +402,7 @@ func TestConfigurationCredentialUnavailableDoesNotCommitOrExposeSecret(t *testin
 		ID:          "target-b", Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model-b",
 		APIKey: "synthetic-key", Capabilities: []string{ChatCapability},
 	})
-	if result.Category != operation.Unavailable || result.Code != "credential_store_unavailable" {
+	if !matchesOperationError(result, operation.Unavailable, "credential_store_unavailable") {
 		t.Fatalf("credential unavailability was not returned as a safe rejection: %#v", result)
 	}
 	if credentials.writeCount() != 0 || repository.writes != 0 || owner.state.Targets["target-b"].Model != "" {
@@ -474,7 +479,7 @@ func TestCredentialIntentPrecedesCreateAndRejectedIntentDoesNotWrite(t *testing.
 		}
 	}
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret"))
-	if result.Category != operation.Ready || !sawPending || credentials.writeCount() != 1 {
+	if result != nil || !sawPending || credentials.writeCount() != 1 {
 		t.Fatalf("intent/write ordering failed: result=%#v pending_seen=%v writes=%d", result, sawPending, credentials.writeCount())
 	}
 	if repository.state.Pending != nil || owner.state.Targets["target-a"].Model != "model-b" {
@@ -485,7 +490,7 @@ func TestCredentialIntentPrecedesCreateAndRejectedIntentDoesNotWrite(t *testing.
 	rejectedCredentials := &configurationTestCredentialAccess{}
 	rejected, rejectedEngine := openConfigurationTestOwner(t, rejectedRepository, rejectedCredentials)
 	result = rejected.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret"))
-	if result.Category != operation.Unavailable || rejectedCredentials.writes != 0 || rejected.state.Targets["target-a"].Model != "model-a" {
+	if !matchesOperationError(result, operation.Unavailable, "") || rejectedCredentials.writes != 0 || rejected.state.Targets["target-a"].Model != "model-a" {
 		t.Fatalf("rejected intent wrote key or changed active config: result=%#v writes=%d", result, rejectedCredentials.writes)
 	}
 	live, _, _, err := rejectedEngine.current(context.Background(), QuickResponse)
@@ -500,17 +505,17 @@ func TestCredentialCreateAckLossAndChangedCommandRetry(t *testing.T) {
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	input := providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret")
 	first := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input)
-	if first.Category != operation.Ready || credentials.writeCount() != 1 {
+	if first != nil || credentials.writeCount() != 1 {
 		t.Fatalf("readback did not recover lost create ACK: %#v writes=%d", first, credentials.writeCount())
 	}
 	second := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input)
-	if second.Category != operation.Ready || credentials.writeCount() != 1 {
+	if second != nil || credentials.writeCount() != 1 {
 		t.Fatalf("exact retry was not idempotent: %#v writes=%d", second, credentials.writeCount())
 	}
 	changed := input
 	changed.Model = "model-c"
 	third := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, changed)
-	if third.Category != operation.Conflict || third.Code != "operation_id_reused" || credentials.writeCount() != 1 {
+	if !matchesOperationError(third, operation.Conflict, "operation_id_reused") || credentials.writeCount() != 1 {
 		t.Fatalf("changed command reused operation identity: %#v writes=%d", third, credentials.writeCount())
 	}
 	encoded, err := jsonMarshalConfig(repository.state)
@@ -528,14 +533,15 @@ func TestIntentAckLossBeforeWriteRecoversAbsenceAndKeepsOldConfig(t *testing.T) 
 			owner, engine := openConfigurationTestOwner(t, repository, credentials)
 			operationID := trust.NewID()
 			result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(operationID, "model-b", "synthetic-secret"))
-			if result.Category != operation.Unavailable || credentials.writeCount() != 0 {
+			if !matchesOperationError(result, operation.Unavailable, "") || credentials.writeCount() != 0 {
 				t.Fatalf("intent ACK loss wrote a key: %#v writes=%d", result, credentials.writeCount())
 			}
 			if committed && repository.state.Pending == nil {
 				t.Fatal("test store did not retain pending intent")
 			}
-			if result = owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID); result.Category != operation.Ready {
-				t.Fatalf("authoritative recovery failed: %#v", result)
+			recovered, recoverErr := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID)
+			if recoverErr != nil || !recovered.Recovered {
+				t.Fatalf("authoritative recovery failed: result=%#v err=%v", recovered, recoverErr)
 			}
 			live, _, _, err := engine.current(context.Background(), QuickResponse)
 			if err != nil || live.TargetID() != "target-a" || owner.state.Pending != nil {
@@ -552,14 +558,15 @@ func TestCandidateCommitAckLossDeniesUntilAuthoritativeRecovery(t *testing.T) {
 	owner, engine := openConfigurationTestOwner(t, repository, credentials)
 	operationID := trust.NewID()
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(operationID, "model-b", "synthetic-secret"))
-	if result.Category != operation.Unavailable || !owner.configUnavailable || repository.state.Pending != nil || repository.state.Targets["target-a"].Model != "model-b" {
+	if !matchesOperationError(result, operation.Unavailable, "") || !owner.configUnavailable || repository.state.Pending != nil || repository.state.Targets["target-a"].Model != "model-b" {
 		t.Fatalf("candidate ACK loss did not durably commit while denying: result=%#v state=%#v", result, repository.state)
 	}
 	if _, _, _, err := engine.current(context.Background(), QuickResponse); err == nil {
 		t.Fatal("ambiguous candidate persistence left inference admitted")
 	}
-	if result = owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID); result.Category != operation.Ready {
-		t.Fatalf("candidate recovery failed: %#v", result)
+	recovered, recoverErr := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID)
+	if recoverErr != nil || !recovered.Recovered {
+		t.Fatalf("candidate recovery failed: result=%#v err=%v", recovered, recoverErr)
 	}
 	live, _, _, err := engine.current(context.Background(), QuickResponse)
 	if err != nil || live.TargetID() != "target-a" || owner.state.Targets["target-a"].Model != "model-b" {
@@ -580,7 +587,7 @@ func TestCredentialReadbackUnavailableOrMismatchRemainsPending(t *testing.T) {
 			owner, engine := openConfigurationTestOwner(t, repository, credentials)
 			operationID := trust.NewID()
 			result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(operationID, "model-b", "synthetic-secret"))
-			if result.Category != operation.Unavailable || owner.state.Pending == nil || !owner.configUnavailable {
+			if !matchesOperationError(result, operation.Unavailable, "") || owner.state.Pending == nil || !owner.configUnavailable {
 				t.Fatalf("ambiguous readback was not held pending: %#v", result)
 			}
 			if _, _, _, err := engine.current(context.Background(), QuickResponse); err == nil {
@@ -590,8 +597,9 @@ func TestCredentialReadbackUnavailableOrMismatchRemainsPending(t *testing.T) {
 			credentials.readErr = nil
 			credentials.createValueOverride = ""
 			credentials.setCredential(pending.Slot, "synthetic-secret")
-			if result = owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID); result.Category != operation.Ready {
-				t.Fatalf("exact recovery failed: %#v", result)
+			recovered, recoverErr := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID)
+			if recoverErr != nil || !recovered.Recovered {
+				t.Fatalf("exact recovery failed: result=%#v err=%v", recovered, recoverErr)
 			}
 			if owner.state.Pending != nil || owner.state.Targets["target-a"].Model != "model-b" {
 				t.Fatalf("recovered candidate not committed: %#v", owner.state)
@@ -607,11 +615,12 @@ func TestEngineAdoptionFailurePersistsCandidateThenRecovers(t *testing.T) {
 	engine.DenyConfiguration()
 	operationID := trust.NewID()
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(operationID, "model-b", "synthetic-secret"))
-	if result.Category != operation.Unavailable || repository.state.Targets["target-a"].Model != "model-b" || owner.state.Targets["target-a"].Model != "model-b" {
+	if !matchesOperationError(result, operation.Unavailable, "") || repository.state.Targets["target-a"].Model != "model-b" || owner.state.Targets["target-a"].Model != "model-b" {
 		t.Fatalf("adoption failure lost durable candidate: result=%#v state=%#v", result, repository.state)
 	}
-	if result = owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID); result.Category != operation.Ready {
-		t.Fatalf("engine recovery failed: %#v", result)
+	recovered, recoverErr := owner.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, operationID)
+	if recoverErr != nil || !recovered.Recovered {
+		t.Fatalf("engine recovery failed: result=%#v err=%v", recovered, recoverErr)
 	}
 	live, _, _, err := engine.current(context.Background(), QuickResponse)
 	if err != nil || live.TargetID() != "target-a" {
@@ -632,7 +641,7 @@ func TestLegacySharedCredentialReferenceIsNeverDeleted(t *testing.T) {
 	repository := &configurationTestRepository{state: state, present: true}
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	result := owner.DeleteTarget(context.Background(), trust.OperatorPrincipal{}, "target-b", trust.NewID())
-	if result.Category != operation.Ready {
+	if result != nil {
 		t.Fatalf("delete shared target failed: %#v", result)
 	}
 	if credentials.deleteCount() != 0 || credentials.credential(legacy) != "synthetic-shared-key" || contentHasSlot(configurationContent(owner.state), legacy) == false {
@@ -666,7 +675,7 @@ func TestConfigurationReceiptCapacityDoesNotEvict(t *testing.T) {
 	credentials := &configurationTestCredentialAccess{}
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret"))
-	if result.Category != operation.Limited || result.Code != "configuration_receipt_capacity" || credentials.writeCount() != 0 || repository.writes != 0 {
+	if !matchesOperationError(result, operation.Limited, "configuration_receipt_capacity") || credentials.writeCount() != 0 || repository.writes != 0 {
 		t.Fatalf("receipt capacity evicted or mutated state: %#v writes=%d saves=%d", result, credentials.writeCount(), repository.writes)
 	}
 }
@@ -709,7 +718,7 @@ func TestInFlightGenerationLeaseSurvivesCancellationAndDefersCleanup(t *testing.
 	}
 	cancel()
 	result := owner.UpdateProvider(context.Background(), trust.OperatorPrincipal{}, ProviderUpdate{OperationID: trust.NewID(), Provider: "openai_compatible", BaseURL: "https://example.invalid", APIKey: "synthetic-new-key", Purposes: map[string]PurposeModel{"quick_response": {Model: "model-b", ReasoningEffort: "medium", Capabilities: []string{ChatCapability}}}})
-	if result.Category != operation.Ready {
+	if result != nil {
 		close(blocker.release)
 		t.Fatalf("replacement failed: %#v", result)
 	}
@@ -774,7 +783,7 @@ func TestEmptyProviderUpdateDeletesOnlyRetiredOwnedSlot(t *testing.T) {
 	credentials := &configurationTestCredentialAccess{values: map[string]string{slot: "synthetic-provider-key"}}
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	result := owner.UpdateProvider(context.Background(), trust.OperatorPrincipal{}, ProviderUpdate{OperationID: trust.NewID(), Provider: "openai_compatible", Purposes: map[string]PurposeModel{}})
-	if result.Category != operation.Ready {
+	if result != nil {
 		t.Fatalf("empty provider update failed: %#v", result)
 	}
 	deadline := time.Now().Add(3 * time.Second)
@@ -797,7 +806,7 @@ func TestInvalidTargetConfigurationDoesNotCreateCredential(t *testing.T) {
 	input := providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret")
 	input.Provider = "unknown_provider"
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input)
-	if result.Category != operation.Invalid || credentials.writeCount() != 0 || repository.writes != 0 || owner.state.Targets["target-a"].Provider != "openai_compatible" {
+	if !matchesOperationError(result, operation.Invalid, "") || credentials.writeCount() != 0 || repository.writes != 0 || owner.state.Targets["target-a"].Provider != "openai_compatible" {
 		t.Fatalf("invalid provider config reached credential storage: result=%#v writes=%d saves=%d", result, credentials.writeCount(), repository.writes)
 	}
 }
@@ -809,7 +818,7 @@ func TestCandidateKnownRejectKeepsIntentAndBlocksNewTransition(t *testing.T) {
 	owner, engine := openConfigurationTestOwner(t, repository, credentials)
 	input := providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret")
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input)
-	if result.Category != operation.Unavailable || owner.state.Pending == nil || credentials.writeCount() != 1 {
+	if !matchesOperationError(result, operation.Unavailable, "") || owner.state.Pending == nil || credentials.writeCount() != 1 {
 		t.Fatalf("known candidate rejection lost exact pending intent: result=%#v state=%#v", result, owner.state)
 	}
 	live, _, _, err := engine.current(context.Background(), QuickResponse)
@@ -817,10 +826,10 @@ func TestCandidateKnownRejectKeepsIntentAndBlocksNewTransition(t *testing.T) {
 		t.Fatalf("rejected candidate partially adopted: target=%q err=%v", live.TargetID(), err)
 	}
 	other := providerTargetUpdate(trust.NewID(), "model-c", "synthetic-other-key")
-	if result = owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, other); result.Category != operation.Conflict || credentials.writeCount() != 1 {
+	if result = owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, other); !matchesOperationError(result, operation.Conflict, "") || credentials.writeCount() != 1 {
 		t.Fatalf("new operation erased a pending transition: result=%#v writes=%d", result, credentials.writeCount())
 	}
-	if result = owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input); result.Category != operation.Ready || credentials.writeCount() != 1 {
+	if result = owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, input); result != nil || credentials.writeCount() != 1 {
 		t.Fatalf("exact retry did not finish pending candidate: result=%#v writes=%d", result, credentials.writeCount())
 	}
 }
@@ -884,7 +893,7 @@ func TestConfigurationSnapshotByteLimitRejectsBeforeCredentialWrite(t *testing.T
 	credentials := &configurationTestCredentialAccess{}
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret"))
-	if result.Category != operation.Limited || result.Code != "configuration_snapshot_capacity" || credentials.writeCount() != 0 || repository.writes != 0 {
+	if !matchesOperationError(result, operation.Limited, "configuration_snapshot_capacity") || credentials.writeCount() != 0 || repository.writes != 0 {
 		t.Fatalf("oversized pending snapshot was persisted or key was written: result=%#v writes=%d saves=%d", result, credentials.writeCount(), repository.writes)
 	}
 }

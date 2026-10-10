@@ -64,8 +64,8 @@ func TestSchema3GatewayBudgetPreflightAndMockProviderPath(t *testing.T) {
 				},
 			},
 		})
-		if result.Code != "" {
-			t.Fatalf("configure mock provider: %s", result.Code)
+		if result != nil {
+			t.Fatalf("configure mock provider: %v", result)
 		}
 	}
 	configure(&inference.ModelBudgetOverride{
@@ -225,8 +225,8 @@ func TestProviderTargetChangeClearsPersistedBudgetOverride(t *testing.T) {
 				},
 			},
 		})
-		if result.Code != "" {
-			t.Fatalf("update provider target: %s", result.Code)
+		if result != nil {
+			t.Fatalf("update provider target: %v", result)
 		}
 	}
 	update(first.URL, "model-a", "synthetic-key-a", &inference.ModelBudgetOverride{

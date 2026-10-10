@@ -44,7 +44,7 @@ The Go server follows the same ownership direction. `server/internal/contracts/s
 
 Concrete server boundaries live under `server/internal/adapters`: provider connectors and lifecycle setup are in `integrations`, OAuth runtimes are in `oauth`, and Codex plus other inference executors are in `models`. These adapters depend on owner contracts; `server/internal/node` composes them. `server/internal/transport/http` owns request/response DTOs, JSON projection and HTTP status mapping.
 
-Product Calendar Mirror remains a specialized Views workflow over the product query and page contract. Authority validates and signs its distinct product permit through a Views-owned enforcement port; the generic Assistant View permit cannot authorize it. HTTP projection remains transport-owned. Typed result expansion and model metadata/capability projection are separate from adapter placement.
+Product Calendar Mirror remains a specialized Views workflow over the product query and page contract. Authority validates and signs its distinct product permit through a Views-owned enforcement port; the generic Assistant View permit cannot authorize it. HTTP projection remains transport-owned: owner APIs return concrete semantic result types or typed errors, while HTTP DTOs project those values and map error categories to status codes. Owners do not return generic operation payload wrappers or HTTP response maps. Dynamic provider scope and schema values remain dynamic where their external contracts require them.
 
 ## Read next
 

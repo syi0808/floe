@@ -136,30 +136,30 @@ func enrollTestClient(t *testing.T, service *trust.Service, store credentials.St
 		IssuerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	operations := pairing.NewOperations(service, credentials.NewPairingAccess(store), nil)
-	started := operations.Execute(context.Background(), "start", request)
-	if started.Code != "" {
-		t.Fatalf("synthetic pairing start failed: %s", started.Code)
-	}
-	encoded, err := json.Marshal(started.Value)
+	started, err := operations.Execute(context.Background(), "start", request)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("synthetic pairing start failed: %v", err)
 	}
-	var start enrollmentStart
-	if err = json.Unmarshal(encoded, &start); err != nil {
-		t.Fatal(err)
+	startResult, ok := started.(pairing.StartResult)
+	if !ok {
+		t.Fatalf("synthetic pairing start returned %T", started)
 	}
+	start := enrollmentStart{PairingID: startResult.PairingID, Proof: startResult.Proof, ChallengeID: startResult.ChallengeID, ChallengeB64URL: startResult.Challenge, ProducerSignature: startResult.ProducerSignature, Producer: startResult.Producer}
+	start.Issuer.KeyID = startResult.Issuer.KeyID
+	start.Issuer.PublicKey = startResult.Issuer.PublicKey
+	start.Issuer.Fingerprint = startResult.Issuer.Fingerprint
 	challenge, err := base64.RawURLEncoding.DecodeString(start.ChallengeB64URL)
 	if err != nil {
 		t.Fatalf("decode enrollment challenge: %v", err)
 	}
 	signature := ed25519.Sign(privateKey, append([]byte(trust.SignatureDomain), challenge...))
-	confirmed := operations.Execute(context.Background(), "confirm", pairing.Request{
+	_, err = operations.Execute(context.Background(), "confirm", pairing.Request{
 		SchemaVersion: 1, PairingID: start.PairingID, Proof: start.Proof,
 		ChallengeID: start.ChallengeID, KeyID: request.IssuerKeyID,
 		Signature: base64.RawURLEncoding.EncodeToString(signature),
 	})
-	if confirmed.Code != "" {
-		t.Fatalf("synthetic pairing confirmation failed: %s", confirmed.Code)
+	if err != nil {
+		t.Fatalf("synthetic pairing confirmation failed: %v", err)
 	}
 	return enrolledClient{privateKey: privateKey, personID: personID, start: start}
 }
@@ -167,9 +167,9 @@ func enrollTestClient(t *testing.T, service *trust.Service, store credentials.St
 func approveTestClient(t *testing.T, service *trust.Service, store credentials.Store, adminToken string, client enrolledClient) enrolledClient {
 	t.Helper()
 	operations := pairing.NewOperations(service, credentials.NewPairingAccess(store), nil)
-	session, login := service.LoginOperator(adminToken)
-	if login.Code != "" {
-		t.Fatalf("synthetic administrator login failed: %s", login.Code)
+	session, loginErr := service.LoginOperator(adminToken)
+	if loginErr != nil {
+		t.Fatalf("synthetic administrator login failed: %v", loginErr)
 	}
 	sessionData, ok := service.OperatorSession(session)
 	if !ok {
@@ -180,25 +180,27 @@ func approveTestClient(t *testing.T, service *trust.Service, store credentials.S
 		t.Fatalf("authenticate synthetic administrator: %v", err)
 	}
 	start := client.start
-	approved := operations.Approve(context.Background(), operator, pairing.ApprovalRequest{SchemaVersion: 1, PairingID: start.PairingID, Fingerprint: start.Issuer.Fingerprint})
-	if approved.Code != "" {
-		t.Fatalf("synthetic pairing approval failed: %s", approved.Code)
-	}
-	poll := operations.Execute(context.Background(), "poll", pairing.Request{SchemaVersion: 1, PairingID: start.PairingID, Proof: start.Proof})
-	if poll.Code != "" {
-		t.Fatalf("synthetic pairing readback failed: %s", poll.Code)
-	}
-	encoded, err := json.Marshal(poll.Value)
+	_, err = operations.Approve(context.Background(), operator, pairing.ApprovalRequest{SchemaVersion: 1, PairingID: start.PairingID, Fingerprint: start.Issuer.Fingerprint})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("synthetic pairing approval failed: %v", err)
 	}
-	var delivery struct {
-		Token string `json:"token"`
+	poll, err := operations.Execute(context.Background(), "poll", pairing.Request{SchemaVersion: 1, PairingID: start.PairingID, Proof: start.Proof})
+	if err != nil {
+		t.Fatalf("synthetic pairing readback failed: %v", err)
 	}
-	if err = json.Unmarshal(encoded, &delivery); err != nil || delivery.Token == "" {
-		t.Fatalf("synthetic pairing did not return its credential: %v", err)
+	var token string
+	switch result := poll.(type) {
+	case pairing.StatusResult:
+		if result.Credentials != nil {
+			token = result.Credentials.Token
+		}
+	case pairing.CredentialDeliveryResult:
+		token = result.Token
 	}
-	client.bearer = delivery.Token
+	if token == "" {
+		t.Fatalf("synthetic pairing did not return its credential: %#v", poll)
+	}
+	client.bearer = token
 	return client
 }
 

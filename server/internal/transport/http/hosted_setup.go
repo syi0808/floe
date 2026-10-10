@@ -93,7 +93,7 @@ func (h *Handler) serveHostedSetup(w http.ResponseWriter, r *http.Request) {
 		view, err = h.Setup.HostedSetup(r.Context(), operator, id)
 	}
 	if err != nil {
-		writeResult(w, trust.Result(err))
+		writeOperationError(w, err)
 		return
 	}
 	session, ok := h.Trust.OperatorSession(cookie.Value)

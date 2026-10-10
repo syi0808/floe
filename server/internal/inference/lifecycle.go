@@ -38,118 +38,118 @@ func (c *Configuration) freshCredentialSlot(ctx context.Context) (string, error)
 	return "", errors.New("credential reference collision")
 }
 
-func (c *Configuration) operationStatus(ctx context.Context, operationID, fingerprint string) (operation.Result, bool) {
+func (c *Configuration) operationStatus(ctx context.Context, operationID, fingerprint string) (error, bool) {
 	for _, receipt := range c.state.Receipts {
 		if receipt.OperationID != operationID {
 			continue
 		}
 		if receipt.Fingerprint != fingerprint {
-			return operation.Reject(operation.Conflict, "operation_id_reused"), true
+			return operation.Fail(operation.Conflict, "operation_id_reused"), true
 		}
 		if c.configUnavailable {
-			return operation.Reject(operation.Unavailable, "configuration_unavailable"), true
+			return operation.Fail(operation.Unavailable, "configuration_unavailable"), true
 		}
 		if receipt.Category == string(operation.Ready) {
-			return operation.Accept(map[string]bool{"ok": true}), true
+			return nil, true
 		}
-		return operation.Reject(operation.Category(receipt.Category), receipt.Code), true
+		return operation.Fail(operation.Category(receipt.Category), receipt.Code), true
 	}
 	if pending := c.state.Pending; pending != nil {
 		if pending.OperationID != operationID || pending.Fingerprint != fingerprint {
-			return operation.Reject(operation.Conflict, "configuration_transition_pending"), true
+			return operation.Fail(operation.Conflict, "configuration_transition_pending"), true
 		}
 		if c.configUnavailable {
-			return operation.Reject(operation.Unavailable, "configuration_unavailable"), true
+			return operation.Fail(operation.Unavailable, "configuration_unavailable"), true
 		}
 		if err := c.resolvePending(ctx, false); err != nil {
-			return operation.Reject(operation.Unavailable, "configuration_unavailable"), true
+			return operation.Fail(operation.Unavailable, "configuration_unavailable"), true
 		}
 		for _, receipt := range c.state.Receipts {
 			if receipt.OperationID == operationID && receipt.Fingerprint == fingerprint {
 				if receipt.Category == string(operation.Ready) {
-					return operation.Accept(map[string]bool{"ok": true}), true
+					return nil, true
 				}
-				return operation.Reject(operation.Category(receipt.Category), receipt.Code), true
+				return operation.Fail(operation.Category(receipt.Category), receipt.Code), true
 			}
 		}
-		return operation.Reject(operation.Unavailable, "configuration_transition_pending"), true
+		return operation.Fail(operation.Unavailable, "configuration_transition_pending"), true
 	}
-	return operation.Result{}, false
+	return nil, false
 }
 
 // commitOperation is called with c.mu held. It durably stores a candidate and
 // bounded receipt before asking the live engine to adopt it.
-func (c *Configuration) commitOperation(ctx context.Context, operationID, fingerprint string, content ConfigContent) operation.Result {
+func (c *Configuration) commitOperation(ctx context.Context, operationID, fingerprint string, content ConfigContent) error {
 	if !trust.ValidID(operationID) || !validDigest(fingerprint) {
-		return operation.Reject(operation.Invalid, "validation")
+		return operation.Fail(operation.Invalid, "validation")
 	}
 	if result, found := c.operationStatus(ctx, operationID, fingerprint); found {
 		return result
 	}
 	if c.configUnavailable {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	if len(c.state.Receipts) >= maxConfigurationReceipts {
-		return operation.Reject(operation.Limited, "configuration_receipt_capacity")
+		return operation.Fail(operation.Limited, "configuration_receipt_capacity")
 	}
 	if c.state.Revision == ^uint64(0) {
-		return operation.Reject(operation.Limited, "configuration_revision_capacity")
+		return operation.Fail(operation.Limited, "configuration_revision_capacity")
 	}
 	next := cloneConfigurationState(c.state)
 	next = withConfigurationContent(next, cloneConfigContent(content))
 	next.Revision++
 	next.Receipts = append(next.Receipts, ConfigurationReceipt{OperationID: operationID, Fingerprint: fingerprint, Category: string(operation.Ready), Code: "ok"})
 	if err := c.planRetiredSlots(&next, c.state, c.engine.Generation()); err != nil {
-		return operation.Reject(operation.Limited, "credential_cleanup_capacity")
+		return operation.Fail(operation.Limited, "credential_cleanup_capacity")
 	}
 	return c.commitAndAdopt(ctx, next)
 }
 
-func (c *Configuration) commitAndAdopt(ctx context.Context, state ConfigState) operation.Result {
+func (c *Configuration) commitAndAdopt(ctx context.Context, state ConfigState) error {
 	if !configurationStateFitsBound(state) {
-		return operation.Reject(operation.Limited, "configuration_snapshot_capacity")
+		return operation.Fail(operation.Limited, "configuration_snapshot_capacity")
 	}
 	if ctx.Err() != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	config, accounts, executor, err := c.prepare(ctx, state)
 	if err != nil || ctx.Err() != nil {
-		return operation.Reject(operation.Invalid, "invalid_configuration")
+		return operation.Fail(operation.Invalid, "invalid_configuration")
 	}
 	if err = c.save(state); err != nil {
 		if errors.Is(err, ErrConfigSnapshotCapacity) {
-			return operation.Reject(operation.Limited, "configuration_snapshot_capacity")
+			return operation.Fail(operation.Limited, "configuration_snapshot_capacity")
 		}
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	c.state = cloneConfigurationState(state)
 	if err = c.engine.Configure(config, accounts, executor); err != nil {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	c.wakeCleanup()
-	return operation.Accept(map[string]bool{"ok": true})
+	return nil
 }
 
-func (c *Configuration) beginCredentialTransition(ctx context.Context, operationID, fingerprint string, slot, key string, content ConfigContent) operation.Result {
+func (c *Configuration) beginCredentialTransition(ctx context.Context, operationID, fingerprint string, slot, key string, content ConfigContent) error {
 	if !trust.ValidID(operationID) || !validDigest(fingerprint) {
-		return operation.Reject(operation.Invalid, "validation")
+		return operation.Fail(operation.Invalid, "validation")
 	}
 	if result, found := c.operationStatus(ctx, operationID, fingerprint); found {
 		return result
 	}
 	if c.configUnavailable {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	if len(c.state.Receipts) >= maxConfigurationReceipts {
-		return operation.Reject(operation.Limited, "configuration_receipt_capacity")
+		return operation.Fail(operation.Limited, "configuration_receipt_capacity")
 	}
 	if len(c.state.OwnedSlots) >= maxOwnedCredentialSlots {
-		return operation.Reject(operation.Limited, "credential_slot_capacity")
+		return operation.Fail(operation.Limited, "credential_slot_capacity")
 	}
 	if c.state.Revision >= ^uint64(0)-1 {
-		return operation.Reject(operation.Limited, "configuration_revision_capacity")
+		return operation.Fail(operation.Limited, "configuration_revision_capacity")
 	}
 	retireCount := 0
 	for _, oldSlot := range c.state.OwnedSlots {
@@ -158,38 +158,38 @@ func (c *Configuration) beginCredentialTransition(ctx context.Context, operation
 		}
 	}
 	if len(c.state.Cleanup)+retireCount > maxCredentialCleanup {
-		return operation.Reject(operation.Limited, "credential_cleanup_capacity")
+		return operation.Fail(operation.Limited, "credential_cleanup_capacity")
 	}
 	// Confirm the freshly issued reference is absent before persisting intent.
 	// The create-only store then prevents replacement after this point.
 	value, err := c.credentials.ReadProviderCredential(ctx, slot)
 	if err != nil || value != "" {
-		return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		return operation.Fail(operation.Unavailable, "credential_store_unavailable")
 	}
 	if c.state.Revision == ^uint64(0) {
-		return operation.Reject(operation.Limited, "configuration_revision_capacity")
+		return operation.Fail(operation.Limited, "configuration_revision_capacity")
 	}
 	pendingState := cloneConfigurationState(c.state)
 	pendingState.Revision++
 	pendingState.Pending = &CredentialTransition{OperationID: operationID, Fingerprint: fingerprint, Slot: slot, Digest: trust.Digest(key), Candidate: cloneConfigContent(content)}
 	if !configurationStateFitsBound(pendingState) {
-		return operation.Reject(operation.Limited, "configuration_snapshot_capacity")
+		return operation.Fail(operation.Limited, "configuration_snapshot_capacity")
 	}
 	candidateState := withConfigurationContent(cloneConfigurationState(c.state), cloneConfigContent(content))
 	if _, _, _, err := c.prepare(ctx, candidateState); err != nil {
-		return operation.Reject(operation.Invalid, "invalid_configuration")
+		return operation.Fail(operation.Invalid, "invalid_configuration")
 	}
 	if _, err := c.committedPendingState(pendingState, c.engine.Generation()); err != nil {
 		if errors.Is(err, ErrConfigSnapshotCapacity) {
-			return operation.Reject(operation.Limited, "configuration_snapshot_capacity")
+			return operation.Fail(operation.Limited, "configuration_snapshot_capacity")
 		}
-		return operation.Reject(operation.Limited, "credential_cleanup_capacity")
+		return operation.Fail(operation.Limited, "credential_cleanup_capacity")
 	}
 	if err := c.save(pendingState); err != nil {
 		if errors.Is(err, ErrConfigSnapshotCapacity) {
-			return operation.Reject(operation.Limited, "configuration_snapshot_capacity")
+			return operation.Fail(operation.Limited, "configuration_snapshot_capacity")
 		}
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
 	c.state = pendingState
 	writeErr := c.credentials.CreateProviderCredential(ctx, slot, key)
@@ -197,29 +197,29 @@ func (c *Configuration) beginCredentialTransition(ctx context.Context, operation
 	if readErr != nil {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
-		return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		return operation.Fail(operation.Unavailable, "credential_store_unavailable")
 	}
 	if observed == "" {
 		if writeErr != nil {
 			if err := c.abortPending(operationID, fingerprint); err != nil {
-				return operation.Reject(operation.Unavailable, "configuration_unavailable")
+				return operation.Fail(operation.Unavailable, "configuration_unavailable")
 			}
-			return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+			return operation.Fail(operation.Unavailable, "credential_store_unavailable")
 		}
 		// A successful create followed by an absent readback is ambiguous.
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
-		return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		return operation.Fail(operation.Unavailable, "credential_store_unavailable")
 	}
 	if trust.Digest(observed) != pendingState.Pending.Digest {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
-		return operation.Reject(operation.Unavailable, "credential_store_unavailable")
+		return operation.Fail(operation.Unavailable, "credential_store_unavailable")
 	}
 	if err := c.finishPending(ctx, false); err != nil {
-		return operation.Reject(operation.Unavailable, "configuration_unavailable")
+		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
-	return operation.Accept(map[string]bool{"ok": true})
+	return nil
 }
 
 func (c *Configuration) abortPending(operationID, fingerprint string) error {
@@ -347,72 +347,92 @@ func (c *Configuration) planRetiredSlots(next *ConfigState, old ConfigState, gen
 	return nil
 }
 
-func (c *Configuration) RecoverOperation(ctx context.Context, operator trust.OperatorPrincipal, operationID string) operation.Result {
-	return c.withCurrentOperator(operator, func() operation.Result {
-		if !trust.ValidID(operationID) {
-			return operation.Reject(operation.Invalid, "validation")
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		read := c.repository.LoadConfig()
-		if read.Disposition != ConfigReadPresent && read.Disposition != ConfigReadAbsent {
-			return c.denyUnavailable()
-		}
-		if read.Disposition == ConfigReadAbsent && (c.state.Revision != 0 || len(c.state.Targets) != 0 || len(c.state.Routes) != 0 || len(c.state.Providers) != 0 || len(c.state.OwnedSlots) != 0 || len(c.state.Cleanup) != 0 || len(c.state.Receipts) != 0 || c.state.Pending != nil) {
-			c.configUnavailable = true
-			c.engine.DenyConfiguration()
-			return operation.Reject(operation.Unavailable, "configuration_unavailable")
-		}
-		state := read.State
-		if read.Disposition == ConfigReadAbsent {
-			state = emptyConfigurationState()
-		}
-		if validateConfigurationState(state, c.factory) != nil {
-			return c.denyUnavailable()
-		}
-		if !configurationStateFitsBound(state) {
-			return c.denyUnavailable()
-		}
-		if state.Pending != nil && state.Pending.OperationID != operationID {
-			return operation.Reject(operation.Conflict, "configuration_transition_pending")
-		}
-		needsAdoption := c.configUnavailable || !reflect.DeepEqual(c.state, state) || state.Pending != nil
-		c.state = cloneConfigurationState(state)
-		if c.state.Pending != nil {
-			if err := c.resolvePending(ctx, true); err != nil {
-				return operation.Reject(operation.Unavailable, "configuration_unavailable")
-			}
-		}
-		if needsAdoption {
-			config, accounts, executor, err := c.prepare(ctx, c.state)
-			if err != nil {
-				return operation.Reject(operation.Unavailable, "configuration_unavailable")
-			}
-			if err = c.engine.RecoverConfiguration(config, accounts, executor); err != nil {
-				c.configUnavailable = true
-				return operation.Reject(operation.Unavailable, "configuration_unavailable")
-			}
-			c.configUnavailable = false
-		}
-		if err := c.cleanupDurable(ctx, false); err != nil {
-			return operation.Reject(operation.Unavailable, "configuration_unavailable")
-		}
-		for _, receipt := range c.state.Receipts {
-			if receipt.OperationID == operationID {
-				if receipt.Category == string(operation.Ready) {
-					return operation.Accept(map[string]any{"ok": true, "recovered": true})
-				}
-				return operation.Accept(map[string]any{"ok": true, "recovered": true, "category": receipt.Category, "code": receipt.Code})
-			}
-		}
-		return operation.Accept(map[string]any{"ok": true, "recovered": true, "status": "no_record"})
-	})
+type RecoveryResult struct {
+	OperationID string
+	Recovered   bool
+	Status      string
+	Category    string
+	Code        string
 }
 
-func (c *Configuration) denyUnavailable() operation.Result {
+func (c *Configuration) RecoverOperation(ctx context.Context, operator trust.OperatorPrincipal, operationID string) (RecoveryResult, error) {
+	if c == nil || c.authority == nil {
+		return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+	}
+	var result RecoveryResult
+	err := c.authority.WithCurrentOperator(operator, func() error {
+		var failure error
+		result, failure = c.recoverOperation(ctx, operationID)
+		return failure
+	})
+	if err != nil {
+		return RecoveryResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
+	}
+	return result, nil
+}
+
+func (c *Configuration) recoverOperation(ctx context.Context, operationID string) (RecoveryResult, error) {
+	if !trust.ValidID(operationID) {
+		return RecoveryResult{}, operation.Fail(operation.Invalid, "validation")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	read := c.repository.LoadConfig()
+	if read.Disposition != ConfigReadPresent && read.Disposition != ConfigReadAbsent {
+		return RecoveryResult{}, c.denyUnavailable()
+	}
+	if read.Disposition == ConfigReadAbsent && (c.state.Revision != 0 || len(c.state.Targets) != 0 || len(c.state.Routes) != 0 || len(c.state.Providers) != 0 || len(c.state.OwnedSlots) != 0 || len(c.state.Cleanup) != 0 || len(c.state.Receipts) != 0 || c.state.Pending != nil) {
+		c.configUnavailable = true
+		c.engine.DenyConfiguration()
+		return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+	}
+	state := read.State
+	if read.Disposition == ConfigReadAbsent {
+		state = emptyConfigurationState()
+	}
+	if validateConfigurationState(state, c.factory) != nil || !configurationStateFitsBound(state) {
+		return RecoveryResult{}, c.denyUnavailable()
+	}
+	if state.Pending != nil && state.Pending.OperationID != operationID {
+		return RecoveryResult{}, operation.Fail(operation.Conflict, "configuration_transition_pending")
+	}
+	needsAdoption := c.configUnavailable || !reflect.DeepEqual(c.state, state) || state.Pending != nil
+	c.state = cloneConfigurationState(state)
+	if c.state.Pending != nil {
+		if err := c.resolvePending(ctx, true); err != nil {
+			return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+		}
+	}
+	if needsAdoption {
+		config, accounts, executor, err := c.prepare(ctx, c.state)
+		if err != nil {
+			return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+		}
+		if err = c.engine.RecoverConfiguration(config, accounts, executor); err != nil {
+			c.configUnavailable = true
+			return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+		}
+		c.configUnavailable = false
+	}
+	if err := c.cleanupDurable(ctx, false); err != nil {
+		return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
+	}
+	for _, receipt := range c.state.Receipts {
+		if receipt.OperationID == operationID {
+			result := RecoveryResult{OperationID: operationID, Recovered: true}
+			if receipt.Category != string(operation.Ready) {
+				result.Category, result.Code = receipt.Category, receipt.Code
+			}
+			return result, nil
+		}
+	}
+	return RecoveryResult{OperationID: operationID, Recovered: true, Status: "no_record"}, nil
+}
+
+func (c *Configuration) denyUnavailable() error {
 	c.configUnavailable = true
 	c.engine.DenyConfiguration()
-	return operation.Reject(operation.Unavailable, "configuration_unavailable")
+	return operation.Fail(operation.Unavailable, "configuration_unavailable")
 }
 
 func (c *Configuration) cleanupDurable(ctx context.Context, restart bool) error {

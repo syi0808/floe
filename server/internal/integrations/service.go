@@ -144,23 +144,23 @@ func (s *Service) commit(p trust.Principal, mutate func(*StateSnapshot) error) e
 		return s.persist(next)
 	})
 }
-func (s *Service) Catalog(ctx context.Context, p trust.Principal) operation.Result {
+func (s *Service) Catalog(ctx context.Context, p trust.Principal) (CatalogResult, error) {
 	if err := s.check(p); err != nil {
-		return trust.Result(err)
+		return CatalogResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	s.mu.RLock()
 	state := clone(s.state)
 	runtimes := copyRuntimes(s.runtimes)
 	s.mu.RUnlock()
-	items := []any{}
 	meta, err := s.trust.ProducerMetadata()
 	if err != nil {
-		return trust.Result(err)
+		return CatalogResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
+	items := make([]ConnectorCatalogEntry, 0, len(Definitions()))
 	for _, d := range Definitions() {
-		item := map[string]any{"id": d.ID, "name": d.Name, "auth_kind": d.AuthKind, "available": s.factories[d.ID] != nil, "status": "disconnected", "required_scopes": d.RequiredScopes, "scope_fields": d.ScopeFields, "capabilities": ConnectorCapabilities(d)}
+		item := ConnectorCatalogEntry{ID: d.ID, Name: d.Name, AuthKind: d.AuthKind, Available: s.factories[d.ID] != nil, Status: "disconnected", RequiredScopes: d.RequiredScopes, ScopeFields: d.ScopeFields, Capabilities: CapabilitiesFor(d)}
 		if s.factories[d.ID] == nil {
-			item["status"] = "unavailable"
+			item.Status = "unavailable"
 		}
 		for _, r := range state.Connections {
 			if r.PersonID == p.PersonID() && r.ConnectorID == d.ID {
@@ -168,46 +168,47 @@ func (s *Service) Catalog(ctx context.Context, p trust.Principal) operation.Resu
 				if runtime, ok := runtimes[r.ConnectionID]; ok && runtime.Setup != nil && runtime.Setup.CachedStatus(binding(r)).Ready {
 					status = "connected"
 				}
-				item["status"] = status
-				item["connection_id"] = r.ConnectionID
-				item["connection_revision"] = r.Revision
-				item["incarnation"] = r.Incarnation
-				item["epoch"] = r.Epoch
-				item["execution_owner"] = meta.ExecutionOwner
-				item["identity_unverified"] = r.IdentityUnverified
-				item["scope"] = r.Scope
+				item.Status = status
+				item.HasConnection = true
+				item.ConnectionID = r.ConnectionID
+				item.ConnectionRevision = r.Revision
+				item.Incarnation = r.Incarnation
+				item.Epoch = r.Epoch
+				item.ExecutionOwner = meta.ExecutionOwner
+				item.IdentityUnverified = r.IdentityUnverified
+				item.Scope = r.Scope
 			}
 		}
 		for _, a := range state.Attempts {
 			if a.ClientID == p.ClientID() && a.ConnectorID == d.ID && a.Status == Pending {
-				item["status"] = "connecting"
+				item.Status = "connecting"
 			}
 		}
 		items = append(items, item)
 	}
 	if err = s.check(p); err != nil {
-		return trust.Result(err)
+		return CatalogResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
-	return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connectors": items, "revision": state.Revision})
+	return CatalogResult{SchemaVersion: 1, PersonID: p.PersonID(), DeviceID: p.DeviceID(), Connectors: items, Revision: state.Revision}, nil
 }
-func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in ConnectRequest) operation.Result {
+func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in ConnectRequest) (AttemptResult, error) {
 	d, ok := DefinitionFor(id)
 	if !ok {
-		return operation.Reject(operation.Missing, "connector_not_found")
+		return AttemptResult{}, operation.Fail(operation.Missing, "connector_not_found")
 	}
 	if in.SchemaVersion != 1 || !trust.ValidID(in.OperationID) || in.Scope == nil || in.ExpectedCatalogRevision == 0 {
-		return operation.Reject(operation.Invalid, "validation")
+		return AttemptResult{}, operation.Fail(operation.Invalid, "validation")
 	}
 	scope := map[string]any{}
 	var err error
 	if len(in.Scope) != 0 {
 		scope, err = ValidatedConnectorScope(d, in.Scope)
 		if err != nil {
-			return operation.Reject(operation.Invalid, "invalid_scope")
+			return AttemptResult{}, operation.Fail(operation.Invalid, "invalid_scope")
 		}
 	}
 	if s.factories[id] == nil {
-		return operation.Reject(operation.Unavailable, "connector_unavailable")
+		return AttemptResult{}, operation.Fail(operation.Unavailable, "connector_unavailable")
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
@@ -260,29 +261,29 @@ func (s *Service) Start(ctx context.Context, p trust.Principal, id string, in Co
 		return s.persist(next)
 	})
 	if err != nil {
-		return trust.Result(err)
+		return AttemptResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
-	return operation.Accept(attemptResponse(result))
+	return attemptResponse(result), nil
 }
-func (s *Service) Poll(ctx context.Context, p trust.Principal, id, attemptID string) operation.Result {
+func (s *Service) Poll(ctx context.Context, p trust.Principal, id, attemptID string) (AttemptResult, error) {
 	if err := s.trust.WithCurrentPrincipal(p, func(trust.PrincipalSnapshot) error { return nil }); err != nil {
-		return trust.Result(err)
+		return AttemptResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	s.mu.RLock()
 	a, ok := s.state.Attempts[attemptID]
 	denied := !s.storageReadyLocked()
 	s.mu.RUnlock()
 	if !ok || a.ClientID != p.ClientID() || a.PersonID != p.PersonID() || a.DeviceID != p.DeviceID() || a.ConnectorID != id {
-		return operation.Reject(operation.Missing, "attempt_not_found")
+		return AttemptResult{}, operation.Fail(operation.Missing, "attempt_not_found")
 	}
 	if denied {
-		return operation.Reject(operation.Unavailable, "integrations_unavailable")
+		return AttemptResult{}, operation.Fail(operation.Unavailable, "integrations_unavailable")
 	}
-	return operation.Accept(attemptResponse(a))
+	return attemptResponse(a), nil
 }
-func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID string, in CancelSetupRequest) operation.Result {
+func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID string, in CancelSetupRequest) (AttemptResult, error) {
 	if in.SchemaVersion != 1 || in.OperationID != attemptID || in.ExpectedRevision == 0 {
-		return operation.Reject(operation.Invalid, "validation")
+		return AttemptResult{}, operation.Fail(operation.Invalid, "validation")
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
@@ -323,19 +324,19 @@ func (s *Service) Cancel(ctx context.Context, p trust.Principal, id, attemptID s
 		return s.persist(next)
 	})
 	if err != nil {
-		return trust.Result(err)
+		return AttemptResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	_ = s.ResumeCleanup(ctx)
-	return operation.Accept(attemptResponse(removed))
+	return attemptResponse(removed), nil
 }
-func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string, in ScopeRequest) operation.Result {
+func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string, in ScopeRequest) (ScopeResult, error) {
 	d, ok := DefinitionFor(id)
 	if !ok {
-		return operation.Reject(operation.Missing, "connector_not_found")
+		return ScopeResult{}, operation.Fail(operation.Missing, "connector_not_found")
 	}
 	scope, err := ValidatedConnectorScope(d, in.Scope)
 	if err != nil || in.SchemaVersion != 1 {
-		return operation.Reject(operation.Invalid, "invalid_scope")
+		return ScopeResult{}, operation.Fail(operation.Invalid, "invalid_scope")
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
@@ -360,19 +361,19 @@ func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string,
 		return nil
 	})
 	if err != nil {
-		return trust.Result(err)
+		return ScopeResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	if !changedScope {
-		return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connection_id": result.ConnectionID, "connection_revision": result.Revision, "connector_id": id, "scope": result.Scope})
+		return scopeResult(p, id, result), nil
 	}
 	// Replace the read runtime after durable scope CAS. Captured old Readers cannot pass the source epoch fence.
 	factory := s.factories[id]
 	if factory == nil {
-		return operation.Reject(operation.Unavailable, "connector_unavailable")
+		return ScopeResult{}, operation.Fail(operation.Unavailable, "connector_unavailable")
 	}
 	runtime, err := factory.Open(ctx, RuntimeConfig{cloneRecord(result), binding(result)})
 	if err != nil {
-		return operation.Reject(operation.Unavailable, "connector_unavailable")
+		return ScopeResult{}, operation.Fail(operation.Unavailable, "connector_unavailable")
 	}
 	s.mu.Lock()
 	old := s.runtimes[result.ConnectionID]
@@ -381,11 +382,11 @@ func (s *Service) UpdateScope(ctx context.Context, p trust.Principal, id string,
 	if old.Close != nil {
 		old.Close()
 	}
-	return operation.Accept(map[string]any{"schema_version": 1, "person_id": p.PersonID(), "device_id": p.DeviceID(), "connection_id": result.ConnectionID, "connection_revision": result.Revision, "connector_id": id, "scope": result.Scope})
+	return scopeResult(p, id, result), nil
 }
-func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, in DisconnectRequest) operation.Result {
+func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, in DisconnectRequest) (DisconnectResult, error) {
 	if in.SchemaVersion != 1 || !trust.ValidID(in.OperationID) || !trust.ValidID(in.ConnectionID) || in.ConnectionRevision == 0 {
-		return operation.Reject(operation.Invalid, "validation")
+		return DisconnectResult{}, operation.Fail(operation.Invalid, "validation")
 	}
 	unlock := s.lock(p.PersonID() + "/" + id)
 	defer unlock()
@@ -427,7 +428,7 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 		return s.persist(next)
 	})
 	if err != nil {
-		return trust.Result(err)
+		return DisconnectResult{}, operation.Normalize(err, operation.Unavailable, "operation_unavailable")
 	}
 	_ = s.ResumeCleanup(ctx)
 	s.mu.RLock()
@@ -435,12 +436,15 @@ func (s *Service) Disconnect(ctx context.Context, p trust.Principal, id string, 
 	denied := !s.storageReadyLocked()
 	s.mu.RUnlock()
 	if !exists || denied {
-		return operation.Reject(operation.Unavailable, "cleanup_receipt_unavailable")
+		return DisconnectResult{}, operation.Fail(operation.Unavailable, "cleanup_receipt_unavailable")
 	}
-	return operation.Accept(map[string]any{"schema_version": 1, "operation_id": receipt.OperationID, "person_id": receipt.PersonID, "device_id": receipt.DeviceID, "connection_id": receipt.ConnectionID, "connector_id": receipt.ConnectorID, "connection_revision": receipt.ConnectionRevision, "cleanup_state": receipt.CleanupState})
+	return DisconnectResult{SchemaVersion: 1, OperationID: receipt.OperationID, PersonID: receipt.PersonID, DeviceID: receipt.DeviceID, ConnectionID: receipt.ConnectionID, ConnectorID: receipt.ConnectorID, ConnectionRevision: receipt.ConnectionRevision, CleanupState: receipt.CleanupState}, nil
 }
-func attemptResponse(a AttemptSnapshot) map[string]any {
-	return map[string]any{"schema_version": 1, "operation_id": a.ID, "connector_id": a.ConnectorID, "connection_id": a.Record.ConnectionID, "person_id": a.PersonID, "device_id": a.DeviceID, "setup_state": string(a.Status), "management_ref": "/manage/setup/" + a.ID, "revision": a.Revision}
+func attemptResponse(a AttemptSnapshot) AttemptResult {
+	return AttemptResult{SchemaVersion: 1, OperationID: a.ID, ConnectorID: a.ConnectorID, ConnectionID: a.Record.ConnectionID, PersonID: a.PersonID, DeviceID: a.DeviceID, SetupState: string(a.Status), ManagementRef: "/manage/setup/" + a.ID, Revision: a.Revision}
+}
+func scopeResult(p trust.Principal, connectorID string, record Record) ScopeResult {
+	return ScopeResult{SchemaVersion: 1, PersonID: p.PersonID(), DeviceID: p.DeviceID(), ConnectionID: record.ConnectionID, ConnectionRevision: record.Revision, ConnectorID: connectorID, Scope: record.Scope}
 }
 func copyRuntimes(in map[string]Runtime) map[string]Runtime {
 	out := map[string]Runtime{}
