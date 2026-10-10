@@ -563,10 +563,16 @@ class _AgentPanelState extends State<AgentPanel> {
       await controller.sendText(text);
       return;
     }
+    final sessionId = controller.session?.id;
     _composerText.clear();
     setState(() {});
     await controller.sendText(text);
-    if (mounted && controller.failure != null && _composerText.text.isEmpty) {
+    if (mounted &&
+        identical(controller, widget.controller) &&
+        sessionId != null &&
+        sessionId == controller.session?.id &&
+        controller.failure != null &&
+        _composerText.text.isEmpty) {
       _composerText.text = text;
       setState(() {});
     }
