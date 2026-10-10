@@ -48,7 +48,8 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
   @override
   void didUpdateWidget(AgentInteractionCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.interactionId != widget.interactionId) {
+    if (oldWidget.interactionId != widget.interactionId ||
+        oldWidget.controller != widget.controller) {
       _ensure();
     }
   }
