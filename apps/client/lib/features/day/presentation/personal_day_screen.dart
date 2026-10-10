@@ -23,7 +23,6 @@ import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_theme.dart';
 import 'package:floe_client/app/floe_toast.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
-import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/application/calendar_action_controller.dart';
 import 'package:floe_client/features/actions/presentation/calendar_action_proposal.dart';
 import 'package:floe_client/features/day/application/personal_day_controller.dart';
