@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"floe/server/internal/storage"
+	"floe/server/internal/adapters/storage/privatefiles"
 )
 
 func catalogBytes(t *testing.T, revision uint64, version, modelID string) []byte {

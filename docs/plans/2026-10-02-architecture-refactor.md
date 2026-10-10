@@ -666,6 +666,50 @@ security setting was changed. Raw command output is saved in
 
 **Constraint:** storage별 commit을 무작정 잘게 쪼개지 않는다. pairing/trust/credential의 현재 복구 계약을 repository port가 표현해야 한다. 외부 protocol JSON과 동적 schema의 adapter-local map은 제한적으로 허용한다.
 
+**Bounded external-adapter relocation follow-on (2026-10-09):** implemented on
+the exact required base `746c24bfe1954fa96f3cd10c96b37a7eee9c7cef` (tree
+`9ac962898a0dc1b622f9467ba755ece640d0c506`, parent
+`e97027a483f154ba7a4141996f2fbd887aca0dad`). Concrete connectors and lifecycle
+setup now live in `adapters/integrations`, shared OAuth runtimes in
+`adapters/oauth`, Codex and inference provider runtimes in `adapters/models`,
+and credential/private-file implementations under `adapters/credentials` and
+`adapters/storage/privatefiles`. Existing owner repository adapters remain in
+`adapters/storage`; Node is the composition root. Pairing defines typed
+operations for its receipt index, attempt receipts and pairing tokens. The
+credential adapter derives and validates those exact slots; Node injects this
+narrow adapter instead of the full credential vault. Old implementation
+packages and compatibility wrappers were removed after caller cutover.
+
+All 50 moved Go implementation/test files match the base after only import-path
+rewrites and `gofmt`. All 19 moved connector protocol fixtures retain their
+original Git blob hashes. The same Ollama mock-response and Codex output-budget
+tests passed on both base and candidate. The Go graph gate covers Authority,
+Contracts, Inference, Integrations, Operation, Pairing, Trust, Views and nested
+packages; it permits the pure `views/contracts` dependency and adapter-to-owner
+edges while rejecting owner-to-adapter/HTTP edges, Authority-to-Views-application
+edges and cycles. Its positive fixture and 13 negative fixtures pass.
+
+Final server validation passed `go test -race ./...`,
+`go test -race -tags=floe_dev ./...`, `go vet ./...`,
+`go vet -tags=floe_dev ./...`, `go build ./...`,
+`go build -tags=floe_dev ./...`, the graph gate, changed-Go `gofmt`, Python
+syntax compilation of the gate, and `git diff --check`. macOS cgo is not
+compiled by this Linux run. Raw output is saved under
+`/tmp/floe-p5-external-adapter-logs`. No commit or push was made.
+
+**Pairing credential-boundary review correction (2026-10-10):** Replaced the
+initial generic `Get/Put/Delete(slot)` Pairing port with typed record operations
+for its fixed index, operation-keyed attempt receipts, and pairing-keyed token.
+The adapter constructs those slot names and validates UUID references before
+backing-store IO; arbitrary provider or integration slots are not expressible
+through the Pairing port. Node supplies this adapter rather than the full vault.
+Synthetic adapter tests verify exact slot mapping and that invalid or
+non-Pairing references produce zero backing-store calls. Existing synthetic
+activation, token readback, cleanup, receipt reload and reopen flows remain the
+behavior evidence. This is a boundary-only correction; it does not alter slot
+names, crypto, retry, activation, or recovery behavior. Follow-up validation
+logs are recorded separately under `/tmp/floe-p5-pairing-port-logs`.
+
 #### P6 — 폐기 확인과 통합 검증
 
 구조·행동·UI·복구 증거를 한 snapshot으로 묶고 리팩토링을 종료한다.

@@ -4,7 +4,7 @@ package node
 
 import (
 	"errors"
-	"floe/server/internal/credentials"
+	"floe/server/internal/adapters/credentials"
 	"os"
 	"path/filepath"
 )

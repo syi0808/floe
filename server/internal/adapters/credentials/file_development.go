@@ -6,7 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"floe/server/internal/storage"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"io"
 	"os"
 	"path/filepath"

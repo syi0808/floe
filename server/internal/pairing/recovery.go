@@ -43,7 +43,7 @@ func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincip
 		}
 		// Activation wins both recovery choices. Missing delivery credentials
 		// remain an explicit repair fact, never permission to replace the token.
-		token, readErr := o.credentials.Get(ctx, "FLOE_PAIRING_"+p.ID)
+		token, readErr := o.credentials.ReadPairingToken(ctx, PairingID(p.ID))
 		if readErr != nil {
 			return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
 		}
@@ -90,7 +90,7 @@ func (o *Operations) Recover(ctx context.Context, operator trust.OperatorPrincip
 	if err != nil || len(hash) != 32 || hex.EncodeToString(hash) != p.activationTokenHash {
 		return operation.Reject(operation.Conflict, "pairing_recovery_token_missing")
 	}
-	token, err := o.credentials.Get(ctx, "FLOE_PAIRING_"+p.ID)
+	token, err := o.credentials.ReadPairingToken(ctx, PairingID(p.ID))
 	if err != nil {
 		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
 	}

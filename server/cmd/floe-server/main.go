@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/envfile"
 	"floe/server/internal/modelcatalog"
 	"floe/server/internal/node"
-	"floe/server/internal/storage"
 	"fmt"
 	"log"
 	"net"

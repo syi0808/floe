@@ -4,7 +4,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
-	"floe/server/internal/credentials"
+	"floe/server/internal/adapters/credentials"
 	"floe/server/internal/integrations"
 	"net/url"
 	"strings"

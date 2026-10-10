@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-
-	"floe/server/internal/credentials"
 )
 
 type inferenceCredentialStore struct {
@@ -43,7 +41,7 @@ func (store *inferenceCredentialStore) Create(ctx context.Context, name, value s
 		return store.putErr
 	}
 	if _, exists := store.values[name]; exists {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	store.values[name] = value
 	return nil
@@ -59,21 +57,21 @@ func TestInferenceProviderAccessScopesProviderCredentialIO(t *testing.T) {
 	if err := access.CreateProviderCredential(ctx, reference, "synthetic-key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CreateProviderCredential(ctx, reference, "replacement-key"); !errors.Is(err, credentials.ErrUnavailable) {
+	if err := access.CreateProviderCredential(ctx, reference, "replacement-key"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("create-only adapter replaced an existing slot: %v", err)
 	}
 	value, err := access.ReadProviderCredential(ctx, reference)
 	if err != nil || value != "synthetic-key" {
 		t.Fatalf("provider credential round trip failed: value=%q err=%v", value, err)
 	}
-	if _, err = access.ReadProviderCredential(ctx, "FLOE_GMAIL_OAUTH"); !errors.Is(err, credentials.ErrUnavailable) {
+	if _, err = access.ReadProviderCredential(ctx, "FLOE_GMAIL_OAUTH"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("adapter accepted a non-Inference credential reference: %v", err)
 	}
-	if err = access.CreateProviderCredential(ctx, reference, "bad\nkey"); !errors.Is(err, credentials.ErrUnavailable) {
+	if err = access.CreateProviderCredential(ctx, reference, "bad\nkey"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("adapter accepted an invalid provider credential value: %v", err)
 	}
-	store.getErr = credentials.ErrUnavailable
-	if _, err = access.ReadProviderCredential(ctx, reference); !errors.Is(err, credentials.ErrUnavailable) {
+	store.getErr = ErrUnavailable
+	if _, err = access.ReadProviderCredential(ctx, reference); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("credential-store unavailability was lost: %v", err)
 	}
 }

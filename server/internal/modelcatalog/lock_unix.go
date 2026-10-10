@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"floe/server/internal/storage"
+	"floe/server/internal/adapters/storage/privatefiles"
 )
 
 const catalogLockTimeout = 10 * time.Second

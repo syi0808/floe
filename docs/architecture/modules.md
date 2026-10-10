@@ -103,7 +103,8 @@ first Trust persistence succeeds; interruption before that retains initializing
 evidence and reports creation_incomplete, never regenerating identity or keys.
 
 `server/internal/adapters/storage` implements the Trust, Integrations, and Inference repository
-ports over scoped authenticated file capabilities. It owns `trust.json`,
+ports over scoped authenticated file capabilities. Its `privatefiles` subpackage
+owns the bounded encrypted private-file implementation. The repositories own `trust.json`,
 `producer-identity.json`, `admin-token`, `integrations.json`, and `inference.json` file selection,
 strict JSON encoding/decoding, and encrypted atomic replacement. The Trust port
 reports presence and write disposition for its complete state, producer identity,
@@ -111,9 +112,12 @@ and operator credential; Trust decides fresh initialization, rejects partial or
 damaged bootstrap, validates semantic state, and latches unavailable authority on
 integrity or indeterminate writes. The Integrations port reads and replaces one
 complete typed snapshot; Integrations validates its records, advances revisions,
-and adopts only a confirmed commit. The separate credential adapter accepts only
-an owner-defined connection binding for writes and deletion; runtime credential
-reads are scoped to the exact binding. No secret token is included in the Trust
+and adopts only a confirmed commit. The credential adapter owns production
+keychain and development private-file stores, and accepts owner-defined scoped
+capabilities: connection writes/deletion require an Integrations binding, runtime
+reads use that exact binding, and Inference uses only its `FLOE_KEY_*` references.
+Pairing defines a separate narrow store port for temporary enrollment records.
+No secret token is included in the Trust
 repository read snapshot. Explicit local token retrieval remains a separate
 read-only adapter operation.
 
@@ -152,8 +156,14 @@ read-only without starting owners or creating credentials. Public
 profile/identity markers, diagnostic logs and operator-supplied environment
 input remain outside the encrypted payload store.
 
-Each Gateway semantic owner receives a distinct storage scope; connector factories
-receive only the connectors subtree. Per-file write locks serialize replacement,
+Concrete connector implementations live in `server/internal/adapters/integrations`,
+OAuth runtimes in `server/internal/adapters/oauth`, and Codex/provider executors
+in `server/internal/adapters/models`. `server/internal/node` composes these
+implementations with owner-defined ports; adapters may depend on owners, while
+owners do not import concrete adapters or HTTP.
+
+Each Gateway semantic owner receives a distinct storage scope; integration
+factories receive only the existing `connectors` subtree. Per-file write locks serialize replacement,
 while a shared lifetime guard fences Close. Indeterminate replacement makes the root unavailable to new Node admission and
 owner readiness checks. Integrity failures propagate to the semantic owner, which
 retains its fail-closed state.

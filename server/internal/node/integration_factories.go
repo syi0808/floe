@@ -4,22 +4,21 @@ import (
 	"context"
 	"errors"
 	credentialadapter "floe/server/internal/adapters/credentials"
-	githubconnector "floe/server/internal/connectors/github"
-	"floe/server/internal/connectors/gmail"
-	googleauth "floe/server/internal/connectors/googleauth"
-	calendarconnector "floe/server/internal/connectors/googlecalendar"
-	driveconnector "floe/server/internal/connectors/googledrive"
-	homeconnector "floe/server/internal/connectors/homeassistant"
-	"floe/server/internal/connectors/lifecycle"
-	microsoftauth "floe/server/internal/connectors/microsoftauth"
-	microsoftcalendarconnector "floe/server/internal/connectors/microsoftcalendar"
-	"floe/server/internal/connectors/microsoftmail"
-	microsoftteamsconnector "floe/server/internal/connectors/microsoftteams"
-	slackconnector "floe/server/internal/connectors/slack"
-	workoauth "floe/server/internal/connectors/workoauth"
-	"floe/server/internal/credentials"
+	githubconnector "floe/server/internal/adapters/integrations/github"
+	"floe/server/internal/adapters/integrations/gmail"
+	calendarconnector "floe/server/internal/adapters/integrations/googlecalendar"
+	driveconnector "floe/server/internal/adapters/integrations/googledrive"
+	homeconnector "floe/server/internal/adapters/integrations/homeassistant"
+	"floe/server/internal/adapters/integrations/lifecycle"
+	microsoftcalendarconnector "floe/server/internal/adapters/integrations/microsoftcalendar"
+	"floe/server/internal/adapters/integrations/microsoftmail"
+	microsoftteamsconnector "floe/server/internal/adapters/integrations/microsoftteams"
+	slackconnector "floe/server/internal/adapters/integrations/slack"
+	googleauth "floe/server/internal/adapters/oauth/googleauth"
+	microsoftauth "floe/server/internal/adapters/oauth/microsoftauth"
+	workoauth "floe/server/internal/adapters/oauth/workoauth"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/integrations"
-	"floe/server/internal/storage"
 	"floe/server/internal/views"
 )
 
@@ -29,7 +28,7 @@ type sourceOAuth interface {
 	Close()
 }
 
-func integrationFactories(files *storage.Files, vault credentials.Store, env func(string) string) map[string]integrations.RuntimeFactory {
+func integrationFactories(files *storage.Files, vault credentialadapter.Store, env func(string) string) map[string]integrations.RuntimeFactory {
 	factories := map[string]integrations.RuntimeFactory{}
 	for _, d := range integrations.Definitions() {
 		d := d
@@ -55,7 +54,7 @@ func integrationFactories(files *storage.Files, vault credentials.Store, env fun
 	}
 	return factories
 }
-func openIntegration(ctx context.Context, files *storage.Files, vault credentials.Store, env func(string) string, c integrations.RuntimeConfig) (out integrations.Runtime, err error) {
+func openIntegration(ctx context.Context, files *storage.Files, vault credentialadapter.Store, env func(string) string, c integrations.RuntimeConfig) (out integrations.Runtime, err error) {
 	r := c.Record
 	scope := r.Scope
 	scopedCredentials := credentialadapter.NewScopedStore(vault, c.Binding)
@@ -255,7 +254,7 @@ func openIntegration(ctx context.Context, files *storage.Files, vault credential
 }
 
 type vaultTokenSource struct {
-	vault credentials.Store
+	vault credentialadapter.Store
 	name  string
 }
 

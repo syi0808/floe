@@ -19,12 +19,12 @@ import (
 	"testing"
 	"time"
 
+	"floe/server/internal/adapters/credentials"
 	storageadapter "floe/server/internal/adapters/storage"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/authority"
 	sourcecontract "floe/server/internal/contracts/source"
-	"floe/server/internal/credentials"
 	"floe/server/internal/pairing"
-	"floe/server/internal/storage"
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 	viewcontracts "floe/server/internal/views/contracts"
@@ -135,7 +135,7 @@ func enrollTestClient(t *testing.T, service *trust.Service, store credentials.St
 		IssuerKeyID:     trust.NewID(),
 		IssuerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),
 	}
-	operations := pairing.NewOperations(service, store, nil)
+	operations := pairing.NewOperations(service, credentials.NewPairingAccess(store), nil)
 	started := operations.Execute(context.Background(), "start", request)
 	if started.Code != "" {
 		t.Fatalf("synthetic pairing start failed: %s", started.Code)
@@ -166,7 +166,7 @@ func enrollTestClient(t *testing.T, service *trust.Service, store credentials.St
 
 func approveTestClient(t *testing.T, service *trust.Service, store credentials.Store, adminToken string, client enrolledClient) enrolledClient {
 	t.Helper()
-	operations := pairing.NewOperations(service, store, nil)
+	operations := pairing.NewOperations(service, credentials.NewPairingAccess(store), nil)
 	session, login := service.LoginOperator(adminToken)
 	if login.Code != "" {
 		t.Fatalf("synthetic administrator login failed: %s", login.Code)

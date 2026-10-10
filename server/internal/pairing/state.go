@@ -3,10 +3,25 @@ package pairing
 
 import (
 	"context"
-	"floe/server/internal/credentials"
 	"floe/server/internal/trust"
 	"time"
 )
+
+// PairingID and OperationID identify the two keyed Pairing receipt records.
+// CredentialAccess deliberately exposes record operations instead of arbitrary
+// credential slots.
+type PairingID string
+type OperationID string
+
+type CredentialAccess interface {
+	ReadPairingToken(context.Context, PairingID) (string, error)
+	StorePairingToken(context.Context, PairingID, string) error
+	DeletePairingToken(context.Context, PairingID) error
+	ReadReceiptIndex(context.Context) (string, error)
+	StoreReceiptIndex(context.Context, string) error
+	ReadPairingAttempt(context.Context, OperationID) (string, error)
+	StorePairingAttempt(context.Context, OperationID, string) error
+}
 
 type Trust interface {
 	PreparePairing(string) (uint64, error)
@@ -23,10 +38,10 @@ type Operations struct {
 	lastPair    time.Time
 	clock       func() time.Time
 	trust       Trust
-	credentials credentials.Store
+	credentials CredentialAccess
 }
 
-func NewOperations(service Trust, store credentials.Store, clock func() time.Time) *Operations {
+func NewOperations(service Trust, store CredentialAccess, clock func() time.Time) *Operations {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -56,7 +71,7 @@ func (o *Operations) ClearClient(ctx context.Context, id string) error {
 	if o.credentials == nil {
 		return repair()
 	}
-	if err := o.credentials.Delete(ctx, "FLOE_PAIRING_"+id); err != nil {
+	if err := o.credentials.DeletePairingToken(ctx, PairingID(id)); err != nil {
 		return err
 	}
 	if o.pending != nil && o.pending.ID == id {

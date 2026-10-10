@@ -5,26 +5,25 @@ package credentials
 import (
 	"context"
 
-	"floe/server/internal/credentials"
 	"floe/server/internal/integrations"
 )
 
-type IntegrationAccess struct{ store credentials.Store }
+type IntegrationAccess struct{ store Store }
 
-func NewIntegrationAccess(store credentials.Store) *IntegrationAccess {
+func NewIntegrationAccess(store Store) *IntegrationAccess {
 	return &IntegrationAccess{store: store}
 }
 
 func (access *IntegrationAccess) StoreConnectionCredential(ctx context.Context, binding integrations.CredentialBinding, secret string) error {
 	if access == nil || access.store == nil || !validBinding(binding) {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return access.store.Put(ctx, binding.Slot, secret)
 }
 
 func (access *IntegrationAccess) DeleteConnectionCredential(ctx context.Context, binding integrations.CredentialBinding) error {
 	if access == nil || access.store == nil || !validBinding(binding) {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return access.store.Delete(ctx, binding.Slot)
 }
@@ -32,31 +31,31 @@ func (access *IntegrationAccess) DeleteConnectionCredential(ctx context.Context,
 // ScopedStore permits a connector runtime to read and rotate only the exact
 // credential slot pinned by its immutable connection binding.
 type ScopedStore struct {
-	store   credentials.Store
+	store   Store
 	binding integrations.CredentialBinding
 }
 
-func NewScopedStore(store credentials.Store, binding integrations.CredentialBinding) *ScopedStore {
+func NewScopedStore(store Store, binding integrations.CredentialBinding) *ScopedStore {
 	return &ScopedStore{store: store, binding: binding}
 }
 
 func (store *ScopedStore) Get(ctx context.Context, slot string) (string, error) {
 	if !store.allowed(slot) {
-		return "", credentials.ErrUnavailable
+		return "", ErrUnavailable
 	}
 	return store.store.Get(ctx, slot)
 }
 
 func (store *ScopedStore) Put(ctx context.Context, slot, value string) error {
 	if !store.allowed(slot) {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return store.store.Put(ctx, slot, value)
 }
 
 func (store *ScopedStore) Delete(ctx context.Context, slot string) error {
 	if !store.allowed(slot) {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return store.store.Delete(ctx, slot)
 }
@@ -70,4 +69,4 @@ func validBinding(binding integrations.CredentialBinding) bool {
 }
 
 var _ integrations.CredentialAccess = (*IntegrationAccess)(nil)
-var _ credentials.Store = (*ScopedStore)(nil)
+var _ Store = (*ScopedStore)(nil)

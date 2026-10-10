@@ -13,13 +13,12 @@ import (
 	"testing"
 
 	credentialadapter "floe/server/internal/adapters/credentials"
+	"floe/server/internal/adapters/models/providers"
 	storageadapter "floe/server/internal/adapters/storage"
-	"floe/server/internal/credentials"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/inference"
-	"floe/server/internal/inference/providers"
 	"floe/server/internal/modelcatalog"
 	"floe/server/internal/pairing"
-	"floe/server/internal/storage"
 	"floe/server/internal/trust"
 )
 
@@ -39,7 +38,7 @@ func (store *memoryCredentialStore) Get(ctx context.Context, name string) (strin
 		return "", err
 	}
 	if name == "" || len(name) > 256 {
-		return "", credentials.ErrUnavailable
+		return "", credentialadapter.ErrUnavailable
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -51,12 +50,12 @@ func (store *memoryCredentialStore) Put(ctx context.Context, name, value string)
 		return err
 	}
 	if name == "" || len(name) > 256 || value == "" || len(value) > 131072 {
-		return credentials.ErrUnavailable
+		return credentialadapter.ErrUnavailable
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, exists := store.values[name]; !exists && len(store.values) >= 256 {
-		return credentials.ErrUnavailable
+		return credentialadapter.ErrUnavailable
 	}
 	store.values[name] = value
 	return nil
@@ -67,12 +66,12 @@ func (store *memoryCredentialStore) Create(ctx context.Context, name, value stri
 		return err
 	}
 	if name == "" || len(name) > 256 || value == "" || len(value) > 131072 {
-		return credentials.ErrUnavailable
+		return credentialadapter.ErrUnavailable
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, exists := store.values[name]; exists {
-		return credentials.ErrUnavailable
+		return credentialadapter.ErrUnavailable
 	}
 	store.values[name] = value
 	return nil
@@ -139,7 +138,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 		t.Fatalf("open inference configuration owner: %v", err)
 	}
 	t.Cleanup(configuration.Close)
-	pairingOperations := pairing.NewOperations(trustService, credentialsStore, nil)
+	pairingOperations := pairing.NewOperations(trustService, credentialadapter.NewPairingAccess(credentialsStore), nil)
 	catalog, err := modelcatalog.Open("")
 	if err != nil {
 		t.Fatalf("open embedded model catalog: %v", err)

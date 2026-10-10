@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	credentialadapter "floe/server/internal/adapters/credentials"
+	codexauth "floe/server/internal/adapters/models/codex"
+	"floe/server/internal/adapters/models/providers"
 	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/authority"
 	"floe/server/internal/inference"
-	codexauth "floe/server/internal/inference/codex"
-	"floe/server/internal/inference/providers"
 	"floe/server/internal/integrations"
 	"floe/server/internal/modelcatalog"
 	"floe/server/internal/pairing"
@@ -156,7 +156,8 @@ func New(config Config) (*Node, error) {
 		return nil, err
 	}
 	mirrorService = mirror
-	pairing := pairing.NewOperations(t, vault, nil)
+	pairingCredentials := credentialadapter.NewPairingAccess(vault)
+	pairing := pairing.NewOperations(t, pairingCredentials, nil)
 	clients := trust.NewClientAdministration(t, sources, pairing)
 	handler := &httptransport.Handler{Address: config.Address, Trust: t, Pairing: pairing, Setup: sources, Integrations: sources, Sources: reader, Mirror: mirror, Configuration: configuration, Accounts: inference.NewAccountManagement(t, runtime), Clients: clients, ModelCatalog: modelCatalog, Inference: &httptransport.InferenceHandler{Service: model, Trust: t, ModelCatalog: modelCatalog, Address: config.Address}}
 	ctx, cancel := context.WithCancel(context.Background())

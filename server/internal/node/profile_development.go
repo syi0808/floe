@@ -4,8 +4,8 @@ package node
 
 import (
 	"errors"
-	"floe/server/internal/credentials"
-	"floe/server/internal/storage"
+	"floe/server/internal/adapters/credentials"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"os"
 	"path/filepath"
 	"syscall"

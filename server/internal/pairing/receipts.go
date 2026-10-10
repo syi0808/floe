@@ -44,7 +44,7 @@ func (o *Operations) index(ctx context.Context) (receiptIndex, error) {
 	if o.credentials == nil {
 		return receiptIndex{}, repair()
 	}
-	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_INDEX")
+	raw, err := o.credentials.ReadReceiptIndex(ctx)
 	if err != nil {
 		return receiptIndex{}, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
@@ -75,7 +75,7 @@ func (o *Operations) reserve(ctx context.Context, index receiptIndex, op, id str
 	if err != nil {
 		return repair()
 	}
-	if o.credentials.Put(ctx, "FLOE_PAIRING_INDEX", string(encoded)) != nil {
+	if o.credentials.StoreReceiptIndex(ctx, string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
@@ -86,13 +86,13 @@ func (o *Operations) save(ctx context.Context, p *Pending) error {
 	if err != nil || len(encoded) > 32768 {
 		return repair()
 	}
-	if o.credentials == nil || o.credentials.Put(ctx, "FLOE_PAIRING_ATTEMPT_"+p.operationID, string(encoded)) != nil {
+	if o.credentials == nil || o.credentials.StorePairingAttempt(ctx, OperationID(p.operationID), string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
 }
 func (o *Operations) load(ctx context.Context, entry receiptIndexEntry) (*Pending, error) {
-	raw, err := o.credentials.Get(ctx, "FLOE_PAIRING_ATTEMPT_"+entry.OperationID)
+	raw, err := o.credentials.ReadPairingAttempt(ctx, OperationID(entry.OperationID))
 	if err != nil {
 		return nil, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}

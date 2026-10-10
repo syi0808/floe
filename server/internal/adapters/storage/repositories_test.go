@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	ownerstorage "floe/server/internal/adapters/storage"
+	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/integrations"
-	privatefiles "floe/server/internal/storage"
 	"floe/server/internal/trust"
 )
 

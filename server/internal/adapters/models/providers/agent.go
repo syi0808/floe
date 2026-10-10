@@ -3,8 +3,8 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	codexauth "floe/server/internal/adapters/models/codex"
 	"floe/server/internal/inference"
-	codexauth "floe/server/internal/inference/codex"
 	"floe/server/internal/trust"
 	"strings"
 )

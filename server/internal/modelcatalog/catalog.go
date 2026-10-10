@@ -20,7 +20,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"floe/server/internal/storage"
+	"floe/server/internal/adapters/storage/privatefiles"
 )
 
 const (

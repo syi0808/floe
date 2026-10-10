@@ -4,40 +4,39 @@ import (
 	"context"
 	"strings"
 
-	"floe/server/internal/credentials"
 	"floe/server/internal/inference"
 )
 
 // InferenceProviderAccess is limited to the generated FLOE_KEY_* references
 // owned by Inference. Creation is immutable; deletion is limited to exact
 // owner-issued references in durable cleanup state.
-type InferenceProviderAccess struct{ store credentials.Store }
+type InferenceProviderAccess struct{ store Store }
 
-func NewInferenceProviderAccess(store credentials.Store) *InferenceProviderAccess {
+func NewInferenceProviderAccess(store Store) *InferenceProviderAccess {
 	return &InferenceProviderAccess{store: store}
 }
 
 func (access *InferenceProviderAccess) ReadProviderCredential(ctx context.Context, reference string) (string, error) {
 	if access == nil || access.store == nil || !validInferenceProviderReference(reference) {
-		return "", credentials.ErrUnavailable
+		return "", ErrUnavailable
 	}
 	return access.store.Get(ctx, reference)
 }
 
 func (access *InferenceProviderAccess) CreateProviderCredential(ctx context.Context, reference, value string) error {
 	if access == nil || access.store == nil || !validInferenceProviderReference(reference) || value == "" || len(value) > 8192 || strings.ContainsAny(value, "\r\n\x00") {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
-	creator, ok := access.store.(credentials.Creator)
+	creator, ok := access.store.(Creator)
 	if !ok {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return creator.Create(ctx, reference, value)
 }
 
 func (access *InferenceProviderAccess) DeleteProviderCredential(ctx context.Context, reference string) error {
 	if access == nil || access.store == nil || !validInferenceProviderReference(reference) {
-		return credentials.ErrUnavailable
+		return ErrUnavailable
 	}
 	return access.store.Delete(ctx, reference)
 }

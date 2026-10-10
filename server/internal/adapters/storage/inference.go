@@ -5,8 +5,8 @@ import (
 	"errors"
 	"os"
 
+	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/inference"
-	privatefiles "floe/server/internal/storage"
 	"floe/server/internal/trust"
 )
 

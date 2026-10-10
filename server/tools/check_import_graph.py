@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Check the Go import graph with go list.
-
-Owner-to-concrete-adapter boundaries cover Authority, Views, Trust,
-Integrations, and Inference. Authority may import Views-owned contract types under
-views/contracts; it may not import the Views application package at
-internal/views.
-"""
+"""Check Go owner, adapter, composition, and HTTP import boundaries."""
 
 from __future__ import annotations
 
@@ -18,27 +12,43 @@ from pathlib import Path
 
 
 MODULE = "floe/server"
-AUTHORITY = f"{MODULE}/internal/authority"
-VIEWS = f"{MODULE}/internal/views"
-TRUST = f"{MODULE}/internal/trust"
-INTEGRATIONS = f"{MODULE}/internal/integrations"
-INFERENCE = f"{MODULE}/internal/inference"
-OWNER_PACKAGES = {AUTHORITY, VIEWS, TRUST, INTEGRATIONS, INFERENCE}
-COMPOSITION_ROOTS = {f"{MODULE}/internal/node", f"{MODULE}/internal/transport/http"}
-CONCRETE_ADAPTER_PREFIXES = (
-    f"{MODULE}/internal/adapters",
-    f"{MODULE}/internal/connectors",
-    f"{MODULE}/internal/storage",
-    f"{MODULE}/internal/credentials",
-    f"{MODULE}/internal/inference/providers",
-    f"{MODULE}/internal/inference/codex",
-    f"{MODULE}/internal/modelcatalog",
+INTERNAL = f"{MODULE}/internal"
+AUTHORITY = f"{INTERNAL}/authority"
+VIEWS = f"{INTERNAL}/views"
+VIEWS_CONTRACTS = f"{VIEWS}/contracts"
+HTTP = f"{INTERNAL}/transport/http"
+COMPOSITION_ROOTS = (f"{INTERNAL}/node",)
+OWNER_ROOTS = tuple(
+    f"{INTERNAL}/{name}"
+    for name in (
+        "authority",
+        "contracts",
+        "inference",
+        "integrations",
+        "operation",
+        "pairing",
+        "trust",
+        "views",
+    )
 )
-HTTP = f"{MODULE}/internal/transport/http"
+CONCRETE_ADAPTER_PREFIXES = (
+    f"{INTERNAL}/adapters",
+    # The operator-facing model catalog remains its existing adapter surface;
+    # metadata/capability ownership is a separate P5 slice.
+    f"{INTERNAL}/modelcatalog",
+)
 
 
 def under(path: str, prefix: str) -> bool:
     return path == prefix or path.startswith(prefix + "/")
+
+
+def is_owner(path: str) -> bool:
+    return any(under(path, prefix) for prefix in OWNER_ROOTS)
+
+
+def is_composition_root(path: str) -> bool:
+    return any(under(path, prefix) for prefix in COMPOSITION_ROOTS)
 
 
 def go_list_graph(root: Path) -> dict[str, set[str]]:
@@ -69,27 +79,58 @@ def go_list_graph(root: Path) -> dict[str, set[str]]:
     return graph
 
 
+def graph_cycle(graph: dict[str, set[str]]) -> list[str] | None:
+    state: dict[str, int] = {}
+    stack: list[str] = []
+
+    def visit(package: str) -> list[str] | None:
+        state[package] = 1
+        stack.append(package)
+        for dependency in graph.get(package, ()):
+            if dependency not in graph:
+                continue
+            if state.get(dependency, 0) == 0:
+                cycle = visit(dependency)
+                if cycle:
+                    return cycle
+            elif state.get(dependency) == 1:
+                start = stack.index(dependency)
+                return stack[start:] + [dependency]
+        stack.pop()
+        state[package] = 2
+        return None
+
+    for package in graph:
+        if state.get(package, 0) == 0:
+            cycle = visit(package)
+            if cycle:
+                return cycle
+    return None
+
+
 def violations(graph: dict[str, set[str]]) -> list[tuple[str, str, str]]:
     found: list[tuple[str, str, str]] = []
     for importer, imports in graph.items():
-        if importer in OWNER_PACKAGES:
+        if is_owner(importer):
             for target in imports:
                 if any(under(target, prefix) for prefix in CONCRETE_ADAPTER_PREFIXES):
                     found.append(("owner-imports-concrete-adapter", importer, target))
-        if importer == AUTHORITY or importer.startswith(AUTHORITY + "/"):
+        if under(importer, AUTHORITY):
             for target in imports:
-                if under(target, VIEWS) and target != f"{VIEWS}/contracts":
+                if under(target, VIEWS) and not under(target, VIEWS_CONTRACTS):
                     found.append(("authority-imports-views-application", importer, target))
-        if importer.startswith(f"{MODULE}/internal/") and importer not in COMPOSITION_ROOTS:
+        if under(importer, INTERNAL) and not is_composition_root(importer):
             for target in imports:
                 if under(target, HTTP):
                     found.append(("core-imports-http", importer, target))
+    cycle = graph_cycle(graph)
+    if cycle:
+        found.append(("internal-import-cycle", cycle[0], " -> ".join(cycle)))
     return found
 
 
-def write_fixture(root: Path, edge: tuple[str, str] | None) -> None:
-    (root / "go.mod").write_text(f"module {MODULE}\n\ngo 1.25.0\n", encoding="utf-8")
-    files = {
+def fixture_files() -> dict[str, str]:
+    return {
         "internal/contracts/source/source.go": "package source\ntype ID string\n",
         "internal/views/contracts/contracts.go": (
             "package contracts\nimport source \"floe/server/internal/contracts/source\"\n"
@@ -103,78 +144,125 @@ def write_fixture(root: Path, edge: tuple[str, str] | None) -> None:
             "package authority\n"
             "import (source \"floe/server/internal/contracts/source\"; "
             "contract \"floe/server/internal/views/contracts\")\n"
-            "var _ source.ID\nvar _ contract.ID\n"
+            "var _ source.ID\nvar _ contract.ID\ntype Owner struct{}\n"
         ),
+        "internal/contracts/contracts.go": "package contracts\ntype Value struct{}\n",
         "internal/trust/trust.go": "package trust\ntype Principal struct{}\n",
         "internal/integrations/integrations.go": (
-            "package integrations\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
+            "package integrations\nimport \"floe/server/internal/trust\"\n"
+            "type Descriptor struct{}\nvar _ trust.Principal\n"
         ),
         "internal/inference/inference.go": (
-            "package inference\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
+            "package inference\nimport \"floe/server/internal/trust\"\n"
+            "type Owner struct{}\nvar _ trust.Principal\n"
+        ),
+        "internal/operation/operation.go": "package operation\ntype ID string\n",
+        "internal/pairing/pairing.go": (
+            "package pairing\nimport \"floe/server/internal/trust\"\nvar _ trust.Principal\n"
         ),
         "internal/transport/http/http.go": "package httptransport\ntype Handler struct{}\n",
-        "internal/connectors/fixture/adapter.go": "package fixture\n",
-        "internal/adapters/storage/repository.go": "package storageadapter\n",
-        "internal/adapters/credentials/repository.go": "package credentialadapter\n",
-        "internal/storage/files.go": "package storage\n",
-        "internal/credentials/store.go": "package credentials\n",
+        "internal/adapters/integrations/fixture/adapter.go": (
+            "package fixture\nimport \"floe/server/internal/integrations\"\n"
+            "type Runtime struct{}\nvar _ integrations.Descriptor\n"
+        ),
+        "internal/adapters/integrations/forbidden/adapter.go": "package forbidden\n",
+        "internal/adapters/oauth/fixture/adapter.go": "package fixture\n",
+        "internal/adapters/models/providers/provider.go": "package providers\n",
+        "internal/adapters/models/codex/codex.go": "package codex\n",
+        "internal/adapters/storage/privatefiles/files.go": "package privatefiles\n",
+        "internal/adapters/storage/repository.go": (
+            "package storage\nimport (\"floe/server/internal/trust\"; "
+            "\"floe/server/internal/integrations\"; \"floe/server/internal/inference\")\n"
+            "var _ trust.Principal\nvar _ integrations.Descriptor\nvar _ inference.Owner\n"
+        ),
+        "internal/adapters/credentials/repository.go": (
+            "package credentials\nimport \"floe/server/internal/integrations\"\n"
+            "var _ integrations.Descriptor\n"
+        ),
+        "internal/node/node.go": (
+            "package node\nimport (\"floe/server/internal/authority\"; "
+            "httptransport \"floe/server/internal/transport/http\"; "
+            "\"floe/server/internal/adapters/integrations/fixture\")\n"
+            "var _ authority.Owner\nvar _ httptransport.Handler\nvar _ fixture.Runtime\n"
+        ),
     }
-    # Keep the composition fixture valid without needing exported behavior.
-    files["internal/authority/authority.go"] += "type Owner struct{}\n"
-    files["internal/node/node.go"] = (
-        "package node\nimport (\"floe/server/internal/authority\"; "
-        "httptransport \"floe/server/internal/transport/http\")\n"
-        "var _ authority.Owner\nvar _ httptransport.Handler\n"
-    )
-    if edge:
-        importer, target = edge
-        relative = importer.removeprefix(MODULE + "/") + "/fixture.go"
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"package {path.parent.name}\nimport _ \"{target}\"\n",
-            encoding="utf-8",
-        )
-    for relative, contents in files.items():
+
+
+def write_fixture(root: Path, edges: tuple[tuple[str, str], ...] = ()) -> None:
+    (root / "go.mod").write_text(f"module {MODULE}\n\ngo 1.25.0\n", encoding="utf-8")
+    for relative, contents in fixture_files().items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(contents, encoding="utf-8")
+    for index, (importer, target) in enumerate(edges):
+        relative = importer.removeprefix(MODULE + "/") + f"/fixture_{index}.go"
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        package_name = path.parent.name
+        for existing in path.parent.glob("*.go"):
+            first_line = existing.read_text(encoding="utf-8").splitlines()[:1]
+            if first_line and first_line[0].startswith("package "):
+                package_name = first_line[0].removeprefix("package ").strip()
+                break
+        path.write_text(
+            f'package {package_name}\nimport _ "{target}"\n',
+            encoding="utf-8",
+        )
+
+
+def run_cycle_fixture(root: Path) -> None:
+    cycle = (
+        (f"{INTERNAL}/trust", f"{INTERNAL}/adapters/credentials"),
+        (f"{INTERNAL}/adapters/credentials", f"{INTERNAL}/trust"),
+    )
+    write_fixture(root, cycle)
+    result = subprocess.run(
+        ["go", "list", "-deps", "-json", "./..."],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    diagnostics = result.stdout + result.stderr
+    if result.returncode == 0 or "import cycle" not in diagnostics:
+        raise RuntimeError("adapter-to-owner cycle fixture was not rejected by go list")
 
 
 def run_fixtures() -> int:
     with tempfile.TemporaryDirectory(prefix="floe-go-import-graph-") as temp:
         base = Path(temp)
-        with tempfile.TemporaryDirectory(dir=base) as positive:
+        with tempfile.TemporaryDirectory(dir=base, prefix="positive-") as positive:
             positive_root = Path(positive)
-            write_fixture(positive_root, None)
-            if violations(go_list_graph(positive_root)):
-                raise RuntimeError("positive import-graph fixture was rejected")
+            write_fixture(positive_root)
+            positive_graph = go_list_graph(positive_root)
+            if violations(positive_graph):
+                raise RuntimeError("positive owner-contract and adapter-to-owner fixture was rejected")
 
-        forbidden = (
-            (VIEWS, f"{MODULE}/internal/connectors/fixture", "owner-imports-concrete-adapter"),
+        forbidden = [
+            (f"{INTERNAL}/authority", f"{INTERNAL}/adapters/storage", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/contracts", f"{INTERNAL}/adapters/models/providers", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/integrations", f"{INTERNAL}/adapters/integrations/forbidden", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/inference", f"{INTERNAL}/adapters/models/providers", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/operation", f"{INTERNAL}/adapters/oauth/fixture", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/pairing", f"{INTERNAL}/adapters/credentials", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/trust", f"{INTERNAL}/adapters/storage/privatefiles", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/views", f"{INTERNAL}/adapters/integrations/forbidden", "owner-imports-concrete-adapter"),
+            (VIEWS_CONTRACTS, f"{INTERNAL}/adapters/storage/privatefiles", "owner-imports-concrete-adapter"),
+            (f"{INTERNAL}/inference/nested/contracts", f"{INTERNAL}/adapters/models/codex", "owner-imports-concrete-adapter"),
             (AUTHORITY, VIEWS, "authority-imports-views-application"),
-            (TRUST, HTTP, "core-imports-http"),
-            (TRUST, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
-            (TRUST, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
-            (TRUST, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
-            (TRUST, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
-            (INTEGRATIONS, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
-            (INTEGRATIONS, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
-            (INTEGRATIONS, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
-            (INTEGRATIONS, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
-            (INFERENCE, f"{MODULE}/internal/storage", "owner-imports-concrete-adapter"),
-            (INFERENCE, f"{MODULE}/internal/credentials", "owner-imports-concrete-adapter"),
-            (INFERENCE, f"{MODULE}/internal/adapters/storage", "owner-imports-concrete-adapter"),
-            (INFERENCE, f"{MODULE}/internal/adapters/credentials", "owner-imports-concrete-adapter"),
-        )
+            (f"{INTERNAL}/trust", HTTP, "core-imports-http"),
+        ]
         for index, (importer, target, expected_rule) in enumerate(forbidden):
             with tempfile.TemporaryDirectory(dir=base, prefix=f"negative-{index}-") as fixture:
                 fixture_root = Path(fixture)
-                write_fixture(fixture_root, (importer, target))
+                write_fixture(fixture_root, ((importer, target),))
                 found = violations(go_list_graph(fixture_root))
                 if not any(rule == expected_rule for rule, _, _ in found):
-                    raise RuntimeError(f"forbidden fixture did not trigger {expected_rule}")
-    return len(forbidden)
+                    raise RuntimeError(f"forbidden fixture did not trigger {expected_rule}: {importer} -> {target}")
+        with tempfile.TemporaryDirectory(dir=base, prefix="cycle-") as cycle:
+            run_cycle_fixture(Path(cycle))
+    return len(forbidden) + 1
 
 
 def main() -> int:
@@ -194,7 +282,11 @@ def main() -> int:
         print(f"Go import-graph gate failed: {error}", file=sys.stderr)
         return 1
     scope = "fixture set" if args.fixtures_only else "server graph"
-    print(f"Go import-graph gate passed ({scope}; positive fixture and {negative_fixtures} negative fixtures).")
+    owners = ", ".join(prefix.rsplit("/", 1)[-1] for prefix in OWNER_ROOTS)
+    print(
+        f"Go import-graph gate passed ({scope}; owner roots: {owners} and nested packages; "
+        f"positive adapter-to-owner fixture and {negative_fixtures} negative fixtures)."
+    )
     return 0
 
 

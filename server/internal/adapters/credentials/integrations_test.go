@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	credentialadapter "floe/server/internal/adapters/credentials"
-	"floe/server/internal/credentials"
 	"floe/server/internal/integrations"
 )
 
@@ -53,23 +52,23 @@ func TestIntegrationCredentialCapabilityReadsBackOnlyItsConnectionAndPropagatesU
 		t.Fatalf("credential readback failed: value=%q err=%v", got, err)
 	}
 	reads := base.reads
-	if _, err := scoped.Get(context.Background(), "another-connection-slot"); !errors.Is(err, credentials.ErrUnavailable) {
+	if _, err := scoped.Get(context.Background(), "another-connection-slot"); !errors.Is(err, credentialadapter.ErrUnavailable) {
 		t.Fatalf("runtime read escaped its immutable binding: %v", err)
 	}
 	if base.reads != reads {
 		t.Fatal("mismatched slot reached the backing credential store")
 	}
 
-	base.getErr = credentials.ErrLocked
-	if _, err := scoped.Get(context.Background(), binding.Slot); !errors.Is(err, credentials.ErrLocked) {
+	base.getErr = credentialadapter.ErrLocked
+	if _, err := scoped.Get(context.Background(), binding.Slot); !errors.Is(err, credentialadapter.ErrLocked) {
 		t.Fatalf("credential unavailability was hidden: %v", err)
 	}
-	base.putErr = credentials.ErrBusy
-	if err := access.StoreConnectionCredential(context.Background(), binding, "replacement-secret"); !errors.Is(err, credentials.ErrBusy) {
+	base.putErr = credentialadapter.ErrBusy
+	if err := access.StoreConnectionCredential(context.Background(), binding, "replacement-secret"); !errors.Is(err, credentialadapter.ErrBusy) {
 		t.Fatalf("credential write unavailability was hidden: %v", err)
 	}
-	base.delErr = credentials.ErrLocked
-	if err := access.DeleteConnectionCredential(context.Background(), binding); !errors.Is(err, credentials.ErrLocked) {
+	base.delErr = credentialadapter.ErrLocked
+	if err := access.DeleteConnectionCredential(context.Background(), binding); !errors.Is(err, credentialadapter.ErrLocked) {
 		t.Fatalf("credential delete unavailability was hidden: %v", err)
 	}
 }

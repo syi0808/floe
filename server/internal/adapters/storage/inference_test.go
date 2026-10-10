@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/inference"
-	privatefiles "floe/server/internal/storage"
 )
 
 func inferenceTestFiles(t *testing.T) (*privatefiles.Files, string) {

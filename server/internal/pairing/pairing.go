@@ -258,10 +258,10 @@ func (o *Operations) Approve(ctx context.Context, operator trust.OperatorPrincip
 	}
 	o.pending = &staged
 	p = &staged
-	if o.credentials == nil || o.credentials.Put(ctx, "FLOE_PAIRING_"+p.ID, token) != nil {
+	if o.credentials == nil || o.credentials.StorePairingToken(ctx, PairingID(p.ID), token) != nil {
 		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
 	}
-	readback, readErr := o.credentials.Get(ctx, "FLOE_PAIRING_"+p.ID)
+	readback, readErr := o.credentials.ReadPairingToken(ctx, PairingID(p.ID))
 	if readErr != nil || trust.Digest(readback) != p.activationTokenHash {
 		return operation.Reject(operation.Unavailable, "pairing_credential_unavailable")
 	}
@@ -320,7 +320,7 @@ func (o *Operations) readCommitted(ctx context.Context, id, proof string) operat
 	if err != nil {
 		return trust.Result(err)
 	}
-	token, err := o.credentials.Get(ctx, "FLOE_PAIRING_"+id)
+	token, err := o.credentials.ReadPairingToken(ctx, PairingID(id))
 	if err != nil || trust.Digest(token) != receipt.TokenHash {
 		return operation.Reject(operation.Conflict, "pairing_repair_required")
 	}

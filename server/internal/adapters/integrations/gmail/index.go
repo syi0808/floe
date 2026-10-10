@@ -3,8 +3,8 @@ package gmail
 import (
 	"encoding/json"
 	"errors"
+	"floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/integrations"
-	"floe/server/internal/storage"
 	"floe/server/internal/views"
 	"os"
 	"sort"
