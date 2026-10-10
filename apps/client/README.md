@@ -89,7 +89,36 @@ to private development files. Gateway development credentials likewise use priva
 not OS protection. iOS Debug Contacts handle keys use a separate `FloeDevelopmentNative`
 application-support directory. The visible `DEV DATA` banner identifies the Debug profile.
 Use synthetic data; file keys and development credentials are not protected like Keychain.
-No OS-store error, environment variable or missing key activates a weaker fallback.
+No OS-store error or missing key activates a weaker fallback.
+
+For a one-off macOS Debug client QA run, `FLOE_DEBUG_SUPPORT_DIRECTORY` selects an
+explicit absolute support root for both the client installation and its diagnostics.
+The normal Rust Debug storage checks still place the client profile at
+`<support root>/development-storage/client`; the diagnostics journal is under
+`<support root>/diagnostics`. Choose a fresh root for each run and do not point it at
+an existing profile. The override is ignored by Profile and Release clients.
+
+The macOS App Sandbox restricts writes to the app's container. Foundation may resolve
+the default support location inside that container, where an existing development
+profile may already be present even when a different temporary path was expected.
+Create each fresh root under the app's container-owned Application Support directory
+so the sandbox can write it. This leaves any existing profile untouched and does not
+reset or migrate it. The command derives the bundle ID from the checked-in macOS
+configuration and does not change signing or entitlements:
+
+```sh
+cd apps/client
+bundle_id="$(sed -n 's/^PRODUCT_BUNDLE_IDENTIFIER = //p' macos/Runner/Configs/AppInfo.xcconfig)"
+qa_parent="$HOME/Library/Containers/$bundle_id/Data/Library/Application Support"
+mkdir -p "$qa_parent"
+qa_root="$(mktemp -d "$qa_parent/floe-debug-qa.XXXXXX")"
+FLOE_DEBUG_SUPPORT_DIRECTORY="$qa_root" flutter run -d macos
+```
+
+The variable must be an absolute path without `..` components. An invalid Debug
+value produces a visible startup failure; the client does not retry with the
+platform default. This selects storage location only: authorization, storage-profile
+validation, key custody and OS sandbox policy remain in effect.
 
 Rust development builds select `--no-default-features --features development-storage`.
 The default `os-keyring` feature and development feature are mutually exclusive; the

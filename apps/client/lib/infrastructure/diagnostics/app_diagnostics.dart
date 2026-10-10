@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:floe_client/infrastructure/platform/client_support_directory.dart';
 import 'package:path_provider/path_provider.dart';
 
 enum DiagnosticLevel { debug, info, warning, error }
@@ -144,7 +145,7 @@ final class AppDiagnostics {
         : _defaultJournalFileBytes;
     _journalFileCount = maxFiles > 0 ? maxFiles : _defaultJournalFileCount;
     try {
-      final root = directory ?? await getApplicationSupportDirectory();
+      final root = directory ?? await resolveClientSupportDirectory();
       final journalDirectory = directory == null
           ? Directory('${root.path}/diagnostics')
           : root;

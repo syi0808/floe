@@ -8,7 +8,6 @@ import 'package:floe_client/features/connections/infrastructure/app_wire_connect
 
 import 'dart:async';
 
-import 'package:path_provider/path_provider.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/actions/infrastructure/app_wire_operation_authorization_gateway.dart';
@@ -20,6 +19,7 @@ import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
+import 'package:floe_client/infrastructure/platform/client_support_directory.dart';
 
 /// Thrown when a request through the app transport fails.
 final class AppRuntimeException implements Exception {
@@ -113,7 +113,7 @@ final class AppRuntime {
   AppWireTransport get wireTransport => _transport;
 
   static Future<AppRuntime> openDefault() async {
-    final supportDirectory = await getApplicationSupportDirectory();
+    final supportDirectory = await resolveClientSupportDirectory();
     final transport = await _open(
       NativeTransport.openDefault(
         libraryPath: resolveLibraryPath(),
