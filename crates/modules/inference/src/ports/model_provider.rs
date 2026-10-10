@@ -185,6 +185,7 @@ pub enum LocalAvailabilityReason {
 pub enum ModelObservationError {
     InvalidIdentity,
     InvalidInventory,
+    CapabilityUnavailable,
     CredentialRejected,
     PermissionDenied,
     Timeout,
@@ -197,9 +198,9 @@ pub enum ModelObservationError {
 impl From<ModelObservationError> for AgentFailure {
     fn from(error: ModelObservationError) -> Self {
         match error {
-            ModelObservationError::InvalidIdentity | ModelObservationError::PermissionDenied => {
-                Self::PolicyDenied
-            }
+            ModelObservationError::InvalidIdentity
+            | ModelObservationError::PermissionDenied
+            | ModelObservationError::CapabilityUnavailable => Self::PolicyDenied,
             ModelObservationError::InvalidInventory => Self::ServerModelInvalidOutput,
             ModelObservationError::CredentialRejected => Self::CredentialExpired,
             ModelObservationError::Timeout => Self::DeadlineExceeded,

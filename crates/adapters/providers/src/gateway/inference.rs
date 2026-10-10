@@ -1,11 +1,13 @@
 use super::{
     credentials::{GatewayConnection, GatewayCredentialError, GatewayCredentialStore},
     http::GatewayHttpTransport,
-    inference_wire::{self, AgentResponse, Inventory, PurposeCapability},
+    inference_wire::{self, AgentResponse, CapabilityStates, Inventory, PurposeCapability},
 };
 use crate::models::agent_codec::WireStep;
 use floe_access::ModelDispatchTarget;
-use floe_agent_contract::{AgentFailure, BoxFuture, ModelPlanRequest, ProcessingBoundary};
+use floe_agent_contract::{
+    AgentFailure, BoxFuture, ModelCapabilities, ModelPlanRequest, ProcessingBoundary,
+};
 use floe_execution::{
     ExecutionScope,
     limits::{CallLimiter, CallLimits},
@@ -88,6 +90,7 @@ impl GatewayModelProvider {
             PurposeCapability::Available {
                 capability_revision,
                 capabilities,
+                capability_states,
                 budget_profile,
             } => Ok(PrimaryObservation::Available(PreparedModelProfile {
                 capability: ObservedModelCapability {
@@ -95,8 +98,11 @@ impl GatewayModelProvider {
                         .ok_or(ModelObservationError::InvalidIdentity)?,
                     consumer: ModelConsumer::new(request.consumer.clone())
                         .ok_or(ModelObservationError::InvalidIdentity)?,
-                    capabilities: inference_wire::model_capabilities(&capabilities)
-                        .map_err(|_| ModelObservationError::InvalidInventory)?,
+                    capabilities: executable_model_capabilities(
+                        &capability_states,
+                        &capabilities,
+                        &request.required_capabilities,
+                    )?,
                     boundary: ProcessingBoundary::Gateway,
                     binding_digest: connection.binding_digest(),
                     selection_commitment: inference_wire::selection_commitment(
@@ -115,6 +121,18 @@ impl GatewayModelProvider {
             })),
         }
     }
+}
+
+fn executable_model_capabilities(
+    capability_states: &CapabilityStates,
+    capabilities: &[String],
+    required: &ModelCapabilities,
+) -> Result<ModelCapabilities, ModelObservationError> {
+    if !capability_states.supports_required(required) {
+        return Err(ModelObservationError::CapabilityUnavailable);
+    }
+    inference_wire::model_capabilities(capabilities)
+        .map_err(|_| ModelObservationError::InvalidInventory)
 }
 
 pub struct PreparedGatewayTransport {
@@ -455,8 +473,9 @@ mod tests {
     use super::*;
     use crate::gateway::CompositeModelProvider;
     use floe_access::{
-        DependencyAuthorization, DependencyResolver, GatewayCredentialExpectation,
-        GatewayTrustReader, RemoteProducerIdentity, VerifiedGatewayBinding,
+        DependencyAuthorization, DependencyResolver, GatewayAdmission,
+        GatewayCredentialExpectation, GatewayTrustReader, RemoteProducerIdentity,
+        VerifiedGatewayBinding,
     };
     use floe_agent_contract::{
         AttemptContext, ContextEnvelope, ContextManifest, ContextualData, DiscoveryContext,
@@ -474,8 +493,202 @@ mod tests {
         budget::{BudgetConfig, BudgetLedger, ModelUsage},
     };
     use floe_kernel::{OwnerActor, PersonId, TraceContext};
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
     use uuid::Uuid;
+
+    #[test]
+    fn configured_primary_unknown_or_unsupported_chat_is_unusable_not_absent() {
+        for status in ["unknown", "unsupported"] {
+            let mut value: serde_json::Value = serde_json::from_str(include_str!(
+                "../../../../../testdata/inference-budget-schema3-configured.json"
+            ))
+            .unwrap();
+            let selected = &mut value["purposes"]["quick_response"];
+            selected["capability_states"]["chat"] = serde_json::json!({
+                "status": status,
+                "reason": "synthetic_capability_evidence_absent"
+            });
+            // Go's omitempty form: an empty supported list is absent on the wire.
+            selected.as_object_mut().unwrap().remove("capabilities");
+
+            let inventory: Inventory = serde_json::from_value(value).unwrap();
+            let PurposeCapability::Available {
+                capabilities,
+                capability_states,
+                ..
+            } = inventory.selected("quick_response").unwrap()
+            else {
+                panic!("configured Primary was misrepresented as absent");
+            };
+            assert!(capabilities.is_empty());
+            let error = executable_model_capabilities(
+                &capability_states,
+                &capabilities,
+                &ModelCapabilities::chat(),
+            )
+            .expect_err("unknown or unsupported chat cannot become executable");
+            assert_eq!(error, ModelObservationError::CapabilityUnavailable);
+            assert_eq!(AgentFailure::from(error), AgentFailure::PolicyDenied);
+        }
+
+        // Keep the execution-plan invariant strict. The wire decoder accepts an
+        // empty observed set, while required-capability selection rejects it first.
+        assert!(inference_wire::model_capabilities(&[]).is_err());
+    }
+
+    #[test]
+    fn empty_supported_list_is_accepted_in_explicit_array_form_too() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../testdata/inference-budget-schema3-configured.json"
+        ))
+        .unwrap();
+        let selected = &mut value["purposes"]["quick_response"];
+        selected["capability_states"]["chat"] = serde_json::json!({
+            "status": "unknown",
+            "reason": "evidence_absent"
+        });
+        selected["capabilities"] = serde_json::json!([]);
+        let inventory: Inventory = serde_json::from_value(value).unwrap();
+        let PurposeCapability::Available {
+            capabilities,
+            capability_states,
+            ..
+        } = inventory.selected("quick_response").unwrap()
+        else {
+            panic!("configured Primary was misrepresented as absent");
+        };
+        assert!(capabilities.is_empty());
+        assert_eq!(
+            executable_model_capabilities(
+                &capability_states,
+                &capabilities,
+                &ModelCapabilities::chat()
+            ),
+            Err(ModelObservationError::CapabilityUnavailable)
+        );
+    }
+
+    #[test]
+    fn unrelated_purpose_unknown_chat_does_not_invalidate_selected_supported_primary() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../testdata/inference-budget-schema3-configured.json"
+        ))
+        .unwrap();
+        let quick_response = &mut value["purposes"]["quick_response"];
+        quick_response["capabilities"] = serde_json::json!(["chat"]);
+        quick_response["capability_states"] = serde_json::json!({
+            "chat": { "status": "supported" },
+            "structured_output": { "status": "unknown", "reason": "evidence_absent" },
+            "tool_proposals": { "status": "unknown", "reason": "evidence_absent" }
+        });
+        let mut other = quick_response.clone();
+        other["capability_states"]["chat"] = serde_json::json!({
+            "status": "unknown",
+            "reason": "evidence_absent"
+        });
+        other.as_object_mut().unwrap().remove("capabilities");
+        value["purposes"]["everyday_assistance"] = other;
+
+        let inventory: Inventory = serde_json::from_value(value).unwrap();
+        let PurposeCapability::Available {
+            capabilities,
+            capability_states,
+            ..
+        } = inventory.selected("quick_response").unwrap()
+        else {
+            panic!("selected configured Primary must remain available");
+        };
+        assert_eq!(
+            executable_model_capabilities(
+                &capability_states,
+                &capabilities,
+                &ModelCapabilities::chat()
+            ),
+            Ok(ModelCapabilities::chat())
+        );
+    }
+
+    struct CapabilityErrorPrimary {
+        fallback_calls: Arc<AtomicUsize>,
+    }
+
+    impl floe_inference::ModelProvider for CapabilityErrorPrimary {
+        fn observe_primary<'a>(
+            &'a self,
+            _request: &'a ModelPlanRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_execution::BoxFuture<
+            'a,
+            Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        > {
+            Box::pin(async { Err(ModelObservationError::CapabilityUnavailable) })
+        }
+
+        fn observe_local_fallback<'a>(
+            &'a self,
+            _request: &'a ModelPlanRequest,
+            _scope: &'a ExecutionScope,
+        ) -> floe_execution::BoxFuture<
+            'a,
+            Result<
+                floe_inference::LocalObservation<Box<dyn PreparedModelTransport>>,
+                ModelObservationError,
+            >,
+        > {
+            let fallback_calls = Arc::clone(&self.fallback_calls);
+            Box::pin(async move {
+                fallback_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(floe_inference::LocalObservation::Unavailable(
+                    floe_inference::LocalAvailabilityReason::Unsupported,
+                ))
+            })
+        }
+    }
+
+    struct NeverGatewayAdmission;
+
+    impl GatewayAdmission for NeverGatewayAdmission {
+        fn admit<'a>(
+            &'a self,
+            _expected: &'a VerifiedGatewayBinding,
+            _scope: &'a ExecutionScope,
+        ) -> floe_execution::BoxFuture<'a, Result<VerifiedGatewayBinding, AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_primary_capability_error_does_not_fallback_or_prepare_dispatch() {
+        let fallback_calls = Arc::new(AtomicUsize::new(0));
+        let planner = floe_inference::InferenceService::new(
+            CapabilityErrorPrimary {
+                fallback_calls: Arc::clone(&fallback_calls),
+            },
+            NoDependencies,
+            NeverGatewayAdmission,
+        );
+        let request = ModelPlanRequest {
+            principal: "77777777-7777-4777-8777-777777777777".to_owned(),
+            device_id: "synthetic-capability-device".to_owned(),
+            purpose: "quick_response".to_owned(),
+            consumer: "manager".to_owned(),
+            required_capabilities: ModelCapabilities::chat(),
+        };
+        let scope = execution_scope();
+
+        let error = match planner.prepare(request, &scope).await {
+            Ok(_) => panic!("unusable configured Primary unexpectedly prepared a model call"),
+            Err(error) => error,
+        };
+        assert_eq!(error, AgentFailure::PolicyDenied);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
+    }
 
     struct TestGatewayTrust {
         producer: RemoteProducerIdentity,

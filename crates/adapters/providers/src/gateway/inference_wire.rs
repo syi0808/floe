@@ -1,6 +1,6 @@
 //! Strict paired Gateway schema 3. Provider/account routing never crosses this wire.
-use floe_agent_contract::AgentFailure;
-use floe_agent_contract::ModelBudgetProfile;
+use chrono::DateTime;
+use floe_agent_contract::{AgentFailure, ModelBudgetProfile, ModelCapabilities, ModelCapability};
 use floe_inference::ModelObservationError;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -22,17 +22,117 @@ pub(crate) struct Purposes {
     pub everyday_assistance: PurposeCapability,
     pub deep_work: PurposeCapability,
 }
+
 #[derive(Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum PurposeCapability {
     Available {
         capability_revision: String,
+        #[serde(default)]
         capabilities: Vec<String>,
+        capability_states: CapabilityStates,
         budget_profile: ModelBudgetProfile,
     },
     NotConfigured,
     Disabled,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapabilityStates {
+    pub chat: CapabilityState,
+    pub structured_output: CapabilityState,
+    pub tool_proposals: CapabilityState,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapabilityState {
+    pub status: CapabilityStateStatus,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub provenance: Option<CapabilityProvenance>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CapabilityStateStatus {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CapabilityProvenance {
+    pub source: String,
+    pub verified_at: String,
+}
+
+impl CapabilityStates {
+    pub(crate) fn matches_supported_capabilities(&self, capabilities: &[String]) -> bool {
+        if !self.chat.is_valid()
+            || !self.structured_output.is_valid()
+            || !self.tool_proposals.is_valid()
+        {
+            return false;
+        }
+
+        let mut expected = Vec::with_capacity(3);
+        if self.chat.status == CapabilityStateStatus::Supported {
+            expected.push("chat");
+        }
+        if self.structured_output.status == CapabilityStateStatus::Supported {
+            expected.push("structured_output");
+        }
+        if self.tool_proposals.status == CapabilityStateStatus::Supported {
+            expected.push("tool_proposals");
+        }
+        expected
+            .into_iter()
+            .eq(capabilities.iter().map(String::as_str))
+    }
+
+    pub(crate) fn supports_required(&self, required: &ModelCapabilities) -> bool {
+        required.0.iter().all(|capability| {
+            let state = match capability {
+                ModelCapability::Chat => &self.chat,
+                ModelCapability::StructuredOutput => &self.structured_output,
+                ModelCapability::ToolProposals => &self.tool_proposals,
+            };
+            state.status == CapabilityStateStatus::Supported
+        })
+    }
+}
+
+impl CapabilityState {
+    fn is_valid(&self) -> bool {
+        self.reason.as_deref().is_none_or(valid_capability_reason)
+            && self
+                .provenance
+                .as_ref()
+                .is_none_or(CapabilityProvenance::is_valid)
+    }
+}
+
+impl CapabilityProvenance {
+    fn is_valid(&self) -> bool {
+        !self.source.is_empty()
+            && self.source.len() <= 512
+            && self.source.trim() == self.source
+            && !self.source.contains(['\r', '\n', '\0'])
+            && DateTime::parse_from_rfc3339(&self.verified_at).is_ok()
+    }
+}
+
+fn valid_capability_reason(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.trim() == value
+        && !value.contains(['\r', '\n', '\0'])
+}
+
 impl Inventory {
     pub fn selected(self, purpose: &str) -> Result<PurposeCapability, ModelObservationError> {
         if self.schema_version != 3 {
@@ -47,10 +147,11 @@ impl Inventory {
                 PurposeCapability::Available {
                     capability_revision,
                     capabilities,
+                    capability_states,
                     budget_profile,
                 } => {
                     if !valid_hex(capability_revision, 64)
-                        || model_capabilities(capabilities).is_err()
+                        || !capability_states.matches_supported_capabilities(capabilities)
                         || budget_profile.validate().is_err()
                     {
                         return Err(ModelObservationError::InvalidInventory);
@@ -276,7 +377,8 @@ pub(crate) fn inference_failure(
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentFailure, Inventory, PurposeCapability};
+    use super::{AgentFailure, CapabilityStateStatus, Inventory, PurposeCapability};
+    use floe_agent_contract::ModelCapabilities;
 
     fn fixture(name: &str) -> &'static str {
         match name {
@@ -293,6 +395,10 @@ mod tests {
         }
     }
 
+    fn configured_fixture() -> serde_json::Value {
+        serde_json::from_str(fixture("configured")).unwrap()
+    }
+
     #[test]
     fn shared_schema3_budget_fixtures_preserve_unknown_and_descriptive_sources() {
         for name in ["unknown", "unavailable", "configured"] {
@@ -303,13 +409,27 @@ mod tests {
                 .expect("valid selected capability");
             let PurposeCapability::Available {
                 capabilities,
+                capability_states,
                 budget_profile,
                 ..
             } = selected
             else {
                 panic!("shared fixture must have an available purpose");
             };
-            assert_eq!(capabilities, vec!["chat".to_owned()]);
+            assert!(capabilities.is_empty());
+            assert_eq!(
+                capability_states.chat.status,
+                CapabilityStateStatus::Unknown
+            );
+            assert_eq!(
+                capability_states.structured_output.status,
+                CapabilityStateStatus::Unknown
+            );
+            assert_eq!(
+                capability_states.tool_proposals.status,
+                CapabilityStateStatus::Unknown
+            );
+            assert!(!capability_states.supports_required(&ModelCapabilities::chat()));
             budget_profile.validate().expect("valid v1 profile");
             if name == "configured" {
                 assert_eq!(budget_profile.context_window.tokens, Some(10_000));
@@ -323,6 +443,128 @@ mod tests {
                 assert_eq!(budget_profile.max_output.tokens, None);
             }
         }
+
+        let mut omitted_capabilities = configured_fixture();
+        omitted_capabilities["purposes"]["quick_response"]
+            .as_object_mut()
+            .unwrap()
+            .remove("capabilities");
+        let inventory: Inventory = serde_json::from_value(omitted_capabilities).unwrap();
+        let PurposeCapability::Available { capabilities, .. } =
+            inventory.selected("quick_response").unwrap()
+        else {
+            panic!("available purpose became primary absence");
+        };
+        assert!(capabilities.is_empty());
+    }
+
+    #[test]
+    fn schema3_capability_states_preserve_supported_provenance_and_tri_state() {
+        let mut fixture: serde_json::Value = serde_json::from_str(fixture("configured")).unwrap();
+        let quick_response = &mut fixture["purposes"]["quick_response"];
+        quick_response["capabilities"] = serde_json::json!(["chat"]);
+        quick_response["capability_states"] = serde_json::json!({
+            "chat": {
+                "status": "supported",
+                "provenance": {
+                    "source": "synthetic verification",
+                    "verified_at": "2026-10-10T00:00:00Z"
+                }
+            },
+            "structured_output": {
+                "status": "unsupported",
+                "reason": "adapter_protocol_unsupported"
+            },
+            "tool_proposals": {
+                "status": "unknown",
+                "reason": "evidence_absent"
+            }
+        });
+
+        let inventory: Inventory = serde_json::from_value(fixture).unwrap();
+        let PurposeCapability::Available {
+            capabilities,
+            capability_states,
+            ..
+        } = inventory.selected("quick_response").unwrap()
+        else {
+            panic!("available capability states became primary absence");
+        };
+
+        assert_eq!(capabilities, vec!["chat".to_owned()]);
+        assert!(capability_states.supports_required(&ModelCapabilities::chat()));
+        assert_eq!(
+            capability_states.chat.status,
+            CapabilityStateStatus::Supported
+        );
+        let provenance = capability_states
+            .chat
+            .provenance
+            .expect("supported evidence provenance");
+        assert_eq!(provenance.source, "synthetic verification");
+        assert_eq!(provenance.verified_at, "2026-10-10T00:00:00Z");
+        assert_eq!(
+            capability_states.structured_output.status,
+            CapabilityStateStatus::Unsupported
+        );
+        assert_eq!(
+            capability_states.tool_proposals.status,
+            CapabilityStateStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn schema3_rejects_malformed_capability_states_and_projection_mismatch() {
+        fn invalidates(fixture: serde_json::Value) -> bool {
+            match serde_json::from_value::<Inventory>(fixture) {
+                Ok(inventory) => inventory.selected("quick_response").is_err(),
+                Err(_) => true,
+            }
+        }
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capability_states"]["chat"]["status"] =
+            serde_json::json!("maybe");
+        assert!(invalidates(fixture), "unknown support status was accepted");
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capability_states"]["image_generation"] =
+            serde_json::json!({"status":"supported"});
+        assert!(invalidates(fixture), "unknown capability key was accepted");
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capability_states"]
+            .as_object_mut()
+            .unwrap()
+            .remove("tool_proposals");
+        assert!(invalidates(fixture), "missing canonical state was accepted");
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capability_states"]["chat"] = serde_json::json!({
+            "status":"supported",
+            "provenance":{"source":"fixture","verified_at":"yesterday"}
+        });
+        fixture["purposes"]["quick_response"]["capabilities"] = serde_json::json!(["chat"]);
+        assert!(invalidates(fixture), "invalid provenance was accepted");
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capabilities"] = serde_json::json!(["chat"]);
+        assert!(
+            invalidates(fixture),
+            "unknown chat support was exposed as executable capability"
+        );
+
+        let mut fixture = configured_fixture();
+        fixture["purposes"]["quick_response"]["capability_states"]["chat"]["status"] =
+            serde_json::json!("supported");
+        fixture["purposes"]["quick_response"]["capability_states"]["chat"]["provenance"] = serde_json::json!({
+            "source":"fixture",
+            "verified_at":"2026-10-10T00:00:00Z"
+        });
+        assert!(
+            invalidates(fixture),
+            "supported chat absent from executable capabilities list"
+        );
     }
 
     #[test]
