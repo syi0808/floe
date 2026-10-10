@@ -38,6 +38,24 @@ func catalogBytes(t *testing.T, revision uint64, version, modelID string) []byte
 	return data
 }
 
+func evidenceCatalogBytes(t *testing.T, revision uint64, state string) []byte {
+	t.Helper()
+	data, err := json.Marshal(Catalog{
+		SchemaVersion: 1,
+		Revision:      revision,
+		Version:       fmt.Sprintf("evidence-revision-%d", revision),
+		Providers:     []Provider{{ProviderID: "openai_compatible", Models: []Model{{ModelID: "suggestion-only", Source: "synthetic_test_fixture"}}}},
+		CapabilityEvidence: &CapabilityEvidenceContract{ContractVersion: 1, Entries: []CapabilityEvidenceEntry{{
+			ProviderID: "openai_compatible", ModelID: "synthetic-model", Endpoint: "https://fixture.invalid/v1",
+			Facts: []CapabilityEvidenceFact{{Capability: "tool_proposals", Status: state, Provenance: MetadataProvenance{Source: "synthetic test evidence", VerifiedAt: "2026-10-10T00:00:00Z"}}},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func writeCatalog(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := storage.WritePrivate(path, data); err != nil {
@@ -76,8 +94,14 @@ func TestBootstrapAndExampleAreDataOnlyMigratedSuggestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Parse(exampleBytes); err != nil {
+	example, err := Parse(exampleBytes)
+	if err != nil {
 		t.Fatalf("parse example catalog: %v", err)
+	}
+	if len(example.Providers) != 1 || example.Providers[0].ProviderID != "openai_compatible" || len(example.Providers[0].Models) != 1 ||
+		example.Providers[0].Models[0].ModelID != "floe-fixture-chat-tools-json" || example.CapabilityEvidence == nil || example.CapabilityEvidence.ContractVersion != 1 || len(example.CapabilityEvidence.Entries) != 1 ||
+		example.CapabilityEvidence.Entries[0].Endpoint != "https://fixture.invalid/v1" || example.CapabilityEvidence.Entries[0].Facts[0].Provenance.Source != "synthetic local fixture" {
+		t.Fatalf("example contains a non-synthetic claim or missing evidence provenance: providers=%#v evidence=%#v", example.Providers, example.CapabilityEvidence)
 	}
 
 	schemaBytes, err := os.ReadFile("schema.json")
@@ -90,6 +114,88 @@ func TestBootstrapAndExampleAreDataOnlyMigratedSuggestions(t *testing.T) {
 	}
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" {
 		t.Fatalf("unexpected JSON Schema dialect: %#v", schema["$schema"])
+	}
+}
+
+func TestCapabilityEvidenceUsesValidatedInstallReloadAndRollback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := Install(path, catalogBytes(t, 2, "suggestions-only", "suggestion-only")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(path, evidenceCatalogBytes(t, 3, "supported")); err != nil {
+		t.Fatalf("install validated capability evidence: %v", err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatalf("reload installed capability evidence: %v", err)
+	}
+	projection := store.Projection()
+	if projection.Catalog.CapabilityEvidence == nil || projection.Catalog.CapabilityEvidence.Entries[0].Facts[0].Status != "supported" {
+		t.Fatalf("reloaded snapshot omitted capability evidence: %#v", projection.Catalog.CapabilityEvidence)
+	}
+	projection.Catalog.CapabilityEvidence.Entries[0].Facts[0].Status = "unsupported"
+	if store.Projection().Catalog.CapabilityEvidence.Entries[0].Facts[0].Status != "supported" {
+		t.Fatal("catalog projection exposed mutable published evidence")
+	}
+	if err := Rollback(path); err != nil {
+		t.Fatalf("rollback capability catalog: %v", err)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatalf("reload rolled-back capability catalog: %v", err)
+	}
+	rolledBack := store.Projection().Catalog
+	if rolledBack.Revision != 4 || rolledBack.CapabilityEvidence != nil {
+		t.Fatalf("rollback did not restore the prior evidence-free catalog at a fresh revision: %#v", rolledBack)
+	}
+}
+
+func TestCapabilityEvidenceRejectsAmbiguousEndpointsDuplicateAndMalformedFacts(t *testing.T) {
+	validCatalog := func() Catalog {
+		return Catalog{
+			SchemaVersion: 1, Revision: 1, Version: "synthetic-evidence",
+			Providers: []Provider{{ProviderID: "openai_compatible", Models: []Model{{ModelID: "fixture-model", Source: "synthetic_test_fixture"}}}},
+			CapabilityEvidence: &CapabilityEvidenceContract{ContractVersion: 1, Entries: []CapabilityEvidenceEntry{{
+				ProviderID: "openai_compatible", ModelID: "fixture-model", Endpoint: "https://fixture.invalid/v1",
+				Facts: []CapabilityEvidenceFact{{Capability: "tool_proposals", Status: "supported", Provenance: MetadataProvenance{Source: "synthetic fixture", VerifiedAt: "2026-10-10T00:00:00Z"}}},
+			}}},
+		}
+	}
+	tests := map[string]func(*Catalog){
+		"credentials in endpoint": func(catalog *Catalog) {
+			catalog.CapabilityEvidence.Entries[0].Endpoint = "https://user:secret@fixture.invalid/v1"
+		},
+		"query": func(catalog *Catalog) {
+			catalog.CapabilityEvidence.Entries[0].Endpoint = "https://fixture.invalid/v1?tenant=one"
+		},
+		"empty query marker":    func(catalog *Catalog) { catalog.CapabilityEvidence.Entries[0].Endpoint = "https://fixture.invalid/v1?" },
+		"fragment":              func(catalog *Catalog) { catalog.CapabilityEvidence.Entries[0].Endpoint = "https://fixture.invalid/v1#" },
+		"noncanonical spelling": func(catalog *Catalog) { catalog.CapabilityEvidence.Entries[0].Endpoint = "https://FIXTURE.invalid/v1/" },
+		"duplicate exact identity": func(catalog *Catalog) {
+			catalog.CapabilityEvidence.Entries = append(catalog.CapabilityEvidence.Entries, catalog.CapabilityEvidence.Entries[0])
+		},
+		"conflicting duplicate fact": func(catalog *Catalog) {
+			entry := &catalog.CapabilityEvidence.Entries[0]
+			entry.Facts = append(entry.Facts, CapabilityEvidenceFact{Capability: "tool_proposals", Status: "unsupported", Provenance: MetadataProvenance{Source: "second synthetic fixture", VerifiedAt: "2026-10-10T00:00:00Z"}})
+		},
+		"malformed provenance": func(catalog *Catalog) {
+			catalog.CapabilityEvidence.Entries[0].Facts[0].Provenance.VerifiedAt = "unknown"
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			catalog := validCatalog()
+			mutate(&catalog)
+			data, err := json.Marshal(catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Parse(data); err == nil {
+				t.Fatal("malformed capability evidence was accepted")
+			}
+		})
 	}
 }
 
@@ -140,6 +246,9 @@ func TestParseRejectsInvalidSchemaDuplicatesAndUnverifiedMetadata(t *testing.T) 
 		{name: "metadata without provenance", data: []byte(`{"schema_version":1,"revision":2,"version":"unverified","providers":[{"provider_id":"codex_oauth","models":[{"model_id":"a","source":"migrated","metadata":{"context_window":100}}]}]}`)},
 		{name: "output exceeds known context", data: []byte(`{"schema_version":1,"revision":2,"version":"inconsistent","providers":[{"provider_id":"codex_oauth","models":[{"model_id":"a","source":"migrated","metadata":{"context_window":100,"max_output_tokens":101,` + provenance + `}}]}]}`)},
 		{name: "duplicate capability", data: []byte(`{"schema_version":1,"revision":2,"version":"duplicate-capability","providers":[{"provider_id":"codex_oauth","models":[{"model_id":"a","source":"migrated","metadata":{"capabilities":["chat","chat"],` + provenance + `}}]}]}`)},
+		{name: "capability evidence with unknown state", data: []byte(`{"schema_version":1,"revision":2,"version":"unknown-evidence","providers":[{"provider_id":"openai_compatible","models":[{"model_id":"m","source":"fixture"}]}],"capability_evidence":{"contract_version":1,"entries":[{"provider_id":"openai_compatible","model_id":"m","endpoint":"https://fixture.invalid/v1","facts":[{"capability":"tool_proposals","status":"unknown","provenance":{"source":"synthetic","verified_at":"2030-01-02T03:04:05Z"}}]}]}}`)},
+		{name: "capability evidence without provenance", data: []byte(`{"schema_version":1,"revision":2,"version":"no-evidence-source","providers":[{"provider_id":"openai_compatible","models":[{"model_id":"m","source":"fixture"}]}],"capability_evidence":{"contract_version":1,"entries":[{"provider_id":"openai_compatible","model_id":"m","endpoint":"https://fixture.invalid/v1","facts":[{"capability":"tool_proposals","status":"supported","provenance":{"source":"synthetic"}}]}]}}`)},
+		{name: "capability evidence wildcard endpoint", data: []byte(`{"schema_version":1,"revision":2,"version":"wildcard-endpoint","providers":[{"provider_id":"openai_compatible","models":[{"model_id":"m","source":"fixture"}]}],"capability_evidence":{"contract_version":1,"entries":[{"provider_id":"openai_compatible","model_id":"m","endpoint":"*","facts":[{"capability":"tool_proposals","status":"supported","provenance":{"source":"synthetic","verified_at":"2030-01-02T03:04:05Z"}}]}]}}`)},
 		{name: "invalid JSON", data: []byte(`{"schema_version":1`)},
 		{name: "oversized", data: bytes.Repeat([]byte("x"), MaxCatalogBytes+1)},
 	}

@@ -1,6 +1,6 @@
-// Package modelcatalog owns operator-facing model suggestions. Catalog entries
-// are descriptive data only; inference configuration remains the authority for
-// provider endpoints, credentials, selected models, and declared capabilities.
+// Package modelcatalog owns validated local model suggestions and versioned
+// capability evidence. Suggestions remain descriptive; Inference combines
+// exact evidence with adapter protocol support without taking storage ownership.
 package modelcatalog
 
 import (
@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -31,6 +33,7 @@ const (
 	MaxModelsPerProvider   = 1000
 	MaxModelsTotal         = 5000
 	MaxCapabilities        = 32
+	MaxCapabilityEvidence  = 5000
 	MinRefreshInterval     = time.Second
 	MaxRefreshInterval     = 24 * time.Hour
 	DefaultRefreshInterval = 5 * time.Minute
@@ -62,10 +65,32 @@ var embedded embed.FS
 // Unknown JSON fields are intentionally ignored by this reader and preserved
 // by the installer when it stores original input bytes.
 type Catalog struct {
-	SchemaVersion int        `json:"schema_version"`
-	Revision      uint64     `json:"revision"`
-	Version       string     `json:"version"`
-	Providers     []Provider `json:"providers"`
+	SchemaVersion      int                         `json:"schema_version"`
+	Revision           uint64                      `json:"revision"`
+	Version            string                      `json:"version"`
+	Providers          []Provider                  `json:"providers"`
+	CapabilityEvidence *CapabilityEvidenceContract `json:"capability_evidence,omitempty"`
+}
+
+// CapabilityEvidenceContract is separate from schema-v1 suggestion metadata.
+// Only explicit model facts in this versioned envelope can inform Inference.
+// A missing envelope, entry, or fact means unknown.
+type CapabilityEvidenceContract struct {
+	ContractVersion int                       `json:"contract_version"`
+	Entries         []CapabilityEvidenceEntry `json:"entries"`
+}
+
+type CapabilityEvidenceEntry struct {
+	ProviderID string                   `json:"provider_id"`
+	ModelID    string                   `json:"model_id"`
+	Endpoint   string                   `json:"endpoint"`
+	Facts      []CapabilityEvidenceFact `json:"facts"`
+}
+
+type CapabilityEvidenceFact struct {
+	Capability string             `json:"capability"`
+	Status     string             `json:"status"`
+	Provenance MetadataProvenance `json:"provenance"`
 }
 
 // ProviderID is a catalog namespace, independent of model IDs and target IDs.
@@ -290,7 +315,7 @@ func Parse(data []byte) (Catalog, error) {
 	if err := json.Unmarshal(data, &catalog); err != nil {
 		return Catalog{}, ErrInvalidCatalog
 	}
-	if catalog.SchemaVersion != 1 || catalog.Revision == 0 || !validText(catalog.Version, 128) || len(catalog.Providers) == 0 || len(catalog.Providers) > MaxProviders {
+	if catalog.SchemaVersion != 1 || catalog.Revision == 0 || !validText(catalog.Version, 128) || len(catalog.Providers) == 0 || len(catalog.Providers) > MaxProviders || !validCapabilityEvidence(catalog.CapabilityEvidence) {
 		return Catalog{}, ErrInvalidCatalog
 	}
 	providerIDs := make(map[string]struct{}, len(catalog.Providers))
@@ -321,6 +346,71 @@ func Parse(data []byte) (Catalog, error) {
 		}
 	}
 	return catalog, nil
+}
+
+func validCapabilityEvidence(contract *CapabilityEvidenceContract) bool {
+	if contract == nil {
+		return true
+	}
+	if contract.ContractVersion != 1 || contract.Entries == nil || len(contract.Entries) > MaxCapabilityEvidence {
+		return false
+	}
+	identities := make(map[string]struct{}, len(contract.Entries))
+	for _, entry := range contract.Entries {
+		endpoint, ok := canonicalEvidenceEndpoint(entry.Endpoint)
+		if !providerIDPattern.MatchString(entry.ProviderID) || !validModelID(entry.ModelID) || !ok || endpoint != entry.Endpoint || entry.Facts == nil || len(entry.Facts) == 0 || len(entry.Facts) > 3 {
+			return false
+		}
+		identity := entry.ProviderID + "\x00" + entry.ModelID + "\x00" + endpoint
+		if _, exists := identities[identity]; exists {
+			return false
+		}
+		identities[identity] = struct{}{}
+		facts := make(map[string]struct{}, len(entry.Facts))
+		for _, fact := range entry.Facts {
+			if fact.Capability != "chat" && fact.Capability != "structured_output" && fact.Capability != "tool_proposals" || fact.Status != "supported" && fact.Status != "unsupported" || !validText(fact.Provenance.Source, 512) || !validTimestamp(fact.Provenance.VerifiedAt) {
+				return false
+			}
+			if _, exists := facts[fact.Capability]; exists {
+				return false
+			}
+			facts[fact.Capability] = struct{}{}
+		}
+	}
+	return true
+}
+
+func canonicalEvidenceEndpoint(value string) (string, bool) {
+	endpoint, err := url.Parse(value)
+	if err != nil || strings.Contains(value, "#") || !endpoint.IsAbs() || endpoint.Opaque != "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
+		return "", false
+	}
+	scheme := strings.ToLower(endpoint.Scheme)
+	if scheme != "http" && scheme != "https" || endpoint.Hostname() == "" {
+		return "", false
+	}
+	hostname := strings.ToLower(endpoint.Hostname())
+	port := endpoint.Port()
+	if scheme == "https" && port == "443" || scheme == "http" && port == "80" {
+		port = ""
+	}
+	if port != "" {
+		endpoint.Host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		endpoint.Host = "[" + hostname + "]"
+	} else {
+		endpoint.Host = hostname
+	}
+	endpoint.Scheme = scheme
+	escapedPath := strings.TrimRight(endpoint.EscapedPath(), "/")
+	decodedPath, err := url.PathUnescape(escapedPath)
+	if err != nil {
+		return "", false
+	}
+	endpoint.Path = decodedPath
+	endpoint.RawPath = escapedPath
+	endpoint.ForceQuery = false
+	return endpoint.String(), true
 }
 
 func validModelID(value string) bool {
@@ -853,6 +943,15 @@ func cloneCatalog(catalog Catalog) *Catalog {
 				copy.Providers[i].Models[j].Metadata = &metadata
 			}
 		}
+	}
+	if catalog.CapabilityEvidence != nil {
+		evidence := *catalog.CapabilityEvidence
+		evidence.Entries = make([]CapabilityEvidenceEntry, len(catalog.CapabilityEvidence.Entries))
+		for i, entry := range catalog.CapabilityEvidence.Entries {
+			evidence.Entries[i] = entry
+			evidence.Entries[i].Facts = append([]CapabilityEvidenceFact(nil), entry.Facts...)
+		}
+		copy.CapabilityEvidence = &evidence
 	}
 	return &copy
 }

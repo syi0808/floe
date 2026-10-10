@@ -17,6 +17,7 @@ type Service struct {
 	mu          sync.RWMutex
 	unavailable bool
 	trust       Trust
+	metadata    CapabilityMetadataPort
 	secret      [32]byte
 	config      InferenceConfig
 	generation  uint64
@@ -27,11 +28,11 @@ type Service struct {
 	audit       *auditLog
 }
 
-func NewService(t Trust) (*Service, error) {
-	if t == nil {
-		return nil, errors.New("trust required")
+func NewService(t Trust, metadata CapabilityMetadataPort) (*Service, error) {
+	if t == nil || metadata == nil {
+		return nil, errors.New("trust and capability metadata required")
 	}
-	s := &Service{trust: t, config: InferenceConfig{Routes: map[Purpose]PurposeRoute{}}, accounts: map[string]ModelAccount{}, generation: 1, leases: map[uint64]int{}, active: make(chan struct{}, 4), audit: newAuditLog(256)}
+	s := &Service{trust: t, metadata: metadata, config: InferenceConfig{Routes: map[Purpose]PurposeRoute{}}, accounts: map[string]ModelAccount{}, generation: 1, leases: map[uint64]int{}, active: make(chan struct{}, 4), audit: newAuditLog(256)}
 	if _, err := rand.Read(s.secret[:]); err != nil {
 		return nil, err
 	}
@@ -43,7 +44,7 @@ func (s *Service) Configure(config InferenceConfig, accounts map[string]ModelAcc
 	}
 	routes := map[Purpose]PurposeRoute{}
 	for p, r := range config.Routes {
-		if accounts[r.TargetID] == nil || !ValidCapabilities(accounts[r.TargetID].Capabilities()) {
+		if accounts[r.TargetID] == nil || !validProtocolAccount(accounts[r.TargetID]) {
 			return errors.New("configured target missing")
 		}
 		routes[p] = r
@@ -72,7 +73,7 @@ func (s *Service) RecoverConfiguration(config InferenceConfig, accounts map[stri
 	}
 	routes := make(map[Purpose]PurposeRoute, len(config.Routes))
 	for purpose, route := range config.Routes {
-		if accounts[route.TargetID] == nil || !ValidCapabilities(accounts[route.TargetID].Capabilities()) {
+		if accounts[route.TargetID] == nil || !validProtocolAccount(accounts[route.TargetID]) {
 			return errors.New("configured target missing")
 		}
 		routes[purpose] = route
@@ -134,29 +135,36 @@ func (s *Service) currentLeased(ctx context.Context, p Purpose) (ResolvedModelTa
 		release()
 		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ProviderCredentialsUnavailable}
 	}
-	capabilities := account.Capabilities()
-	if !ValidCapabilities(capabilities) {
-		release()
-		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
-	}
 	modelIdentity := account.ModelIdentity()
 	if !validModelIdentity(modelIdentity) {
 		release()
 		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
+	protocols := account.ProtocolCapabilities()
+	if _, ok := protocolCapabilitySet(protocols); !ok {
+		release()
+		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
+	}
+	metadata, metadataErr := s.metadata.Snapshot(ctx)
+	capabilityStates := resolveCapabilityStates(modelIdentity, protocols, metadata, metadataErr)
+	capabilities := supportedCapabilities(capabilityStates)
 	budgetProfile := ResolveModelBudgetProfile(account.BudgetOverride())
 	if budgetProfile.Validate() != nil {
 		release()
 		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: ModelUnavailable}
 	}
-	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...), modelIdentity: modelIdentity, budgetProfile: budgetProfile}
+	target := ResolvedModelTarget{targetID: r.TargetID, effort: r.ReasoningEffort, accountIdentity: identity, generation: generation, capabilities: append([]string(nil), capabilities...), capabilityStates: cloneCapabilityStates(capabilityStates), modelIdentity: modelIdentity, budgetProfile: budgetProfile}
 	material, _ := json.Marshal(struct {
 		Purpose                    Purpose
 		TargetID, Effort, Identity string
 		Generation                 uint64
-		Capabilities               []string
-		BudgetProfile              any
-	}{p, r.TargetID, r.ReasoningEffort, identity, generation, capabilities, budgetProfile.effectiveRevisionMaterial()})
+		ModelIdentity              ModelIdentity
+		CapabilityStates           []struct {
+			Name   string
+			Status CapabilityStatus
+		}
+		BudgetProfile any
+	}{p, r.TargetID, r.ReasoningEffort, identity, generation, modelIdentity, effectiveCapabilityMaterial(capabilityStates), budgetProfile.effectiveRevisionMaterial()})
 	mac := hmac.New(sha256.New, s.secret[:])
 	mac.Write(material)
 	revision := hex.EncodeToString(mac.Sum(nil))
@@ -168,6 +176,34 @@ func (s *Service) currentLeased(ctx context.Context, p Purpose) (ResolvedModelTa
 		return ResolvedModelTarget{}, "", nil, nil, Failure{Code: CapabilityChanged}
 	}
 	return target, revision, executor, release, nil
+}
+
+func validProtocolAccount(account ModelAccount) bool {
+	_, ok := protocolCapabilitySet(account.ProtocolCapabilities())
+	return ok && validModelIdentity(account.ModelIdentity())
+}
+
+func (s *Service) CapabilityStatesForTarget(ctx context.Context, targetID string) (CapabilityStates, error) {
+	s.mu.RLock()
+	if s.unavailable {
+		s.mu.RUnlock()
+		return defaultUnknownCapabilities("inference_unavailable"), Failure{Code: ModelUnavailable}
+	}
+	generation := s.generation
+	account := s.accounts[targetID]
+	s.mu.RUnlock()
+	if account == nil || !validProtocolAccount(account) {
+		return defaultUnknownCapabilities("model_unavailable"), Failure{Code: ModelUnavailable}
+	}
+	metadata, metadataErr := s.metadata.Snapshot(ctx)
+	states := resolveCapabilityStates(account.ModelIdentity(), account.ProtocolCapabilities(), metadata, metadataErr)
+	s.mu.RLock()
+	unchanged := s.generation == generation && !s.unavailable
+	s.mu.RUnlock()
+	if !unchanged {
+		return defaultUnknownCapabilities("capability_changed"), Failure{Code: CapabilityChanged}
+	}
+	return states, nil
 }
 
 func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, string, ModelExecutor, error) {
@@ -197,7 +233,7 @@ func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 		}
 		out.set(p, PurposeCapability{
 			Status: Available, CapabilityRevision: revision, Capabilities: append([]string(nil), target.capabilities...),
-			BudgetProfile: target.budgetProfile, ModelIdentity: target.modelIdentity,
+			CapabilityStates: cloneCapabilityStates(target.capabilityStates), BudgetProfile: target.budgetProfile, ModelIdentity: target.modelIdentity,
 		})
 	}
 	return out, nil
@@ -233,7 +269,7 @@ func (s *Service) InvokeAgent(ctx context.Context, p trust.Principal, in AgentIn
 	if err = ValidateModelBudgetInput(target.budgetProfile, in); err != nil {
 		return out, err
 	}
-	if !SupportsAgent(target.capabilities, in) {
+	if !supportsAgent(target.capabilityStates, in) {
 		return out, Failure{Code: RequestRejected}
 	}
 	select {
@@ -311,6 +347,9 @@ func (s *Service) InvokeStructured(ctx context.Context, p trust.OperatorPrincipa
 	}
 	if err = ValidateStructuredModelBudgetInput(target.budgetProfile, in); err != nil {
 		return out, err
+	}
+	if !supportsStructured(target.capabilityStates) {
+		return out, Failure{Code: RequestRejected}
 	}
 	select {
 	case s.active <- struct{}{}:

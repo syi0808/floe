@@ -11,7 +11,6 @@ type ProviderTarget struct {
 	BaseURL        string               `json:"base_url"`
 	Model          string               `json:"model"`
 	APIKeyEnv      string               `json:"api_key_env,omitempty"`
-	Capabilities   []string             `json:"capabilities"`
 	BudgetOverride *ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 
@@ -46,14 +45,22 @@ func OpenConfiguration(ctx context.Context, repository ConfigRepository, engine 
 	switch read.Disposition {
 	case ConfigReadAbsent:
 		state = emptyConfigurationState()
+	case ConfigReadInvalid:
+		if errors.Is(read.Cause, ErrUnsupportedConfigVersion) {
+			return nil, read.Cause
+		}
+		return nil, errors.New("inference configuration unavailable")
 	case ConfigReadPresent:
-		if err := validateConfigurationState(read.State, factory); err != nil {
+		state = cloneConfigurationState(read.State)
+		if state.SchemaVersion != 3 {
+			return nil, unsupportedConfigVersion(state.SchemaVersion)
+		}
+		if err := validateConfigurationState(state, factory); err != nil {
 			return nil, err
 		}
-		if !configurationStateFitsBound(read.State) {
+		if !configurationStateFitsBound(state) {
 			return nil, ErrConfigSnapshotCapacity
 		}
-		state = cloneConfigurationState(read.State)
 	default:
 		return nil, errors.New("inference configuration unavailable")
 	}
@@ -101,7 +108,7 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 		return errors.New("invalid inference configuration")
 	}
 	for _, route := range config.Routes {
-		if accounts[route.TargetID] == nil || !ValidCapabilities(accounts[route.TargetID].Capabilities()) {
+		if accounts[route.TargetID] == nil || !validProtocolAccount(accounts[route.TargetID]) {
 			return errors.New("configured target missing")
 		}
 	}
@@ -111,7 +118,6 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 func (c *Configuration) open(ctx context.Context, state ConfigState) (map[string]ModelAccount, ModelExecutor, error) {
 	targets := make(map[string]ProviderTarget, len(state.Targets)+9)
 	for id, target := range state.Targets {
-		target.Capabilities = append([]string(nil), target.Capabilities...)
 		target.BudgetOverride = cloneModelBudgetOverride(target.BudgetOverride)
 		targets[id] = target
 	}
@@ -141,7 +147,7 @@ func profileTargetID(provider, purpose string) string {
 
 func profileTarget(provider, purpose string, profile ProviderProfile) ProviderTarget {
 	configured := profile.Purposes[purpose]
-	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, Capabilities: append([]string(nil), configured.Capabilities...), BudgetOverride: cloneModelBudgetOverride(configured.BudgetOverride)}
+	return ProviderTarget{Provider: provider, BaseURL: profile.BaseURL, Model: configured.Model, APIKeyEnv: profile.APIKeyEnv, BudgetOverride: cloneModelBudgetOverride(configured.BudgetOverride)}
 }
 
 func (c *Configuration) RequiredError() error {

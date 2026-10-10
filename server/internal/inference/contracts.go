@@ -28,6 +28,7 @@ type PurposeCapability struct {
 	Status             PurposeStatus
 	CapabilityRevision string
 	Capabilities       []string
+	CapabilityStates   CapabilityStates
 	BudgetProfile      ModelBudgetProfile
 	ModelIdentity      ModelIdentity
 }

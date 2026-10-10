@@ -8,6 +8,48 @@
     "schema_version": {"const": 1},
     "revision": {"type": "integer", "minimum": 1},
     "version": {"type": "string", "minLength": 1, "maxLength": 128},
+    "capability_evidence": {
+      "type": "object",
+      "required": ["contract_version", "entries"],
+      "properties": {
+        "contract_version": {"const": 1},
+        "entries": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "type": "object",
+            "required": ["provider_id", "model_id", "endpoint", "facts"],
+            "properties": {
+              "provider_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+              "model_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^\\S+$"},
+              "endpoint": {"type": "string", "format": "uri", "minLength": 1, "maxLength": 2048},
+              "facts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "items": {
+                  "type": "object",
+                  "required": ["capability", "status", "provenance"],
+                  "properties": {
+                    "capability": {"enum": ["chat", "structured_output", "tool_proposals"]},
+                    "status": {"enum": ["supported", "unsupported"]},
+                    "provenance": {
+                      "type": "object",
+                      "required": ["source", "verified_at"],
+                      "properties": {
+                        "source": {"type": "string", "minLength": 1, "maxLength": 512},
+                        "verified_at": {"type": "string", "format": "date-time"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "$comment": "Facts match exact provider_id, model_id, and canonical endpoint. Missing contract, entry, or fact means unknown. Only explicit supported or unsupported values carry provenance."
+    },
     "providers": {
       "type": "array",
       "minItems": 1,
@@ -73,5 +115,5 @@
       }
     }
   },
-  "$comment": "Unknown additive fields are ignored by this reader. Change schema_version for incompatible meaning changes. Provider and model IDs are separate values. Catalog capabilities are descriptive and never authorize inference. Migrated suggestions have no verification timestamp or limits."
+  "$comment": "Unknown additive fields are ignored by this reader. Change schema_version for incompatible suggestion changes. Provider and model IDs are separate values. Model metadata capabilities remain descriptive; only the separately versioned capability_evidence contract informs Inference. Migrated suggestions have no verification timestamp, capability evidence, or limits."
 }

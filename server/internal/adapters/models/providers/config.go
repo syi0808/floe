@@ -29,7 +29,7 @@ func NewFactory(lookup func(context.Context, string) (string, error), codex Code
 type registry struct{ targets map[string]*provider }
 
 func (f *Factory) ValidateTarget(target inference.ProviderTarget) error {
-	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || !inference.ValidCapabilities(target.Capabilities) || target.BudgetOverride != nil && target.BudgetOverride.Validate() != nil {
+	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || target.BudgetOverride != nil && target.BudgetOverride.Validate() != nil {
 		return errors.New("invalid model")
 	}
 	if target.Provider == "codex_oauth" && target.BudgetOverride != nil && target.BudgetOverride.SelectedOutputReservationTokens != nil {
@@ -112,12 +112,18 @@ func (p *provider) ReplayIdentity() string {
 	return hex.EncodeToString(h[:])
 }
 
-func (p *provider) Capabilities() []string {
-	return append([]string(nil), p.target.Capabilities...)
+func (p *provider) ProtocolCapabilities() []string {
+	// These are adapter implementation facts only. Model support for chat, JSON,
+	// and tool proposals still requires exact metadata evidence in Inference.
+	return []string{inference.ChatCapability, inference.StructuredOutputCapability, inference.ToolProposalsCapability}
 }
 
 func (p *provider) ModelIdentity() inference.ModelIdentity {
-	return inference.ModelIdentity{ProviderID: p.target.Provider, ModelID: p.target.Model}
+	endpoint, ok := inference.CanonicalModelEndpoint(p.target.BaseURL)
+	if !ok {
+		return inference.ModelIdentity{}
+	}
+	return inference.ModelIdentity{ProviderID: p.target.Provider, ModelID: p.target.Model, Endpoint: endpoint}
 }
 
 func (p *provider) BudgetOverride() *inference.ModelBudgetOverride {
@@ -133,7 +139,7 @@ func (r *registry) InvokeAgent(ctx context.Context, target inference.ResolvedMod
 	if tokens, ok := target.SelectedOutputReservationTokens(); ok {
 		outputTokenLimit = &tokens
 	}
-	return p.agent(ctx, in, target.ReasoningEffort(), outputTokenLimit)
+	return p.agent(ctx, target.CapabilityStates(), in, target.ReasoningEffort(), outputTokenLimit)
 }
 
 func (r *registry) InvokeStructured(ctx context.Context, target inference.ResolvedModelTarget, in inference.StructuredInvocation) (inference.StructuredResult, error) {
@@ -145,5 +151,5 @@ func (r *registry) InvokeStructured(ctx context.Context, target inference.Resolv
 	if tokens, ok := target.SelectedOutputReservationTokens(); ok {
 		outputTokenLimit = &tokens
 	}
-	return p.structured(ctx, in, target.ReasoningEffort(), outputTokenLimit)
+	return p.structured(ctx, target.CapabilityStates(), in, target.ReasoningEffort(), outputTokenLimit)
 }

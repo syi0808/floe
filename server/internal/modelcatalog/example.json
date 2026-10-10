@@ -4,13 +4,50 @@
   "version": "example-revision-2",
   "providers": [
     {
-      "provider_id": "codex_oauth",
+      "provider_id": "openai_compatible",
       "models": [
         {
-          "model_id": "gpt-5.5",
-          "source": "migrated_repository_suggestions"
+          "model_id": "floe-fixture-chat-tools-json",
+          "display_name": "Synthetic fixture (local data example)",
+          "source": "local_synthetic_example"
         }
       ]
     }
-  ]
+  ],
+  "capability_evidence": {
+    "contract_version": 1,
+    "entries": [
+      {
+        "provider_id": "openai_compatible",
+        "model_id": "floe-fixture-chat-tools-json",
+        "endpoint": "https://fixture.invalid/v1",
+        "facts": [
+          {
+            "capability": "chat",
+            "status": "supported",
+            "provenance": {
+              "source": "synthetic local fixture",
+              "verified_at": "2026-10-10T00:00:00Z"
+            }
+          },
+          {
+            "capability": "structured_output",
+            "status": "supported",
+            "provenance": {
+              "source": "synthetic local fixture",
+              "verified_at": "2026-10-10T00:00:00Z"
+            }
+          },
+          {
+            "capability": "tool_proposals",
+            "status": "supported",
+            "provenance": {
+              "source": "synthetic local fixture",
+              "verified_at": "2026-10-10T00:00:00Z"
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

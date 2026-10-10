@@ -30,12 +30,33 @@ func TestInferenceSchema3BudgetFixturesRoundTripAsClosedDTOs(t *testing.T) {
 			if err := profile.Validate(); err != nil {
 				t.Fatalf("fixture profile is invalid: %v", err)
 			}
-			if fixture.Purposes.QuickResponse.Capabilities == nil || len(fixture.Purposes.QuickResponse.Capabilities) != 1 || fixture.Purposes.QuickResponse.Capabilities[0] != inference.ChatCapability {
-				t.Fatalf("catalog metadata changed declared capabilities: %#v", fixture.Purposes.QuickResponse.Capabilities)
+			if len(fixture.Purposes.QuickResponse.Capabilities) != 0 {
+				t.Fatalf("wire capabilities included chat without exact model evidence: %#v", fixture.Purposes.QuickResponse.Capabilities)
+			}
+			states := fixture.Purposes.QuickResponse.CapabilityStates
+			if states[inference.ChatCapability].Status != string(inference.CapabilityUnknown) || states[inference.StructuredOutputCapability].Status != string(inference.CapabilityUnknown) || states[inference.ToolProposalsCapability].Status != string(inference.CapabilityUnknown) {
+				t.Fatalf("wire inventory omitted unknown capability states: %#v", states)
 			}
 			if profile.Sources.Catalog.ContextWindowTokens != nil && profile.ContextWindow.Status != inference.LimitUnknown && *profile.ContextWindow.Tokens == *profile.Sources.Catalog.ContextWindowTokens {
 				t.Fatal("catalog limit was silently reused as the effective configured limit")
 			}
 		})
+	}
+}
+
+func TestCapabilityStateDTOPreservesProvenanceAndUnknownReason(t *testing.T) {
+	states := capabilityStatesDTO(inference.CapabilityStates{
+		inference.ChatCapability: {Status: inference.CapabilitySupported, Provenance: &inference.CapabilityProvenance{
+			Source: "synthetic chat evidence", VerifiedAt: "2026-10-10T00:00:00Z",
+		}},
+		inference.StructuredOutputCapability: {Status: inference.CapabilitySupported, Provenance: &inference.CapabilityProvenance{
+			Source: "synthetic DTO fixture", VerifiedAt: "2026-10-10T00:00:00Z",
+		}},
+		inference.ToolProposalsCapability: {Status: inference.CapabilityUnknown, Reason: "evidence_absent"},
+	})
+	if states[inference.ChatCapability].Status != "supported" || states[inference.ChatCapability].Provenance == nil || states[inference.ChatCapability].Provenance.Source != "synthetic chat evidence" || states[inference.StructuredOutputCapability].Provenance == nil ||
+		states[inference.StructuredOutputCapability].Provenance.Source != "synthetic DTO fixture" ||
+		states[inference.ToolProposalsCapability].Status != "unknown" || states[inference.ToolProposalsCapability].Reason != "evidence_absent" {
+		t.Fatalf("capability state DTO lost status, provenance, or reason: %#v", states)
 	}
 }

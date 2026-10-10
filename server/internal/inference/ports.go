@@ -3,7 +3,6 @@ package inference
 import (
 	"context"
 	"floe/server/internal/trust"
-	"strings"
 )
 
 type Trust interface {
@@ -31,7 +30,7 @@ type ModelExecutor interface {
 type ModelAccount interface {
 	Ready(context.Context) error
 	ReplayIdentity() string
-	Capabilities() []string
+	ProtocolCapabilities() []string
 	ModelIdentity() ModelIdentity
 	BudgetOverride() *ModelBudgetOverride
 }
@@ -41,11 +40,12 @@ type ModelAccount interface {
 type ModelIdentity struct {
 	ProviderID string
 	ModelID    string
+	Endpoint   string
 }
 
 func validModelIdentity(identity ModelIdentity) bool {
-	return ValidAlias(identity.ProviderID) && identity.ModelID != "" && len(identity.ModelID) <= 128 &&
-		identity.ModelID == strings.TrimSpace(identity.ModelID) && !strings.ContainsAny(identity.ModelID, "\r\n\x00")
+	endpoint, ok := CanonicalModelEndpoint(identity.Endpoint)
+	return validModelIdentityBase(identity) && ok && endpoint == identity.Endpoint
 }
 
 // ResolvedModelTarget is a private selection value. It never contains provider credentials.
@@ -53,6 +53,7 @@ type ResolvedModelTarget struct {
 	targetID, effort, accountIdentity string
 	generation                        uint64
 	capabilities                      []string
+	capabilityStates                  CapabilityStates
 	modelIdentity                     ModelIdentity
 	budgetProfile                     ModelBudgetProfile
 }
@@ -60,6 +61,15 @@ type ResolvedModelTarget struct {
 func (t ResolvedModelTarget) TargetID() string        { return t.targetID }
 func (t ResolvedModelTarget) ReasoningEffort() string { return t.effort }
 func (t ResolvedModelTarget) AccountIdentity() string { return t.accountIdentity }
+func (t ResolvedModelTarget) CapabilityStates() CapabilityStates {
+	return cloneCapabilityStates(t.capabilityStates)
+}
+func (t ResolvedModelTarget) SupportsAgent(in AgentInvocation) bool {
+	return supportsAgent(t.capabilityStates, in)
+}
+func (t ResolvedModelTarget) SupportsStructuredOutput() bool {
+	return supportsStructured(t.capabilityStates)
+}
 func (t ResolvedModelTarget) SelectedOutputReservationTokens() (uint32, bool) {
 	if t.budgetProfile.SelectedOutputReservation.Status != LimitKnown || t.budgetProfile.SelectedOutputReservation.Tokens == nil {
 		return 0, false

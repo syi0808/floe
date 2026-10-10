@@ -30,9 +30,11 @@ type selectionTestAccount struct {
 
 func (account selectionTestAccount) Ready(context.Context) error { return nil }
 func (account selectionTestAccount) ReplayIdentity() string      { return account.identity }
-func (selectionTestAccount) Capabilities() []string              { return []string{ChatCapability} }
+func (selectionTestAccount) ProtocolCapabilities() []string {
+	return []string{ChatCapability, StructuredOutputCapability, ToolProposalsCapability}
+}
 func (account selectionTestAccount) ModelIdentity() ModelIdentity {
-	return ModelIdentity{ProviderID: "openai_compatible", ModelID: account.model}
+	return ModelIdentity{ProviderID: "openai_compatible", ModelID: account.model, Endpoint: "https://example.invalid"}
 }
 func (account selectionTestAccount) BudgetOverride() *ModelBudgetOverride {
 	return CloneModelBudgetOverride(account.override)
@@ -62,7 +64,7 @@ func TestCapabilityRevisionChangesWithModelIdentityAndSameBudget(t *testing.T) {
 	config := InferenceConfig{Routes: map[Purpose]PurposeRoute{
 		QuickResponse: {TargetID: "selected", ReasoningEffort: "medium", Enabled: true},
 	}}
-	service, err := NewService(selectionTestTrust{})
+	service, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
 	if err != nil {
 		t.Fatal(err)
 	}

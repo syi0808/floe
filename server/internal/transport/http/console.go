@@ -30,7 +30,6 @@ type TargetRequest struct {
 	BaseURL        string                         `json:"base_url"`
 	Model          string                         `json:"model"`
 	APIKey         string                         `json:"api_key"`
-	Capabilities   []string                       `json:"capabilities"`
 	BudgetOverride *inference.ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 type ProviderRequest struct {
@@ -256,7 +255,7 @@ func (handler *Handler) manage(writer http.ResponseWriter, request *http.Request
 		})
 	case "/manage/api/target":
 		dispatchCommand(writer, request, func(in TargetRequest) error {
-			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{OperationID: in.OperationID, ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, Capabilities: in.Capabilities, BudgetOverride: in.BudgetOverride})
+			return handler.Configuration.UpdateTarget(request.Context(), operator, inference.TargetUpdate{OperationID: in.OperationID, ID: in.ID, Provider: in.Provider, BaseURL: in.BaseURL, Model: in.Model, APIKey: in.APIKey, BudgetOverride: in.BudgetOverride})
 		})
 	case "/manage/api/provider":
 		dispatchCommand(writer, request, func(in ProviderRequest) error {

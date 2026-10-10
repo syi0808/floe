@@ -304,6 +304,35 @@ function renderModelCatalogSuggestions() {
   statusNode.textContent = `${source}${version}. ${errors || 'Enter any model ID, including one not listed here.'}`;
 }
 
+function renderCapabilityStates(container, states) {
+  if (!container) return;
+  container.replaceChildren();
+  const heading = text('strong', 'Model capabilities · derived from exact endpoint and model evidence');
+  container.append(heading);
+  const names = [
+    ['chat', 'Text chat'],
+    ['structured_output', 'Structured JSON'],
+    ['tool_proposals', 'Tool proposals'],
+  ];
+  for (const [name, label] of names) {
+    const fact = states?.[name] || {status: 'unknown', reason: 'evidence_absent'};
+    const row = document.createElement('p');
+    row.className = `capability-state capability-${fact.status}`;
+    const status = ({supported: 'Supported', unsupported: 'Unsupported', unknown: 'Unknown'})[fact.status] || 'Unknown';
+    const source = fact.provenance?.source;
+    const verified = fact.provenance?.verified_at;
+    const provenance = source
+      ? ` · ${source}${verified ? ` · verified ${verified}` : ''}`
+      : fact.reason === 'adapter_protocol_unsupported'
+        ? ' · adapter protocol unavailable'
+        : fact.reason === 'metadata_unavailable'
+          ? ' · evidence unavailable'
+          : ' · no matching evidence';
+    row.textContent = `${label}: ${status}${provenance}`;
+    container.append(row);
+  }
+}
+
 function renderProvider() {
   const isClaude = selectedProvider === 'claude_oauth';
   const isCodex = selectedProvider === 'codex_oauth';
@@ -336,10 +365,8 @@ function renderProvider() {
     const model = form.elements[`${purpose}_model`];
     model.value = configured.model || '';
     form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
-    const capabilities = configured.capabilities || ['chat'];
-    form.elements[`${purpose}_structured_output`].checked = capabilities.includes('structured_output');
-    form.elements[`${purpose}_tool_proposals`].checked = capabilities.includes('tool_proposals');
     const row = form.querySelector(`[data-class="${purpose}"]`);
+    renderCapabilityStates(row.querySelector('.capability-states'), configured.capability_states);
     row.classList.toggle('active-route', configured.active === true);
     row.querySelector('.test-class').disabled = !configured.model || configured.available === false;
   }
@@ -470,11 +497,8 @@ function providerPayloadFromForm(form) {
   const baseURL = form.elements.base_url.value;
   for (const purpose of purposes) {
     const model = form.elements[`${purpose}_model`].value.trim();
-    const capabilities = ['chat'];
-    if (form.elements[`${purpose}_structured_output`].checked) capabilities.push('structured_output');
-    if (form.elements[`${purpose}_tool_proposals`].checked) capabilities.push('tool_proposals');
     if (model) {
-      configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value, capabilities};
+      configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value};
       const targetBudget = budgetOverrideForTarget(state.providers?.[selectedProvider], purpose, model, baseURL);
       if (targetBudget.budgetOverride) configured[purpose].budget_override = targetBudget.budgetOverride;
     }

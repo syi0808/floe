@@ -212,7 +212,7 @@ func (access *configurationTestCredentialAccess) deleteCount() int {
 type configurationTestFactory struct{}
 
 func (configurationTestFactory) ValidateTarget(target ProviderTarget) error {
-	if target.Provider != "openai_compatible" || target.BaseURL == "" || target.Model == "" || !ValidCapabilities(target.Capabilities) {
+	if target.Provider != "openai_compatible" || target.BaseURL == "" || target.Model == "" {
 		return errors.New("invalid synthetic provider target")
 	}
 	return nil
@@ -221,34 +221,34 @@ func (configurationTestFactory) ValidateTarget(target ProviderTarget) error {
 func (configurationTestFactory) Open(_ context.Context, targets map[string]ProviderTarget) (map[string]ModelAccount, ModelExecutor, error) {
 	accounts := make(map[string]ModelAccount, len(targets))
 	for id, target := range targets {
-		accounts[id] = configurationTestAccount{provider: target.Provider, model: target.Model, capabilities: append([]string(nil), target.Capabilities...)}
+		accounts[id] = configurationTestAccount{provider: target.Provider, model: target.Model, endpoint: target.BaseURL}
 	}
 	return accounts, selectionTestExecutor{}, nil
 }
 
 type configurationTestAccount struct {
-	provider, model string
-	capabilities    []string
+	provider, model, endpoint string
 }
 
 func (account configurationTestAccount) Ready(context.Context) error { return nil }
 func (account configurationTestAccount) ReplayIdentity() string {
 	return account.provider + ":" + account.model
 }
-func (account configurationTestAccount) Capabilities() []string {
-	return append([]string(nil), account.capabilities...)
+func (configurationTestAccount) ProtocolCapabilities() []string {
+	return []string{ChatCapability, StructuredOutputCapability, ToolProposalsCapability}
 }
 func (account configurationTestAccount) ModelIdentity() ModelIdentity {
-	return ModelIdentity{ProviderID: account.provider, ModelID: account.model}
+	endpoint, _ := CanonicalModelEndpoint(account.endpoint)
+	return ModelIdentity{ProviderID: account.provider, ModelID: account.model, Endpoint: endpoint}
 }
 func (configurationTestAccount) BudgetOverride() *ModelBudgetOverride { return nil }
 
 func configurationTestState(targetID, model string) ConfigState {
 	return ConfigState{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		OwnedSlots:    []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{},
 		Targets: map[string]ProviderTarget{
-			targetID: {Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: model, Capabilities: []string{ChatCapability}},
+			targetID: {Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: model},
 		},
 		Routes: map[Purpose]PurposeRoute{
 			QuickResponse: {TargetID: targetID, ReasoningEffort: "medium", Enabled: true},
@@ -259,7 +259,7 @@ func configurationTestState(targetID, model string) ConfigState {
 
 func openConfigurationTestOwner(t *testing.T, repository ConfigRepository, credentials ProviderCredentialAccess) (*Configuration, *Service) {
 	t.Helper()
-	engine, err := NewService(selectionTestTrust{})
+	engine, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestOpenConfigurationAbsentAndCorruptSnapshots(t *testing.T) {
 	}
 
 	corrupt := &configurationTestRepository{loadDisposition: ConfigReadInvalid}
-	corruptEngine, err := NewService(selectionTestTrust{})
+	corruptEngine, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,23 +300,102 @@ func TestOpenConfigurationAbsentAndCorruptSnapshots(t *testing.T) {
 		t.Fatalf("failed startup partially configured the live engine: generation=%d", corruptEngine.generation)
 	}
 	semanticCorruption := &configurationTestRepository{present: true, state: ConfigState{SchemaVersion: 2}}
-	semanticEngine, err := NewService(selectionTestTrust{})
+	semanticEngine, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenConfiguration(context.Background(), semanticCorruption, semanticEngine, selectionTestTrust{}, credentials, configurationTestFactory{}); err == nil {
-		t.Fatal("persisted config with missing semantic maps was accepted")
+	if _, err := OpenConfiguration(context.Background(), semanticCorruption, semanticEngine, selectionTestTrust{}, credentials, configurationTestFactory{}); !errors.Is(err, ErrUnsupportedConfigVersion) {
+		t.Fatalf("schema-2 configuration did not fail with an explicit unsupported-version error: %v", err)
 	}
-	if semanticEngine.generation != 1 {
-		t.Fatalf("semantically corrupt config partially configured the live engine: generation=%d", semanticEngine.generation)
+	if semanticEngine.generation != 1 || semanticCorruption.writes != 0 || semanticCorruption.state.SchemaVersion != 2 {
+		t.Fatalf("unsupported config was changed or partially adopted: generation=%d writes=%d state=%#v", semanticEngine.generation, semanticCorruption.writes, semanticCorruption.state)
 	}
 	incompatible := &configurationTestRepository{present: true, state: ConfigState{SchemaVersion: 1}}
-	incompatibleEngine, _ := NewService(selectionTestTrust{})
-	if _, err := OpenConfiguration(context.Background(), incompatible, incompatibleEngine, selectionTestTrust{}, credentials, configurationTestFactory{}); err == nil {
-		t.Fatal("schema-1 profile was reset or silently migrated")
+	incompatibleEngine, _ := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
+	if _, err := OpenConfiguration(context.Background(), incompatible, incompatibleEngine, selectionTestTrust{}, credentials, configurationTestFactory{}); !errors.Is(err, ErrUnsupportedConfigVersion) {
+		t.Fatalf("schema-1 profile did not fail with an explicit unsupported-version error: %v", err)
 	}
 	if incompatible.writes != 0 || incompatible.state.SchemaVersion != 1 || incompatibleEngine.generation != 1 {
 		t.Fatal("incompatible stored configuration was changed or partially adopted")
+	}
+}
+
+func TestUnsupportedConfigurationVersionsFailClosedUnchanged(t *testing.T) {
+	for _, version := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("schema_%d", version), func(t *testing.T) {
+			data := []byte(fmt.Sprintf(`{"schema_version":%d,"revision":7,"targets":{"target-a":{"provider":"openai_compatible","base_url":"https://example.invalid","model":"selected-model","capabilities":["chat","tool_proposals"]}},"routes":{},"providers":{},"owned_slots":[],"cleanup":[],"receipts":[]}`, version))
+			if _, err := DecodeConfigState(data); !errors.Is(err, ErrUnsupportedConfigVersion) || !strings.Contains(err.Error(), fmt.Sprint(version)) {
+				t.Fatalf("unsupported schema did not report its version explicitly: %v", err)
+			}
+
+			repository := &configurationTestRepository{
+				state: ConfigState{SchemaVersion: version, Revision: 7}, present: true,
+			}
+			engine, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := OpenConfiguration(context.Background(), repository, engine, selectionTestTrust{}, &configurationTestCredentialAccess{}, configurationTestFactory{}); !errors.Is(err, ErrUnsupportedConfigVersion) {
+				t.Fatalf("startup did not return explicit unsupported-version error: %v", err)
+			}
+			if repository.writes != 0 || repository.state.SchemaVersion != version || repository.state.Revision != 7 || engine.Generation() != 1 {
+				t.Fatalf("unsupported profile was modified or adopted: writes=%d state=%#v generation=%d", repository.writes, repository.state, engine.Generation())
+			}
+		})
+	}
+
+	assertionBearingSchemaThree := []byte(`{"schema_version":3,"revision":1,"targets":{"target-a":{"provider":"openai_compatible","base_url":"https://example.invalid","model":"selected-model","capabilities":["chat"]}},"routes":{},"providers":{},"owned_slots":[],"cleanup":[],"receipts":[]}`)
+	if _, err := DecodeConfigState(assertionBearingSchemaThree); err == nil {
+		t.Fatal("current schema accepted a supplied manual capability assertion")
+	}
+}
+
+func TestUnknownCapabilityEvidenceDoesNotBlockProviderProfileLoad(t *testing.T) {
+	const slot = "FLOE_KEY_PROFILE_UNKNOWN_EVIDENCE"
+	repository := &configurationTestRepository{state: providerProfileState(slot), present: true}
+	credentials := &configurationTestCredentialAccess{values: map[string]string{slot: "synthetic profile credential"}}
+	owner, engine := openConfigurationTestOwner(t, repository, credentials)
+	states, err := engine.CapabilityStatesForTarget(context.Background(), profileTargetID("openai_compatible", string(QuickResponse)))
+	if err != nil {
+		t.Fatalf("unknown feature evidence blocked a valid chat profile: %v", err)
+	}
+	if states[ChatCapability].Status != CapabilityUnknown || states[StructuredOutputCapability].Status != CapabilityUnknown ||
+		states[ToolProposalsCapability].Status != CapabilityUnknown {
+		t.Fatalf("bootstrap without verified feature facts fabricated capability support: %#v", states)
+	}
+	operatorSnapshot, err := owner.Snapshot(context.Background(), trust.OperatorPrincipal{})
+	if err != nil || operatorSnapshot.Profiles["openai_compatible"].Purposes["quick_response"].CapabilityStates[ChatCapability].Status != CapabilityUnknown {
+		t.Fatalf("unknown evidence blocked configuration management or was not displayed: snapshot=%#v err=%v", operatorSnapshot, err)
+	}
+}
+
+func TestExactConfigurationOperationReplaySurvivesCapabilityMetadataUpdate(t *testing.T) {
+	metadata := emptyCapabilityMetadata()
+	engine, err := NewService(selectionTestTrust{}, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := &configurationTestRepository{}
+	owner, err := OpenConfiguration(context.Background(), repository, engine, selectionTestTrust{}, &configurationTestCredentialAccess{}, configurationTestFactory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(owner.Close)
+	command := providerTargetUpdate(trust.NewID(), "model-a", "")
+	if err := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, command); err != nil {
+		t.Fatalf("commit synthetic target command: %v", err)
+	}
+	before := repository.snapshot()
+	generation := engine.Generation()
+	metadata.replace(CapabilityEvidenceSnapshot{ContractVersion: 1, Entries: []CapabilityEvidenceEntry{
+		testEvidence("openai_compatible", "model-a", "https://example.invalid", StructuredOutputCapability, CapabilitySupported),
+	}})
+	if err := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, command); err != nil {
+		t.Fatalf("replay exact immutable command after metadata update: %v", err)
+	}
+	after := repository.snapshot()
+	if repository.writes != 1 || after.Revision != before.Revision || after.Targets["target-a"].Model != "model-a" || engine.Generation() != generation {
+		t.Fatalf("metadata update changed exact operation replay: writes=%d before=%#v after=%#v generations=%d/%d", repository.writes, before, after, generation, engine.Generation())
 	}
 }
 
@@ -356,7 +435,7 @@ func TestConfigurationSaveDispositionControlsAdoptionAndReopen(t *testing.T) {
 			credentials := &configurationTestCredentialAccess{}
 			owner, engine := openConfigurationTestOwner(t, repository, credentials)
 			next := cloneConfigurationState(owner.state)
-			next.Targets["target-b"] = ProviderTarget{Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model-b", Capabilities: []string{ChatCapability}}
+			next.Targets["target-b"] = ProviderTarget{Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model-b"}
 			next.Routes[QuickResponse] = PurposeRoute{TargetID: "target-b", ReasoningEffort: "high", Enabled: true}
 			repository.nextWrite = &ConfigWriteOutcome{Disposition: test.disposition, Cause: errors.New("synthetic repository outcome")}
 			result := owner.commitOperation(context.Background(), trust.NewID(), trust.Digest("synthetic-configuration-commit"), configurationContent(next))
@@ -400,7 +479,7 @@ func TestConfigurationCredentialUnavailableDoesNotCommitOrExposeSecret(t *testin
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, TargetUpdate{
 		OperationID: trust.NewID(),
 		ID:          "target-b", Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model-b",
-		APIKey: "synthetic-key", Capabilities: []string{ChatCapability},
+		APIKey: "synthetic-key",
 	})
 	if !matchesOperationError(result, operation.Unavailable, "credential_store_unavailable") {
 		t.Fatalf("credential unavailability was not returned as a safe rejection: %#v", result)
@@ -431,21 +510,19 @@ func TestCloneConfigurationStateDeepCopiesBoundedCollections(t *testing.T) {
 	wantMaxInputBytes := maxInputBytes
 	state := configurationTestState("target-a", "model-a")
 	target := state.Targets["target-a"]
-	target.Capabilities = []string{ChatCapability}
 	target.BudgetOverride = &ModelBudgetOverride{SchemaVersion: ModelBudgetOverrideVersion, MaxInputJSONBytes: &maxInputBytes}
 	state.Targets["target-a"] = target
 	state.Providers["openai_compatible"] = ProviderProfile{
 		BaseURL: "https://example.invalid", APIKeyEnv: "FLOE_KEY_SYNTHETIC",
-		Purposes: map[string]PurposeModel{"quick_response": {Model: "model-a", Capabilities: []string{ChatCapability}}},
+		Purposes: map[string]PurposeModel{"quick_response": {Model: "model-a"}},
 	}
 	cloned := cloneConfigurationState(state)
 	state.Routes[QuickResponse] = PurposeRoute{TargetID: "changed", Enabled: true}
 	target = state.Targets["target-a"]
-	target.Capabilities[0] = "changed"
 	*target.BudgetOverride.MaxInputJSONBytes = 1
 	state.Targets["target-a"] = target
 	state.Providers["openai_compatible"].Purposes["quick_response"] = PurposeModel{Model: "changed"}
-	if cloned.Routes[QuickResponse].TargetID != "target-a" || cloned.Targets["target-a"].Capabilities[0] != ChatCapability ||
+	if cloned.Routes[QuickResponse].TargetID != "target-a" ||
 		*cloned.Targets["target-a"].BudgetOverride.MaxInputJSONBytes != wantMaxInputBytes ||
 		cloned.Providers["openai_compatible"].Purposes["quick_response"].Model != "model-a" {
 		t.Fatalf("configuration clone shared mutable state: %#v", cloned)
@@ -453,14 +530,14 @@ func TestCloneConfigurationStateDeepCopiesBoundedCollections(t *testing.T) {
 }
 
 func providerTargetUpdate(operationID, model, key string) TargetUpdate {
-	return TargetUpdate{OperationID: operationID, ID: "target-a", Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: model, APIKey: key, Capabilities: []string{ChatCapability}}
+	return TargetUpdate{OperationID: operationID, ID: "target-a", Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: model, APIKey: key}
 }
 
 func providerProfileState(slot string) ConfigState {
 	state := emptyConfigurationState()
 	state.Providers["openai_compatible"] = ProviderProfile{
 		BaseURL: "https://example.invalid", APIKeyEnv: slot,
-		Purposes: map[string]PurposeModel{"quick_response": {Model: "model-a", ReasoningEffort: "medium", Capabilities: []string{ChatCapability}}},
+		Purposes: map[string]PurposeModel{"quick_response": {Model: "model-a", ReasoningEffort: "medium"}},
 	}
 	state.Routes[QuickResponse] = PurposeRoute{TargetID: "managed_openai_compatible_quick_response", ReasoningEffort: "medium", Enabled: true}
 	return state
@@ -688,7 +765,10 @@ func TestInFlightGenerationLeaseSurvivesCancellationAndDefersCleanup(t *testing.
 	repository := &configurationTestRepository{state: state, present: true}
 	blocker := &blockingConfigurationExecutor{started: make(chan struct{}), release: make(chan struct{})}
 	factory := blockingConfigurationFactory{executor: blocker}
-	engine, err := NewService(selectionTestTrust{})
+	metadata := &testCapabilityMetadata{snapshot: CapabilityEvidenceSnapshot{ContractVersion: 1, Entries: []CapabilityEvidenceEntry{
+		testEvidence("openai_compatible", "model-a", "https://example.invalid", ChatCapability, CapabilitySupported),
+	}}}
+	engine, err := NewService(selectionTestTrust{}, metadata)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -717,7 +797,7 @@ func TestInFlightGenerationLeaseSurvivesCancellationAndDefersCleanup(t *testing.
 		t.Fatal("inference did not start mock provider")
 	}
 	cancel()
-	result := owner.UpdateProvider(context.Background(), trust.OperatorPrincipal{}, ProviderUpdate{OperationID: trust.NewID(), Provider: "openai_compatible", BaseURL: "https://example.invalid", APIKey: "synthetic-new-key", Purposes: map[string]PurposeModel{"quick_response": {Model: "model-b", ReasoningEffort: "medium", Capabilities: []string{ChatCapability}}}})
+	result := owner.UpdateProvider(context.Background(), trust.OperatorPrincipal{}, ProviderUpdate{OperationID: trust.NewID(), Provider: "openai_compatible", BaseURL: "https://example.invalid", APIKey: "synthetic-new-key", Purposes: map[string]PurposeModel{"quick_response": {Model: "model-b", ReasoningEffort: "medium"}}})
 	if result != nil {
 		close(blocker.release)
 		t.Fatalf("replacement failed: %#v", result)
@@ -852,7 +932,7 @@ func TestOpenConfigurationResolvesDurablePendingBeforeAdmission(t *testing.T) {
 			if keyExists {
 				credentials.values = map[string]string{pending.Slot: "synthetic-restart-key"}
 			}
-			engine, err := NewService(selectionTestTrust{})
+			engine, err := NewService(selectionTestTrust{}, emptyCapabilityMetadata())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -884,7 +964,7 @@ func TestConfigurationSnapshotByteLimitRejectsBeforeCredentialWrite(t *testing.T
 	longBaseURL := "https://example.invalid/" + strings.Repeat("x", 1200)
 	for i := 0; i < 31; i++ {
 		id := fmt.Sprintf("target-%02d", i)
-		state.Targets[id] = ProviderTarget{Provider: "openai_compatible", BaseURL: longBaseURL, Model: "model", Capabilities: []string{ChatCapability}}
+		state.Targets[id] = ProviderTarget{Provider: "openai_compatible", BaseURL: longBaseURL, Model: "model"}
 	}
 	if size := len(mustJSON(t, state)); size >= MaxConfigSnapshotBytes {
 		t.Fatalf("test initial snapshot too large: %d", size)

@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 
 	credentialadapter "floe/server/internal/adapters/credentials"
+	"floe/server/internal/adapters/modelmetadata"
 	"floe/server/internal/adapters/models/providers"
 	storageadapter "floe/server/internal/adapters/storage"
 	"floe/server/internal/adapters/storage/privatefiles"
@@ -98,8 +100,39 @@ type consoleFixture struct {
 }
 
 func newConsoleFixture(t *testing.T) *consoleFixture {
+	return newConsoleFixtureWithEvidence(t, "", "")
+}
+
+func newConsoleFixtureWithEvidence(t *testing.T, model, endpoint string, capabilities ...string) *consoleFixture {
 	t.Helper()
 	directory := t.TempDir()
+	catalogPath := filepath.Join(directory, modelcatalog.FileName)
+	if model != "" {
+		facts := make([]modelcatalog.CapabilityEvidenceFact, len(capabilities))
+		for i, capability := range capabilities {
+			facts[i] = modelcatalog.CapabilityEvidenceFact{
+				Capability: capability,
+				Status:     "supported",
+				Provenance: modelcatalog.MetadataProvenance{Source: "synthetic HTTP test fixture", VerifiedAt: "2026-10-10T00:00:00Z"},
+			}
+		}
+		catalogData, err := json.Marshal(modelcatalog.Catalog{
+			SchemaVersion: 1,
+			Revision:      2,
+			Version:       "synthetic-http-fixture",
+			Providers:     []modelcatalog.Provider{{ProviderID: "openai_compatible", Models: []modelcatalog.Model{{ModelID: "synthetic-suggestion-only", Source: "synthetic_test_fixture"}}}},
+			CapabilityEvidence: &modelcatalog.CapabilityEvidenceContract{
+				ContractVersion: 1,
+				Entries:         []modelcatalog.CapabilityEvidenceEntry{{ProviderID: "openai_compatible", ModelID: model, Endpoint: endpoint, Facts: facts}},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := modelcatalog.Install(catalogPath, catalogData); err != nil {
+			t.Fatalf("install synthetic model evidence fixture: %v", err)
+		}
+	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
@@ -127,7 +160,11 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 		t.Fatalf("read generated test administrator token: %v", err)
 	}
 	credentialsStore := newMemoryCredentialStore()
-	inferenceService, err := inference.NewService(trustService)
+	catalog, err := modelcatalog.Open(catalogPath)
+	if err != nil {
+		t.Fatalf("open embedded model catalog: %v", err)
+	}
+	inferenceService, err := inference.NewService(trustService, modelmetadata.NewCatalogSource(catalog))
 	if err != nil {
 		t.Fatalf("create inference owner: %v", err)
 	}
@@ -140,10 +177,6 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 	}
 	t.Cleanup(configuration.Close)
 	pairingOperations := pairing.NewOperations(trustService, credentialadapter.NewPairingAccess(credentialsStore), nil)
-	catalog, err := modelcatalog.Open("")
-	if err != nil {
-		t.Fatalf("open embedded model catalog: %v", err)
-	}
 	return &consoleFixture{
 		address:     dashboardTestAddress,
 		adminToken:  adminToken,
@@ -365,13 +398,12 @@ func TestConsoleTargetCommandKeepsImmutableOperationReplay(t *testing.T) {
 	fixture := newConsoleFixture(t)
 	cookie, csrf := fixture.login(t)
 	input := TargetRequest{
-		OperationID:  trust.NewID(),
-		ID:           "synthetic-http-target",
-		Provider:     "openai_compatible",
-		BaseURL:      "https://example.invalid",
-		Model:        "synthetic-model-a",
-		APIKey:       "synthetic-http-replay-key",
-		Capabilities: []string{inference.ChatCapability},
+		OperationID: trust.NewID(),
+		ID:          "synthetic-http-target",
+		Provider:    "openai_compatible",
+		BaseURL:     "https://example.invalid",
+		Model:       "synthetic-model-a",
+		APIKey:      "synthetic-http-replay-key",
 	}
 	request := func(command TargetRequest) *httptest.ResponseRecorder {
 		return fixture.request(http.MethodPost, "/manage/api/target", command, cookie, "http://"+fixture.address, csrf, "")
@@ -400,6 +432,25 @@ func TestConsoleTargetCommandKeepsImmutableOperationReplay(t *testing.T) {
 	}
 	if bytes.Contains(conflict.Body.Bytes(), []byte(input.APIKey)) {
 		t.Fatal("operation conflict response exposed the submitted credential")
+	}
+}
+
+func TestConsoleRejectsManualCapabilityAssertions(t *testing.T) {
+	fixture := newConsoleFixture(t)
+	cookie, csrf := fixture.login(t)
+	target := fixture.request(http.MethodPost, "/manage/api/target", map[string]any{
+		"operation_id": trust.NewID(), "id": "manual-capability-target", "provider": "openai_compatible",
+		"base_url": "https://example.invalid", "model": "synthetic-model", "api_key": "", "capabilities": []string{"chat", "tool_proposals"},
+	}, cookie, "http://"+fixture.address, csrf, "")
+	if target.Code != http.StatusBadRequest {
+		t.Fatalf("manual target capability assertion returned %d: %s", target.Code, target.Body.String())
+	}
+	provider := fixture.request(http.MethodPost, "/manage/api/provider", map[string]any{
+		"operation_id": trust.NewID(), "provider": "openai_compatible", "base_url": "https://example.invalid", "api_key": "",
+		"purposes": map[string]any{"quick_response": map[string]any{"model": "synthetic-model", "capabilities": []string{"chat", "structured_output"}}},
+	}, cookie, "http://"+fixture.address, csrf, "")
+	if provider.Code != http.StatusBadRequest {
+		t.Fatalf("manual provider capability assertion returned %d: %s", provider.Code, provider.Body.String())
 	}
 }
 

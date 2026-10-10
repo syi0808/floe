@@ -4,7 +4,12 @@
     "quick_response": {
       "status": "available",
       "capability_revision": "0000000000000000000000000000000000000000000000000000000000000000",
-      "capabilities": ["chat"],
+      "capabilities": [],
+      "capability_states": {
+        "chat": {"status": "unknown", "reason": "evidence_absent"},
+        "structured_output": {"status": "unknown", "reason": "evidence_absent"},
+        "tool_proposals": {"status": "unknown", "reason": "evidence_absent"}
+      },
       "budget_profile": {
         "schema_version": 1,
         "context_window": {"status": "unknown", "tokens": null, "source": "unknown"},

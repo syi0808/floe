@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	credentialadapter "floe/server/internal/adapters/credentials"
+	"floe/server/internal/adapters/modelmetadata"
 	codexauth "floe/server/internal/adapters/models/codex"
 	"floe/server/internal/adapters/models/providers"
 	storageadapter "floe/server/internal/adapters/storage"
@@ -106,7 +107,8 @@ func New(config Config) (*Node, error) {
 			runtime.Close()
 		}
 	}()
-	model, err := inference.NewService(t)
+	metadata := modelmetadata.NewCatalogSource(modelCatalog)
+	model, err := inference.NewService(t, metadata)
 	if err != nil {
 		return nil, err
 	}

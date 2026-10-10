@@ -24,7 +24,6 @@ type TargetUpdate struct {
 	BaseURL        string
 	Model          string
 	APIKey         string
-	Capabilities   []string
 	BudgetOverride *ModelBudgetOverride
 }
 
@@ -37,12 +36,12 @@ type ProviderUpdate struct {
 }
 
 type OperatorPurposeProfile struct {
-	Model           string
-	ReasoningEffort string
-	Active          bool
-	Available       bool
-	Capabilities    []string
-	BudgetOverride  *ModelBudgetOverride
+	Model            string
+	ReasoningEffort  string
+	Active           bool
+	Available        bool
+	CapabilityStates CapabilityStates
+	BudgetOverride   *ModelBudgetOverride
 }
 
 type OperatorProviderProfile struct {
@@ -113,7 +112,7 @@ func (c *Configuration) UpdateTarget(ctx context.Context, operator trust.Operato
 			baseURL = "https://chatgpt.com/backend-api/codex"
 			apiKey = ""
 		}
-		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, Capabilities: append([]string(nil), input.Capabilities...), BudgetOverride: cloneModelBudgetOverride(input.BudgetOverride)}
+		target := ProviderTarget{Provider: providerName, BaseURL: baseURL, Model: input.Model, BudgetOverride: cloneModelBudgetOverride(input.BudgetOverride)}
 		if apiKey == "" && old.Provider == target.Provider && old.BaseURL == target.BaseURL {
 			target.APIKeyEnv = old.APIKeyEnv
 		}
@@ -245,13 +244,14 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 				targetID := profileTargetID(provider, purpose)
 				route := c.state.Routes[Purpose(purpose)]
 				available := inventoryErr == nil && inventory.Get(Purpose(purpose)).Status == Available
+				capabilityStates, _ := c.engine.CapabilityStatesForTarget(ctx, targetID)
 				purposes[purpose] = OperatorPurposeProfile{
-					Model:           model.Model,
-					ReasoningEffort: model.ReasoningEffort,
-					Active:          route.TargetID == targetID && route.Enabled,
-					Available:       available,
-					Capabilities:    append([]string(nil), model.Capabilities...),
-					BudgetOverride:  cloneModelBudgetOverride(model.BudgetOverride),
+					Model:            model.Model,
+					ReasoningEffort:  model.ReasoningEffort,
+					Active:           route.TargetID == targetID && route.Enabled,
+					Available:        available,
+					CapabilityStates: capabilityStates,
+					BudgetOverride:   cloneModelBudgetOverride(model.BudgetOverride),
 				}
 			}
 			profiles[provider] = OperatorProviderProfile{BaseURL: configured.BaseURL, HasCredential: configured.APIKeyEnv != "", Purposes: purposes}
@@ -289,7 +289,6 @@ func configuredTarget(state ConfigState, id string) (ProviderTarget, bool) {
 func clonePurposeModels(purposes map[string]PurposeModel) map[string]PurposeModel {
 	out := make(map[string]PurposeModel, len(purposes))
 	for purpose, configured := range purposes {
-		configured.Capabilities = append([]string(nil), configured.Capabilities...)
 		configured.BudgetOverride = cloneModelBudgetOverride(configured.BudgetOverride)
 		out[purpose] = configured
 	}

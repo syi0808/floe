@@ -30,10 +30,6 @@ type provider struct {
 }
 
 func newProvider(ctx context.Context, target inference.ProviderTarget, lookup func(context.Context, string) (string, error), codex CodexClient) (*provider, error) {
-	if !inference.ValidCapabilities(target.Capabilities) {
-		return nil, errors.New("invalid model capabilities")
-	}
-	target.Capabilities = append([]string(nil), target.Capabilities...)
 	target.BudgetOverride = inference.CloneModelBudgetOverride(target.BudgetOverride)
 	if strings.TrimSpace(target.Model) == "" || len(target.Model) > 128 || strings.ContainsAny(target.Model, "\r\n") {
 		return nil, errors.New("invalid model")
@@ -50,7 +46,7 @@ func newProvider(ctx context.Context, target inference.ProviderTarget, lookup fu
 	}
 	ip := net.ParseIP(endpoint.Hostname())
 	loopback := ip != nil && ip.IsLoopback()
-	if endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && loopback) {
+	if endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || strings.Contains(target.BaseURL, "#") || endpoint.Fragment != "" || endpoint.Scheme != "https" && !(endpoint.Scheme == "http" && loopback) {
 		return nil, errors.New("invalid provider endpoint")
 	}
 	if target.Provider != "ollama" && target.Provider != "openai_compatible" {
@@ -147,7 +143,10 @@ func (p *provider) checkLocal(ctx context.Context) error {
 	}
 	return nil
 }
-func (p *provider) structured(ctx context.Context, in inference.StructuredInvocation, effort string, outputTokenLimit *uint32) (out inference.StructuredResult, err error) {
+func (p *provider) structured(ctx context.Context, states inference.CapabilityStates, in inference.StructuredInvocation, effort string, outputTokenLimit *uint32) (out inference.StructuredResult, err error) {
+	if !inference.SupportsStructuredOutput(states) {
+		return out, inference.Failure{Code: inference.RequestRejected}
+	}
 	if p.target.Provider == "codex_oauth" {
 		if outputTokenLimit != nil {
 			return out, inference.Failure{Code: inference.Validation}

@@ -43,7 +43,7 @@ func TestSchema3GatewayBudgetPreflightAndMockProviderPath(t *testing.T) {
 	}))
 	defer provider.Close()
 
-	fixture := newConsoleFixture(t)
+	fixture := newConsoleFixtureWithEvidence(t, "synthetic-budget-model", provider.URL, inference.ChatCapability, inference.StructuredOutputCapability)
 	fixture.handler.Inference.ModelCatalog = fixture.catalog
 	operatorCookie, csrf := fixture.login(t)
 	operator, err := fixture.trust.AuthenticateOperatorSession(context.Background(), operatorCookie.Value, csrf, true)
@@ -59,7 +59,7 @@ func TestSchema3GatewayBudgetPreflightAndMockProviderPath(t *testing.T) {
 			APIKey:      "synthetic-test-key",
 			Purposes: map[string]inference.PurposeModel{
 				string(inference.QuickResponse): {
-					Model: "synthetic-budget-model", ReasoningEffort: "", Capabilities: []string{inference.ChatCapability, inference.StructuredOutputCapability},
+					Model: "synthetic-budget-model", ReasoningEffort: "",
 					BudgetOverride: override,
 				},
 			},
@@ -221,7 +221,7 @@ func TestProviderTargetChangeClearsPersistedBudgetOverride(t *testing.T) {
 			Provider:    "openai_compatible", BaseURL: endpoint, APIKey: key,
 			Purposes: map[string]inference.PurposeModel{
 				string(inference.QuickResponse): {
-					Model: model, Capabilities: []string{inference.ChatCapability}, BudgetOverride: override,
+					Model: model, BudgetOverride: override,
 				},
 			},
 		})

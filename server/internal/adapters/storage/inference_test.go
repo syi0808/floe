@@ -37,7 +37,7 @@ func TestInferenceConfigRepositoryLoadsAbsentStrictSnapshotAndCorruption(t *test
 	}
 
 	state := inference.ConfigState{
-		SchemaVersion: 2, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
+		SchemaVersion: 3, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
 		Targets:   map[string]inference.ProviderTarget{},
 		Routes:    map[inference.Purpose]inference.PurposeRoute{},
 		Providers: map[string]inference.ProviderProfile{},
@@ -48,6 +48,18 @@ func TestInferenceConfigRepositoryLoadsAbsentStrictSnapshotAndCorruption(t *test
 	loaded := repository.LoadConfig()
 	if loaded.Disposition != inference.ConfigReadPresent || !reflect.DeepEqual(loaded.State, state) {
 		t.Fatalf("typed config snapshot did not round-trip: %#v", loaded)
+	}
+	legacyData := []byte(`{"schema_version":2,"revision":4,"targets":{"target-a":{"provider":"openai_compatible","base_url":"https://example.invalid","model":"selected-model","capabilities":["chat","tool_proposals"]}},"routes":{},"providers":{},"owned_slots":[],"cleanup":[],"receipts":[]}`)
+	if err := files.Write(inferenceConfigurationFile, legacyData); err != nil {
+		t.Fatal(err)
+	}
+	legacy := repository.LoadConfig()
+	if legacy.Disposition != inference.ConfigReadInvalid || !errors.Is(legacy.Cause, inference.ErrUnsupportedConfigVersion) {
+		t.Fatalf("schema-2 data was not rejected with an explicit unsupported-version cause: %#v", legacy)
+	}
+	preserved, err := files.Read(inferenceConfigurationFile, inference.MaxConfigSnapshotBytes)
+	if err != nil || string(preserved) != string(legacyData) {
+		t.Fatalf("unsupported schema-2 file was modified or removed: err=%v bytes=%s", err, preserved)
 	}
 
 	if err := files.Write(inferenceConfigurationFile, []byte(`{"schema_version":2,"schema_version":2}`)); err != nil {
@@ -99,9 +111,9 @@ func TestInferenceConfigRepositoryJSONRetainsExistingFileShape(t *testing.T) {
 	files, _ := inferenceTestFiles(t)
 	repository := NewInferenceConfigRepository(files)
 	state := inference.ConfigState{
-		SchemaVersion: 2, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
+		SchemaVersion: 3, OwnedSlots: []string{}, Cleanup: []inference.CredentialCleanup{}, Receipts: []inference.ConfigurationReceipt{},
 		Targets: map[string]inference.ProviderTarget{
-			"test-target": {Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model", APIKeyEnv: "FLOE_KEY_SYNTHETIC", Capabilities: []string{inference.ChatCapability}},
+			"test-target": {Provider: "openai_compatible", BaseURL: "https://example.invalid", Model: "model", APIKeyEnv: "FLOE_KEY_SYNTHETIC"},
 		},
 		Routes:    map[inference.Purpose]inference.PurposeRoute{inference.QuickResponse: {TargetID: "test-target", ReasoningEffort: "medium", Enabled: true}},
 		Providers: map[string]inference.ProviderProfile{},

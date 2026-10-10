@@ -7,7 +7,6 @@ import (
 
 	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/inference"
-	"floe/server/internal/trust"
 )
 
 const inferenceConfigurationFile = "inference.json"
@@ -33,9 +32,9 @@ func (repository *InferenceConfigRepository) LoadConfig() inference.ConfigReadOu
 	case err != nil:
 		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadUnavailable, Cause: err}
 	}
-	var state inference.ConfigState
-	if trust.DecodeStrict(data, &state, inference.MaxConfigSnapshotBytes, 32) != nil {
-		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadInvalid}
+	state, decodeErr := inference.DecodeConfigState(data)
+	if decodeErr != nil {
+		return inference.ConfigReadOutcome{Disposition: inference.ConfigReadInvalid, Cause: decodeErr}
 	}
 	return inference.ConfigReadOutcome{Disposition: inference.ConfigReadPresent, State: state}
 }

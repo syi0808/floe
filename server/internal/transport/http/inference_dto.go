@@ -13,8 +13,22 @@ type PurposeCapabilityDTO struct {
 	Status             string                        `json:"status"`
 	CapabilityRevision string                        `json:"capability_revision,omitempty"`
 	Capabilities       []string                      `json:"capabilities,omitempty"`
+	CapabilityStates   CapabilityStatesDTO           `json:"capability_states,omitempty"`
 	BudgetProfile      *inference.ModelBudgetProfile `json:"budget_profile,omitempty"`
 }
+
+type CapabilityProvenanceDTO struct {
+	Source     string `json:"source"`
+	VerifiedAt string `json:"verified_at"`
+}
+
+type CapabilityStateDTO struct {
+	Status     string                   `json:"status"`
+	Reason     string                   `json:"reason,omitempty"`
+	Provenance *CapabilityProvenanceDTO `json:"provenance,omitempty"`
+}
+
+type CapabilityStatesDTO map[string]CapabilityStateDTO
 type InventoryResponseDTO struct {
 	SchemaVersion int `json:"schema_version"`
 	Purposes      struct {
@@ -243,6 +257,7 @@ func inventoryDTO(i inference.PurposeInventory, catalog *modelcatalog.Store) Inv
 		profile.Sources.Catalog = catalogBudgetFacts(catalog, c.ModelIdentity)
 		out.CapabilityRevision = c.CapabilityRevision
 		out.Capabilities = append([]string(nil), c.Capabilities...)
+		out.CapabilityStates = capabilityStatesDTO(c.CapabilityStates)
 		out.BudgetProfile = &profile
 		return out
 	}
@@ -252,6 +267,18 @@ func inventoryDTO(i inference.PurposeInventory, catalog *modelcatalog.Store) Inv
 	out.Purposes.EverydayAssistance = capability(i.EverydayAssistance)
 	out.Purposes.DeepWork = capability(i.DeepWork)
 	return out
+}
+
+func capabilityStatesDTO(value inference.CapabilityStates) CapabilityStatesDTO {
+	copy := make(CapabilityStatesDTO, len(value))
+	for name, state := range value {
+		converted := CapabilityStateDTO{Status: string(state.Status), Reason: state.Reason}
+		if state.Provenance != nil {
+			converted.Provenance = &CapabilityProvenanceDTO{Source: state.Provenance.Source, VerifiedAt: state.Provenance.VerifiedAt}
+		}
+		copy[name] = converted
+	}
+	return copy
 }
 
 func catalogBudgetFacts(store *modelcatalog.Store, identity inference.ModelIdentity) inference.CatalogBudgetFacts {

@@ -136,8 +136,12 @@ test('catalog suggestions preserve a removed selected model and leave entry open
   const env = makeDashboard([
     {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({
       providers: {codex_oauth: {purposes: {
-        quick_response: {model: 'removed-model', capabilities: ['chat']},
-        everyday_assistance: {model: 'retired-model', capabilities: ['chat']},
+        quick_response: {model: 'removed-model', capability_states: {
+          chat: {status: 'unknown', reason: 'evidence_absent'},
+          structured_output: {status: 'unknown', reason: 'evidence_absent'},
+          tool_proposals: {status: 'unsupported', provenance: {source: 'synthetic fixture', verified_at: '2026-10-10T00:00:00Z'}},
+        }},
+        everyday_assistance: {model: 'retired-model'},
       }}},
       model_catalog: {
         catalog: {providers: [{provider_id: 'codex_oauth', models: [
@@ -156,6 +160,10 @@ test('catalog suggestions preserve a removed selected model and leave entry open
   const deprecatedInput = env.window.document.querySelector('[name="everyday_assistance_model"]');
   assert.equal(modelInput.value, 'removed-model');
   assert.equal(deprecatedInput.value, 'retired-model');
+  assert.equal(env.window.document.querySelectorAll('.model-capabilities input[type="checkbox"]').length, 0);
+  assert.match(env.window.document.querySelector('[data-class="quick_response"] .capability-states').textContent, /Structured JSON: Unknown/);
+  assert.match(env.window.document.querySelector('[data-class="quick_response"] .capability-states').textContent, /Text chat: Unknown/);
+  assert.match(env.window.document.querySelector('[data-class="quick_response"] .capability-states').textContent, /Tool proposals: Unsupported · synthetic fixture · verified 2026-10-10/);
   assert.equal(modelInput.getAttribute('list'), 'model-suggestions');
   const choices = [...element(env.window, 'model-suggestions').options].map((option) => option.value);
   assert.deepEqual(choices, ['gpt-5.5']);
@@ -195,7 +203,7 @@ const savedProviderContext = (operationId, {hasApiKey = false, model = 'saved-mo
   provider: 'openai_compatible',
   has_api_key: hasApiKey,
   base_url: 'https://api.openai.com/v1',
-  purposes: {quick_response: {model, reasoning_effort: 'medium', capabilities: ['chat']}},
+  purposes: {quick_response: {model, reasoning_effort: 'medium'}},
   draft_generation: 1,
 });
 
@@ -405,6 +413,7 @@ test('lost provider response recovers no_record then replays the exact saved com
   await env.settle();
   const initialRequest = env.requests.find((request) => request.path === '/manage/api/provider');
   const originalBody = JSON.parse(initialRequest.body);
+  assert.equal(Object.hasOwn(originalBody.purposes.quick_response, 'capabilities'), false);
   const storedContext = env.window.sessionStorage.getItem(providerOperationStorage);
   assert.ok(storedContext);
   assert.doesNotMatch(storedContext, /synthetic-only-key/);
@@ -422,6 +431,7 @@ test('lost provider response recovers no_record then replays the exact saved com
   assert.equal(posts.length, 2);
   assert.deepEqual(JSON.parse(posts[1].body), originalBody);
   assert.equal(JSON.parse(posts[1].body).operation_id, originalBody.operation_id);
+  assert.equal(Object.hasOwn(JSON.parse(posts[1].body).purposes.quick_response, 'capabilities'), false);
   assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
   assert.match(element(env.window, 'provider-operation-status').textContent, /completed/i);
   env.assertDrained();

@@ -628,6 +628,52 @@ Git VCS status (`exit status 128`, with Go's `-buildvcs=false` hint); no Git
 security setting was changed. Raw command output is saved in
 `/tmp/floe-inference-lifecycle-dashboard-e970-logs`. No commit or push was made.
 
+**Bounded P5 model-capability evidence candidate (2026-10-10):** implemented on
+the exact requested base `48ce5e5e3b28ec6f8b0a710eab52c8f4bef36c1f` (tree
+`3a07b52bd1696c224a7840d8c30d7d5639b047ee`). Inference now resolves explicit
+`supported`/`unsupported` facts and absent-as-`unknown` through a typed metadata
+snapshot port. Node composes the model-catalog adapter; the owner has no import
+of catalog storage or provider adapters. Evidence is a separate version-1
+contract keyed by exact provider, model, and canonical endpoint, with required
+provenance. Existing catalog v1 suggestion capabilities remain descriptive.
+The request commitment binds effective states from the same snapshot used for
+resolution; provenance, suggestion fields, and descriptive limits do not enter
+that commitment. Schema-2 manual assertions are discarded in an explicit
+validated schema-3 rewrite that preserves selection and resolves pending
+credential transitions. Dashboard assertions are rejected, and the UI displays
+read-only derived states. The synthetic local catalog example and validated
+install/reload/rollback flow are documented in
+`server/internal/modelcatalog/README.md`.
+
+Coverage includes exact custom-endpoint matching, protocol-vs-model support,
+unknown and unsupported states, effective revision drift before dispatch,
+single-snapshot resolution, provenance-only revision stability, catalog
+install/reload/rollback, removed suggestions with retained selections, schema-2
+configuration and pending credential recovery, immutable operation replay after
+metadata changes, and dashboard pending/recovery/draft/navigation behavior.
+The Go import boundary passes with one positive adapter-to-owner fixture and 16
+negative fixtures; all 19 dashboard tests pass. The standard Go race/vet/build
+gates and the same three commands with `-tags=floe_dev` pass, as do the focused
+package suite, JavaScript syntax checks, `git diff --check`, and changed-Go
+`gofmt`. Raw logs are saved under
+`/tmp/floe-p5-capability-logs`. The optional Rust-Gateway-to-local-mock E2E
+fixture could not run because its Cargo invocation attempted to fetch uncached
+`serde` metadata from crates.io and network access failed; no provider or paid
+call was made. No commit or push was made.
+
+**P5 parent-review correction (2026-10-10):** this note supersedes the
+schema-2 rewrite/migration statement above without editing that recorded
+candidate text. Chat is a model capability and requires exact versioned
+evidence; absent chat facts stay unknown, and execution requires supported
+chat plus each requested feature. Adapter protocol support only limits the
+result. Endpoint identity retains escaped path semantics, including escaped
+slashes and percent signs; trailing literal slashes are equivalent because
+the provider URL builder removes them before appending its API path. Schema-2
+and other unsupported inference snapshots are now left byte-for-byte untouched
+and fail closed with an explicit unsupported-version error. QA uses a fresh
+isolated profile. No live provider claims, calls, migrations, or publication
+are included.
+
 - **의존 DAG 먼저:** Trust는 identity/principal/custody port, Authority는 signed enforcement, Views는 parse/read/validate workflow. 공유되는 SourceReference/Snapshot/Bounds 등 순수 값만 contracts/source로 옮긴다. authority는 views application을 import하지 않고 Views가 자신의 Authority port로 협력한다.
 - **첫 View:** authority.SourceService의 Preview/Admit/Read/Release orchestration을 views/application으로 이관한다. Engine의 issue/claim/stage/release 검증은 authority에 남긴다. canonical query bytes·proof binding·one-use release·fence를 그대로 보존한다.
 - **Repository 역전:** Trust.Repository, Integrations.Repository, Inference.ConfigRepository와 실제 필요한 credential capability port를 owner가 정의한다. owner transition/원자적 commit 의미는 남기고 파일명·JSON 저장·암호화 mechanics만 adapters/storage로 이동한다.

@@ -145,6 +145,21 @@ after restart there are no surviving in-process generation leases. These
 ordered stores are not one cross-store transaction; persisted intent and exact
 readback define the recovery truth at each cut point.
 
+Model chat, tool, and structured-output support is resolved by Inference
+through a typed capability-metadata snapshot port. Node composes the local
+catalog adapter; Inference does not import catalog storage or model adapters.
+The versioned evidence facts match exact provider, model, and canonical
+endpoint identities. Missing facts remain `unknown`; adapter protocol support
+is an upper bound and cannot establish model support. Execution requires
+positive chat evidence and positive evidence for every requested feature, but
+unknown facts do not block configuration management. The capability revision
+is computed from the same metadata snapshot used to resolve support, so a
+metadata update invalidates a pinned pre-dispatch request when its effective
+support states change. Cosmetic suggestions and descriptive limits stay
+outside that commitment. Schema-2 and other unsupported local configuration
+versions remain unchanged and fail closed with an explicit version error; QA
+uses a fresh isolated profile.
+
 Logical file purpose and root identity are AEAD-bound. Trust, Integrations and
 Inference retain their schema, validation, transitions and indeterminate-write
 fences behind typed repositories. Trust state/producer identity/admin token,

@@ -3,10 +3,17 @@ package inference
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"floe/server/internal/trust"
 )
+
+var ErrUnsupportedConfigVersion = errors.New("unsupported inference configuration schema version")
+
+func unsupportedConfigVersion(version int) error {
+	return fmt.Errorf("%w: %d", ErrUnsupportedConfigVersion, version)
+}
 
 // ProviderProfile is the Inference-owned persisted provider configuration.
 type ProviderProfile struct {
@@ -27,6 +34,39 @@ type ConfigState struct {
 	OwnedSlots    []string                   `json:"owned_slots"`
 	Cleanup       []CredentialCleanup        `json:"cleanup"`
 	Receipts      []ConfigurationReceipt     `json:"receipts"`
+}
+
+// UnmarshalJSON delegates to the strict current-schema decoder.
+func (state *ConfigState) UnmarshalJSON(data []byte) error {
+	decoded, err := DecodeConfigState(data)
+	if err != nil {
+		return err
+	}
+	*state = decoded
+	return nil
+}
+
+// DecodeConfigState accepts only the current schema. Unsupported persisted
+// versions are left untouched and fail closed for explicit operator recovery.
+func DecodeConfigState(data []byte) (ConfigState, error) {
+	if len(data) == 0 || len(data) > MaxConfigSnapshotBytes {
+		return ConfigState{}, errors.New("invalid inference configuration")
+	}
+	var marker struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if json.Unmarshal(data, &marker) != nil {
+		return ConfigState{}, errors.New("invalid inference configuration")
+	}
+	if marker.SchemaVersion != 3 {
+		return ConfigState{}, unsupportedConfigVersion(marker.SchemaVersion)
+	}
+	type currentConfigState ConfigState
+	var current currentConfigState
+	if err := trust.DecodeStrict(data, &current, MaxConfigSnapshotBytes, 32); err != nil {
+		return ConfigState{}, err
+	}
+	return ConfigState(current), nil
 }
 
 // ConfigContent is a candidate complete live configuration within the owner
@@ -65,7 +105,7 @@ const (
 
 func emptyConfigurationState() ConfigState {
 	return ConfigState{
-		SchemaVersion: 2,
+		SchemaVersion: 3,
 		Targets:       map[string]ProviderTarget{},
 		Routes:        map[Purpose]PurposeRoute{},
 		Providers:     map[string]ProviderProfile{},
@@ -76,7 +116,10 @@ func emptyConfigurationState() ConfigState {
 }
 
 func validateConfigurationState(state ConfigState, factory ProviderFactory) error {
-	if factory == nil || state.SchemaVersion != 2 || state.Targets == nil || state.Routes == nil || state.Providers == nil || state.OwnedSlots == nil || state.Cleanup == nil || state.Receipts == nil ||
+	if state.SchemaVersion != 3 {
+		return unsupportedConfigVersion(state.SchemaVersion)
+	}
+	if factory == nil || state.Targets == nil || state.Routes == nil || state.Providers == nil || state.OwnedSlots == nil || state.Cleanup == nil || state.Receipts == nil ||
 		len(state.Targets) > 32 || len(state.Providers) > 3 || ValidateConfig(InferenceConfig{Routes: state.Routes}) != nil {
 		return errors.New("inference configuration unavailable")
 	}
@@ -84,7 +127,7 @@ func validateConfigurationState(state ConfigState, factory ProviderFactory) erro
 		return errors.New("invalid inference lifecycle state")
 	}
 	if state.Pending != nil {
-		candidate := cloneConfigurationState(ConfigState{SchemaVersion: 2, Targets: state.Pending.Candidate.Targets, Routes: state.Pending.Candidate.Routes, Providers: state.Pending.Candidate.Providers, OwnedSlots: []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{}})
+		candidate := cloneConfigurationState(ConfigState{SchemaVersion: 3, Targets: state.Pending.Candidate.Targets, Routes: state.Pending.Candidate.Routes, Providers: state.Pending.Candidate.Providers, OwnedSlots: []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{}})
 		if validateConfigurationState(candidate, factory) != nil {
 			return errors.New("invalid inference transition candidate")
 		}
@@ -178,7 +221,6 @@ func cloneConfigurationState(state ConfigState) ConfigState {
 		out.Pending = &pending
 	}
 	for id, target := range state.Targets {
-		target.Capabilities = append([]string(nil), target.Capabilities...)
 		target.BudgetOverride = cloneModelBudgetOverride(target.BudgetOverride)
 		out.Targets[id] = target
 	}
@@ -189,7 +231,6 @@ func cloneConfigurationState(state ConfigState) ConfigState {
 		copy := profile
 		copy.Purposes = make(map[string]PurposeModel, len(profile.Purposes))
 		for purpose, configured := range profile.Purposes {
-			configured.Capabilities = append([]string(nil), configured.Capabilities...)
 			configured.BudgetOverride = cloneModelBudgetOverride(configured.BudgetOverride)
 			copy.Purposes[purpose] = configured
 		}
@@ -203,7 +244,7 @@ func configurationContent(state ConfigState) ConfigContent {
 }
 
 func cloneConfigContent(content ConfigContent) ConfigContent {
-	state := cloneConfigurationState(ConfigState{SchemaVersion: 2, Targets: content.Targets, Routes: content.Routes, Providers: content.Providers, OwnedSlots: []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{}})
+	state := cloneConfigurationState(ConfigState{SchemaVersion: 3, Targets: content.Targets, Routes: content.Routes, Providers: content.Providers, OwnedSlots: []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{}})
 	return ConfigContent{Targets: state.Targets, Routes: state.Routes, Providers: state.Providers}
 }
 

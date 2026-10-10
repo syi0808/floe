@@ -34,8 +34,8 @@ OWNER_ROOTS = tuple(
 )
 CONCRETE_ADAPTER_PREFIXES = (
     f"{INTERNAL}/adapters",
-    # The operator-facing model catalog remains its existing adapter surface;
-    # metadata/capability ownership is a separate P5 slice.
+    # The model catalog is concrete local data storage; P5 exposes its evidence
+    # to Inference only through the typed modelmetadata adapter.
     f"{INTERNAL}/modelcatalog",
 )
 

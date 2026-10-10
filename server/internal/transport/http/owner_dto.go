@@ -260,12 +260,12 @@ type inferenceProbeDTO struct {
 }
 
 type providerPurposeDTO struct {
-	Model           string                         `json:"model"`
-	ReasoningEffort string                         `json:"reasoning_effort"`
-	Active          bool                           `json:"active"`
-	Available       bool                           `json:"available"`
-	Capabilities    []string                       `json:"capabilities"`
-	BudgetOverride  *inference.ModelBudgetOverride `json:"budget_override,omitempty"`
+	Model            string                         `json:"model"`
+	ReasoningEffort  string                         `json:"reasoning_effort"`
+	Active           bool                           `json:"active"`
+	Available        bool                           `json:"available"`
+	CapabilityStates CapabilityStatesDTO            `json:"capability_states"`
+	BudgetOverride   *inference.ModelBudgetOverride `json:"budget_override,omitempty"`
 }
 
 type providerProfileDTO struct {
@@ -296,7 +296,7 @@ func providerProfilesProjection(values map[string]inference.OperatorProviderProf
 	for provider, value := range values {
 		purposes := make(map[string]providerPurposeDTO, len(value.Purposes))
 		for purpose, item := range value.Purposes {
-			purposes[purpose] = providerPurposeDTO{Model: item.Model, ReasoningEffort: item.ReasoningEffort, Active: item.Active, Available: item.Available, Capabilities: item.Capabilities, BudgetOverride: item.BudgetOverride}
+			purposes[purpose] = providerPurposeDTO{Model: item.Model, ReasoningEffort: item.ReasoningEffort, Active: item.Active, Available: item.Available, CapabilityStates: capabilityStatesDTO(item.CapabilityStates), BudgetOverride: item.BudgetOverride}
 		}
 		out[provider] = providerProfileDTO{BaseURL: value.BaseURL, HasCredential: value.HasCredential, Purposes: purposes}
 	}

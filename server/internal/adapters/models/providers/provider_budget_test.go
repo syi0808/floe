@@ -44,14 +44,18 @@ func TestOllamaEnforcesSelectedOutputReservationForAgentAndStructuredCalls(t *te
 
 	p, err := newProvider(context.Background(), inference.ProviderTarget{
 		Provider: "ollama", BaseURL: server.URL, Model: "local-model",
-		Capabilities: []string{inference.ChatCapability, inference.StructuredOutputCapability},
 	}, func(context.Context, string) (string, error) { return "", nil }, nil)
 	if err != nil {
 		t.Fatalf("create loopback Ollama adapter: %v", err)
 	}
 	limit := uint32(96)
 	content := "synthetic"
-	agent, err := p.agent(context.Background(), inference.AgentInvocation{
+	states := inference.CapabilityStates{
+		inference.ChatCapability:             {Status: inference.CapabilitySupported},
+		inference.StructuredOutputCapability: {Status: inference.CapabilitySupported},
+		inference.ToolProposalsCapability:    {Status: inference.CapabilitySupported},
+	}
+	agent, err := p.agent(context.Background(), states, inference.AgentInvocation{
 		Purpose: inference.QuickResponse, CapabilityRevision: "revision", AttemptID: trust.NewID(),
 		DataClasses: []string{"synthetic"}, Instructions: "Answer briefly.",
 		Input:        inference.AgentInput{Messages: []inference.Message{{Role: "user", Content: &content}}, Tools: []inference.Tool{}},
@@ -60,7 +64,7 @@ func TestOllamaEnforcesSelectedOutputReservationForAgentAndStructuredCalls(t *te
 	if err != nil || len(agent.Output) != 1 || agent.Output[0].Text != "Synthetic completion" {
 		t.Fatalf("Ollama agent request result %#v err=%v", agent, err)
 	}
-	structured, err := p.structured(context.Background(), inference.StructuredInvocation{
+	structured, err := p.structured(context.Background(), states, inference.StructuredInvocation{
 		Purpose: inference.QuickResponse, CapabilityRevision: "revision", AttemptID: trust.NewID(),
 		DataClasses: []string{"synthetic"}, Instructions: "Return a JSON object.",
 		Input:          json.RawMessage(`{"question":"synthetic"}`),
@@ -77,7 +81,6 @@ func TestCodexRejectsConfiguredOutputTokenReservation(t *testing.T) {
 	factory := NewFactory(func(context.Context, string) (string, error) { return "", nil }, nil)
 	err := factory.ValidateTarget(inference.ProviderTarget{
 		Provider: "codex_oauth", BaseURL: "https://chatgpt.com/backend-api/codex", Model: "model-a",
-		Capabilities: []string{inference.ChatCapability},
 		BudgetOverride: &inference.ModelBudgetOverride{
 			SchemaVersion:                   inference.ModelBudgetOverrideVersion,
 			SelectedOutputReservationTokens: &limit,
@@ -85,5 +88,63 @@ func TestCodexRejectsConfiguredOutputTokenReservation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Codex accepted an output reservation it cannot enforce")
+	}
+}
+
+func TestProviderRequestPathMatchesCanonicalEndpointIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		baseURL        string
+		wantBasePath   string
+		wantIdentity   string
+		wantRequestURI string
+	}{
+		{
+			name:           "trimmed trailing slash and retained base path",
+			baseURL:        "https://example.invalid/api/v1///",
+			wantBasePath:   "https://example.invalid/api/v1",
+			wantIdentity:   "https://example.invalid/api/v1",
+			wantRequestURI: "/api/v1/chat/completions",
+		},
+		{
+			name:           "encoded slash remains one encoded path segment",
+			baseURL:        "https://example.invalid/tenant%2Fmodel/",
+			wantBasePath:   "https://example.invalid/tenant%2Fmodel",
+			wantIdentity:   "https://example.invalid/tenant%2Fmodel",
+			wantRequestURI: "/tenant%2Fmodel/chat/completions",
+		},
+		{
+			name:           "escaped percent remains distinct from escaped slash",
+			baseURL:        "https://example.invalid/tenant%252Fmodel",
+			wantBasePath:   "https://example.invalid/tenant%252Fmodel",
+			wantIdentity:   "https://example.invalid/tenant%252Fmodel",
+			wantRequestURI: "/tenant%252Fmodel/chat/completions",
+		},
+		{
+			name:           "path case is preserved",
+			baseURL:        "https://example.invalid/Tenant/Model",
+			wantBasePath:   "https://example.invalid/Tenant/Model",
+			wantIdentity:   "https://example.invalid/Tenant/Model",
+			wantRequestURI: "/Tenant/Model/chat/completions",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, err := newProvider(context.Background(), inference.ProviderTarget{
+				Provider: "openai_compatible", BaseURL: test.baseURL, Model: "synthetic-model",
+			}, func(context.Context, string) (string, error) { return "", nil }, nil)
+			if err != nil {
+				t.Fatalf("construct local provider adapter: %v", err)
+			}
+			if adapter.target.BaseURL != test.wantBasePath || adapter.ModelIdentity().Endpoint != test.wantIdentity {
+				t.Fatalf("configured base URL and metadata identity diverged: base=%q identity=%q", adapter.target.BaseURL, adapter.ModelIdentity().Endpoint)
+			}
+			request, err := http.NewRequest(http.MethodPost, adapter.target.BaseURL+"/chat/completions", nil)
+			if err != nil {
+				t.Fatalf("construct mock request URL: %v", err)
+			}
+			if request.URL.EscapedPath() != test.wantRequestURI {
+				t.Fatalf("request construction changed endpoint path: uri=%q", request.URL.EscapedPath())
+			}
+		})
 	}
 }
