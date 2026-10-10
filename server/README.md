@@ -161,7 +161,9 @@ Paired routes reject all nonempty Origin headers. Operator mutations require the
 
 ## Ownership and verification
 
-`trust` owns immutable principals, issuer/producer identity, sessions and durable revocation. `pairing` owns temporary proof/approval state and private committed readback. `integrations` owns connection lifecycle, scopes and cleanup. `views` owns normalized payloads, typed queries and bounded validation. `authority` owns one-use source admission/staging/release. `inference` owns durable operator configuration, purpose selection, account management and accounting; concrete adapters live under `inference/providers` and `inference/codex`. `transport/http` owns framing, routes, cookies and redacted DTOs. `node` composes these owners and real connector factories.
+`trust` owns immutable principals, issuer/producer identity, sessions and durable revocation. `pairing` owns temporary proof/approval state and private committed readback. `integrations` owns connection lifecycle, scopes and cleanup. `views` owns normalized payloads, typed queries and bounded validation. `authority` owns one-use source admission/staging/release. `inference` owns durable operator configuration, purpose selection, account management and accounting; concrete adapters live under `adapters/models/providers` and `adapters/models/codex`. `transport/http` owns framing, routes, cookies and redacted DTOs. `node` composes these owners and real connector factories.
+
+All source View domains—`calendar.timeline`, `mail.communication`, `work.context` and `life.logistics`—use the same `views.Service` preview/admit/read/release flow. Each registered connector supplies a typed descriptor and reader through Integrations; HTTP does not call provider readers directly. Product Calendar Mirror uses the separate `views.CalendarMirrorService` and its distinct permit/release contract. Authority implements the inward Views enforcement ports and does not select a reader. The server does not expose a parallel legacy source-read path.
 
 During the coordinated architecture work, follow the [active plan](../docs/plans/2026-10-02-architecture-refactor.md). Run focused checks at completed slices; the T2 layer exercises actual Rust/Go boundaries with external endpoints mocked. Final server qualification for the implemented scope uses:
 
@@ -179,7 +181,11 @@ Trust state, producer private identity, administrator token, integration journal
 inference configuration and Gmail index payloads use authenticated AES-GCM files.
 The production build holds its root key in the OS credential store. The explicit
 `floe_dev` build uses its separate private file credential store without Keychain
-prompts; it does not weaken production on failure. Public root/profile markers and
+prompts; it does not weaken production on failure. `scripts/run-local.sh` defaults
+to the development build, pairing the `floe_dev` server and Flutter Debug client
+with isolated development profiles. `--release` and `--profile` build the server
+without `floe_dev` and require the production OS credential store; combining either
+with `--debug` is rejected. Public root/profile markers and
 logs are not encrypted payloads. Operator-provided environment files remain inputs.
 
 A process lease excludes a second writer to the same profile. Existing missing or

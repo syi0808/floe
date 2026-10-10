@@ -76,7 +76,7 @@ The core stack should remain operable by users. Hosted Floe is a managed distrib
 
 ## Intelligence is not authority
 
-Models and Experts may understand, recommend and propose. Access and Actions own authorization and consequential execution. No prompt or model output grants itself more authority.
+Models and Experts may understand, recommend and propose. Consequential changes require explicit authority and deterministic owner checks. No prompt or model output grants itself more authority.
 
 ## Reasoning is purpose-based, not a model approval ceremony
 

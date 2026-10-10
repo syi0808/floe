@@ -23,8 +23,8 @@ use turso::{Builder, EncryptionOpts};
 use uuid::Uuid;
 
 mod access_grants;
-mod agent_actions;
 mod authority_keys;
+mod calendar_operations_store;
 mod connection_reviews;
 mod context_cleanup;
 mod context_dependencies;
@@ -35,12 +35,12 @@ mod conversation_core_reads;
 mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;
-mod expert_actions;
 pub(crate) mod expert_binding_reviews;
+mod expert_proposals;
 mod owner_custody;
 mod owner_transcript_reads;
 mod typed_history;
-pub use expert_actions::VaultExpertProposalReader;
+pub use expert_proposals::VaultExpertProposalReader;
 #[cfg(feature = "development-storage")]
 pub(crate) mod development_keys;
 mod gateway_authority;

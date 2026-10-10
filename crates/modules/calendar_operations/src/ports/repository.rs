@@ -160,8 +160,9 @@ pub enum PreDispatchState {
     Blocked { reason: ActionBlockedReason },
 }
 
-/// The single encrypted Action authority. All writes call the Actions-owned pure
-/// transition functions while the exact current record is held by one transaction.
+/// The single encrypted Calendar Operation authority. All writes call the
+/// Calendar Operations-owned pure transition functions while the exact current
+/// record is held by one transaction.
 pub trait CalendarOperationsRepository: Send + Sync {
     /// Pure current coverage inspection for proposal presentation. Admission and
     /// dispatch still validate atomically in their own transactions.

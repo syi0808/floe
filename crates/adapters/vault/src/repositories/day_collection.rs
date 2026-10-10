@@ -1,4 +1,4 @@
-//! Exact idempotent projection of an Actions-owned causal receipt into Day.
+//! Exact idempotent projection of a Calendar Operations causal receipt into Day.
 use super::day_refresh::{
     current_calendar_sources_on, finish_transaction, mirror_on, persist_mirror_on,
     require_executor, versions_of,

@@ -5,7 +5,7 @@
 
 mod api;
 mod bootstrap;
-mod calendar_operations_facade;
+mod calendar_operations_composition;
 #[cfg(unix)]
 mod composition;
 mod connection_observe;

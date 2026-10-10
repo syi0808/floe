@@ -25,7 +25,7 @@ Business modules                    Generic runtime
 Conversation  Experts               Agent Runtime
 Context       Access                Execution
 Inference     Connections
-Actions       Knowledge
+Calendar Ops  Knowledge
 Day
         |
         v
@@ -41,6 +41,8 @@ Pure cross-owner value contracts live in `crates/contracts/`. Built-in Experts a
 ## Go server owner boundaries
 
 The Go server follows the same ownership direction. `server/internal/contracts/source` contains pure source identity, snapshot, descriptor and bounds values shared by source readers and authorization. `server/internal/views` owns View preview, admission, parsing, bounded read/validation and release orchestration. `server/internal/authority` owns signed admission/release enforcement, proof checks, one-use state, staging limits and source-fence enforcement; it implements the inward Views port without importing the Views application package or selecting a reader. `server/internal/integrations` resolves current source identity and owns connection, attempt, cleanup and receipt state. `server/internal/trust` owns principal, issuer, producer identity, pairing activation and revocation state. Trust, Integrations and Inference define their typed repository/configuration ports in their owner packages. `server/internal/adapters/storage` implements encrypted persistence; its `privatefiles` subpackage owns low-level private-file mechanics. `server/internal/adapters/credentials` owns platform credential stores and scoped owner capabilities. Pairing defines typed operations for its receipt index, attempt receipts and pairing tokens; the credential adapter derives and validates their exact slots before store IO.
+
+Every provider View reader is registered as an `integrations.Reader` with its typed `ViewDescriptor`; HTTP source callers use the same Views workflow. Calendar Mirror remains a separate product-specific workflow inside Views with its own permit and release contract.
 
 Concrete server boundaries live under `server/internal/adapters`: provider connectors and lifecycle setup are in `integrations`, OAuth runtimes are in `oauth`, and Codex plus other inference executors are in `models`. These adapters depend on owner contracts; `server/internal/node` composes them. `server/internal/transport/http` owns request/response DTOs, JSON projection and HTTP status mapping.
 

@@ -1,5 +1,6 @@
-//! Physical Task receipt/artifact reader for Actions. Immutable Task provenance
-//! is validated by Experts; proposal and effect policy remain Actions-owned.
+//! Physical Task receipt/artifact reader for Calendar Operations. Immutable Task
+//! provenance is validated by Experts; proposal and effect policy remain owned
+//! by Calendar Operations.
 
 use floe_agent_contract::{ArtifactPart, DependencyCoverage, TaskExecutionReceiptRef};
 use floe_calendar_operations::{
@@ -54,7 +55,7 @@ impl ExpertProposalReader for VaultExpertProposalReader {
     }
 }
 
-/// The encrypted Actions admission transaction may call this after loading the
+/// The encrypted Calendar Operations admission transaction may call this after loading the
 /// exact TaskRecord in that same transaction. No fresh Registry lookup is used.
 pub(super) fn decode_task_proposal(
     record: &TaskRecord,

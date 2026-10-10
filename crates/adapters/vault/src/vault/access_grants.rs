@@ -363,7 +363,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .iter()
                     .find(|grant| grant.id() == *grant_id && grant.authority() == *authority)
                     .ok_or(AgentFailure::Conflict)?;
-                self.invalidate_agent_actions_for_grant_in_transaction(
+                self.invalidate_expert_proposals_for_grant_in_transaction(
                     transaction,
                     *grant_id,
                     *authority,

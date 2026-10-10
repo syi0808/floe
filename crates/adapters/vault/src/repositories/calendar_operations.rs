@@ -87,18 +87,20 @@ impl floe_calendar_operations::OperationSourceReader for crate::TursoStore {
     }
 }
 
-/// The one Actions repository, backed by the Person's encrypted Vault.
-pub struct VaultActionsRepository<Keys> {
+/// The one Calendar Operations repository, backed by the Person's encrypted Vault.
+pub struct VaultCalendarOperationsRepository<Keys> {
     vault: Arc<EncryptedAgentVault<Keys>>,
 }
 
-impl<Keys: VaultKeyProvider> VaultActionsRepository<Keys> {
+impl<Keys: VaultKeyProvider> VaultCalendarOperationsRepository<Keys> {
     pub fn new(vault: Arc<EncryptedAgentVault<Keys>>) -> Self {
         Self { vault }
     }
 }
 
-impl<Keys: VaultKeyProvider> CalendarOperationsRepository for VaultActionsRepository<Keys> {
+impl<Keys: VaultKeyProvider> CalendarOperationsRepository
+    for VaultCalendarOperationsRepository<Keys>
+{
     fn validate_proposal_coverage<'a>(
         &'a self,
         person_id: PersonId,

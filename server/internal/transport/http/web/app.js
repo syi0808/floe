@@ -86,6 +86,7 @@ function rememberProviderOperation(payload, kind = 'update', draftGeneration = n
   providerStorageUnavailable = false;
   providerOperationContext = context;
   pendingProviderCommand = makeProviderOperation(payload, context, draftGeneration);
+  renderProvider();
   return pendingProviderCommand;
 }
 function providerPayloadFromContext(context, apiKey = '') {
@@ -304,10 +305,12 @@ function renderModelCatalogSuggestions() {
   statusNode.textContent = `${source}${version}. ${errors || 'Enter any model ID, including one not listed here.'}`;
 }
 
-function renderCapabilityStates(container, states) {
+function renderCapabilityStates(container, states, {identityMatches = true, operationPending = false} = {}) {
   if (!container) return;
   container.replaceChildren();
-  const heading = text('strong', 'Model capabilities · derived from exact endpoint and model evidence');
+  const heading = text('strong', identityMatches
+    ? 'Model capabilities · derived from exact endpoint and model evidence'
+    : 'Model capabilities · unsaved endpoint/model identity');
   container.append(heading);
   const names = [
     ['chat', 'Text chat'],
@@ -315,7 +318,7 @@ function renderCapabilityStates(container, states) {
     ['tool_proposals', 'Tool proposals'],
   ];
   for (const [name, label] of names) {
-    const fact = states?.[name] || {status: 'unknown', reason: 'evidence_absent'};
+    const fact = (identityMatches ? states?.[name] : null) || {status: 'unknown', reason: 'evidence_absent'};
     const row = document.createElement('p');
     row.className = `capability-state capability-${fact.status}`;
     const status = ({supported: 'Supported', unsupported: 'Unsupported', unknown: 'Unknown'})[fact.status] || 'Unknown';
@@ -331,6 +334,19 @@ function renderCapabilityStates(container, states) {
     row.textContent = `${label}: ${status}${provenance}`;
     container.append(row);
   }
+  if (!identityMatches) {
+    container.append(text('p', 'This endpoint or model differs from saved settings. Capability evidence is unknown for this draft; save it before testing.'));
+  } else if (operationPending) {
+    container.append(text('p', 'A provider operation is unresolved. Check its status before testing.'));
+  }
+}
+
+function providerModelIdentityMatchesSaved(profile, form, purpose) {
+  const savedModel = profile.purposes?.[purpose]?.model;
+  const draftModel = form.elements[`${purpose}_model`].value.trim();
+  const endpointMatches = selectedProvider === 'codex_oauth'
+    || form.elements.base_url.value === (profile.base_url || 'https://api.openai.com/v1');
+  return typeof savedModel === 'string' && savedModel.length > 0 && draftModel === savedModel && endpointMatches;
 }
 
 function renderProvider() {
@@ -345,30 +361,42 @@ function renderProvider() {
   }
   if (isClaude) return;
   const form = element('provider-form');
-  if (editing) {
-    renderModelCatalogSuggestions();
-    renderProviderOperationStatus();
-    return;
-  }
   const profile = state.providers?.[selectedProvider] || {purposes: {}};
-  form.elements.provider.value = selectedProvider;
-  element('provider-heading').replaceChildren(
-    text('h2', isCodex ? 'Codex OAuth' : 'OpenAI-compatible API'),
-    text('p', isCodex ? 'Experimental Codex-client login; use an API key for the official production path.' : 'Use one compatible endpoint and its server-owned credential.'),
-  );
+  if (!editing) {
+    form.elements.provider.value = selectedProvider;
+    element('provider-heading').replaceChildren(
+      text('h2', isCodex ? 'Codex OAuth' : 'OpenAI-compatible API'),
+      text('p', isCodex ? 'Experimental Codex-client login; use an API key for the official production path.' : 'Use one compatible endpoint and its server-owned credential.'),
+    );
+    form.elements.base_url.value = profile.base_url || 'https://api.openai.com/v1';
+    form.elements.api_key.value = '';
+  }
   element('codex-auth').hidden = !isCodex;
   element('api-connection').hidden = isCodex;
-  form.elements.base_url.value = profile.base_url || 'https://api.openai.com/v1';
-  form.elements.api_key.value = '';
+  const operationPending = Boolean(providerOperationContext || providerSubmitBusy || providerRecoveryBusy);
   for (const purpose of purposes) {
     const configured = profile.purposes?.[purpose] || {};
     const model = form.elements[`${purpose}_model`];
-    model.value = configured.model || '';
-    form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
+    if (!editing) {
+      model.value = configured.model || '';
+      form.elements[`${purpose}_effort`].value = configured.reasoning_effort || '';
+    }
     const row = form.querySelector(`[data-class="${purpose}"]`);
-    renderCapabilityStates(row.querySelector('.capability-states'), configured.capability_states);
+    const identityMatches = providerModelIdentityMatchesSaved(profile, form, purpose);
+    renderCapabilityStates(row.querySelector('.capability-states'), configured.capability_states, {identityMatches, operationPending});
     row.classList.toggle('active-route', configured.active === true);
-    row.querySelector('.test-class').disabled = !configured.model || configured.available === false;
+    const testButton = row.querySelector('.test-class');
+    const reason = !configured.model
+      ? 'Save a model before testing.'
+      : !identityMatches
+        ? 'Save this endpoint and model before testing. Test uses the saved provider route.'
+        : operationPending
+          ? 'Resolve the pending provider operation before testing.'
+          : configured.available === false
+            ? 'The saved route does not currently support the required capabilities.'
+            : '';
+    testButton.disabled = Boolean(reason);
+    testButton.title = reason || 'Send a synthetic test using the saved provider route.';
   }
   renderModelCatalogSuggestions();
   element('remove-provider').disabled = !state.providers?.[selectedProvider];
@@ -491,7 +519,7 @@ for (const option of document.querySelectorAll('.provider-option')) {
     renderProvider();
   });
 }
-element('provider-form').addEventListener('input', () => { editing = true; providerDraftGeneration++; });
+element('provider-form').addEventListener('input', () => { editing = true; providerDraftGeneration++; renderProvider(); });
 function providerPayloadFromForm(form) {
   const configured = {};
   const baseURL = form.elements.base_url.value;
@@ -531,7 +559,7 @@ element('provider-form').addEventListener('submit', (event) => {
   providerSubmitBusy = true;
   action(event.submitter || event.target.querySelector('button[type="submit"], button:not([type])'), async () => {
     try { await submitProviderForm(); }
-    finally { providerSubmitBusy = false; }
+    finally { providerSubmitBusy = false; renderProvider(); }
   });
 });
 element('provider-operation-check').addEventListener('click', () => action(element('provider-operation-check'), reconcileProviderOperation));
@@ -568,11 +596,22 @@ element('remove-provider').addEventListener('click', () => action(element('remov
 for (const testButton of document.querySelectorAll('.test-class')) {
   testButton.addEventListener('click', () => action(testButton, async () => {
     const purpose = testButton.closest('.class-grid').dataset.class;
-    const configured = state.providers?.[selectedProvider]?.purposes?.[purpose];
-    if (!configured || !confirm('Send a synthetic test with no personal or calendar data? Provider usage may apply.')) return;
+    const profile = state.providers?.[selectedProvider] || {purposes: {}};
+    const configured = profile.purposes?.[purpose];
+    const form = element('provider-form');
+    if (providerOperationContext || providerSubmitBusy || providerRecoveryBusy) {
+      notice('Resolve the pending provider operation before testing the saved route.');
+      return;
+    }
+    if (!configured?.model || configured.available === false) return;
+    if (!providerModelIdentityMatchesSaved(profile, form, purpose)) {
+      notice('Save the displayed endpoint and model before testing. Test uses the saved provider route.');
+      return;
+    }
+    if (!confirm('Send a synthetic test using the saved provider route, without personal or calendar data? Provider usage may apply.')) return;
     const result = await api('test', {id: `managed_${selectedProvider}_${purpose}`});
     notice(`${purpose.replace('_', ' ')}: valid response in ${result.elapsed_ms} ms.`);
-  }));
+  }).finally(renderProvider));
 }
 element('refresh').onclick = () => action(element('refresh'), refresh);
 element('logout').onclick = () => action(element('logout'), async () => { await api('logout', {}); lock(); });

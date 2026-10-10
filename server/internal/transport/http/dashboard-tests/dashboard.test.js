@@ -108,6 +108,32 @@ function state({csrf = 'csrf-current-session', clients = [], pairing = null, pro
   return {csrf, clients, providers, address: `${origin}`, pairing, model_catalog};
 }
 
+function syntheticCapabilityStates() {
+  const provenance = {source: 'synthetic local fixture', verified_at: '2026-10-10T00:00:00Z'};
+  return {
+    chat: {status: 'supported', provenance},
+    structured_output: {status: 'supported', provenance},
+    tool_proposals: {status: 'supported', provenance},
+  };
+}
+
+function syntheticProvider({baseURL = 'https://fixture.invalid/v1', model = 'floe-fixture-chat-tools-json'} = {}) {
+  const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
+  return {
+    base_url: baseURL,
+    purposes: Object.fromEntries(purposes.map((purpose) => [purpose, {
+      model,
+      reasoning_effort: 'medium',
+      capability_states: syntheticCapabilityStates(),
+      available: true,
+    }])),
+  };
+}
+
+function dispatchInput(window, field) {
+  field.dispatchEvent(new window.Event('input', {bubbles: true}));
+}
+
 function pairing({
   id = '11111111-1111-4111-8111-111111111111',
   phase = 'local_confirmed',
@@ -171,6 +197,97 @@ test('catalog suggestions preserve a removed selected model and leave entry open
   assert.equal(modelInput.value, 'operator-entered-model');
   assert.match(element(env.window, 'model-catalog-status').textContent, /revision-2/);
   assert.match(element(env.window, 'model-catalog-status').textContent, /failed validation/i);
+  env.assertDrained();
+});
+
+test('credential guidance explains encrypted token retrieval and platform-neutral private storage', () => {
+  assert.match(html, /--print-admin-token/);
+  assert.match(html, /encrypted administrator token/i);
+  assert.doesNotMatch(html, /admin-token<\/code> file/i);
+  assert.match(html, /API key <span class="muted">managed by the server’s private credential store<\/span>/);
+  assert.doesNotMatch(html, /macOS Keychain/);
+});
+
+test('a model draft hides saved capability evidence and Test only runs for the saved identity', async (t) => {
+  const savedModel = 'floe-fixture-chat-tools-json';
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({
+      providers: {openai_compatible: syntheticProvider()},
+    })))} ,
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+
+  const form = element(env.window, 'provider-form');
+  const model = form.elements.quick_response_model;
+  const capabilityStates = env.window.document.querySelector('[data-class="quick_response"] .capability-states');
+  const testButton = env.window.document.querySelector('[data-class="quick_response"] .test-class');
+  assert.match(capabilityStates.textContent, /Text chat: Supported · synthetic local fixture/);
+  assert.match(capabilityStates.textContent, /Structured JSON: Supported · synthetic local fixture/);
+  assert.match(capabilityStates.textContent, /Tool proposals: Supported · synthetic local fixture/);
+  assert.equal(testButton.disabled, false);
+  assert.equal(testButton.textContent, 'Test saved route');
+
+  model.value = `${savedModel}-unknown`;
+  dispatchInput(env.window, model);
+  assert.match(capabilityStates.textContent, /unsaved endpoint\/model identity/);
+  assert.match(capabilityStates.textContent, /Text chat: Unknown/);
+  assert.match(capabilityStates.textContent, /Structured JSON: Unknown/);
+  assert.match(capabilityStates.textContent, /Tool proposals: Unknown/);
+  assert.doesNotMatch(capabilityStates.textContent, /Supported|synthetic local fixture/);
+  assert.equal(testButton.disabled, true);
+
+  // A dispatched click cannot bypass the saved-identity guard.
+  testButton.dispatchEvent(new env.window.MouseEvent('click', {bubbles: true}));
+  await env.settle();
+  assert.equal(env.requests.some((request) => request.path === '/manage/api/test'), false);
+  assert.match(element(env.window, 'notice').textContent, /save the displayed endpoint and model/i);
+  assert.equal(testButton.disabled, true);
+
+  model.value = savedModel;
+  dispatchInput(env.window, model);
+  assert.match(capabilityStates.textContent, /Text chat: Supported · synthetic local fixture/);
+  assert.match(capabilityStates.textContent, /verified 2026-10-10/);
+  assert.equal(testButton.disabled, false);
+
+  env.expect('test', 'POST', jsonResponse(200, {elapsed_ms: 12}));
+  testButton.click();
+  await env.settle();
+  const testRequest = env.requests.find((request) => request.path === '/manage/api/test');
+  assert.deepEqual(JSON.parse(testRequest.body), {id: 'managed_openai_compatible_quick_response'});
+  assert.match(element(env.window, 'notice').textContent, /valid response in 12 ms/i);
+  assert.equal(env.requests.some((request) => request.path === '/manage/api/provider'), false);
+  env.assertDrained();
+});
+
+test('an endpoint draft clears evidence for all models and reverting restores saved evidence', async (t) => {
+  const savedEndpoint = 'https://fixture.invalid/v1';
+  const env = makeDashboard([
+    {path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({
+      providers: {openai_compatible: syntheticProvider({baseURL: savedEndpoint})},
+    })))} ,
+  ]);
+  t.after(() => env.close());
+  await env.settle();
+
+  const form = element(env.window, 'provider-form');
+  const endpoint = form.elements.base_url;
+  endpoint.value = 'https://fixture.invalid/v2';
+  dispatchInput(env.window, endpoint);
+  for (const purpose of ['quick_response', 'everyday_assistance', 'deep_work']) {
+    const row = env.window.document.querySelector(`[data-class="${purpose}"]`);
+    assert.match(row.querySelector('.capability-states').textContent, /Text chat: Unknown/);
+    assert.doesNotMatch(row.querySelector('.capability-states').textContent, /Supported|synthetic local fixture/);
+    assert.equal(row.querySelector('.test-class').disabled, true);
+  }
+
+  endpoint.value = savedEndpoint;
+  dispatchInput(env.window, endpoint);
+  for (const purpose of ['quick_response', 'everyday_assistance', 'deep_work']) {
+    const row = env.window.document.querySelector(`[data-class="${purpose}"]`);
+    assert.match(row.querySelector('.capability-states').textContent, /Text chat: Supported · synthetic local fixture/);
+    assert.equal(row.querySelector('.test-class').disabled, false);
+  }
   env.assertDrained();
 });
 
@@ -475,20 +592,45 @@ test('completion after a pending submit preserves newer unsent provider edits', 
   ]);
   t.after(() => env.close());
   await env.settle();
-  await startSignedIn(env);
+  await startSignedIn(env, null, {openai_compatible: syntheticProvider()});
 
-  const form = editProviderForm(env, {model: 'submitted-model', apiKey: 'synthetic-first-key'});
+  const form = element(env.window, 'provider-form');
+  const testButton = env.window.document.querySelector('[data-class="quick_response"] .test-class');
+  form.elements.api_key.value = 'synthetic-first-key';
+  dispatchInput(env.window, form.elements.api_key);
+  const savedCapabilities = env.window.document.querySelector('[data-class="quick_response"] .capability-states');
+  assert.match(savedCapabilities.textContent, /Text chat: Supported · synthetic local fixture/);
+  assert.equal(testButton.disabled, false);
+
   const delayedPost = env.expectDeferred('provider', 'POST');
   submitProviderForm(env);
   await env.settle();
+  const originalRequest = env.requests.find((request) => request.path === '/manage/api/provider');
+  const originalBody = JSON.parse(originalRequest.body);
+  const storedContext = JSON.parse(env.window.sessionStorage.getItem(providerOperationStorage));
+  assert.equal(storedContext.operation_id, originalBody.operation_id);
+  assert.doesNotMatch(env.window.sessionStorage.getItem(providerOperationStorage), /synthetic-first-key/);
+  assert.equal(testButton.disabled, true);
+  assert.match(savedCapabilities.textContent, /provider operation is unresolved/i);
+
   form.elements.quick_response_model.value = 'newer-unsent-model';
-  form.elements.quick_response_model.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+  dispatchInput(env.window, form.elements.quick_response_model);
+  assert.match(savedCapabilities.textContent, /Text chat: Unknown/);
+  assert.doesNotMatch(savedCapabilities.textContent, /Supported|synthetic local fixture/);
+  assert.equal(testButton.disabled, true);
 
   env.expect('inference/recover', 'POST', jsonResponse(200, {ok: true, recovered: true}));
-  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: {base_url: 'https://api.openai.com/v1', purposes: {quick_response: {model: 'submitted-model'}}}}})));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {openai_compatible: syntheticProvider()}})));
   element(env.window, 'provider-operation-check').click();
   await env.settle();
+  const posts = env.requests.filter((request) => request.path === '/manage/api/provider');
+  assert.equal(posts.length, 1);
+  assert.deepEqual(JSON.parse(posts[0].body), originalBody);
+  assert.equal(originalBody.purposes.quick_response.model, 'floe-fixture-chat-tools-json');
   assert.equal(form.elements.quick_response_model.value, 'newer-unsent-model');
+  assert.match(savedCapabilities.textContent, /Text chat: Unknown/);
+  assert.doesNotMatch(savedCapabilities.textContent, /Supported|synthetic local fixture/);
+  assert.equal(testButton.disabled, true);
   assert.match(element(env.window, 'provider-operation-status').textContent, /newer form edits remain on screen/i);
   assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
 

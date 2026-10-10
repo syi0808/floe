@@ -28,7 +28,8 @@ pub use engine::TursoStore;
 pub use error::{StoreError, StoreErrorCode};
 #[cfg(unix)]
 pub use repositories::{
-    ContextEvidenceReader, VaultActionsRepository, VaultConversationRepository, VaultTaskRepository,
+    ContextEvidenceReader, VaultCalendarOperationsRepository, VaultConversationRepository,
+    VaultTaskRepository,
 };
 #[cfg(unix)]
 pub use vault::*;

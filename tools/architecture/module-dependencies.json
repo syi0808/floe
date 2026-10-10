@@ -193,10 +193,10 @@
       ]
     },
     {
-      "id": "actions",
+      "id": "calendar_operations",
       "package": "floe-calendar-operations",
       "path": "crates/modules/calendar_operations",
-      "responsibility": "Proposal review, idempotent actions, reconciliation",
+      "responsibility": "Calendar Operation proposal review, idempotent external effects, reconciliation",
       "group": "modules",
       "allowed_internal_dependencies": [
         "kernel",
@@ -239,7 +239,7 @@
         "inference",
         "experts",
         "knowledge",
-        "actions",
+        "calendar_operations",
         "access",
         "connections",
         "context_contract",
@@ -258,7 +258,7 @@
         "agent_runtime",
         "context_contract",
         "execution",
-        "actions",
+        "calendar_operations",
         "day",
         "experts"
       ]
@@ -291,7 +291,7 @@
         "inference",
         "context",
         "connections",
-        "actions",
+        "calendar_operations",
         "access",
         "day",
         "kernel",
@@ -318,7 +318,7 @@
         "connections",
         "access",
         "knowledge",
-        "actions",
+        "calendar_operations",
         "day",
         "context"
       ]
@@ -340,7 +340,7 @@
         "access",
         "context",
         "knowledge",
-        "actions",
+        "calendar_operations",
         "day",
         "builtin",
         "providers",
@@ -375,7 +375,7 @@
         "access",
         "context",
         "day",
-        "actions",
+        "calendar_operations",
         "experts",
         "knowledge",
         "kernel",

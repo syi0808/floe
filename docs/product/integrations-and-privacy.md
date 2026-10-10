@@ -85,7 +85,7 @@ Third-party Experts are denied by default. Grants are semantic and scoped, such 
 - No implicit unrestricted network/filesystem access.
 - No direct authoritative Memory write.
 - Broader package permissions require explicit re-approval.
-- Action proposal permission does not bypass Actions authority.
+- Proposal permission does not bypass the authority required for the exact external change.
 
 ## Device and server placement
 

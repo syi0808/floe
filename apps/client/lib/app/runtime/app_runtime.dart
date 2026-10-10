@@ -11,7 +11,7 @@ import 'dart:async';
 import 'package:path_provider/path_provider.dart';
 import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_gateway.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
-import 'package:floe_client/features/actions/application/operation_authorization_facade.dart';
+import 'package:floe_client/features/actions/infrastructure/app_wire_operation_authorization_gateway.dart';
 import 'package:floe_client/features/conversation/assistant_features/infrastructure/app_wire_assistant_feature_gateway.dart';
 import 'package:floe_client/infrastructure/native/native_context_host_transport.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
@@ -71,7 +71,6 @@ final class AppRuntime {
   late final assistantFeatures = AppWireAssistantFeatureGateway(_transport);
   late final memory = AppWireMemoryGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
-  late final operationAuthorization = OperationAuthorizationFacade(this);
   late final connectionsController = ConnectionsController(
     connections,
     runtime: runtimeController,
@@ -107,7 +106,7 @@ final class AppRuntime {
     runtime: runtimeController,
     assistantFeatures: assistantFeatureController,
     memory: memoryController,
-    operationAuthorization: operationAuthorization,
+    operationAuthorization: AppWireOperationAuthorizationGateway(_transport),
   );
   late final NativeContextHostTransport nativeHostTransport =
       AppWireNativeContextHostTransport(_transport.nativeCallbacks);

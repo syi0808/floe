@@ -62,13 +62,11 @@ class PersonalDayScreen extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.query,
-    this.operationAuthorization,
+    required this.ownerGateways,
     this.agentGateway,
     this.connectionsController,
-    this.ownerGateways = const LocalOwnerGateways(),
   });
   final DayGateway gateway;
-  final OperationAuthorizationGateway? operationAuthorization;
   final DayQuery query;
   final AgentConversationGateway? agentGateway;
   final ConnectionsController? connectionsController;
@@ -108,7 +106,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     widget.connectionsController?.addListener(_connectionsChanged);
     unawaited(_loadInitialDay());
     final runtime = widget.ownerGateways.runtime;
-    final actionGateway = widget.operationAuthorization;
+    final actionGateway = widget.ownerGateways.operationAuthorization;
     if (actionGateway != null && runtime != null) {
       operationPolicyController = OperationPolicyController(
         gateway: actionGateway,

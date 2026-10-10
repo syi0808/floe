@@ -8,7 +8,7 @@ use floe_experts::TaskRepository;
 use floe_kernel::{AgentFailure, OwnerActor};
 use floe_provider_adapters::sources::NativeCalendarExecutor;
 use floe_vault::{
-    EncryptedAgentVault, TursoStore, VaultActionsRepository, VaultExpertProposalReader,
+    EncryptedAgentVault, TursoStore, VaultCalendarOperationsRepository, VaultExpertProposalReader,
     VaultKeyProvider,
 };
 use std::sync::Arc;
@@ -23,7 +23,7 @@ pub(crate) fn build_calendar_operations<Keys: VaultKeyProvider + 'static>(
         Arc<dyn floe_calendar_operations::CalendarOperationExecutor>,
     >,
 ) -> Result<Arc<CalendarOperationsService>, AgentFailure> {
-    let repository = Arc::new(VaultActionsRepository::new(vault));
+    let repository = Arc::new(VaultCalendarOperationsRepository::new(vault));
     let proposals = Arc::new(VaultExpertProposalReader::new(tasks));
     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
     let executor: Arc<dyn floe_calendar_operations::CalendarOperationExecutor> = match qa_executor {

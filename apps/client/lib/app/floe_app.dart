@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 
-import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/presentation/personal_day_screen.dart';
@@ -20,11 +19,10 @@ class FloeApp extends StatefulWidget {
     super.key,
     required this.gateway,
     required this.personId,
-    this.operationAuthorization,
+    required this.ownerGateways,
     this.query,
     this.agentGateway,
     this.connectionsController,
-    this.ownerGateways = const LocalOwnerGateways(),
     this.onDisposeGateway,
     this.locale = const Locale('en'),
     this.builder,
@@ -32,9 +30,6 @@ class FloeApp extends StatefulWidget {
   final Locale locale;
   final DayGateway gateway;
   final String personId;
-
-  /// Access-owned policy for Expert-proposed Calendar changes.
-  final OperationAuthorizationGateway? operationAuthorization;
 
   final DayQuery? query;
   final AgentConversationGateway? agentGateway;
@@ -68,7 +63,6 @@ class _FloeAppState extends State<FloeApp> {
     final home = FloeToastHost(
       child: PersonalDayScreen(
         gateway: widget.gateway,
-        operationAuthorization: widget.operationAuthorization,
         query: effectiveQuery,
         agentGateway: widget.agentGateway,
         connectionsController: widget.connectionsController,

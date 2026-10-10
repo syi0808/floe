@@ -908,7 +908,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
     }
 
-    pub(super) async fn invalidate_agent_actions_for_grant_in_transaction(
+    pub(super) async fn invalidate_expert_proposals_for_grant_in_transaction(
         &self,
         transaction: &Transaction<'_>,
         grant_id: floe_context_contract::GrantId,
@@ -1052,7 +1052,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(CalendarOperationStoreError::CorruptRecord);
         }
-        let evidence = super::expert_actions::decode_task_proposal(
+        let evidence = super::expert_proposals::decode_task_proposal(
             &task,
             evidence_ref,
             *artifact_id,

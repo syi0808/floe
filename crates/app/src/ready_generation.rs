@@ -182,15 +182,16 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 programs: floe_experts_builtin::registrations(),
             },
         )?);
-        let calendar_operations = crate::calendar_operations_facade::build_calendar_operations(
-            actor.clone(),
-            vault.clone(),
-            core.store.clone(),
-            core.day.clone(),
-            task_repository,
-            #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
-            calendar_operation_executor,
-        )?;
+        let calendar_operations =
+            crate::calendar_operations_composition::build_calendar_operations(
+                actor.clone(),
+                vault.clone(),
+                core.store.clone(),
+                core.day.clone(),
+                task_repository,
+                #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+                calendar_operation_executor,
+            )?;
         let day_operation_port: Arc<dyn floe_day::ExternalCalendarOperationPort> =
             calendar_operations.clone();
         core.day
@@ -294,7 +295,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         let close = self.owners.close_admission();
         let gateway = isolate_sync(|| self.core.product_gateway.retire(self.generation));
         let scope = crate::host_scope(operation_id, Cancellation::new(), Duration::from_secs(34));
-        let (conversation, connections, actions, experts, knowledge) = tokio::join!(
+        let (conversation, connections, calendar_operations, experts, knowledge) = tokio::join!(
             drain_owner(|| self.owners.conversation.shutdown(&scope)),
             drain_owner(|| self.owners.connections.shutdown_and_drain(&scope)),
             drain_owner(|| self.owners.calendar_operations.shutdown_and_drain(&scope)),
@@ -306,7 +307,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             .and(gateway)
             .and(conversation)
             .and(connections)
-            .and(actions)
+            .and(calendar_operations)
             .and(experts)
             .and(knowledge);
         #[cfg(all(test, feature = "development-storage"))]

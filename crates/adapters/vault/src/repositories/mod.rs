@@ -1,7 +1,7 @@
 //! Owner-scoped repository implementations over the local encrypted engine.
 
-mod actions;
-pub use actions::VaultActionsRepository;
+mod calendar_operations;
+pub use calendar_operations::VaultCalendarOperationsRepository;
 mod connections;
 #[cfg(unix)]
 mod context_evidence;
