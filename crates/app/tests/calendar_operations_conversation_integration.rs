@@ -294,6 +294,69 @@ mod qa {
         }
     }
 
+    fn wait_for_linked_resume(
+        host: &AppHost<AppComposition>,
+        origin_run_id: floe_kernel::RunId,
+    ) -> floe_conversation::RunReceipt {
+        let command_id = floe_conversation::resume_command_id(origin_run_id)
+            .expect("valid Conversation origin run");
+        let deadline = Instant::now() + Duration::from_secs(55);
+        let linked = loop {
+            let receipt = support::with_ready(host, |services, caller, owners| {
+                let actor = caller.owner_actor();
+                let scope = floe_app::host_scope(
+                    Uuid::new_v4(),
+                    floe_execution::Cancellation::new(),
+                    Duration::from_secs(15),
+                );
+                services.execute_owner(async move {
+                    owners
+                        .conversation
+                        .read_command(&actor, command_id, &scope)
+                        .await
+                })
+            });
+            match receipt {
+                Ok(Some(receipt)) => break receipt,
+                Ok(None) | Err(AgentFailure::StorageBusy) => {}
+                Err(failure) => panic!("read linked Conversation resume: {failure:?}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "linked Conversation resume was not admitted"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(linked.resume_of, Some(origin_run_id));
+
+        loop {
+            let receipt = support::with_ready(host, |services, caller, owners| {
+                let actor = caller.owner_actor();
+                let scope = floe_app::host_scope(
+                    Uuid::new_v4(),
+                    floe_execution::Cancellation::new(),
+                    Duration::from_secs(15),
+                );
+                services.execute_owner(async move {
+                    owners
+                        .conversation
+                        .read_run(&actor, linked.run_id, &scope)
+                        .await
+                })
+            });
+            match receipt {
+                Ok(Some(receipt)) if receipt.state.is_terminal() => return receipt,
+                Ok(Some(_)) | Ok(None) | Err(AgentFailure::StorageBusy) => {}
+                Err(failure) => panic!("read linked Conversation run: {failure:?}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "linked Conversation run did not settle"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
     #[test]
     fn conversation_allow_and_deny_use_the_real_vault_operation_owner() {
         let allowed = prepare_scenario(OperationPolicyMode::Allow, CalendarExecutorScript::Commit);
@@ -816,6 +879,11 @@ mod qa {
                 floe_calendar_operations::ActionStatus::Unknown { .. }
             )
         });
+        // Resolving the review starts a linked Conversation resume; let its
+        // durable writes settle before exercising Day's direct-origin fence.
+        let linked_resume = wait_for_linked_resume(&scenario.host, interaction.origin_run_id);
+        assert_eq!(linked_resume.state, floe_conversation::RunState::Completed);
+        assert_eq!(linked_resume.issue, None);
         let reconciliation_command = Uuid::new_v4();
         let lookups_before_reject = scenario.executor.snapshot().lookups;
         let rejected_expert_reconciliation = scenario
@@ -830,6 +898,10 @@ mod qa {
                 }),
             })
             .expect_err("Day cannot reconcile an Expert operation");
+        assert_eq!(
+            rejected_expert_reconciliation.disposition,
+            ProductCommandDisposition::NotApplied
+        );
         assert!(
             matches!(
                 &rejected_expert_reconciliation.failure,
@@ -858,10 +930,13 @@ mod qa {
                 }),
             })
             .expect("failed Expert reconciliation did not reserve the command ID");
-        assert!(matches!(
-            direct_reconciliation,
-            ProductCommandOutcome::Day(DayCommandOutcome::ReconciledExternalCalendarOperation(_))
-        ));
+        let ProductCommandOutcome::Day(DayCommandOutcome::ReconciledExternalCalendarOperation(
+            direct_receipt,
+        )) = direct_reconciliation
+        else {
+            panic!("Day returned a different direct reconciliation result");
+        };
+        assert_eq!(direct_receipt.operation_id, missing_receipt.operation_id);
         let lookup_deadline = Instant::now() + Duration::from_secs(10);
         while scenario.executor.snapshot().lookups == lookups_before_reject {
             assert!(
