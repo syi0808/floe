@@ -9,7 +9,7 @@ import 'package:floe_client/infrastructure/native/platform_acquisition_services.
 /// Owns the app-lifetime Flutter runtime and its native callback services.
 final class ClientAppBootstrap {
   ClientAppBootstrap._(this.runtime, this._platformServices)
-    : dayGateway = AppWireDayGateway(runtime);
+    : dayGateway = AppWireDayGateway(runtime.wireTransport);
 
   final AppRuntime runtime;
   final DayGateway dayGateway;

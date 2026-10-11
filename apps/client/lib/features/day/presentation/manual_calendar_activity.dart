@@ -25,10 +25,12 @@ class ManualCalendarActivity extends StatefulWidget {
 class _ManualCalendarActivityState extends State<ManualCalendarActivity>
     with WidgetsBindingObserver {
   List<ManualCalendarOperationReceipt> _operations = const [];
+  final Map<String, ManualCalendarOperationReceipt> _latestOperations = {};
   final List<String?> _previousCursors = [];
   String? _cursor;
   String? _nextCursor;
   final Set<String> _busyOperations = {};
+  int _gatewayGeneration = 0;
   bool _loading = false;
   bool _loaded = false;
   String? _error;
@@ -38,6 +40,24 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(ManualCalendarActivity oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.gateway, widget.gateway)) return;
+
+    _gatewayGeneration++;
+    _operations = const [];
+    _latestOperations.clear();
+    _previousCursors.clear();
+    _cursor = null;
+    _nextCursor = null;
+    _busyOperations.clear();
+    _loading = false;
+    _loaded = false;
+    _error = null;
+    unawaited(_load(reset: true));
   }
 
   @override
@@ -59,16 +79,21 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
     bool consumePrevious = false,
   }) async {
     if (_loading) return;
+    final generation = _gatewayGeneration;
+    final gateway = widget.gateway;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final requestedCursor = reset ? null : (useCursor ? cursor : _cursor);
-      final page = await widget.gateway.loadExternalCalendarOperations(
+      final page = await gateway.loadExternalCalendarOperations(
         cursor: requestedCursor,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _gatewayGeneration) return;
+      final operations = page.operations
+          .map(_currentOperation)
+          .toList(growable: false);
       setState(() {
         if (reset) _previousCursors.clear();
         if (rememberCurrent) _previousCursors.add(_cursor);
@@ -76,15 +101,20 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
           _previousCursors.removeLast();
         }
         _cursor = requestedCursor;
-        _operations = page.operations;
+        for (final operation in operations) {
+          _latestOperations[operation.operationRef] = operation;
+        }
+        _operations = operations;
         _nextCursor = page.nextCursor;
         _loaded = true;
       });
     } on Object catch (failure) {
-      if (!mounted) return;
+      if (!mounted || generation != _gatewayGeneration) return;
       setState(() => _error = failure.toString());
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && generation == _gatewayGeneration) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -108,10 +138,11 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
     Future<ManualCalendarOperationReceipt> Function() load,
   ) async {
     if (!_busyOperations.add(operation.operationRef)) return;
+    final generation = _gatewayGeneration;
     setState(() => _error = null);
     try {
       final next = await load();
-      if (!mounted) return;
+      if (!mounted || generation != _gatewayGeneration) return;
       if (next.operationRef != operation.operationRef ||
           next.revision < operation.revision ||
           (next.revision == operation.revision &&
@@ -119,18 +150,40 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
                   next.collectionPending != operation.collectionPending))) {
         throw StateError('Calendar operation status regressed.');
       }
+      final current = _currentOperation(next);
       setState(() {
+        _latestOperations[next.operationRef] = current;
         _operations = [
-          for (final current in _operations)
-            if (current.operationRef == next.operationRef) next else current,
+          for (final existing in _operations)
+            if (existing.operationRef == next.operationRef)
+              current
+            else
+              existing,
         ];
       });
     } on Object catch (failure) {
-      if (mounted) setState(() => _error = failure.toString());
+      if (mounted && generation == _gatewayGeneration) {
+        setState(() => _error = failure.toString());
+      }
     } finally {
-      _busyOperations.remove(operation.operationRef);
-      if (mounted) setState(() {});
+      if (generation == _gatewayGeneration) {
+        _busyOperations.remove(operation.operationRef);
+        if (mounted) setState(() {});
+      }
     }
+  }
+
+  ManualCalendarOperationReceipt _currentOperation(
+    ManualCalendarOperationReceipt next,
+  ) {
+    final previous = _latestOperations[next.operationRef];
+    if (previous == null || next.revision > previous.revision) return next;
+    if (next.revision == previous.revision &&
+        (next.status != previous.status ||
+            next.collectionPending != previous.collectionPending)) {
+      throw StateError('Calendar operation status regressed.');
+    }
+    return previous;
   }
 
   String _status(ManualCalendarOperationReceipt operation) =>

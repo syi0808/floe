@@ -19,10 +19,10 @@ final _timestampPattern = RegExp(
 
 /// The Day timeline, safe Calendar coverage, and durable refresh owner client.
 final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
-  AppWireDayGateway(this._runtime, {DateTime Function()? clock})
+  AppWireDayGateway(this._transport, {DateTime Function()? clock})
     : _clock = clock ?? DateTime.now;
 
-  final AppRuntime _runtime;
+  final AppWireTransport _transport;
   final DateTime Function() _clock;
   _PendingDayMutation? _pendingMutation;
   _PendingExternalCalendarOperation? _pendingExternalCalendarOperation;
@@ -56,7 +56,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
     active.submitted = true;
     try {
       final result = await ownerCommand(
-        _runtime.wireTransport,
+        _transport,
         active.commandId,
         {'kind': 'day.refresh', 'day': active.day},
       );
@@ -79,7 +79,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   @override
   Future<DayRefreshSnapshot> observeDayRefresh(String operationRef) async {
     final result = await ownerQuery(
-      _runtime.wireTransport,
+      _transport,
       newAgentRequestId(),
       {'kind': 'day.refresh.get', 'operation_ref': operationRef},
     );
@@ -141,7 +141,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
   Future<List<ManualCalendarDestination>> loadExternalCalendarDestinations()
   async {
     final result = await ownerQuery(
-      _runtime.wireTransport,
+      _transport,
       newAgentRequestId(),
       const {'kind': 'day.calendar_destinations'},
     );
@@ -189,7 +189,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       throw ArgumentError.value(cursor, 'cursor');
     }
     final result = await ownerQuery(
-      _runtime.wireTransport,
+      _transport,
       newAgentRequestId(),
       {'kind': 'day.external_calendar_operations', 'cursor': cursor, 'limit': limit},
     );
@@ -233,7 +233,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       throw ArgumentError.value(operationRef, 'operationRef');
     }
     final result = await ownerQuery(
-      _runtime.wireTransport,
+      _transport,
       newAgentRequestId(),
       {'kind': 'day.external_calendar_operation.get', 'operation_ref': operationRef},
     );
@@ -260,7 +260,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       throw ArgumentError('Invalid Day Calendar operation identity or revision.');
     }
     final result = await ownerCommand(
-      _runtime.wireTransport,
+      _transport,
       newAgentRequestId(),
       {
         'kind': 'day.external_calendar_operation.reconcile',
@@ -308,7 +308,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
     active.submitted = true;
     try {
       final result = await ownerCommand(
-        _runtime.wireTransport,
+        _transport,
         active.commandId,
         {
           'kind': 'day.external_calendar_operation',
@@ -397,7 +397,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
 
   Future<Map<String, dynamic>> _load(DayQuery query) async {
     try {
-      final result = await _runtime.wireTransport.queryV2({
+      final result = await _transport.queryV2({
         'schema_version': appWireProtocolVersion,
         'request_id': newAgentRequestId(),
         'query': {'kind': 'day.snapshot', 'day': _day(query)},
@@ -455,7 +455,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
     final previouslySubmitted = active.submitted;
     active.submitted = true;
     try {
-      final result = await ownerCommand(_runtime.wireTransport, commandId, {
+      final result = await ownerCommand(_transport, commandId, {
         'kind': 'day.mutate',
         'day': requestDay,
         'mutation': requestMutation,
