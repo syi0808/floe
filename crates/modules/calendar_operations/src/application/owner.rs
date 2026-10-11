@@ -72,10 +72,10 @@ impl CalendarOperationsService {
             .store(true, Ordering::Release);
     }
 
-    /// Serialize every command family by the shared immutable command ID.
-    /// The guard spans replay lookup, mutable-source validation and durable
-    /// admission so a concurrent family cannot claim an ID after an absence
-    /// check but before this command reports a precommit rejection.
+    /// Serialize Calendar Operations command families by the shared immutable
+    /// command ID. The guard keeps replay lookup and mutable-source validation
+    /// in one per-owner interval. Admission transactions recheck the shared
+    /// Vault namespace before commit, including Conversation handoffs.
     pub(super) async fn lock_command(
         &self,
         command_id: Uuid,

@@ -179,7 +179,9 @@ impl CalendarOperationsService {
     }
 
     /// Finish dispatch after an owner transaction has durably admitted this
-    /// exact immutable record. Pending review and policy denial remain inert.
+    /// exact immutable record. Every later failure retains the admitted
+    /// disposition so callers replay this same command ID. Pending review and
+    /// policy denial remain inert.
     pub async fn complete_admission(
         &self,
         actor: &OwnerActor,
@@ -187,7 +189,7 @@ impl CalendarOperationsService {
         scope: &ExecutionScope,
     ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
         self.admit_actor(actor, scope)
-            .map_err(floe_kernel::CommandFailure::NotAdmitted)?;
+            .map_err(floe_kernel::CommandFailure::Admitted)?;
         self.validate_record_actor(actor, &record)
             .map_err(floe_kernel::CommandFailure::Admitted)?;
         if record.state == ActionState::Approved {

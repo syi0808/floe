@@ -1,6 +1,10 @@
 use super::{CalendarOperationsDependencies, CalendarOperationsService};
 use crate::*;
 use floe_access::{OperationAuthorizationPolicy, OperationPolicyChange, OperationPolicyMode};
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_connections::{ConnectionResource, ResourceMode, SourceConnection};
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+use floe_context_contract::{ConnectionId, ConnectorId, ExecutionOwnerId, ResourceHandle};
 use floe_day::{
     CalendarAcquisition, CalendarMirror, CalendarRefreshError, CalendarRefreshRequest,
     DayCollectionCommit, DayCollectionReceipt, DayError, DayMutationCommand, DayMutationResult,
@@ -32,18 +36,30 @@ fn unexpected<'a, T: Send + 'a>() -> BoxFuture<'a, T> {
 
 struct BarrierRepository {
     receipts: StdMutex<HashMap<Uuid, &'static str>>,
+    actions: StdMutex<HashMap<Uuid, (ActionDigest, ActionRecord)>>,
     find_calls: AtomicUsize,
+    admitted: AtomicUsize,
     authority_started: Notify,
     authority_release: Semaphore,
+    admission_committed: Notify,
+    admission_release: Semaphore,
+    pre_dispatch_stops: AtomicUsize,
+    pre_dispatch_stopped: Notify,
 }
 
 impl BarrierRepository {
     fn new() -> Self {
         Self {
             receipts: StdMutex::new(HashMap::new()),
+            actions: StdMutex::new(HashMap::new()),
             find_calls: AtomicUsize::new(0),
+            admitted: AtomicUsize::new(0),
             authority_started: Notify::new(),
             authority_release: Semaphore::new(0),
+            admission_committed: Notify::new(),
+            admission_release: Semaphore::new(0),
+            pre_dispatch_stops: AtomicUsize::new(0),
+            pre_dispatch_stopped: Notify::new(),
         }
     }
 }
@@ -60,9 +76,16 @@ impl CalendarOperationsRepository for BarrierRepository {
     fn get<'a>(
         &'a self,
         _person_id: PersonId,
-        _action_id: Uuid,
+        action_id: Uuid,
     ) -> BoxFuture<'a, Result<Option<ActionRecord>, CalendarOperationStoreError>> {
-        unexpected()
+        Box::pin(async move {
+            Ok(self
+                .actions
+                .lock()
+                .map_err(|_| CalendarOperationStoreError::Unavailable)?
+                .values()
+                .find_map(|(_, record)| (record.id == action_id).then(|| record.clone())))
+        })
     }
 
     fn list<'a>(
@@ -87,10 +110,22 @@ impl CalendarOperationsRepository for BarrierRepository {
         &'a self,
         _person_id: PersonId,
         command_id: Uuid,
-        _request_digest: ActionDigest,
+        request_digest: ActionDigest,
     ) -> BoxFuture<'a, Result<Option<ActionRecord>, CalendarOperationStoreError>> {
         Box::pin(async move {
             self.find_calls.fetch_add(1, Ordering::AcqRel);
+            if let Some((stored_digest, record)) = self
+                .actions
+                .lock()
+                .map_err(|_| CalendarOperationStoreError::Unavailable)?
+                .get(&command_id)
+            {
+                return if stored_digest == &request_digest {
+                    Ok(Some(record.clone()))
+                } else {
+                    Err(CalendarOperationStoreError::Conflict)
+                };
+            }
             let occupied = self
                 .receipts
                 .lock()
@@ -106,9 +141,54 @@ impl CalendarOperationsRepository for BarrierRepository {
 
     fn admit<'a>(
         &'a self,
-        _admission: OperationAdmission,
+        admission: OperationAdmission,
     ) -> BoxFuture<'a, Result<AdmittedOperation, CommandFailure<CalendarOperationStoreError>>> {
-        unexpected()
+        Box::pin(async move {
+            let (record, replayed) = {
+                let mut actions = self.actions.lock().map_err(|_| {
+                    CommandFailure::Indeterminate(CalendarOperationStoreError::Unavailable)
+                })?;
+                if let Some((stored_digest, record)) = actions.get(&admission.command_id) {
+                    if stored_digest != &admission.request_digest {
+                        return Err(CommandFailure::Indeterminate(
+                            CalendarOperationStoreError::Conflict,
+                        ));
+                    }
+                    (record.clone(), true)
+                } else {
+                    if self
+                        .receipts
+                        .lock()
+                        .map_err(|_| {
+                            CommandFailure::Indeterminate(CalendarOperationStoreError::Unavailable)
+                        })?
+                        .contains_key(&admission.command_id)
+                    {
+                        return Err(CommandFailure::Indeterminate(
+                            CalendarOperationStoreError::Conflict,
+                        ));
+                    }
+                    let record = admission.record.clone();
+                    actions.insert(
+                        admission.command_id,
+                        (admission.request_digest, record.clone()),
+                    );
+                    self.admitted.fetch_add(1, Ordering::AcqRel);
+                    (record, false)
+                }
+            };
+            if !replayed {
+                self.admission_committed.notify_one();
+                self.admission_release
+                    .acquire()
+                    .await
+                    .map_err(|_| {
+                        CommandFailure::Indeterminate(CalendarOperationStoreError::Unavailable)
+                    })?
+                    .forget();
+            }
+            Ok(AdmittedOperation { record, replayed })
+        })
     }
 
     fn record_decision<'a>(
@@ -127,9 +207,20 @@ impl CalendarOperationsRepository for BarrierRepository {
 
     fn stop_before_dispatch<'a>(
         &'a self,
-        _stop: PreDispatchStop,
+        stop: PreDispatchStop,
     ) -> BoxFuture<'a, Result<ActionRecord, CalendarOperationStoreError>> {
-        unexpected()
+        Box::pin(async move {
+            let record = self
+                .actions
+                .lock()
+                .map_err(|_| CalendarOperationStoreError::Unavailable)?
+                .values()
+                .find_map(|(_, record)| (record.id == stop.action_id).then(|| record.clone()))
+                .ok_or(CalendarOperationStoreError::NotFound)?;
+            self.pre_dispatch_stops.fetch_add(1, Ordering::AcqRel);
+            self.pre_dispatch_stopped.notify_one();
+            Ok(record)
+        })
     }
 
     fn prepare_dispatch<'a>(
@@ -172,9 +263,15 @@ impl CalendarOperationsRepository for BarrierRepository {
 
     fn read_authority<'a>(
         &'a self,
-        _person_id: PersonId,
+        person_id: PersonId,
     ) -> BoxFuture<'a, Result<OperationAuthorizationPolicy, CalendarOperationStoreError>> {
-        unexpected()
+        Box::pin(async move {
+            Ok(OperationAuthorizationPolicy {
+                person_id,
+                revision: 1,
+                calendar_create: OperationPolicyMode::Ask,
+            })
+        })
     }
 
     fn compare_and_set_authority<'a>(
@@ -312,13 +409,13 @@ impl DayRefreshRepository for UnusedDay {
         &'a self,
         _replacement: RefreshExecutorReplacement,
     ) -> BoxFuture<'a, Result<Vec<RefreshRecord>, DayError>> {
-        unexpected()
+        Box::pin(async { Ok(Vec::new()) })
     }
     fn retire_refresh_executor<'a>(
         &'a self,
         _expected: RefreshExecutorReplacement,
     ) -> BoxFuture<'a, Result<(), DayError>> {
-        unexpected()
+        Box::pin(async { Ok(()) })
     }
 }
 impl DayRepository for UnusedDay {
@@ -340,13 +437,13 @@ impl DayRepository for UnusedDay {
         &'a self,
         _query: DayReadQuery,
     ) -> BoxFuture<'a, Result<Vec<TimelineItem>, DayError>> {
-        unexpected()
+        Box::pin(async { Ok(Vec::new()) })
     }
     fn calendar_mirror<'a>(
         &'a self,
         _person_id: PersonId,
     ) -> BoxFuture<'a, Result<Option<CalendarMirror>, DayError>> {
-        unexpected()
+        Box::pin(async { Ok(None) })
     }
 }
 
@@ -389,12 +486,19 @@ fn service(repository: Arc<BarrierRepository>, actor: OwnerActor) -> CalendarOpe
 }
 
 fn scope_for(timeout: Duration) -> floe_execution::ExecutionScope {
+    scope_with(floe_execution::Cancellation::new(), timeout)
+}
+
+fn scope_with(
+    cancellation: floe_execution::Cancellation,
+    timeout: Duration,
+) -> floe_execution::ExecutionScope {
     let ledger = floe_execution::budget::BudgetLedger::new(
         floe_execution::budget::BudgetConfig::new(100, 100),
         floe_execution::budget::ModelUsage::default(),
     );
     floe_execution::ExecutionScope::root(
-        floe_execution::Cancellation::new(),
+        cancellation,
         Instant::now() + timeout,
         ledger.work_lease(),
         TraceContext::new(Uuid::new_v4()),
@@ -551,4 +655,304 @@ async fn waiting_for_same_command_lock_respects_the_callers_deadline() {
         .await
         .expect("authority task")
         .expect("authority admitted");
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+struct SubmissionSources {
+    source: SourceConnection,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl OperationSourceReader for SubmissionSources {
+    fn list_calendar_sources<'a>(
+        &'a self,
+        person_id: PersonId,
+    ) -> BoxFuture<'a, Result<Vec<SourceConnection>, AgentFailure>> {
+        Box::pin(async move {
+            Ok((self.source.person_id() == person_id)
+                .then(|| self.source.clone())
+                .into_iter()
+                .collect())
+        })
+    }
+
+    fn load<'a>(
+        &'a self,
+        person_id: PersonId,
+        connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<Option<SourceConnection>, AgentFailure>> {
+        Box::pin(async move {
+            Ok((self.source.person_id() == person_id
+                && self.source.connection_id() == connection_id)
+                .then(|| self.source.clone()))
+        })
+    }
+
+    fn source_is_fenced<'a>(
+        &'a self,
+        _person_id: PersonId,
+        _connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn read_reservation_fence<'a>(
+        &'a self,
+        _person_id: PersonId,
+        _connection_id: &'a ConnectionId,
+    ) -> BoxFuture<'a, Result<floe_connections::SourceReservationFence, AgentFailure>> {
+        Box::pin(async {
+            Ok(floe_connections::SourceReservationFence {
+                watermark: floe_connections::SourceReservationWatermark::NeverReserved,
+                fenced: false,
+            })
+        })
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+struct SubmissionExecutor {
+    calendar_id: String,
+    prepare_calls: AtomicUsize,
+    prepare_started: Notify,
+    prepare_release: Semaphore,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+impl CalendarOperationExecutor for SubmissionExecutor {
+    fn destinations<'a>(
+        &'a self,
+        _actor: &'a OwnerActor,
+        _source: &'a ActionSourceFence,
+        _scope: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<Vec<CalendarDestinationObservation>, ActionBlockedReason>> {
+        Box::pin(async move {
+            Ok(vec![CalendarDestinationObservation {
+                calendar_id: self.calendar_id.clone(),
+                calendar_name: "QA Calendar".to_owned(),
+                can_modify: true,
+            }])
+        })
+    }
+
+    fn prepare<'a>(
+        &'a self,
+        _actor: &'a OwnerActor,
+        _record: &'a ActionRecord,
+        _dependencies: &'a [ActionDependencySourceFence],
+        _local_events: &'a [floe_day::Event],
+        _scope: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, Result<Box<dyn PreparedCalendarEffect>, ActionBlockedReason>> {
+        Box::pin(async move {
+            self.prepare_calls.fetch_add(1, Ordering::AcqRel);
+            self.prepare_started.notify_one();
+            self.prepare_release
+                .acquire()
+                .await
+                .map_err(|_| ActionBlockedReason::ExecutorUnavailable)?
+                .forget();
+            Err(ActionBlockedReason::ScheduleConflict)
+        })
+    }
+
+    fn recover<'a>(
+        &'a self,
+        _actor: &'a OwnerActor,
+        _intent: &'a ExecutionIntent,
+        _scope: &'a floe_execution::ExecutionScope,
+    ) -> BoxFuture<'a, CalendarEffectOutcome> {
+        unexpected()
+    }
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+fn fixture_calendar_source(actor: &OwnerActor) -> SourceConnection {
+    let connector = ConnectorId::try_new("calendar.fixture").expect("valid fixture connector");
+    let connection = ConnectionId::try_new("calendar.fixture.local").expect("valid connection");
+    let owner = ExecutionOwnerId::try_new(floe_access::fixture_calendar_execution_owner(
+        &actor.device_id,
+    ))
+    .expect("valid fixture execution owner");
+    let resource = ConnectionResource::new(
+        ResourceHandle::try_new("calendar-1").expect("valid calendar resource"),
+        "QA Calendar".to_owned(),
+        None,
+    )
+    .expect("valid fixture calendar resource");
+    SourceConnection::establish_reviewed_native(
+        actor.person_id,
+        connector,
+        connection,
+        owner,
+        ResourceMode::Selected,
+        vec![resource],
+        "a".repeat(64),
+    )
+    .expect("valid synthetic Calendar source")
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+async fn submission_service(
+    repository: Arc<BarrierRepository>,
+    actor: OwnerActor,
+    source: SourceConnection,
+    executor: Arc<SubmissionExecutor>,
+) -> CalendarOperationsService {
+    let day = Arc::new(DayService::new(
+        Arc::new(UnusedDay),
+        Arc::new(UnusedAcquisition),
+        Arc::new(floe_day::SystemDayClock),
+    ));
+    day.activate(&actor, &scope())
+        .await
+        .expect("activate synthetic Day owner");
+    CalendarOperationsService::new(
+        actor,
+        CalendarOperationsDependencies {
+            repository,
+            sources: Arc::new(SubmissionSources { source }),
+            proposals: Arc::new(UnusedProposals),
+            day,
+            executor,
+            clock: Arc::new(SystemCalendarOperationsClock),
+        },
+    )
+    .expect("construct test Calendar Operations owner")
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[derive(Clone, Copy)]
+enum AdmissionBoundary {
+    Shutdown,
+    Cancelled,
+    Deadline,
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[tokio::test]
+async fn committed_submit_failures_keep_admitted_disposition_and_replay_same_id() {
+    for boundary in [
+        AdmissionBoundary::Shutdown,
+        AdmissionBoundary::Cancelled,
+        AdmissionBoundary::Deadline,
+    ] {
+        let repository = Arc::new(BarrierRepository::new());
+        let actor = OwnerActor {
+            person_id: PersonId::new(),
+            device_id: "device-a".to_owned(),
+            runtime_epoch: 1,
+        };
+        let source = fixture_calendar_source(&actor);
+        let executor = Arc::new(SubmissionExecutor {
+            calendar_id: "calendar-1".to_owned(),
+            prepare_calls: AtomicUsize::new(0),
+            prepare_started: Notify::new(),
+            prepare_release: Semaphore::new(0),
+        });
+        let initial_service = submission_service(
+            Arc::clone(&repository),
+            actor.clone(),
+            source.clone(),
+            Arc::clone(&executor),
+        )
+        .await;
+        let destination_ref = initial_service
+            .destinations(&actor, &scope())
+            .await
+            .expect("synthetic destination")
+            .into_iter()
+            .next()
+            .expect("one writable destination")
+            .destination_ref;
+        let command_id = Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let intent = ActionIntent::DirectCreate {
+            destination_ref,
+            title: "Boundary test".to_owned(),
+            schedule: floe_day::TimedSchedule::new(
+                now + chrono::Duration::hours(2),
+                now + chrono::Duration::hours(2) + chrono::Duration::minutes(30),
+                "UTC",
+            )
+            .expect("valid synthetic schedule"),
+        };
+        let cancellation = floe_execution::Cancellation::new();
+        let timeout = if matches!(boundary, AdmissionBoundary::Deadline) {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_secs(30)
+        };
+        let first_scope = scope_with(cancellation.clone(), timeout);
+        let committed = repository.admission_committed.notified();
+        tokio::pin!(committed);
+        let submit_service = initial_service.clone();
+        let submit_actor = actor.clone();
+        let submit_intent = intent.clone();
+        let submit_scope = first_scope.clone();
+        let first_submit = tokio::spawn(async move {
+            submit_service
+                .submit(&submit_actor, command_id, submit_intent, &submit_scope)
+                .await
+        });
+        committed.await;
+
+        let expected_failure = match boundary {
+            AdmissionBoundary::Shutdown => {
+                initial_service.shutdown();
+                AgentFailure::VaultUnavailable
+            }
+            AdmissionBoundary::Cancelled => {
+                cancellation.cancel();
+                AgentFailure::Cancelled
+            }
+            AdmissionBoundary::Deadline => {
+                tokio::time::sleep_until(first_scope.deadline()).await;
+                AgentFailure::DeadlineExceeded
+            }
+        };
+        repository.admission_release.add_permits(1);
+        assert_eq!(
+            first_submit.await.expect("first submit task"),
+            Err(CommandFailure::Admitted(expected_failure)),
+            "a committed operation must retain its same-ID replay disposition"
+        );
+        assert_eq!(repository.admitted.load(Ordering::Acquire), 1);
+
+        let replay_service = submission_service(
+            Arc::clone(&repository),
+            actor.clone(),
+            source,
+            Arc::clone(&executor),
+        )
+        .await;
+        let executor_started = executor.prepare_started.notified();
+        tokio::pin!(executor_started);
+        let replay = replay_service
+            .submit(&actor, command_id, intent.clone(), &scope())
+            .await
+            .expect("same-ID replay under a fresh scope");
+        executor_started.await;
+        let second_replay = replay_service
+            .submit(&actor, command_id, intent, &scope())
+            .await
+            .expect("concurrent same-ID replay");
+        assert_eq!(second_replay.action_ref, replay.action_ref);
+        assert_eq!(repository.admitted.load(Ordering::Acquire), 1);
+        assert_eq!(
+            executor.prepare_calls.load(Ordering::Acquire),
+            1,
+            "concurrent replay must join the existing operation job"
+        );
+
+        let stopped = repository.pre_dispatch_stopped.notified();
+        tokio::pin!(stopped);
+        executor.prepare_release.add_permits(1);
+        stopped.await;
+        replay_service
+            .shutdown_and_drain(&scope())
+            .await
+            .expect("drain the synthetic pre-dispatch job");
+        assert_eq!(executor.prepare_calls.load(Ordering::Acquire), 1);
+        assert_eq!(repository.pre_dispatch_stops.load(Ordering::Acquire), 1);
+    }
 }
