@@ -304,17 +304,13 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
         'A prior Calendar command is unresolved; retry that exact command first.',
       );
     }
-    final previouslySubmitted = active.submitted;
-    active.submitted = true;
+    final submission = ++active.submissionCount;
+    final previouslySubmitted = submission > 1;
     try {
-      final result = await ownerCommand(
-        _transport,
-        active.commandId,
-        {
-          'kind': 'day.external_calendar_operation',
-          'operation': active.operation,
-        },
-      );
+      final result = await ownerCommand(_transport, active.commandId, {
+        'kind': 'day.external_calendar_operation',
+        'operation': active.operation,
+      });
       _requireKeys(result, const {'kind', 'operation'}, 'Day Calendar result');
       if (result['kind'] != 'day.external_calendar_operation') {
         throw const FormatException('Invalid Day Calendar result kind.');
@@ -322,13 +318,17 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       final receipt = ManualCalendarOperationReceipt.fromJson(
         _asMap(result['operation'], 'Day Calendar operation'),
       );
-      _pendingExternalCalendarOperation = null;
+      if (identical(_pendingExternalCalendarOperation, active)) {
+        _pendingExternalCalendarOperation = null;
+      }
       return receipt;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
-        previouslySubmitted: previouslySubmitted,
-      )) {
+            error,
+            previouslySubmitted: previouslySubmitted,
+          ) &&
+          active.submissionCount == submission &&
+          identical(_pendingExternalCalendarOperation, active)) {
         _pendingExternalCalendarOperation = null;
       }
       throw _runtimeError(error);
@@ -546,7 +546,7 @@ final class _PendingExternalCalendarOperation {
   final String commandId;
   final String intent;
   final Map<String, dynamic> operation;
-  bool submitted = false;
+  int submissionCount = 0;
 }
 
 final class _DecodedMutation {

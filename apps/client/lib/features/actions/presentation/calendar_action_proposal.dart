@@ -38,10 +38,20 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
   bool loadingDestinations = false;
   String? destinationError;
   bool saving = false;
+  int _destinationLoadGeneration = 0;
+  int _saveGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    _resetDraft();
+    if (widget.event == null) {
+      loadingDestinations = true;
+      unawaited(_loadDestinations(markLoading: false));
+    }
+  }
+
+  void _resetDraft() {
     final now = DateTime.now();
     final next =
         widget.initialStart ??
@@ -52,10 +62,38 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
         ? start.add(const Duration(minutes: 45))
         : start.add(event.endsAt.difference(event.startsAt));
     title.text = widget.event?.title ?? '';
-    if (event == null) {
-      loadingDestinations = true;
-      unawaited(_loadDestinations());
+  }
+
+  @override
+  void didUpdateWidget(covariant CalendarEventComposer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.gateway, widget.gateway) &&
+        _sameEventTargetSnapshot(oldWidget.event, widget.event) &&
+        oldWidget.initialStart == widget.initialStart) {
+      return;
     }
+
+    _destinationLoadGeneration++;
+    _saveGeneration++;
+    _resetDraft();
+    destinationRef = null;
+    destinations = const [];
+    destinationError = null;
+    saving = false;
+    loadingDestinations = widget.event == null;
+    if (widget.event == null) {
+      unawaited(_loadDestinations(markLoading: false));
+    }
+  }
+
+  bool _sameEventTargetSnapshot(EventItem? first, EventItem? second) {
+    if (first == null || second == null) return first == null && second == null;
+    final firstTarget = first.actionTarget;
+    final secondTarget = second.actionTarget;
+    return first.id == second.id &&
+        first.revision == second.revision &&
+        firstTarget?.eventId == secondTarget?.eventId &&
+        firstTarget?.expectedRevision == secondTarget?.expectedRevision;
   }
 
   @override
@@ -64,24 +102,39 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     super.dispose();
   }
 
-  Future<void> _loadDestinations() async {
-    destinationError = null;
+  Future<void> _loadDestinations({bool markLoading = true}) async {
+    if (markLoading && loadingDestinations) return;
+    final gateway = widget.gateway;
+    final generation = ++_destinationLoadGeneration;
+    if (markLoading) {
+      setState(() {
+        loadingDestinations = true;
+        destinationError = null;
+      });
+    } else {
+      destinationError = null;
+    }
     try {
-      final values = await widget.gateway.loadExternalCalendarDestinations();
-      if (!mounted) return;
+      final values = await gateway.loadExternalCalendarDestinations();
+      if (!_isCurrentDestinationLoad(gateway, generation)) return;
       setState(() {
         destinations = values;
         destinationRef = values.isEmpty ? null : values.first.destinationRef;
         loadingDestinations = false;
       });
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!_isCurrentDestinationLoad(gateway, generation)) return;
       setState(() {
         destinationError = error.toString();
         loadingDestinations = false;
       });
     }
   }
+
+  bool _isCurrentDestinationLoad(DayGateway gateway, int generation) =>
+      mounted &&
+      generation == _destinationLoadGeneration &&
+      identical(widget.gateway, gateway);
 
   bool _validTitle(String? value) {
     if (value == null || value.trim().isEmpty) return false;
@@ -95,6 +148,7 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     if (saving || loadingDestinations || !form.currentState!.validate()) {
       return;
     }
+    final gateway = widget.gateway;
     final event = widget.event;
     final target = event?.actionTarget;
     if (event == null &&
@@ -104,32 +158,43 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
         event != null && target == null) {
       return;
     }
-    setState(() => saving = true);
+    final requestTitle = title.text.trim();
+    final requestStart = start;
+    final requestEnd = end;
     final ManualCalendarOperationIntent intent = event == null
         ? CreateManualCalendarEvent(
             destinationRef: destinationRef!,
-            title: title.text.trim(),
-            startsAt: start.toUtc(),
-            endsAt: end.toUtc(),
-            timezone: calendarStorageTimezone(start.timeZoneOffset),
+            title: requestTitle,
+            startsAt: requestStart.toUtc(),
+            endsAt: requestEnd.toUtc(),
+            timezone: calendarStorageTimezone(requestStart.timeZoneOffset),
           )
         : UpdateManualCalendarEvent(
             eventRef: target!.eventId,
             expectedRevision: target.expectedRevision,
-            title: title.text.trim(),
-            startsAt: start.toUtc(),
-            endsAt: end.toUtc(),
+            title: requestTitle,
+            startsAt: requestStart.toUtc(),
+            endsAt: requestEnd.toUtc(),
             timezone:
-                event.timezone ?? calendarStorageTimezone(start.timeZoneOffset),
+                event.timezone ??
+                calendarStorageTimezone(requestStart.timeZoneOffset),
           );
+    final generation = ++_saveGeneration;
+    setState(() => saving = true);
     try {
-      final receipt = await widget.gateway.executeExternalCalendarOperation(
-        intent,
-      );
-      if (!mounted) return;
+      final receipt = await gateway.executeExternalCalendarOperation(intent);
+      if (!mounted ||
+          generation != _saveGeneration ||
+          !identical(widget.gateway, gateway)) {
+        return;
+      }
       Navigator.of(context).pop(receipt);
     } on Object catch (error) {
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _saveGeneration ||
+          !identical(widget.gateway, gateway)) {
+        return;
+      }
       setState(() {
         saving = false;
         destinationError = error.toString();
