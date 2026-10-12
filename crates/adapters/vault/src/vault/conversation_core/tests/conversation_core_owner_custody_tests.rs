@@ -6947,11 +6947,25 @@ async fn owner_read_metadata_body_and_coverage_corruption_are_errors() {
         .await
         .expect("read typed payload row")
         .expect("typed payload exists")
-        .get::<String>(0)
-        .expect("typed payload text");
+        .get::<Vec<u8>>(0)
+        .expect("typed payload frame");
+    let payload = String::from_utf8(
+        crate::vault::storage_payload::decode_payload(
+            &payload,
+            body_link.typed_reference.encoded_byte_length() as usize,
+            floe_conversation::MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     let corrupted_payload = payload.replace("body corrupt probe", "Body corrupt probe");
     assert_ne!(corrupted_payload, payload);
     assert_eq!(corrupted_payload.len(), payload.len());
+    let corrupted_payload = crate::vault::storage_payload::encode_payload(
+        corrupted_payload.as_bytes(),
+        floe_conversation::MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    )
+    .unwrap();
     drop(rows);
     transaction
         .execute(

@@ -32,6 +32,17 @@ encrypted fixtures test append/reopen/exact replay, last-scope corruption, and
 corruption and validation without repair. Other owner admission limits remain
 open. Fresh qualification passed all 133 Vault tests, 258 workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. The 4,098-entry fixture includes actual encrypted reopen and exact admission replay; the multi-page fixtures retain corruption rejection without repair. Flutter/Apple/live-provider qualification is not extended by these results.
 
+The lossless typed-history reconstruction replaces encrypted TEXT payloads with
+bounded raw/zlib BLOB frames while preserving exact canonical bytes, digests,
+logical budgets and duplicate-admission row identity. The new actual encrypted
+storage test first reproduced TEXT storage; new cases cover exact reopen,
+pre-hydration budget/header rejection and malformed compressed streams. Existing
+payload-corruption fixtures now frame their deliberately damaged canonical bytes
+so they still exercise evidence validation rather than failing at the new SQL
+type constraint. Fresh qualification passed 140 Vault tests, 265 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. Flutter 3.47.7 / Dart 3.13.5 was restored from a checksum-verified official SDK, but dependency restoration was blocked by the environment network policy for pub.dev, including the supported escalation retry; Flutter tests and analysis did not run. No client/wire source changed in this slice. Apple and live-provider qualification remain open. No existing profile is
+reset; a fresh explicitly selected development profile is required for this
+stored-format change. Model-context semantic compaction remains open.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

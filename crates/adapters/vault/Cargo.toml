@@ -13,6 +13,7 @@ qa-fixtures = ["development-storage"]
 
 [dependencies]
 base64 = "0.22.1"
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 chrono.workspace = true
 floe-access = { path = "../../modules/access" }
 floe-calendar-operations = { path = "../../modules/calendar_operations" }

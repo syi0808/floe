@@ -1,8 +1,9 @@
 //! Encrypted owner storage for lossless typed Session evidence.
 //!
-//! The transaction-scoped methods are the composition seam for a future
-//! Conversation-plus-Core write. They do not update Session or Core themselves.
+//! The caller composes owner state and Core custody in the same transaction.
+//! These methods own only bounded physical payload storage and evidence reads.
 
+use super::storage_payload::{decode_payload, encode_payload, inspect_payload_header};
 use floe_access::DependencyCoverage;
 use floe_agent_contract::AgentFailure;
 use floe_conversation::{
@@ -30,14 +31,14 @@ pub(crate) struct ResolvedTypedAgentMessage {
 #[derive(Clone, Debug)]
 pub(super) struct StoredHeader {
     pub(super) reference: TypedAgentMessageReference,
-    actual_payload_bytes: usize,
+    logical_payload_bytes: usize,
 }
 
 impl StoredHeader {
     pub(super) fn encoded_bytes(&self) -> Result<usize, AgentFailure> {
         let declared = usize::try_from(self.reference.encoded_byte_length())
             .map_err(|_| AgentFailure::VaultUnavailable)?;
-        if declared == 0 || self.actual_payload_bytes != declared {
+        if declared == 0 || self.logical_payload_bytes != declared {
             return Err(AgentFailure::VaultUnavailable);
         }
         let total = declared
@@ -53,8 +54,7 @@ impl StoredHeader {
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Insert exact owner-encoded evidence in the caller's transaction.
     ///
-    /// This is intentionally not wired into production Session writes. Later
-    /// Conversation/Core composition can call it with the same transaction as
+    /// Conversation/Core composition calls this in the same transaction as
     /// owner state and the opaque Core evidence digest.
     pub(super) async fn insert_typed_agent_message_on(
         &self,
@@ -76,9 +76,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             message,
         )?;
         let reference = evidence.reference().clone();
-        let payload = std::str::from_utf8(evidence.payload_bytes())
-            .map_err(|_| AgentFailure::InvalidInput)?
-            .to_owned();
+        let payload = encode_payload(
+            evidence.payload_bytes(),
+            MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+        )?;
         let actual_record_bytes = evidence.encoded_byte_length()?;
         if actual_record_bytes > MAX_TYPED_AGENT_MESSAGE_ENVELOPE_BYTES {
             return Err(AgentFailure::BudgetExceeded);
@@ -114,10 +115,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if header.reference != reference {
                 return Err(AgentFailure::Conflict);
             }
-            if header.actual_payload_bytes != reference.encoded_byte_length() as usize {
+            if header.logical_payload_bytes != reference.encoded_byte_length() as usize {
                 return Err(AgentFailure::VaultUnavailable);
             }
-            if header.actual_payload_bytes > MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES {
+            if header.logical_payload_bytes > MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES {
                 return Err(AgentFailure::BudgetExceeded);
             }
             let existing_payload = load_payload_on(
@@ -127,10 +128,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &self.typed_history_payload_hydrations,
             )
             .await?;
-            let existing = TypedAgentMessageEvidence::from_stored(
-                reference.clone(),
-                existing_payload.into_bytes(),
-            )?;
+            let existing =
+                TypedAgentMessageEvidence::from_stored(reference.clone(), existing_payload)?;
             if existing.payload_bytes() != evidence.payload_bytes() {
                 return Err(AgentFailure::Conflict);
             }
@@ -342,8 +341,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             &self.typed_history_payload_hydrations,
         )
         .await?;
-        let evidence =
-            TypedAgentMessageEvidence::from_stored(header.reference.clone(), payload.into_bytes())?;
+        let evidence = TypedAgentMessageEvidence::from_stored(header.reference.clone(), payload)?;
         evidence.decode_message()
     }
 
@@ -398,7 +396,7 @@ async fn load_header_on(
 ) -> Result<Option<StoredHeader>, AgentFailure> {
     let mut rows = transaction
         .query(
-        "SELECT person_id, owner_namespace, schema_id, schema_version, turn_id, provenance, payload_byte_length, digest, length(CAST(payload AS BLOB)) FROM agent_conversation_typed_history_entries WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND entry_id = ? LIMIT 2",
+        "SELECT person_id, owner_namespace, schema_id, schema_version, turn_id, provenance, payload_byte_length, digest, length(CAST(payload AS BLOB)), substr(payload, 1, 9) FROM agent_conversation_typed_history_entries WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND entry_id = ? LIMIT 2",
             (
                 person_id.to_string(),
                 TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
@@ -419,8 +417,14 @@ async fn load_header_on(
         .map_err(|_| AgentFailure::UnsupportedVersion)?;
     let declared_length = u64::try_from(row.get::<i64>(6).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
-    let actual_payload_bytes = usize::try_from(row.get::<i64>(8).map_err(storage)?)
+    let stored_bytes = usize::try_from(row.get::<i64>(8).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let logical_payload_bytes = inspect_payload_header(
+        &row.get::<Vec<u8>>(9).map_err(storage)?,
+        stored_bytes,
+        MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    )?
+    .logical_bytes;
     let stored_reference = TypedAgentMessageReference::from_stored_fields(
         row.get::<String>(1).map_err(storage)?,
         row.get::<String>(2).map_err(storage)?,
@@ -435,7 +439,7 @@ async fn load_header_on(
     );
     Ok(Some(StoredHeader {
         reference: stored_reference,
-        actual_payload_bytes,
+        logical_payload_bytes,
     }))
 }
 
@@ -449,7 +453,7 @@ async fn load_header_by_digest_on(
 ) -> Result<Option<StoredHeader>, AgentFailure> {
     let mut rows = transaction
         .query(
-            "SELECT person_id, owner_namespace, session_id, entry_id, schema_id, schema_version, turn_id, provenance, payload_byte_length, digest, length(CAST(payload AS BLOB)) FROM agent_conversation_typed_history_entries WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND digest = ? LIMIT 2",
+            "SELECT person_id, owner_namespace, session_id, entry_id, schema_id, schema_version, turn_id, provenance, payload_byte_length, digest, length(CAST(payload AS BLOB)), substr(payload, 1, 9) FROM agent_conversation_typed_history_entries WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND digest = ? LIMIT 2",
             (
                 person_id.to_string(),
                 owner_namespace,
@@ -470,8 +474,14 @@ async fn load_header_by_digest_on(
         .map_err(|_| AgentFailure::UnsupportedVersion)?;
     let declared_length = u64::try_from(row.get::<i64>(8).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
-    let actual_payload_bytes = usize::try_from(row.get::<i64>(10).map_err(storage)?)
+    let stored_bytes = usize::try_from(row.get::<i64>(10).map_err(storage)?)
         .map_err(|_| AgentFailure::VaultUnavailable)?;
+    let logical_payload_bytes = inspect_payload_header(
+        &row.get::<Vec<u8>>(11).map_err(storage)?,
+        stored_bytes,
+        MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    )?
+    .logical_bytes;
     let stored_reference = TypedAgentMessageReference::from_stored_fields(
         row.get::<String>(1).map_err(storage)?,
         row.get::<String>(4).map_err(storage)?,
@@ -486,7 +496,7 @@ async fn load_header_by_digest_on(
     );
     Ok(Some(StoredHeader {
         reference: stored_reference,
-        actual_payload_bytes,
+        logical_payload_bytes,
     }))
 }
 
@@ -494,7 +504,7 @@ async fn load_payload_on(
     transaction: &Transaction<'_>,
     reference: &TypedAgentMessageReference,
     #[cfg(test)] hydration_count: &std::sync::atomic::AtomicU64,
-) -> Result<String, AgentFailure> {
+) -> Result<Vec<u8>, AgentFailure> {
     #[cfg(test)]
     hydration_count.fetch_add(1, Ordering::Relaxed);
     let mut rows = transaction
@@ -517,13 +527,13 @@ async fn load_payload_on(
     if rows.next().await.map_err(database_failure)?.is_some() {
         return Err(AgentFailure::VaultUnavailable);
     }
-    let payload = row.get::<String>(0).map_err(storage)?;
-    if payload.as_bytes().is_empty()
-        || payload.as_bytes().len() > MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES
-    {
-        return Err(AgentFailure::VaultUnavailable);
-    }
-    Ok(payload)
+    let payload = row.get::<Vec<u8>>(0).map_err(storage)?;
+    decode_payload(
+        &payload,
+        usize::try_from(reference.encoded_byte_length())
+            .map_err(|_| AgentFailure::VaultUnavailable)?,
+        MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES,
+    )
 }
 
 fn parse_uuid(value: String) -> Result<Uuid, AgentFailure> {
@@ -803,6 +813,17 @@ mod tests {
                 .expect("corrupt selected typed-history row for test");
         }
 
+        async fn update_payload_entry(&self, session_id: Uuid, entry_id: Uuid, plain: &[u8]) {
+            let frame = encode_payload(plain, MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES)
+                .expect("frame replacement canonical payload");
+            self.vault.connection().expect("connect to Vault")
+                .execute(
+                    "UPDATE agent_conversation_typed_history_entries SET payload = ? WHERE person_id = ? AND owner_namespace = ? AND session_id = ? AND entry_id = ?",
+                    (frame, self.person_id.to_string(), TYPED_AGENT_MESSAGE_OWNER_NAMESPACE,
+                     session_id.to_string(), entry_id.to_string()),
+                ).await.expect("replace payload in isolated corruption fixture");
+        }
+
         async fn update_integer_entry(
             &self,
             session_id: Uuid,
@@ -979,7 +1000,7 @@ mod tests {
             row.get::<i64>(7).expect("schema version"),
             row.get::<i64>(8).expect("payload length"),
             row.get::<String>(9).expect("digest"),
-            row.get::<String>(10).expect("payload"),
+            row.get::<Vec<u8>>(10).expect("payload"),
         );
         serde_json::to_vec(&values).expect("encode selected database row")
     }
@@ -1310,7 +1331,7 @@ mod tests {
                         i64::from(reference.schema_version()),
                         i64::try_from(reference.encoded_byte_length()).unwrap(),
                         digest_to_hex(reference.digest()),
-                        conflicting_payload,
+                        encode_payload(conflicting_payload.as_bytes(), MAX_TYPED_AGENT_MESSAGE_PAYLOAD_BYTES).unwrap(),
                     ),
                 )
                 .await;
@@ -1692,14 +1713,14 @@ mod tests {
         let mut damaged = original.clone();
         damaged.replace_range(0..1, "[");
         store
-            .update_text_entry(session_id, entry_id, "payload", &damaged)
+            .update_payload_entry(session_id, entry_id, damaged.as_bytes())
             .await;
         assert_eq!(
             store.resolve(&reference).await.unwrap_err(),
             AgentFailure::VaultUnavailable
         );
         store
-            .update_text_entry(session_id, entry_id, "payload", &original)
+            .update_payload_entry(session_id, entry_id, original.as_bytes())
             .await;
         assert_eq!(store.resolve(&reference).await.unwrap().message, message);
     }
@@ -1810,6 +1831,138 @@ mod tests {
             !crate::schema::typed_history_family_present(&connection)
                 .await
                 .expect("rolled-back family remains absent")
+        );
+    }
+
+    #[tokio::test]
+    async fn compressed_history_keeps_logical_budgets_exact_replay_and_reopen() {
+        let store = TestVault::new().await;
+        let session_id = Uuid::new_v4();
+        let entry_id = Uuid::new_v4();
+        let message = AgentMessage::Assistant {
+            turn_id: Uuid::new_v4(),
+            text: "보존할 원본 대화 🌿\n".repeat(128),
+        };
+        store
+            .insert_session(session_id, std::slice::from_ref(&message))
+            .await;
+        let reference = store
+            .insert_message(session_id, entry_id, &message)
+            .await
+            .unwrap();
+        let connection = store.vault.connection().unwrap();
+        let mut rows = connection.query(
+            "SELECT typeof(payload), length(CAST(payload AS BLOB)), payload_byte_length FROM agent_conversation_typed_history_entries WHERE entry_id = ?",
+            [entry_id.to_string()],
+        ).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), "blob");
+        assert!(row.get::<i64>(1).unwrap() < row.get::<i64>(2).unwrap() / 4);
+        assert_eq!(
+            row.get::<i64>(2).unwrap() as u64,
+            reference.encoded_byte_length()
+        );
+        drop(rows);
+        drop(connection);
+        store
+            .vault
+            .typed_history_payload_hydrations
+            .store(0, Ordering::Relaxed);
+        assert_eq!(
+            store.resolve_with_budget(&reference, 1).await,
+            Err(AgentFailure::BudgetExceeded)
+        );
+        assert_eq!(
+            store
+                .vault
+                .typed_history_payload_hydrations
+                .load(Ordering::Relaxed),
+            0
+        );
+        let before = read_row_bytes(&store, session_id, entry_id).await;
+        assert_eq!(
+            store
+                .insert_message(session_id, entry_id, &message)
+                .await
+                .unwrap(),
+            reference
+        );
+        assert_eq!(read_row_bytes(&store, session_id, entry_id).await, before);
+        assert_eq!(store.resolve(&reference).await.unwrap().message, message);
+        let TestVault {
+            vault,
+            keys,
+            person_id,
+            root,
+        } = store;
+        drop(vault);
+        let vault = EncryptedAgentVault::open(&root.0, person_id, keys.clone())
+            .await
+            .unwrap();
+        let reopened = TestVault {
+            vault,
+            keys,
+            person_id,
+            root,
+        };
+        assert_eq!(reopened.resolve(&reference).await.unwrap().message, message);
+    }
+
+    #[tokio::test]
+    async fn compressed_history_rejects_corrupt_frame_before_payload_hydration() {
+        let store = TestVault::new().await;
+        let session_id = Uuid::new_v4();
+        let entry_id = Uuid::new_v4();
+        let message = AgentMessage::Assistant {
+            turn_id: Uuid::new_v4(),
+            text: "same retained original ".repeat(100),
+        };
+        store
+            .insert_session(session_id, std::slice::from_ref(&message))
+            .await;
+        let reference = store
+            .insert_message(session_id, entry_id, &message)
+            .await
+            .unwrap();
+        let connection = store.vault.connection().unwrap();
+        let mut rows = connection
+            .query(
+                "SELECT payload FROM agent_conversation_typed_history_entries WHERE entry_id = ?",
+                [entry_id.to_string()],
+            )
+            .await
+            .unwrap();
+        let mut encoded = rows
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<Vec<u8>>(0)
+            .unwrap();
+        drop(rows);
+        encoded[4] = 0xff;
+        connection
+        .execute(
+            "UPDATE agent_conversation_typed_history_entries SET payload = ? WHERE entry_id = ?",
+            (encoded, entry_id.to_string()),
+        )
+        .await
+        .unwrap();
+        drop(connection);
+        store
+            .vault
+            .typed_history_payload_hydrations
+            .store(0, Ordering::Relaxed);
+        assert_eq!(
+            store.resolve(&reference).await,
+            Err(AgentFailure::VaultUnavailable)
+        );
+        assert_eq!(
+            store
+                .vault
+                .typed_history_payload_hydrations
+                .load(Ordering::Relaxed),
+            0
         );
     }
 }

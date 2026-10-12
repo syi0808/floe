@@ -511,3 +511,25 @@ that could hide a malformed identifier. Transcript, owner, close/retirement and
 orphan checks remain required. Later-page corruption fails closed without repair
 or history deletion. Other owner admission quotas remain separate, and a full
 integrity scan is still proportional to retained data rather than constant-time.
+
+## Lossless typed-history storage
+
+Vault stores each canonical typed-message payload as a bounded BLOB frame inside
+the encrypted database. The frame contains a magic identifier, raw/zlib codec and
+canonical plain-byte length. Zlib is used only when it saves more than 16 bytes;
+small or incompressible payloads use the same frame with a raw body. The canonical
+plain bytes still determine evidence digests, replay identity and all read/context
+budgets. A smaller physical row does not increase a caller's logical allowance.
+
+Metadata preflight reads only the frame header and stored length before payload
+hydration. Decoding allocates at most the validated plain length plus one sentinel
+byte, and requires exact decompressed length, stream end and complete input
+consumption. Unknown codecs, inconsistent lengths, truncation, trailing data,
+checksum failure and canonical digest mismatch fail closed. No evidence, source
+reference, owner authority or original conversation is removed.
+
+This is a deliberate local stored-format change: use an explicitly selected
+fresh development profile with a same-snapshot binary. There is no old TEXT
+decoder, automatic profile reset or key replacement. Compression currently covers
+typed-history payloads only; owner snapshots and model-context semantic
+summarization are separate work and are not completed by this storage change.
