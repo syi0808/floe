@@ -131,6 +131,15 @@ mod tests {
     struct ScriptedResolver(AgentFailure);
 
     impl DependencyResolver for ScriptedResolver {
+        fn authorize_memories<'a>(
+            &'a self,
+            _: floe_kernel::PersonId,
+            _: &'a [floe_context_contract::MemoryRevisionReference],
+            _: &'a floe_access::DependencyAuthorization,
+        ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+
         fn authorize<'a>(
             &'a self,
             _dependency: &'a ContextDependency,

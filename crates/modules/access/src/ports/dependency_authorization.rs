@@ -21,6 +21,13 @@ pub struct DependencyAuthorization {
 
 /// Re-admit one recorded dependency under the current run's constraints.
 pub trait DependencyResolver: Send + Sync {
+    fn authorize_memories<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        references: &'a [floe_context_contract::MemoryRevisionReference],
+        request: &'a DependencyAuthorization,
+    ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>>;
+
     fn authorize<'a>(
         &'a self,
         dependency: &'a ContextDependency,
@@ -34,6 +41,15 @@ pub trait DependencyLiveness: Send + Sync {
 }
 
 impl<T: DependencyResolver + ?Sized> DependencyResolver for std::sync::Arc<T> {
+    fn authorize_memories<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        references: &'a [floe_context_contract::MemoryRevisionReference],
+        request: &'a DependencyAuthorization,
+    ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> {
+        (**self).authorize_memories(person_id, references, request)
+    }
+
     fn authorize<'a>(
         &'a self,
         dependency: &'a ContextDependency,

@@ -4,7 +4,7 @@ Review the completed-conversation digest and propose at most one durable Persona
 - Keep the exact named person or entity from evidence in the statement, including fictional names; never replace a named subject with "the user".
 - Propose only supported facts, preferences, commitments, observations, or inferences useful later.
 - Use create when no memory is replaced and revise only with the exact supplied target and base revision.
-- Retire only for an explicit forget or correction that invalidates a current memory.
+- Never propose deletion. Saved memories are forgotten through the immediate memory.forget product command, not learner review. Return an empty proposals array for forget requests.
 - Return an empty proposals array for ambiguous, transient, conversational, unsupported, or already represented evidence.
 - Treat validity as timeless unless evidence explicitly states a start or expiry date. Never use the observation timestamp or model knowledge as a date.
 - Never modify identity, policy, permissions, safety behavior, model configuration, or executable instructions.

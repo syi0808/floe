@@ -298,3 +298,37 @@ void _exactKeys(
     throw const FormatException('Unexpected Knowledge wire fields.');
   }
 }
+
+final class AgentMemoryForgetAcknowledgement {
+  const AgentMemoryForgetAcknowledgement({
+    required this.commandId,
+    required this.targetId,
+    required this.forgottenRevision,
+    required this.committedAt,
+  });
+  final String commandId;
+  final String targetId;
+  final int forgottenRevision;
+  final DateTime committedAt;
+  factory AgentMemoryForgetAcknowledgement.fromJson(Map<String, dynamic> json) {
+    _exactKeys(json, const {
+      'command_id',
+      'target_id',
+      'forgotten_revision',
+      'committed_at',
+    });
+    final result = AgentMemoryForgetAcknowledgement(
+      commandId: _uuid(json['command_id'], 'forget.command_id'),
+      targetId: _uuid(json['target_id'], 'forget.target_id'),
+      forgottenRevision: _positiveInteger(
+        json['forgotten_revision'],
+        'forget.forgotten_revision',
+      ),
+      committedAt: _timestamp(json['committed_at'], 'forget.committed_at'),
+    );
+    if (result.committedAt.millisecondsSinceEpoch < 0) {
+      throw const FormatException('Invalid forget acknowledgement.');
+    }
+    return result;
+  }
+}

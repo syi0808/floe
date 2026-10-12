@@ -56,6 +56,14 @@ pub(super) const KNOWLEDGE: &[SchemaObject] = &[
         "CREATE TABLE knowledge_command_receipts (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_kind TEXT NOT NULL, candidate_id TEXT NOT NULL, decision_kind TEXT NOT NULL, payload TEXT NOT NULL)",
     ),
     SchemaObject::table(
+        "knowledge_forget_commands",
+        "CREATE TABLE knowledge_forget_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, payload TEXT NOT NULL)",
+    ),
+    SchemaObject::table(
+        "knowledge_forgotten_evidence",
+        "CREATE TABLE knowledge_forgotten_evidence (person_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, PRIMARY KEY(person_id, session_id, turn_id))",
+    ),
+    SchemaObject::table(
         "learner_review_jobs",
         "CREATE TABLE learner_review_jobs (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))",
     ),

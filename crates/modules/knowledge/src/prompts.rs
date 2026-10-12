@@ -8,7 +8,7 @@ pub use floe_agent_contract::prompts::*;
 
 pub const LEARNER_ROLE: &str = include_str!("../prompts/learner_role.txt");
 pub const LEARNER_PROTOCOL: &str = include_str!("../prompts/learner_protocol.txt");
-pub const LEARNER_ROLE_REVISION: u64 = 3;
+pub const LEARNER_ROLE_REVISION: u64 = 4;
 pub const LEARNER_PROTOCOL_REVISION: u64 = 4;
 pub const LEARNER_EXTRACTOR_VERSION: &str = "memory-extractor-v3";
 pub const LEARNER_PROMPT_VERSION: &str = "memory-review-v4";

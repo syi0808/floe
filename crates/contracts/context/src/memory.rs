@@ -60,3 +60,11 @@ pub enum EpistemicStatus {
     Fact,
     Inference,
 }
+
+/// Identity of confirmed memory captured by a model projection. Contents are
+/// deliberately absent; Knowledge must confirm the revision is still live.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryRevisionReference {
+    pub target_id: Uuid,
+    pub revision: u64,
+}

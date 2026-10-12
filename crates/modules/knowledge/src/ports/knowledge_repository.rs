@@ -56,6 +56,13 @@ pub trait KnowledgeRepository: Send + Sync {
         request: MemoryDecisionRequest,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<crate::KnowledgeDecisionResult, CommandFailure<AgentFailure>>>;
+    fn forget<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::MemoryForgetRequest,
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::MemoryForgetAcknowledgement, CommandFailure<AgentFailure>>>;
     fn stage<'a>(
         &'a self,
         request: MemoryStageRequest,

@@ -28,7 +28,7 @@ pub use evidence::{ContextEvidence, MAX_CONTEXT_EVIDENCE, MAX_CONTEXT_EVIDENCE_B
 pub use floe_kernel::PersonId;
 pub use memory::{
     ContextMemory, EpistemicStatus, LearningEvidenceRef, MAX_CONTEXT_MEMORIES,
-    MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, PersonalMemoryKind,
+    MAX_CONTEXT_MEMORY_BYTES, MemoryContextSnapshot, MemoryRevisionReference, PersonalMemoryKind,
 };
 pub use source_access::{
     MAX_SOURCE_ACCESS_BLOCKERS, ObservedGrant, SourceAccessBlockers, SourceAccessRequirement,

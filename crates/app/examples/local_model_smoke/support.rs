@@ -19,6 +19,15 @@ use uuid::Uuid;
 
 pub(super) struct SmokeResolver;
 impl floe_access::DependencyResolver for SmokeResolver {
+    fn authorize_memories<'a>(
+        &'a self,
+        _: floe_kernel::PersonId,
+        _: &'a [floe_context_contract::MemoryRevisionReference],
+        _: &'a floe_access::DependencyAuthorization,
+    ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::PolicyDenied) })
+    }
+
     fn authorize<'a>(
         &'a self,
         _: &'a floe_context_contract::ContextDependency,

@@ -91,3 +91,20 @@ impl MemoryDecisionAcknowledgementDto {
         Ok(())
     }
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryForgetAcknowledgementDto {
+    pub command_id: CommandIdDto,
+    pub target_id: UuidRefDto,
+    pub forgotten_revision: u64,
+    pub committed_at: DateTime<Utc>,
+}
+impl MemoryForgetAcknowledgementDto {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.forgotten_revision == 0 || self.forgotten_revision > i64::MAX as u64 {
+            return Err("knowledge.forget_acknowledgement");
+        }
+        Ok(())
+    }
+}

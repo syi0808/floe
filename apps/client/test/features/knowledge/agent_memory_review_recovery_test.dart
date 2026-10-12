@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:floe_client/app/runtime/app_owner_exception.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
+import 'package:floe_client/app/runtime/runtime_gateway.dart';
+import 'package:floe_client/features/settings/presentation/agent_memory_settings.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
@@ -12,6 +15,179 @@ import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_ga
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
 
 void main() {
+  group('Immediate memory forgetting', () {
+    testWidgets('Forget acts immediately without creating another review', (
+      tester,
+    ) async {
+      var forgotten = false;
+      final transport = _ScriptedMemoryTransport(
+        onQuery: (request, call) async {
+          final kind = (request['query'] as Map<String, dynamic>)['kind'];
+          if (kind == 'memory.overview' && !forgotten) {
+            return _savedOverviewResponse();
+          }
+          return _successfulQuery(request, call);
+        },
+        onCommand: (request, call) async {
+          forgotten = true;
+          return _forgetAcknowledgement(request);
+        },
+      );
+      final harness = _MemoryHarness(transport);
+      final runtime = RuntimeController(
+        gateway: _ReadyRuntimeGateway(),
+        personId: _personId,
+      );
+      await runtime.open();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: AgentMemorySettings(
+                controller: harness.controller,
+                runtime: runtime,
+                onBack: () {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final button = find.byKey(
+        const ValueKey('memory-forget-$_approveCandidateId'),
+      );
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(transport.commands, hasLength(1));
+      expect(
+        (transport.commands.single['command'] as Map<String, dynamic>)['kind'],
+        'memory.forget',
+      );
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        find.byKey(const ValueKey('memory-forget-acknowledgement')),
+        findsOneWidget,
+      );
+      expect(find.text('Mina prefers tea.'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      harness.controller.dispose();
+      runtime.dispose();
+    });
+
+    test(
+      'retries an uncertain deletion with the same immutable command',
+      () async {
+        final transport = _ScriptedMemoryTransport(
+          onQuery: (request, call) async => call == 1
+              ? _savedOverviewResponse()
+              : _successfulQuery(request, call),
+          onCommand: (request, call) async {
+            if (call == 1) {
+              throw const AppWireTransportException(
+                'timeout',
+                'Synthetic lost acknowledgement.',
+              );
+            }
+            return _forgetAcknowledgement(request);
+          },
+        );
+        final harness = _MemoryHarness(transport);
+        await harness.controller.load();
+        await harness.controller.forget(_approveCandidateId);
+        expect(harness.controller.canRetryForget, isTrue);
+        expect(harness.controller.forgetAcknowledgement, isNull);
+        expect(harness.controller.canReview, isFalse);
+        await harness.controller.forget(_approveCandidateId);
+        expect(transport.commands, hasLength(1));
+        await harness.controller.retryPendingForget();
+        expect(transport.commands, hasLength(2));
+        expect(
+          transport.commands[0]['command_id'],
+          transport.commands[1]['command_id'],
+        );
+        expect(
+          transport.commands[0]['command'],
+          transport.commands[1]['command'],
+        );
+        expect(
+          transport.commands[0]['request_id'],
+          isNot(transport.commands[1]['request_id']),
+        );
+        expect(
+          harness.controller.forgetAcknowledgement?.targetId,
+          _approveCandidateId,
+        );
+        expect(harness.controller.overview?.memories, isEmpty);
+        expect(harness.controller.canRetryForget, isFalse);
+        harness.controller.dispose();
+      },
+    );
+    test(
+      'keeps a forget receipt and clears stale content if refresh fails',
+      () async {
+        final transport = _ScriptedMemoryTransport(
+          onQuery: (request, call) async {
+            if (call == 1) return _savedOverviewResponse();
+            throw const AppWireTransportException(
+              'storage_unavailable',
+              'Synthetic refresh failure.',
+            );
+          },
+          onCommand: (request, call) async => _forgetAcknowledgement(request),
+        );
+        final harness = _MemoryHarness(transport);
+        await harness.controller.load();
+        await harness.controller.forget(_approveCandidateId);
+        expect(harness.controller.forgetAcknowledgement, isNotNull);
+        expect(harness.controller.overview, isNull);
+        expect(harness.controller.canRetryForget, isFalse);
+        expect(transport.commands, hasLength(1));
+        harness.controller.dispose();
+      },
+    );
+    test(
+      'rejects mismatched acknowledgements and retains exact retry identity',
+      () async {
+        final transport = _ScriptedMemoryTransport(
+          onQuery: (request, call) async => _savedOverviewResponse(),
+          onCommand: (request, call) async {
+            final response = _forgetAcknowledgement(request);
+            (response['acknowledgement']
+                    as Map<String, dynamic>)['forgotten_revision'] =
+                2;
+            return response;
+          },
+        );
+        final harness = _MemoryHarness(transport);
+        await harness.controller.load();
+        await harness.controller.forget(_approveCandidateId);
+        expect(harness.controller.forgetAcknowledgement, isNull);
+        expect(harness.controller.canRetryForget, isTrue);
+        expect(harness.gateway.pendingForgetRevision, 1);
+        harness.controller.dispose();
+      },
+    );
+    test('ignores a forget completion after controller clear', () async {
+      final response = Completer<Map<String, dynamic>>();
+      final transport = _ScriptedMemoryTransport(
+        onQuery: (request, call) async => _savedOverviewResponse(),
+        onCommand: (request, call) => response.future,
+      );
+      final harness = _MemoryHarness(transport);
+      await harness.controller.load();
+      final completion = harness.controller.forget(_approveCandidateId);
+      expect(transport.commands, hasLength(1));
+      harness.controller.clear();
+      response.complete(_forgetAcknowledgement(transport.commands.single));
+      await completion;
+      expect(harness.controller.forgetAcknowledgement, isNull);
+      expect(harness.controller.overview, isNull);
+      expect(harness.controller.busy, isFalse);
+      harness.controller.dispose();
+    });
+  });
+
   group('AgentMemoryController review recovery', () {
     test('submits allowed approve and reject decisions', () async {
       final transport = _ScriptedMemoryTransport(
@@ -393,6 +569,7 @@ final class _MemoryHarness {
     controller = AgentMemoryController(
       memoryGateway: gateway,
       reviewGateway: gateway,
+      forgetGateway: gateway,
       personId: _personId,
       canOperate: () => true,
       onFatalFailure: fatalFailures.add,
@@ -619,4 +796,54 @@ Map<String, dynamic> _acknowledgementResponse(Map<String, dynamic> request) {
       'resulting_revision': null,
     },
   };
+}
+
+Map<String, dynamic> _savedOverviewResponse() => {
+  'kind': 'memory.overview',
+  'overview': {
+    'schema_version': 1,
+    'person_id': _personId,
+    'saved_count': 1,
+    'pending_count': 0,
+    'memories': [
+      {
+        'target_id': _approveCandidateId,
+        'revision': 1,
+        'statement': 'Mina prefers tea.',
+        'memory_kind': 'preference',
+        'epistemic_status': 'fact',
+        'confidence_millis': 1000,
+        'source_count': 1,
+        'origin': 'user_provided',
+        'created_at': '2026-10-10T00:00:00Z',
+      },
+    ],
+  },
+};
+Map<String, dynamic> _forgetAcknowledgement(Map<String, dynamic> request) {
+  final command = request['command'] as Map<String, dynamic>;
+  return {
+    'kind': 'memory.forgotten',
+    'acknowledgement': {
+      'command_id': request['command_id'],
+      'target_id': command['target_id'],
+      'forgotten_revision': command['expected_revision'],
+      'committed_at': '2026-10-10T00:00:01Z',
+    },
+  };
+}
+
+final class _ReadyRuntimeGateway implements RuntimeGateway {
+  @override
+  Future<RuntimeReadinessSnapshot> readiness(String requestId) async =>
+      const RuntimeReadinessSnapshot(state: RuntimeReadinessState.ready);
+  @override
+  Future<RuntimePreparationResult> prepare(String operationId) async =>
+      throw UnimplementedError();
+  @override
+  Future<RuntimePreparationResult> getPreparation(String operationId) async =>
+      throw UnimplementedError();
+  @override
+  Future<RuntimePreparationResult> acknowledge(String operationId) async =>
+      throw UnimplementedError();
 }

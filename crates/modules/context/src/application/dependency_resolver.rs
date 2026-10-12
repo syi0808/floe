@@ -21,6 +21,7 @@ pub struct ContextDependencyResolver {
     personal: Arc<dyn PersonalSourceDriver + Send>,
     transport: Arc<dyn ExpertSourceTransport>,
     leases: Arc<SourceLeaseRegistry>,
+    memories: Arc<dyn floe_knowledge::MemoryEvidenceReader>,
 }
 impl ContextDependencyResolver {
     pub fn new(
@@ -30,6 +31,7 @@ impl ContextDependencyResolver {
         personal: Arc<dyn PersonalSourceDriver + Send>,
         transport: Arc<dyn ExpertSourceTransport>,
         leases: Arc<SourceLeaseRegistry>,
+        memories: Arc<dyn floe_knowledge::MemoryEvidenceReader>,
     ) -> Result<Self, AgentFailure> {
         actor.validate()?;
         Ok(Self {
@@ -39,10 +41,38 @@ impl ContextDependencyResolver {
             personal,
             transport,
             leases,
+            memories,
         })
     }
 }
 impl DependencyResolver for ContextDependencyResolver {
+    fn authorize_memories<'a>(
+        &'a self,
+        person_id: floe_kernel::PersonId,
+        references: &'a [floe_context_contract::MemoryRevisionReference],
+        request: &'a DependencyAuthorization,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            if person_id != self.actor.person_id {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            let scope = ExecutionScope::root(
+                request.cancellation.clone(),
+                request.deadline,
+                BudgetLedger::new(BudgetConfig::new(0, 0), ModelUsage::default()).root_lease(),
+                TraceContext::new(uuid::Uuid::new_v4()),
+            );
+            scope
+                .run(self.memories.validate_memories(
+                    &self.actor,
+                    references,
+                    chrono::Utc::now(),
+                    &scope,
+                ))
+                .await
+        })
+    }
+
     fn authorize<'a>(
         &'a self,
         dependency: &'a ContextDependency,

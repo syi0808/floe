@@ -1953,7 +1953,9 @@ async fn first_late_task_result_releases_writer_and_preserves_unresolved_model_a
             .vault()
             .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
             .await
-            .expect("exact replay returns the closed receipt before generation-sensitive transitions"),
+            .expect(
+                "exact replay returns the closed receipt before generation-sensitive transitions"
+            ),
         CoreComposedRecoveryResult::Closed { record, close }
     );
     assert_eq!(
@@ -9353,7 +9355,6 @@ async fn source_review_blocked_expert_releases_custody_for_the_next_task() {
     );
 }
 
-
 #[tokio::test]
 async fn uncertain_model_accounting_does_not_block_the_next_manager_turn() {
     for restart in [false, true] {
@@ -9648,5 +9649,368 @@ async fn interrupted_expert_model_releases_writer_without_replaying_the_attempt(
             .unwrap(),
         interrupted,
         "new Task does not rewrite or retry its uncertain predecessor"
+    );
+}
+
+#[tokio::test]
+async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_evidence() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{CommandFailure, OwnerActor, TraceContext};
+    use floe_knowledge::{
+        EpistemicStatus, KnowledgeActor, KnowledgeDecisionKind, MemoryDecisionRequest,
+        MemoryForgetRequest, MemoryStageOrigin, MemoryStageRequest, PersonalMemoryKind,
+        PersonalMemoryValue, StageMemoryCandidate,
+    };
+
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let ledger = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let now = Utc::now();
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .unwrap();
+    let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
+        .unwrap()
+        .unwrap();
+    let stage = MemoryStageRequest {
+        actor: actor.clone(),
+        now,
+        origin: MemoryStageOrigin::User,
+        request: StageMemoryCandidate {
+            session_id: scenario.session_id,
+            expected_session_revision: run.session_revision,
+            turn_ids: vec![run.run_id.as_uuid()],
+            observation_kind: floe_knowledge::LearningObservationKind::ExplicitRemember,
+            digest: old_input.digest.clone(),
+            value: PersonalMemoryValue {
+                kind: PersonalMemoryKind::Preference,
+                statement: "Prefers tea".into(),
+                epistemic_status: EpistemicStatus::Fact,
+                confidence_millis: 1000,
+                valid_from: None,
+                valid_until: None,
+                observed_at: now,
+            },
+            target_id: None,
+            base_revision: None,
+            extractor_version: "test".into(),
+            prompt_version: "test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        },
+    };
+    let candidate = scenario
+        .vault()
+        .knowledge_stage(stage.clone(), &scope)
+        .await
+        .unwrap();
+    let first = scenario
+        .vault()
+        .knowledge_decide(
+            &actor,
+            MemoryDecisionRequest {
+                command_id: CommandId::new(),
+                candidate_id: candidate.id,
+                kind: KnowledgeDecisionKind::Approve,
+                decided_at: now,
+            },
+            &scope,
+        )
+        .await
+        .unwrap()
+        .revision
+        .unwrap();
+    let future_revision = MemoryForgetRequest {
+        command_id: CommandId::new(),
+        target_id: first.target_id,
+        expected_revision: 2,
+    };
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_forget(&actor, future_revision.clone(), now, &scope)
+            .await,
+        Err(CommandFailure::NotApplied(AgentFailure::Conflict))
+    );
+    let mut revised = stage.clone();
+    revised.request.target_id = Some(first.target_id);
+    revised.request.base_revision = Some(1);
+    revised.request.value.statement = "Prefers green tea".into();
+    let candidate = scenario
+        .vault()
+        .knowledge_stage(revised, &scope)
+        .await
+        .unwrap();
+    let second = scenario
+        .vault()
+        .knowledge_decide(
+            &actor,
+            MemoryDecisionRequest {
+                command_id: CommandId::new(),
+                candidate_id: candidate.id,
+                kind: KnowledgeDecisionKind::Approve,
+                decided_at: now,
+            },
+            &scope,
+        )
+        .await
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(second.revision, 2);
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_forget(&actor, future_revision, now, &scope)
+            .await,
+        Err(CommandFailure::NotApplied(AgentFailure::Conflict)),
+        "a durable rejection cannot later become a deletion"
+    );
+    let forget = MemoryForgetRequest {
+        command_id: CommandId::new(),
+        target_id: second.target_id,
+        expected_revision: 2,
+    };
+    let references = vec![floe_context_contract::MemoryRevisionReference {
+        target_id: second.target_id,
+        revision: second.revision,
+    }];
+    scenario
+        .vault()
+        .knowledge_validate_memories(&actor, &references, now, &scope)
+        .await
+        .unwrap();
+    let mut pending_request = stage.clone();
+    pending_request.request.value.statement = "Prefers tea in the morning".into();
+    pending_request.request.extractor_version = "test-new-extractor".into();
+    let pending = scenario
+        .vault()
+        .knowledge_stage(pending_request, &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_overview(&actor, 100, &scope)
+            .await
+            .unwrap()
+            .pending_count,
+        1
+    );
+    let queued = scenario
+        .vault()
+        .learner_enqueue(&actor, old_input.clone(), now, &scope)
+        .await
+        .unwrap();
+    let claim = scenario
+        .vault()
+        .learner_claim_review(
+            &actor,
+            floe_knowledge::LearnerBudget::default(),
+            now,
+            &scope,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.id, queued.id);
+    let forgotten = scenario
+        .vault()
+        .knowledge_forget(&actor, forget.clone(), now, &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_validate_memories(&actor, &references, now, &scope)
+            .await,
+        Err(AgentFailure::StaleContext)
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_overview(&actor, 100, &scope)
+            .await
+            .unwrap()
+            .pending_count,
+        0
+    );
+    assert!(
+        scenario
+            .vault()
+            .knowledge_decide(
+                &actor,
+                MemoryDecisionRequest {
+                    command_id: CommandId::new(),
+                    candidate_id: pending.id,
+                    kind: KnowledgeDecisionKind::Approve,
+                    decided_at: now
+                },
+                &scope
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(forgotten.target_id, first.target_id);
+    let claim_scope = ExecutionScope::root(
+        Cancellation::new(),
+        scope.deadline(),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()).with_run_id(RunId::from_uuid(claim.id).unwrap()),
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_read_claim(
+                &actor,
+                floe_knowledge::LearnerClaimRef {
+                    job_id: claim.id,
+                    claim_attempt: claim.attempts
+                },
+                &claim_scope
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied),
+        "a claimed pre-forget job cannot reach model projection"
+    );
+
+    assert!(
+        scenario
+            .vault()
+            .knowledge_read_context(&actor, now, &scope)
+            .await
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_overview(&actor, 100, &scope)
+            .await
+            .unwrap()
+            .saved_count,
+        0
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_stage(stage.clone(), &scope)
+            .await,
+        Err(AgentFailure::PolicyDenied),
+        "even exact old staging replay cannot revive a forgotten memory"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_enqueue(&actor, old_input, now, &scope)
+            .await
+            .unwrap()
+            .id,
+        queued.id,
+        "exact enqueue replay returns its existing job, never a new job"
+    );
+    assert!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, &scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let history = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            None,
+            16,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        history.messages.len(),
+        2,
+        "forgetting saved memory does not erase the original conversation"
+    );
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_forget(&actor, forget.clone(), Utc::now(), &scope)
+            .await
+            .unwrap(),
+        forgotten
+    );
+    scenario.executor_generation = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let fresh = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember again that I prefer tea.",
+        "You prefer tea again.".into(),
+    )
+    .await;
+    let mut fresh_stage = stage;
+    fresh_stage.request.expected_session_revision = fresh.session_revision;
+    fresh_stage.request.turn_ids = vec![fresh.run_id.as_uuid()];
+    fresh_stage.request.digest = "New explicit user statement: prefers tea again.".into();
+    let fresh_candidate = scenario
+        .vault()
+        .knowledge_stage(fresh_stage, &scope)
+        .await
+        .unwrap();
+    let fresh_revision = scenario
+        .vault()
+        .knowledge_decide(
+            &actor,
+            MemoryDecisionRequest {
+                command_id: CommandId::new(),
+                candidate_id: fresh_candidate.id,
+                kind: KnowledgeDecisionKind::Approve,
+                decided_at: now,
+            },
+            &scope,
+        )
+        .await
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_ne!(
+        fresh_revision.target_id, forgotten.target_id,
+        "fresh explicit learning is allowed without removing exclusions"
+    );
+    let mut changed = forget;
+    changed.target_id = Uuid::new_v4();
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_forget(&actor, changed, now, &scope)
+            .await,
+        Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     );
 }

@@ -161,10 +161,29 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
                 Text('Saved memories', style: FloeType.titleLarge),
                 const SizedBox(height: FloeSpace.xs),
                 Text(
-                  'Only approved memories appear here.',
+                  'Forget removes a saved memory immediately and prevents relearning from its old evidence. Original conversations are kept.',
                   style: FloeType.body.copyWith(color: FloePalette.neutral600),
                 ),
                 const SizedBox(height: FloeSpace.md),
+                if (controller.forgetAcknowledgement != null)
+                  Text(
+                    'Memory forgotten.',
+                    key: const ValueKey('memory-forget-acknowledgement'),
+                    style: FloeType.bodySmall,
+                  ),
+                if (controller.forgetFailure != null)
+                  Text(
+                    controller.canRetryForget
+                        ? 'Forgetting is not yet confirmed. Retry the same request.'
+                        : 'Memory could not be forgotten. Refresh and try again.',
+                    style: FloeType.body.copyWith(color: FloePalette.error600),
+                  ),
+                if (controller.canRetryForget)
+                  FloeButton.outlined(
+                    key: const ValueKey('memory-forget-retry'),
+                    onPressed: controller.retryPendingForget,
+                    child: const Text('Retry forgetting'),
+                  ),
                 if (controller.failure != null)
                   Text(
                     'Saved memories are temporarily unavailable.',
@@ -187,7 +206,7 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
                   )
                 else ...[
                   for (final memory in overview.memories) ...[
-                    _MemoryRow(memory: memory),
+                    _MemoryRow(memory: memory, controller: controller),
                     if (memory != overview.memories.last)
                       const SizedBox(height: FloeSpace.sm),
                   ],
@@ -211,7 +230,9 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
 }
 
 final class _MemoryRow extends StatelessWidget {
-  const _MemoryRow({required this.memory});
+  const _MemoryRow({required this.memory, required this.controller});
+
+  final AgentMemoryController controller;
 
   final AgentMemory memory;
 
@@ -230,6 +251,15 @@ final class _MemoryRow extends StatelessWidget {
           '${memory.category} · ${memory.origin == AgentMemoryOrigin.userProvided ? 'Provided by you' : 'Learned with your approval'} · ${DateFormat.yMMMd().format(memory.createdAt.toLocal())}',
           style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
         ),
+        if (controller.forgetGateway != null)
+          FloeButton.text(
+            key: ValueKey('memory-forget-${memory.targetId}'),
+            size: FloeButtonSize.compact,
+            onPressed: controller.canForget
+                ? () => controller.forget(memory.targetId)
+                : null,
+            child: const Text('Forget'),
+          ),
       ],
     ),
   );

@@ -3218,3 +3218,44 @@ fn finalization_rejects_changed_effective_context_output_budget_before_provider_
         .expect("changed effective budget profile is structurally valid");
     assert_finalizer_drift_rejected(changed_budget);
 }
+
+#[test]
+fn memory_forget_is_routed_to_knowledge_with_durable_negative_replay() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let command_id = floe_kernel::CommandId::new();
+    let target_id = Uuid::new_v4();
+    for _ in 0..2 {
+        let failure = host
+            .request(Uuid::new_v4())
+            .unwrap()
+            .product_command(ProductCommandRequest {
+                command_id,
+                command: ProductCommand::Memory(MemoryCommand::Forget {
+                    target_id,
+                    expected_revision: 1,
+                }),
+            })
+            .expect_err("missing memory deletion is durably not applied");
+        assert_eq!(failure.disposition, ProductCommandDisposition::NotApplied);
+        assert!(matches!(
+            failure.failure,
+            ProductFailure::Memory(floe_kernel::AgentFailure::NotFound)
+        ));
+    }
+    let failure = host
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_command(ProductCommandRequest {
+            command_id,
+            command: ProductCommand::Memory(MemoryCommand::Forget {
+                target_id: Uuid::new_v4(),
+                expected_revision: 1,
+            }),
+        })
+        .expect_err("an existing command cannot be changed");
+    assert_eq!(
+        failure.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+}

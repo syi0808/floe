@@ -126,6 +126,20 @@ async fn authorize_request<R: DependencyResolver, A: GatewayAdmission>(
             Ok(())
         }
     }?;
+    // Revalidate exact confirmed-memory revisions after potentially slow source
+    // reads. A captured projection cannot keep forgotten memory alive.
+    if !request.memories.is_empty() {
+        resolver
+            .authorize_memories(
+                request.person_id,
+                &request.memories,
+                &DependencyAuthorization {
+                    deadline: request.deadline,
+                    cancellation: request.cancellation.clone(),
+                },
+            )
+            .await?;
+    }
     // Source revalidation may await native/provider I/O. Reload the exact model
     // transport after those awaits, immediately at this handoff/release fence.
     if let ModelDispatchTarget::Gateway { expected } = &request.target {
@@ -142,4 +156,139 @@ async fn authorize_request<R: DependencyResolver, A: GatewayAdmission>(
         return Err(AgentFailure::DeadlineExceeded);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod memory_fence_tests {
+    use super::*;
+    use floe_context_contract::{ContextDependency, MemoryRevisionReference};
+    use floe_execution::{
+        BoxFuture, Cancellation,
+        budget::{BudgetConfig, BudgetLedger, ModelUsage},
+    };
+    use floe_kernel::{PersonId, TraceContext};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use uuid::Uuid;
+
+    struct MemoryResolver {
+        live: AtomicBool,
+        reads: AtomicUsize,
+    }
+    impl DependencyResolver for MemoryResolver {
+        fn authorize<'a>(
+            &'a self,
+            _: &'a ContextDependency,
+            _: &'a DependencyAuthorization,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+        fn authorize_memories<'a>(
+            &'a self,
+            _: PersonId,
+            references: &'a [MemoryRevisionReference],
+            _: &'a DependencyAuthorization,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async move {
+                assert_eq!(references.len(), 1);
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                if self.live.load(Ordering::SeqCst) {
+                    Ok(())
+                } else {
+                    Err(AgentFailure::StaleContext)
+                }
+            })
+        }
+    }
+    struct NoGateway;
+    impl GatewayAdmission for NoGateway {
+        fn admit<'a>(
+            &'a self,
+            _: &'a crate::VerifiedGatewayBinding,
+            _: &'a ExecutionScope,
+        ) -> BoxFuture<'a, Result<crate::VerifiedGatewayBinding, AgentFailure>> {
+            Box::pin(async { panic!("device dispatch cannot consult Gateway") })
+        }
+    }
+    fn scope() -> ExecutionScope {
+        ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(30),
+            BudgetLedger::new(BudgetConfig::new(64, 64), ModelUsage::default()).root_lease(),
+            TraceContext::new(Uuid::new_v4()),
+        )
+    }
+    fn request(scope: &ExecutionScope) -> ModelDispatchRequest {
+        ModelDispatchRequest {
+            person_id: PersonId::new(),
+            device_id: "test-device".into(),
+            plan_id: Uuid::new_v4(),
+            binding_digest: [1; 32],
+            projection_ref: Uuid::new_v4(),
+            projection_revision: 1,
+            coverage: DependencyCoverage::Independent,
+            memories: vec![MemoryRevisionReference {
+                target_id: Uuid::new_v4(),
+                revision: 1,
+            }],
+            input_data_classes: vec![DataClass::Personal],
+            purpose: "test".into(),
+            consumer: "manager".into(),
+            target: ModelDispatchTarget::Device,
+            deadline: scope.deadline(),
+            cancellation: scope.cancellation().clone(),
+        }
+    }
+    #[tokio::test]
+    async fn forgotten_memory_is_checked_at_admission_handoff_and_response_release() {
+        let scope = scope();
+        let resolver = MemoryResolver {
+            live: AtomicBool::new(true),
+            reads: AtomicUsize::new(0),
+        };
+        let permit = admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope)
+            .await
+            .unwrap();
+        resolver.live.store(false, Ordering::SeqCst);
+        assert!(matches!(
+            consume_model_dispatch(permit).await,
+            Err(AgentFailure::StaleContext)
+        ));
+        assert!(matches!(
+            admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope).await,
+            Err(AgentFailure::StaleContext)
+        ));
+        resolver.live.store(true, Ordering::SeqCst);
+        let permit = admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope)
+            .await
+            .unwrap();
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        resolver.live.store(false, Ordering::SeqCst);
+        assert_eq!(
+            revalidate_model_dispatch(&fence).await,
+            Err(AgentFailure::StaleContext)
+        );
+        assert_eq!(resolver.reads.load(Ordering::SeqCst), 6);
+        let mut empty = request(&scope);
+        empty.memories.clear();
+        let permit = admit_model_dispatch(empty, &resolver, &NoGateway, &scope)
+            .await
+            .unwrap();
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        revalidate_model_dispatch(&fence).await.unwrap();
+        assert_eq!(
+            resolver.reads.load(Ordering::SeqCst),
+            6,
+            "memory-free projections are unaffected"
+        );
+    }
+    #[test]
+    fn duplicate_and_invalid_memory_references_are_rejected() {
+        let scope = scope();
+        let mut request = request(&scope);
+        request.memories.push(request.memories[0].clone());
+        assert_eq!(request.validate(), Err(AgentFailure::InvalidInput));
+        request.memories.pop();
+        request.memories[0].revision = 0;
+        assert_eq!(request.validate(), Err(AgentFailure::InvalidInput));
+    }
 }

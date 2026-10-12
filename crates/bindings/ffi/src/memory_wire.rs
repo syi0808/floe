@@ -5,58 +5,99 @@ use floe_protocol::*;
 use uuid::Uuid;
 
 pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<MemoryCommand> {
-    let AppProductCommandDto::MemoryDecide {
-        candidate_id,
-        decision,
-    } = value
-    else {
-        return Err(validation("command"));
-    };
-    let kind = match decision {
-        AgentMemoryReviewDecisionKindDto::Approve => floe_knowledge::KnowledgeDecisionKind::Approve,
-        AgentMemoryReviewDecisionKindDto::Reject => floe_knowledge::KnowledgeDecisionKind::Reject,
-    };
-    Ok(MemoryCommand::Decide {
-        candidate_id,
-        decision: kind,
-    })
+    match value {
+        AppProductCommandDto::MemoryDecide {
+            candidate_id,
+            decision,
+        } => Ok(MemoryCommand::Decide {
+            candidate_id,
+            decision: match decision {
+                AgentMemoryReviewDecisionKindDto::Approve => {
+                    floe_knowledge::KnowledgeDecisionKind::Approve
+                }
+                AgentMemoryReviewDecisionKindDto::Reject => {
+                    floe_knowledge::KnowledgeDecisionKind::Reject
+                }
+            },
+        }),
+        AppProductCommandDto::MemoryForget {
+            target_id,
+            expected_revision,
+        } => Ok(MemoryCommand::Forget {
+            target_id,
+            expected_revision,
+        }),
+        _ => Err(validation("command")),
+    }
 }
 
 pub(crate) fn command_out(
     request: &MemoryCommand,
     command_id: Uuid,
-    value: floe_knowledge::MemoryDecisionAcknowledgement,
+    value: floe_app::MemoryCommandOutcome,
 ) -> AppWireResult<AppCommandResultDto> {
-    let MemoryCommand::Decide {
-        candidate_id,
-        decision: kind,
-    } = request;
-    if value.command_id.as_uuid() != command_id
-        || value.candidate_id != *candidate_id
-        || value.decision != *kind
-    {
-        return Err(internal_error());
+    match (request, value) {
+        (
+            MemoryCommand::Decide {
+                candidate_id,
+                decision: kind,
+            },
+            floe_app::MemoryCommandOutcome::Decided(value),
+        ) => {
+            if value.command_id.as_uuid() != command_id
+                || value.candidate_id != *candidate_id
+                || value.decision != *kind
+            {
+                return Err(internal_error());
+            }
+            let result = MemoryDecisionAcknowledgementDto {
+                command_id: CommandIdDto::new(command_id).ok_or_else(internal_error)?,
+                candidate_id: reference(*candidate_id)?,
+                decision: match kind {
+                    floe_knowledge::KnowledgeDecisionKind::Approve => {
+                        AgentMemoryReviewDecisionKindDto::Approve
+                    }
+                    floe_knowledge::KnowledgeDecisionKind::Reject => {
+                        AgentMemoryReviewDecisionKindDto::Reject
+                    }
+                },
+                committed_at: value.committed_at,
+                resulting_target_id: value.resulting_target_id.map(reference).transpose()?,
+                resulting_revision: value.resulting_revision,
+            };
+            result.validate().map_err(|_| internal_error())?;
+            Ok(AppCommandResultDto::MemoryDecision {
+                acknowledgement: result,
+            })
+        }
+        (
+            MemoryCommand::Forget {
+                target_id,
+                expected_revision,
+            },
+            floe_app::MemoryCommandOutcome::Forgotten(value),
+        ) => {
+            if value.command_id.as_uuid() != command_id
+                || value.target_id != *target_id
+                || value.forgotten_revision != *expected_revision
+            {
+                return Err(internal_error());
+            }
+            let result = MemoryForgetAcknowledgementDto {
+                command_id: CommandIdDto::new(command_id).ok_or_else(internal_error)?,
+                target_id: reference(*target_id)?,
+                forgotten_revision: value.forgotten_revision,
+                committed_at: value.committed_at,
+            };
+            result.validate().map_err(|_| internal_error())?;
+            Ok(AppCommandResultDto::MemoryForgotten {
+                acknowledgement: result,
+            })
+        }
+        _ => Err(internal_error()),
     }
-    let result = MemoryDecisionAcknowledgementDto {
-        command_id: CommandIdDto::new(command_id).ok_or_else(internal_error)?,
-        candidate_id: reference(*candidate_id)?,
-        decision: match kind {
-            floe_knowledge::KnowledgeDecisionKind::Approve => {
-                AgentMemoryReviewDecisionKindDto::Approve
-            }
-            floe_knowledge::KnowledgeDecisionKind::Reject => {
-                AgentMemoryReviewDecisionKindDto::Reject
-            }
-        },
-        committed_at: value.committed_at,
-        resulting_target_id: value.resulting_target_id.map(reference).transpose()?,
-        resulting_revision: value.resulting_revision,
-    };
-    result.validate().map_err(|_| internal_error())?;
-    Ok(AppCommandResultDto::MemoryDecision {
-        acknowledgement: result,
-    })
 }
+
 pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<MemoryQuery> {
     match value {
         AppProductQueryDto::MemoryOverview {} => Ok(MemoryQuery::Overview { limit: 100 }),
@@ -174,5 +215,54 @@ fn epistemic(value: floe_knowledge::EpistemicStatus) -> EpistemicStatusDto {
     match value {
         floe_knowledge::EpistemicStatus::Fact => EpistemicStatusDto::Fact,
         floe_knowledge::EpistemicStatus::Inference => EpistemicStatusDto::Inference,
+    }
+}
+
+#[cfg(test)]
+mod forget_tests {
+    use super::*;
+    #[test]
+    fn forget_wire_preserves_exact_command_target_and_revision() {
+        let target_id = Uuid::new_v4();
+        let command_id = Uuid::new_v4();
+        let request = command_in(AppProductCommandDto::MemoryForget {
+            target_id,
+            expected_revision: 7,
+        })
+        .unwrap();
+        let ack = floe_knowledge::MemoryForgetAcknowledgement {
+            command_id: floe_app::CommandId::from_uuid(command_id).unwrap(),
+            target_id,
+            forgotten_revision: 7,
+            committed_at: chrono::Utc::now(),
+        };
+        let result = command_out(
+            &request,
+            command_id,
+            floe_app::MemoryCommandOutcome::Forgotten(ack.clone()),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(result).unwrap()["kind"],
+            "memory.forgotten"
+        );
+        let mut mismatch = ack.clone();
+        mismatch.forgotten_revision = 8;
+        assert!(
+            command_out(
+                &request,
+                command_id,
+                floe_app::MemoryCommandOutcome::Forgotten(mismatch)
+            )
+            .is_err()
+        );
+        assert!(
+            command_out(
+                &request,
+                Uuid::new_v4(),
+                floe_app::MemoryCommandOutcome::Forgotten(ack)
+            )
+            .is_err()
+        );
     }
 }

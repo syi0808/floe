@@ -462,13 +462,15 @@ where
                     state.dependencies.resolver.clone(),
                     request.session_id,
                     context.clone(),
+                    actor.clone(),
+                    state.dependencies.knowledge.clone(),
                     session.data_classes,
                     environment.identity(),
                 )?;
                 request.delegation_context = Some(floe_agent_contract::DelegationContextInput {
                     session_id: request.session_id,
                     device_id: actor.device_id.clone(),
-                    agent_context: context,
+                    agent_context: context.clone(),
                     max_output_bytes: state.config.max_output_bytes,
                 });
                 state

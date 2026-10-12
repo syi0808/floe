@@ -141,6 +141,11 @@ pub enum AppProductCommandDto {
         operation_ref: super::OperationRefDto,
         expected_revision: u64,
     },
+    #[serde(rename = "memory.forget")]
+    MemoryForget {
+        target_id: Uuid,
+        expected_revision: u64,
+    },
     #[serde(rename = "memory.decide")]
     MemoryDecide {
         candidate_id: Uuid,
@@ -272,6 +277,17 @@ impl AppProductCommandDto {
             Self::DayExternalCalendarOperationReconcile {
                 expected_revision, ..
             } => validate_revision(*expected_revision),
+            Self::MemoryForget {
+                target_id,
+                expected_revision,
+            } => {
+                validate_revision(*expected_revision)?;
+                if target_id.is_nil() {
+                    Err("command.target_id")
+                } else {
+                    Ok(())
+                }
+            }
             Self::MemoryDecide { candidate_id, .. } => {
                 if candidate_id.is_nil() {
                     Err("command.candidate_id")
@@ -413,6 +429,31 @@ mod memory_command_namespace_tests {
     use uuid::Uuid;
 
     #[test]
+    fn memory_forget_requires_an_exact_nonzero_target_revision() {
+        let mut command = AppProductCommandDto::MemoryForget {
+            target_id: Uuid::new_v4(),
+            expected_revision: 1,
+        };
+        assert_eq!(command.validate(), Ok(()));
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(wire["kind"], "memory.forget");
+        assert_eq!(
+            serde_json::from_value::<AppProductCommandDto>(wire).unwrap(),
+            command
+        );
+        command = AppProductCommandDto::MemoryForget {
+            target_id: Uuid::nil(),
+            expected_revision: 1,
+        };
+        assert!(command.validate().is_err());
+        command = AppProductCommandDto::MemoryForget {
+            target_id: Uuid::new_v4(),
+            expected_revision: 0,
+        };
+        assert!(command.validate().is_err());
+    }
+
+    #[test]
     fn memory_decision_uses_only_the_product_namespace() {
         let command = AppProductCommandDto::MemoryDecide {
             candidate_id: Uuid::new_v4(),
@@ -520,6 +561,10 @@ pub enum AppCommandResultDto {
     #[serde(rename = "day.external_calendar_operation")]
     DayExternalCalendarOperation {
         operation: super::ManualCalendarOperationReceiptDto,
+    },
+    #[serde(rename = "memory.forgotten")]
+    MemoryForgotten {
+        acknowledgement: super::MemoryForgetAcknowledgementDto,
     },
     #[serde(rename = "memory.decision")]
     MemoryDecision {

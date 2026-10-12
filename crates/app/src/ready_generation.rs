@@ -94,11 +94,16 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             .await?;
         let tasks = Arc::new(tasks);
         let activation = scope.run(vault.activate_conversation_executor()).await?;
+        let memories = Arc::new(floe_vault::VaultKnowledgeRepository::new(
+            vault.clone(),
+            actor.clone(),
+        )?);
         let sources = crate::connection_observe::SourceServices::new(
             vault.clone(),
             core.clone(),
             local_context,
             actor.clone(),
+            memories.clone(),
             #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
             expert_source_transport,
         )?;
@@ -116,10 +121,6 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 sources.dependency_resolver.clone(),
                 sources.gateway_credentials.clone(),
             ));
-        let memories = Arc::new(floe_vault::VaultKnowledgeRepository::new(
-            vault.clone(),
-            actor.clone(),
-        )?);
         let learner_projection = Arc::new(floe_context::ContextLearnerProjection::new(
             actor.clone(),
             memories.clone(),

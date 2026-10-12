@@ -88,6 +88,7 @@ final class AppRuntime {
   late final memoryController = AgentMemoryController(
     memoryGateway: memory,
     reviewGateway: memory,
+    forgetGateway: memory,
     personId: personId,
     canOperate: () => runtimeController.ready,
     onFatalFailure: runtimeController.reportFailure,

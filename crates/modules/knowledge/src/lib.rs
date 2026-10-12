@@ -12,10 +12,10 @@ pub use application::learner_scheduling::{
 };
 pub use application::learner_service::LearnerService;
 pub use application::service::{
-    KnowledgeClock, KnowledgeDependencies, KnowledgeOwner, KnowledgeRead, KnowledgeService,
-    SystemKnowledgeClock,
+    KnowledgeClock, KnowledgeDependencies, KnowledgeForget, KnowledgeOwner, KnowledgeRead,
+    KnowledgeService, SystemKnowledgeClock,
 };
-pub use ports::evidence::EvidenceReader;
+pub use ports::evidence::{EvidenceReader, MemoryEvidenceReader};
 pub use ports::knowledge_repository::{
     KnowledgeRepository, MemoryDecisionRequest, MemoryStageOrigin, MemoryStageRequest,
 };
@@ -28,6 +28,7 @@ pub use ports::learner_repository::{
 };
 pub mod application {
     pub mod discovery;
+    pub mod forget;
     pub mod learner;
     pub mod learner_journal;
     pub mod learner_scheduling;
@@ -88,4 +89,8 @@ pub use application::storage_policy::{
 pub use application::memory_display::{
     MemoryCandidateSummary, MemoryDecisionAcknowledgement, MemoryReviewAction, MemoryReviewDisplay,
     project_memory_decision, project_memory_review,
+};
+
+pub use application::forget::{
+    MemoryForgetAcknowledgement, MemoryForgetRequest, memory_forget_evidence,
 };

@@ -226,6 +226,17 @@ where
             projection_ref: request.projection.projection_ref.as_uuid(),
             projection_revision: request.projection.projection_revision,
             coverage: request.projection.coverage.clone(),
+            memories: request
+                .projection
+                .envelope
+                .manifest
+                .memories
+                .iter()
+                .map(|memory| floe_context_contract::MemoryRevisionReference {
+                    target_id: memory.target_id,
+                    revision: memory.revision,
+                })
+                .collect(),
             input_data_classes: request.projection.input_data_classes.clone(),
             purpose: self.plan.purpose.clone(),
             consumer: self.plan.consumer.clone(),

@@ -23,6 +23,8 @@ pub struct ConversationModelProjection<Evidence, Resolver> {
     resolver: Resolver,
     session_id: Uuid,
     agent_context: AgentContext,
+    actor: floe_kernel::OwnerActor,
+    knowledge: std::sync::Arc<dyn floe_knowledge::KnowledgeRead>,
     session_data_classes: Vec<DataClass>,
     manager_prompt: PromptAssembly,
     finalization_prompt: PromptAssembly,
@@ -38,6 +40,8 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
         resolver: Resolver,
         session_id: Uuid,
         agent_context: AgentContext,
+        actor: floe_kernel::OwnerActor,
+        knowledge: std::sync::Arc<dyn floe_knowledge::KnowledgeRead>,
         session_data_classes: Vec<DataClass>,
         environment: floe_experts::RunExpertEnvironmentIdentity,
     ) -> Result<Self, AgentFailure> {
@@ -47,6 +51,7 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
         {
             return Err(AgentFailure::InvalidInput);
         }
+        actor.validate()?;
         agent_context.validate()?;
         environment.validate()?;
         let manager_prompt = manager_prompt(agent_context.persona.as_ref())?;
@@ -68,6 +73,8 @@ impl<Evidence, Resolver> ConversationModelProjection<Evidence, Resolver> {
             resolver,
             session_id,
             agent_context,
+            actor,
+            knowledge,
             session_data_classes,
             manager_prompt,
             finalization_prompt,
@@ -94,6 +101,26 @@ where
     ) -> BoxFuture<'a, Result<ModelProjectionOutcome, AgentFailure>> {
         Box::pin(async move {
             request.validate()?;
+            if request.principal != self.actor.person_id.to_string() {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            // Memory mutations can happen while a Run is alive. Reacquire from
+            // its owner instead of reusing the first turn's captured contents.
+            let snapshot = self.knowledge.read_context(&self.actor, scope).await?;
+            let mut agent_context = self.agent_context.clone();
+            agent_context.memories = snapshot.memories;
+            agent_context
+                .optional_context_issues
+                .retain(|issue| issue.source != floe_agent_contract::ContextSource::Memory);
+            if let Some(reason) = snapshot.issue {
+                agent_context
+                    .optional_context_issues
+                    .push(floe_agent_contract::ContextIssue {
+                        source: floe_agent_contract::ContextSource::Memory,
+                        reason,
+                    });
+            }
+            agent_context.validate()?;
             let role = match request.role.role_id.as_str() {
                 "manager" => floe_context::ContextProjectionRole::Manager,
                 role if role == FINALIZATION_ROLE_ID => {
@@ -130,7 +157,7 @@ where
                 correction: request.correction.clone(),
                 prompt,
                 conversation: projected.conversation,
-                agent_context: &self.agent_context,
+                agent_context: &agent_context,
                 catalog: &request.catalog,
                 expert_environment: Some(self.expert_environment.clone()),
                 authorized_history_dependencies: &projected.authorized_history_dependencies,

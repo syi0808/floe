@@ -19,3 +19,17 @@ abstract interface class AgentMemoryReviewGateway {
     required String personId,
   });
 }
+
+abstract interface class AgentMemoryForgetGateway {
+  String? get pendingForgetCommandId;
+  String? get pendingForgetTargetId;
+  int? get pendingForgetRevision;
+  Future<AgentMemoryForgetAcknowledgement> forgetMemory({
+    required String personId,
+    required String targetId,
+    required int expectedRevision,
+  });
+  Future<AgentMemoryForgetAcknowledgement> retryPendingForget({
+    required String personId,
+  });
+}

@@ -9,6 +9,7 @@ final class AgentMemoryController extends ChangeNotifier {
   AgentMemoryController({
     required this.memoryGateway,
     required this.reviewGateway,
+    this.forgetGateway,
     required this.personId,
     required this.canOperate,
     required this.onFatalFailure,
@@ -16,6 +17,7 @@ final class AgentMemoryController extends ChangeNotifier {
 
   final AgentMemoryGateway? memoryGateway;
   final AgentMemoryReviewGateway? reviewGateway;
+  final AgentMemoryForgetGateway? forgetGateway;
   final String personId;
   final bool Function() canOperate;
   final void Function(AppOwnerException failure) onFatalFailure;
@@ -29,6 +31,19 @@ final class AgentMemoryController extends ChangeNotifier {
   String? failure;
   AgentMemoryDecisionAcknowledgement? acknowledgement;
   bool busy = false;
+  String? forgetFailure;
+  AgentMemoryForgetAcknowledgement? forgetAcknowledgement;
+  bool get canForget =>
+      forgetGateway != null &&
+      !busy &&
+      canOperate() &&
+      forgetGateway!.pendingForgetCommandId == null &&
+      reviewGateway?.pendingCommandId == null;
+  bool get canRetryForget =>
+      forgetGateway != null &&
+      !busy &&
+      canOperate() &&
+      forgetGateway!.pendingForgetCommandId != null;
 
   bool get hasMemory => memoryGateway != null;
   bool get hasReview => reviewGateway != null;
@@ -38,7 +53,8 @@ final class AgentMemoryController extends ChangeNotifier {
       hasReview &&
       !busy &&
       canOperate() &&
-      reviewGateway!.pendingCommandId == null;
+      reviewGateway!.pendingCommandId == null &&
+      forgetGateway?.pendingForgetCommandId == null;
   bool get canRetryDecision =>
       hasReview &&
       !busy &&
@@ -138,6 +154,86 @@ final class AgentMemoryController extends ChangeNotifier {
     );
   }
 
+  Future<void> forget(String targetId) async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canForget) return;
+    final memory = overview?.memories
+        .where((entry) => entry.targetId == targetId)
+        .singleOrNull;
+    if (memory == null) {
+      forgetFailure = 'conflict';
+      _notifyIfCurrent(generation);
+      return;
+    }
+    await _resolveForget(
+      generation,
+      () => forgetGateway!.forgetMemory(
+        personId: personId,
+        targetId: targetId,
+        expectedRevision: memory.revision,
+      ),
+      targetId: targetId,
+      revision: memory.revision,
+    );
+  }
+
+  Future<void> retryPendingForget() async {
+    final generation = _operationGeneration;
+    if (!_isCurrent(generation) || !canRetryForget) return;
+    final commandId = forgetGateway!.pendingForgetCommandId;
+    final targetId = forgetGateway!.pendingForgetTargetId;
+    final revision = forgetGateway!.pendingForgetRevision;
+    if (commandId == null || targetId == null || revision == null) {
+      forgetFailure = 'conflict';
+      _notifyIfCurrent(generation);
+      return;
+    }
+    await _resolveForget(
+      generation,
+      () => forgetGateway!.retryPendingForget(personId: personId),
+      targetId: targetId,
+      revision: revision,
+      commandId: commandId,
+    );
+  }
+
+  Future<void> _resolveForget(
+    int generation,
+    Future<AgentMemoryForgetAcknowledgement> Function() submit, {
+    required String targetId,
+    required int revision,
+    String? commandId,
+  }) async {
+    if (!_isCurrent(generation) || busy) return;
+    busy = true;
+    forgetFailure = null;
+    forgetAcknowledgement = null;
+    _notifyIfCurrent(generation);
+    try {
+      final confirmed = await submit();
+      if (!_isCurrent(generation)) return;
+      if (confirmed.targetId != targetId ||
+          confirmed.forgottenRevision != revision ||
+          commandId != null && confirmed.commandId != commandId) {
+        throw const FormatException('Memory forget acknowledgement mismatch.');
+      }
+      forgetAcknowledgement = confirmed;
+      // Never keep displaying forgotten text if the subsequent refresh fails.
+      overview = null;
+      candidates = null;
+      await _reloadAfterDecision(generation);
+    } on Object catch (error) {
+      if (!_isCurrent(generation)) return;
+      forgetFailure = _failure(error);
+      _reportFatal(error, generation);
+    } finally {
+      if (_isCurrent(generation, requireCanOperate: false)) {
+        busy = false;
+        notifyListeners();
+      }
+    }
+  }
+
   void clear() {
     _operationGeneration++;
     if (_disposed) return;
@@ -146,6 +242,8 @@ final class AgentMemoryController extends ChangeNotifier {
     overview = null;
     failure = null;
     acknowledgement = null;
+    forgetAcknowledgement = null;
+    forgetFailure = null;
     busy = false;
     notifyListeners();
   }

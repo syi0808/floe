@@ -315,6 +315,15 @@ async fn project_case(
         super::support::SmokeResolver,
         session_id,
         context(),
+        floe_kernel::OwnerActor {
+            person_id: PersonId::from_uuid(
+                Uuid::parse_str(principal).map_err(|_| AgentFailure::InvalidInput)?,
+            )
+            .ok_or(AgentFailure::InvalidInput)?,
+            device_id: "synthetic-smoke".into(),
+            runtime_epoch: 1,
+        },
+        Arc::new(SyntheticMemory),
         vec![DataClass::Synthetic],
         floe_experts::RunExpertEnvironmentIdentity {
             revision: catalog.revision,
@@ -731,5 +740,21 @@ pub(super) async fn run(mode: Mode) -> std::process::ExitCode {
         std::process::ExitCode::SUCCESS
     } else {
         std::process::ExitCode::FAILURE
+    }
+}
+
+struct SyntheticMemory;
+impl floe_knowledge::KnowledgeRead for SyntheticMemory {
+    fn read_context<'a>(
+        &'a self,
+        _: &'a floe_kernel::OwnerActor,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_knowledge::MemoryContextSnapshot, AgentFailure>> {
+        Box::pin(async {
+            Ok(floe_knowledge::MemoryContextSnapshot {
+                memories: vec![],
+                issue: None,
+            })
+        })
     }
 }

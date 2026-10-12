@@ -409,3 +409,9 @@ non-save feedback is keyed by source, distinguishes initial configuration from
 reconfiguration, and clears after that source's later successful configure, sharing
 review/pause or disconnect. Wire validation and source correlation failures after a
 possibly committed command remain Indeterminate and preserve its command identity.
+
+### Exact-target saved-memory forgetting
+
+Knowledge stores immutable positive and negative `memory.forget` receipts under the same command namespace as Memory review decisions. Exact actor/intent replay returns the original outcome; changed intent or cross-command reuse cannot become a new deletion. Operational interruption without a committed negative receipt remains indeterminate. Physical saved-memory removal, evidence-turn exclusions, candidate withdrawal and acknowledgement commit in one Immediate Vault transaction. Exclusion entries contain only Person/Session/turn identities. Original transcripts and historical execution/review receipts are separate records.
+
+Memory projection validity is independent of source grants. The Context dependency resolver receives Knowledge's narrow live-memory reader; it cannot fabricate a source grant for a saved memory. Inference includes canonical manifest target/revision references in each Access dispatch request and rechecks them at admission, handoff and release. Trusted usage settles before a failed output-release check. Manager preparation reads a fresh Knowledge snapshot for each attempt. A stale revision, missing target, invalid temporal window or unavailable owner fails closed.

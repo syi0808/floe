@@ -193,6 +193,10 @@ pub enum DayCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MemoryCommand {
+    Forget {
+        target_id: Uuid,
+        expected_revision: u64,
+    },
     Decide {
         candidate_id: Uuid,
         decision: floe_knowledge::KnowledgeDecisionKind,
@@ -264,7 +268,13 @@ pub enum ProductCommandOutcome {
     Conversation(ConversationCommandOutcome),
     Connections(ConnectionsCommandOutcome),
     Day(DayCommandOutcome),
-    Memory(floe_knowledge::MemoryDecisionAcknowledgement),
+    Memory(MemoryCommandOutcome),
+}
+
+#[derive(Clone, Debug)]
+pub enum MemoryCommandOutcome {
+    Decided(floe_knowledge::MemoryDecisionAcknowledgement),
+    Forgotten(floe_knowledge::MemoryForgetAcknowledgement),
 }
 
 #[derive(Clone, Debug)]

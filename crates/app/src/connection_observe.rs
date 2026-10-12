@@ -29,6 +29,7 @@ impl SourceServices {
         core: Arc<crate::FloeCore>,
         local_context: Arc<crate::LocalContextHost>,
         actor: floe_kernel::OwnerActor,
+        memories: Arc<dyn floe_knowledge::MemoryEvidenceReader>,
         #[cfg(all(feature = "qa-fixtures", target_os = "linux"))] expert_source_transport: Option<
             Arc<dyn floe_context::ExpertSourceTransport>,
         >,
@@ -114,6 +115,7 @@ impl SourceServices {
                 personal.clone(),
                 transport.clone(),
                 core.lease_registry.clone(),
+                memories,
             )?);
         let cleanup = Arc::new(GatewaySourceCleanup::new(
             gateway_credentials.as_ref().clone(),

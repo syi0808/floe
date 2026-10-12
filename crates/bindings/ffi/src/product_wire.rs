@@ -83,7 +83,7 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
             operation_ref: operation_ref.get(),
             expected_revision,
         }),
-        command @ C::MemoryDecide { .. } => {
+        command @ (C::MemoryDecide { .. } | C::MemoryForget { .. }) => {
             ProductCommand::Memory(crate::memory_wire::command_in(command)?)
         }
     })

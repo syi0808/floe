@@ -135,6 +135,24 @@ impl<Keys: VaultKeyProvider + 'static> KnowledgeRepository for VaultKnowledgeRep
         })
     }
 
+    fn forget<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: floe_knowledge::MemoryForgetRequest,
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<
+        'a,
+        Result<floe_knowledge::MemoryForgetAcknowledgement, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async move {
+            self.authorize(actor).map_err(CommandFailure::NotAdmitted)?;
+            check_scope(scope).map_err(CommandFailure::NotAdmitted)?;
+            self.vault
+                .knowledge_forget(actor, request, now, scope)
+                .await
+        })
+    }
     fn stage<'a>(
         &'a self,
         request: MemoryStageRequest,
@@ -251,5 +269,29 @@ fn check_scope(scope: &ExecutionScope) -> Result<(), AgentFailure> {
         Err(AgentFailure::DeadlineExceeded)
     } else {
         Ok(())
+    }
+}
+
+impl<Keys: VaultKeyProvider + 'static> floe_knowledge::MemoryEvidenceReader
+    for VaultKnowledgeRepository<Keys>
+{
+    fn validate_memories<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        references: &'a [floe_context_contract::MemoryRevisionReference],
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.authorize(actor)?;
+            check_scope(scope)?;
+            let result = scope
+                .run(
+                    self.vault
+                        .knowledge_validate_memories(actor, references, now, scope),
+                )
+                .await;
+            self.after_scoped(result, scope)
+        })
     }
 }

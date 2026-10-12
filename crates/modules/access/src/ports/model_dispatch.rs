@@ -28,6 +28,7 @@ pub struct ModelDispatchRequest {
     pub projection_ref: Uuid,
     pub projection_revision: u64,
     pub coverage: DependencyCoverage,
+    pub memories: Vec<floe_context_contract::MemoryRevisionReference>,
     pub input_data_classes: Vec<DataClass>,
     pub purpose: String,
     pub consumer: String,
@@ -53,6 +54,17 @@ impl ModelDispatchRequest {
                 })
             || self.input_data_classes.is_empty()
             || self.input_data_classes.len() > 32
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut memory_ids = std::collections::HashSet::new();
+        if self.memories.len() > floe_context_contract::MAX_CONTEXT_MEMORIES
+            || self.memories.iter().any(|r| {
+                r.target_id.is_nil()
+                    || r.revision == 0
+                    || r.revision > i64::MAX as u64
+                    || !memory_ids.insert(r.target_id)
+            })
         {
             return Err(AgentFailure::InvalidInput);
         }

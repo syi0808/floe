@@ -555,12 +555,27 @@ fn route_command(
                     MemoryCommand::Decide {
                         candidate_id,
                         decision,
-                    } => {
-                        owners
-                            .knowledge
-                            .decide(&actor, command_id, candidate_id, decision, &scope)
-                            .await
-                    }
+                    } => owners
+                        .knowledge
+                        .decide(&actor, command_id, candidate_id, decision, &scope)
+                        .await
+                        .map(MemoryCommandOutcome::Decided),
+                    MemoryCommand::Forget {
+                        target_id,
+                        expected_revision,
+                    } => owners
+                        .knowledge
+                        .forget(
+                            &actor,
+                            floe_knowledge::MemoryForgetRequest {
+                                command_id,
+                                target_id,
+                                expected_revision,
+                            },
+                            &scope,
+                        )
+                        .await
+                        .map(MemoryCommandOutcome::Forgotten),
                 };
                 outcome
                     .map(ProductCommandOutcome::Memory)

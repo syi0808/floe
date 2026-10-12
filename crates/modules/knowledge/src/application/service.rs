@@ -28,7 +28,16 @@ pub trait KnowledgeRead: Send + Sync {
     ) -> BoxFuture<'a, Result<crate::MemoryContextSnapshot, AgentFailure>>;
 }
 
-pub trait KnowledgeOwner: KnowledgeRead {
+pub trait KnowledgeForget: Send + Sync {
+    fn forget<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::MemoryForgetRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::MemoryForgetAcknowledgement, CommandFailure<AgentFailure>>>;
+}
+
+pub trait KnowledgeOwner: KnowledgeRead + KnowledgeForget {
     fn activate<'a>(&'a self, scope: &'a ExecutionScope)
     -> BoxFuture<'a, Result<(), AgentFailure>>;
     fn foreground_lease(&self) -> Result<crate::KnowledgeForegroundLease, AgentFailure>;
@@ -267,5 +276,25 @@ impl Drop for KnowledgeService {
     fn drop(&mut self) {
         self.scheduling.close();
         self.learner.close_admission();
+    }
+}
+
+impl KnowledgeForget for KnowledgeService {
+    fn forget<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::MemoryForgetRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::MemoryForgetAcknowledgement, CommandFailure<AgentFailure>>>
+    {
+        Box::pin(async move {
+            let _operation = self
+                .begin_operation(actor, scope)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            self.repository
+                .forget(actor, request, self.clock.now(), scope)
+                .await
+        })
     }
 }

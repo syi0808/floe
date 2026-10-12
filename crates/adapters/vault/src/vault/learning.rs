@@ -201,6 +201,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(database_failure)?;
         let result = async {
+            if learning_evidence_was_forgotten(&transaction, self.person_id, &identity.source_refs).await? {
+                return Err(AgentFailure::PolicyDenied);
+            }
             // Validate the learner claim against its canonical acknowledged Output first.
             // This is immutable journal evidence; no mutable Conversation revision is reread.
             let mut learner_input = None;
@@ -331,6 +334,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut replay_checked = false;
         let mut prior_command = false;
         let result = async {
+            let mut occupied = transaction.query(
+                "SELECT 1 FROM knowledge_forget_commands WHERE command_id = ?",
+                [request.command_id.as_uuid().to_string()],
+            ).await.map_err(database_failure)?;
+            if occupied.next().await.map_err(database_failure)?.is_some() {
+                prior_command = true;
+                return Err(AgentFailure::Conflict);
+            }
+            drop(occupied);
             let stored = match knowledge_decision_receipt(
                 &transaction,
                 request.command_id,
@@ -367,6 +379,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             validate_review_candidate(&candidate)?;
             validate_memory_review_candidate(&candidate, self.person_id)?;
             let admission = if request.kind == KnowledgeDecisionKind::Approve {
+                if learning_evidence_was_forgotten(&transaction, self.person_id, &candidate.source_refs).await? {
+                    return Err(AgentFailure::PolicyDenied);
+                }
                 let independent = evidence_is_independent(
                     &transaction,
                     self.person_id,
@@ -494,6 +509,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let messages =
                     learning_transcript_messages(self, &transaction, session.id, &history).await?;
                 let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
+                let sources = actual_turns
+                    .iter()
+                    .map(|turn_id| LearningEvidenceRef {
+                        session_id: session.id,
+                        turn_id: *turn_id,
+                    })
+                    .collect::<Vec<_>>();
+                if learning_evidence_was_forgotten(&transaction, self.person_id, &sources).await? {
+                    continue;
+                }
                 let evidence_reader = TransactionLearningEvidence {
                     vault: self,
                     transaction: &transaction,
@@ -1636,6 +1661,16 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         if person_id != self.vault.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
+        let sources = turn_ids
+            .iter()
+            .map(|turn_id| LearningEvidenceRef {
+                session_id,
+                turn_id: *turn_id,
+            })
+            .collect::<Vec<_>>();
+        if learning_evidence_was_forgotten(self.transaction, person_id, &sources).await? {
+            return Err(AgentFailure::PolicyDenied);
+        }
         // Learning has no independent history representation. Resolve the same
         // bounded normalized Manager suffix as discovery, under this transaction.
         // Scoped Expert Sessions are deliberately outside Manager-only learning.
@@ -1680,7 +1715,10 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         let mut actual_turn_ids = history
             .iter()
             .filter(|item| {
-                !matches!(item.message, floe_conversation::AgentMessage::Compaction { .. })
+                !matches!(
+                    item.message,
+                    floe_conversation::AgentMessage::Compaction { .. }
+                )
             })
             .map(|item| item.message.turn_id())
             .collect::<HashSet<_>>()
@@ -2218,4 +2256,233 @@ fn learner_event_key(claim: LearnerClaimRef, event: &JournalEvent) -> Result<Str
         _ => return Err(AgentFailure::CapabilityDenied),
     };
     Ok(key)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
+enum StoredMemoryForgetOutcome {
+    Forgotten {
+        acknowledgement: floe_knowledge::MemoryForgetAcknowledgement,
+    },
+    Rejected {
+        failure: AgentFailure,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredMemoryForget {
+    request: floe_knowledge::MemoryForgetRequest,
+    outcome: StoredMemoryForgetOutcome,
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(crate) async fn knowledge_forget(
+        &self,
+        actor: &OwnerActor,
+        request: floe_knowledge::MemoryForgetRequest,
+        now: DateTime<Utc>,
+        scope: &ExecutionScope,
+    ) -> Result<floe_knowledge::MemoryForgetAcknowledgement, CommandFailure<AgentFailure>> {
+        self.validate_learning_actor(actor)
+            .map_err(CommandFailure::NotAdmitted)?;
+        self.check_learning_scope(scope)
+            .map_err(CommandFailure::NotAdmitted)?;
+        if !request.command_id.is_valid() {
+            return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
+        }
+        let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
+        let mut replay_checked = false;
+        let mut prior_command = false;
+        let result = async {
+            let mut rows = transaction.query(
+                "SELECT person_id, device_id, payload FROM knowledge_forget_commands WHERE command_id = ?",
+                [request.command_id.as_uuid().to_string()],
+            ).await.map_err(database_failure)?;
+            if let Some(row) = rows.next().await.map_err(database_failure)? {
+                prior_command = true;
+                let person = row.get::<String>(0).map_err(storage)?;
+                let device = row.get::<String>(1).map_err(storage)?;
+                let encoded = row.get::<String>(2).map_err(storage)?;
+                if encoded.len() > 4096 { return Err(AgentFailure::StorageUnavailable); }
+                let stored: StoredMemoryForget = decode(&encoded)?;
+                if person != self.person_id.to_string() || device != actor.device_id || stored.request != request {
+                    return Err(AgentFailure::Conflict);
+                }
+                if rows.next().await.map_err(database_failure)?.is_some() { return Err(AgentFailure::StorageUnavailable); }
+                match &stored.outcome {
+                    StoredMemoryForgetOutcome::Forgotten { acknowledgement } if acknowledgement.command_id != request.command_id
+                        || acknowledgement.target_id != request.target_id || acknowledgement.forgotten_revision != request.expected_revision
+                        || acknowledgement.committed_at.timestamp_millis() < 0 => return Err(AgentFailure::StorageUnavailable),
+                    StoredMemoryForgetOutcome::Rejected { failure } if !matches!(failure, AgentFailure::InvalidInput | AgentFailure::NotFound | AgentFailure::Conflict) => return Err(AgentFailure::StorageUnavailable),
+                    _ => {}
+                }
+                return Ok(stored.outcome);
+            }
+            drop(rows);
+            let mut occupied = transaction.query(
+                "SELECT 1 FROM knowledge_command_receipts WHERE command_id = ?",
+                [request.command_id.as_uuid().to_string()],
+            ).await.map_err(database_failure)?;
+            if occupied.next().await.map_err(database_failure)?.is_some() {
+                prior_command = true;
+                return Err(AgentFailure::Conflict);
+            }
+            drop(occupied);
+            replay_checked = true;
+            let validation = match request.validate() {
+                Err(failure) => Err(failure),
+                Ok(()) => match active_revision_on(&transaction, self.person_id, request.target_id).await? {
+                    None => Err(AgentFailure::NotFound),
+                    Some(revision) if revision.revision != request.expected_revision => Err(AgentFailure::Conflict),
+                    Some(_) => Ok(()),
+                },
+            };
+            let outcome = match validation {
+                Err(failure) => StoredMemoryForgetOutcome::Rejected { failure },
+                Ok(()) => {
+                    // Stream bounded records: retain identity-only exclusions from every
+                    // revision, then remove saved-memory content in this same transaction.
+                    let mut revisions = transaction.query(
+                        "SELECT revision, state, CASE WHEN length(CAST(payload AS BLOB)) <= ? THEN payload ELSE NULL END FROM knowledge_revisions WHERE person_id = ? AND target_id = ? ORDER BY revision",
+                        (MAX_LEARNER_JOB_BYTES as i64, self.person_id.to_string(), request.target_id.to_string()),
+                    ).await.map_err(database_failure)?;
+                    while let Some(row) = revisions.next().await.map_err(database_failure)? {
+                        self.check_learning_scope(scope)?;
+                        let number = row.get::<i64>(0).map_err(storage)?;
+                        let state = row.get::<String>(1).map_err(storage)?;
+                        let encoded = row.get::<Option<String>>(2).map_err(storage)?.ok_or(AgentFailure::BudgetExceeded)?;
+                        let revision: KnowledgeRevision = decode(&encoded)?;
+                        if integer(revision.revision)? != number || revision_state_name(revision.state) != state {
+                            return Err(AgentFailure::StorageUnavailable);
+                        }
+                        for source in floe_knowledge::memory_forget_evidence(&revision, self.person_id, request.target_id)? {
+                            transaction.execute(
+                                "INSERT INTO knowledge_forgotten_evidence (person_id, session_id, turn_id) VALUES (?, ?, ?) ON CONFLICT(person_id, session_id, turn_id) DO NOTHING",
+                                (self.person_id.to_string(), source.session_id.to_string(), source.turn_id.to_string()),
+                            ).await.map_err(database_failure)?;
+                        }
+                    }
+                    drop(revisions);
+                    transaction.execute(
+                        "DELETE FROM knowledge_revisions WHERE person_id = ? AND target_id = ?",
+                        (self.person_id.to_string(), request.target_id.to_string()),
+                    ).await.map_err(database_failure)?;
+                    // Withdraw pending proposals, including Create proposals reusing old
+                    // evidence under a different prospective target. Historical receipts
+                    // and original Conversation/model accounting records remain immutable.
+                    transaction.execute(
+                        "UPDATE knowledge_candidates SET state = 'withdrawn', payload = json_set(payload, '$.state', 'withdrawn') WHERE person_id = ? AND state = 'pending' AND (target_id = ? OR EXISTS (SELECT 1 FROM json_each(knowledge_candidates.payload, '$.source_refs') e JOIN knowledge_forgotten_evidence f ON f.person_id = knowledge_candidates.person_id AND f.session_id = json_extract(e.value, '$.session_id') AND f.turn_id = json_extract(e.value, '$.turn_id')))",
+                        (self.person_id.to_string(), request.target_id.to_string()),
+                    ).await.map_err(database_failure)?;
+                    StoredMemoryForgetOutcome::Forgotten { acknowledgement: floe_knowledge::MemoryForgetAcknowledgement {
+                        command_id: request.command_id, target_id: request.target_id,
+                        forgotten_revision: request.expected_revision, committed_at: now,
+                    } }
+                }
+            };
+            let encoded = payload(&StoredMemoryForget { request: request.clone(), outcome: outcome.clone() })?;
+            transaction.execute(
+                "INSERT INTO knowledge_forget_commands (command_id, person_id, device_id, payload) VALUES (?, ?, ?, ?)",
+                (request.command_id.as_uuid().to_string(), self.person_id.to_string(), actor.device_id.clone(), encoded),
+            ).await.map_err(database_failure)?;
+            self.check_learning_scope(scope)?;
+            Ok(outcome)
+        }.await;
+        let outcome =
+            finish_command_transaction(self, transaction, result, replay_checked, prior_command)
+                .await
+                .map_err(|failure| match failure {
+                    // Only a committed negative receipt can settle the whole command.
+                    CommandFailure::NotApplied(failure) => CommandFailure::Indeterminate(failure),
+                    other => other,
+                })?;
+        match outcome {
+            StoredMemoryForgetOutcome::Forgotten { acknowledgement } => Ok(acknowledgement),
+            StoredMemoryForgetOutcome::Rejected { failure } => {
+                Err(CommandFailure::NotApplied(failure))
+            }
+        }
+    }
+}
+
+async fn learning_evidence_was_forgotten(
+    transaction: &turso::transaction::Transaction<'_>,
+    person_id: floe_kernel::PersonId,
+    sources: &[LearningEvidenceRef],
+) -> Result<bool, AgentFailure> {
+    for source in sources {
+        let mut rows = transaction.query(
+            "SELECT 1 FROM knowledge_forgotten_evidence WHERE person_id = ? AND session_id = ? AND turn_id = ?",
+            (person_id.to_string(), source.session_id.to_string(), source.turn_id.to_string()),
+        ).await.map_err(database_failure)?;
+        if rows.next().await.map_err(database_failure)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(crate) async fn knowledge_validate_memories(
+        &self,
+        actor: &OwnerActor,
+        references: &[floe_context_contract::MemoryRevisionReference],
+        now: DateTime<Utc>,
+        scope: &ExecutionScope,
+    ) -> Result<(), AgentFailure> {
+        self.validate_learning_actor(actor)?;
+        self.check_learning_scope(scope)?;
+        let mut ids = HashSet::new();
+        if references.len() > floe_knowledge::MAX_CONTEXT_MEMORIES
+            || references.iter().any(|r| {
+                r.target_id.is_nil()
+                    || r.revision == 0
+                    || r.revision > i64::MAX as u64
+                    || !ids.insert(r.target_id)
+            })
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(database_failure)?;
+        let result = async {
+            let mut facts = Vec::with_capacity(references.len());
+            for reference in references {
+                let revision =
+                    active_revision_on(&transaction, self.person_id, reference.target_id)
+                        .await?
+                        .ok_or(AgentFailure::StaleContext)?;
+                if revision.revision != reference.revision {
+                    return Err(AgentFailure::StaleContext);
+                }
+                let independent =
+                    evidence_is_independent(&transaction, self.person_id, &revision.source_refs)
+                        .await?;
+                facts.push(MemoryContextFact {
+                    revision,
+                    evidence_independent: independent,
+                });
+            }
+            if project_memory_context(self.person_id, facts, now)?
+                .memories
+                .len()
+                != references.len()
+            {
+                return Err(AgentFailure::StaleContext);
+            }
+            self.check_learning_scope(scope)
+        }
+        .await;
+        let result = finish_transaction(self, transaction, result).await;
+        self.check_access()?;
+        result
+    }
 }

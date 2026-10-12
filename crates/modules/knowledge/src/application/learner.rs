@@ -448,6 +448,13 @@ pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservation
     if normalized.is_empty() {
         return None;
     }
+    if normalized.starts_with("forget ")
+        || ["please forget", "잊어줘", "잊어 줘", "기억에서 지워"]
+            .iter()
+            .any(|signal| normalized.contains(signal))
+    {
+        return None;
+    }
     if normalized.starts_with("remember ")
         || [
             "please remember",
@@ -461,13 +468,6 @@ pub fn explicit_learning_signal(text: &str) -> Option<crate::LearningObservation
         .any(|signal| normalized.contains(signal))
     {
         return Some(crate::LearningObservationKind::ExplicitRemember);
-    }
-    if normalized.starts_with("forget ")
-        || ["please forget", "잊어줘", "잊어 줘", "기억에서 지워"]
-            .iter()
-            .any(|signal| normalized.contains(signal))
-    {
-        return Some(crate::LearningObservationKind::UserCorrection);
     }
     if [
         "actually,",

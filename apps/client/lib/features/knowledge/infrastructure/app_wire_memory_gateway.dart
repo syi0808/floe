@@ -6,11 +6,21 @@ import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
 import 'package:floe_client/features/knowledge/domain/memory_review.dart';
 
 final class AppWireMemoryGateway
-    implements AgentMemoryGateway, AgentMemoryReviewGateway {
+    implements
+        AgentMemoryGateway,
+        AgentMemoryReviewGateway,
+        AgentMemoryForgetGateway {
   AppWireMemoryGateway(this._transport);
 
   final AppWireTransport _transport;
   _PendingMemoryDecision? _pending;
+  _PendingMemoryForget? _pendingForget;
+  @override
+  String? get pendingForgetCommandId => _pendingForget?.commandId;
+  @override
+  String? get pendingForgetTargetId => _pendingForget?.targetId;
+  @override
+  int? get pendingForgetRevision => _pendingForget?.revision;
 
   @override
   String? get pendingCommandId => _pending?.commandId;
@@ -44,7 +54,9 @@ final class AppWireMemoryGateway
     required String candidateId,
     required AgentMemoryDecision decision,
   }) async {
-    if (_pending != null) throw const AppOwnerException('conflict');
+    if (_pending != null || _pendingForget != null) {
+      throw const AppOwnerException('conflict');
+    }
     final pending = _PendingMemoryDecision(
       commandId: newAgentRequestId(),
       personId: personId,
@@ -69,6 +81,73 @@ final class AppWireMemoryGateway
       throw const AppOwnerException('conflict');
     }
     return _submit(pending);
+  }
+
+  @override
+  Future<AgentMemoryForgetAcknowledgement> forgetMemory({
+    required String personId,
+    required String targetId,
+    required int expectedRevision,
+  }) {
+    if (_pending != null || _pendingForget != null) {
+      throw const AppOwnerException('conflict');
+    }
+    final pending = _PendingMemoryForget(
+      commandId: newAgentRequestId(),
+      personId: personId,
+      targetId: targetId,
+      revision: expectedRevision,
+    );
+    _pendingForget = pending;
+    return _submitForget(pending);
+  }
+
+  @override
+  Future<AgentMemoryForgetAcknowledgement> retryPendingForget({
+    required String personId,
+  }) {
+    final pending = _pendingForget;
+    if (pending == null || pending.personId != personId) {
+      throw const AppOwnerException('conflict');
+    }
+    return _submitForget(pending);
+  }
+
+  Future<AgentMemoryForgetAcknowledgement> _submitForget(
+    _PendingMemoryForget pending,
+  ) async {
+    final previouslySubmitted = pending.submitted;
+    pending.submitted = true;
+    try {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': newAgentRequestId(),
+        'command_id': pending.commandId,
+        'command': {
+          'kind': 'memory.forget',
+          'target_id': pending.targetId,
+          'expected_revision': pending.revision,
+        },
+      });
+      final acknowledgement = AgentMemoryForgetAcknowledgement.fromJson(
+        _payload(result, 'memory.forgotten', 'acknowledgement'),
+      );
+      if (acknowledgement.commandId != pending.commandId ||
+          acknowledgement.targetId != pending.targetId ||
+          acknowledgement.forgottenRevision != pending.revision) {
+        throw const FormatException('Memory forget acknowledgement mismatch.');
+      }
+      if (identical(_pendingForget, pending)) _pendingForget = null;
+      return acknowledgement;
+    } on AppWireTransportException catch (error) {
+      if (mayDiscardPendingCommand(
+        error,
+        previouslySubmitted: previouslySubmitted,
+      )) {
+        if (identical(_pendingForget, pending)) _pendingForget = null;
+      }
+      throw _fromTransport(error, pending.commandId, 'knowledge_forget');
+    }
   }
 
   Future<Map<String, dynamic>> _query(Map<String, Object?> query) async {
@@ -165,5 +244,19 @@ final class _PendingMemoryDecision {
   final String candidateId;
   final AgentMemoryDecision decision;
   final Map<String, Object?> payload;
+  bool submitted = false;
+}
+
+final class _PendingMemoryForget {
+  _PendingMemoryForget({
+    required this.commandId,
+    required this.personId,
+    required this.targetId,
+    required this.revision,
+  });
+  final String commandId;
+  final String personId;
+  final String targetId;
+  final int revision;
   bool submitted = false;
 }
