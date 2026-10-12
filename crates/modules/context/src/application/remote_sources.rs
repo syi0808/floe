@@ -217,7 +217,6 @@ async fn read_one_remote_source(
     query_fingerprint: &[u8],
     max_items: usize,
     max_bytes: usize,
-    now: i64,
 ) -> Result<(Value, AuthorizedSourceBinding), AgentFailure> {
     let source = grant.source();
     require_unfenced(operations, source).await?;
@@ -281,8 +280,15 @@ async fn read_one_remote_source(
     }
     admit_remote_view_binding(&current_grant, grant, source, &resource)?;
     check_window(window)?;
-    let (value, observed, expires) =
-        validate_remote_view(view_id, raw, query, now, max_items, max_bytes)?;
+    // Freshness belongs to release after transport and continuity I/O, not request start.
+    let (value, observed, expires) = validate_remote_view(
+        view_id,
+        raw,
+        query,
+        Utc::now().timestamp_millis(),
+        max_items,
+        max_bytes,
+    )?;
     let dependency = remote_view_dependency(
         person_id,
         &current_grant,
@@ -408,7 +414,6 @@ async fn read_classified_remote_view(
     if admitted.is_empty() {
         return Err(AgentFailure::CapabilityUnavailable);
     }
-    let now = Utc::now().timestamp_millis();
     let mut values = Vec::with_capacity(admitted.len());
     let mut bindings = Vec::with_capacity(admitted.len());
     let mut reconnect = Vec::new();
@@ -432,7 +437,6 @@ async fn read_classified_remote_view(
             query_fingerprint,
             max_items,
             max_bytes,
-            now,
         )
         .await
         {
@@ -458,10 +462,17 @@ async fn read_classified_remote_view(
     if !reconnect.is_empty() {
         return blocked_outcome(reconnect);
     }
-    Ok(SourceReadOutcome::Ready((
-        merge_remote_views(view_id, values, &query, now, max_items, max_bytes)?,
-        bindings,
-    )))
+    check_window(window)?;
+    let merged = merge_remote_views(
+        view_id,
+        values,
+        &query,
+        Utc::now().timestamp_millis(),
+        max_items,
+        max_bytes,
+    )?;
+    check_window(window)?;
+    Ok(SourceReadOutcome::Ready((merged, bindings)))
 }
 
 /// Whether a recorded remote dependency may still be relied on.
@@ -484,6 +495,11 @@ pub async fn authorize_remote_dependency(
     dependency: &ContextDependency,
     authorization: &DependencyAuthorization,
 ) -> Result<(), AgentFailure> {
+    let window = RemoteCallWindow {
+        deadline: authorization.deadline,
+        cancellation: authorization.cancellation.clone(),
+    };
+    check_window(&window)?;
     remote_dependency_live(dependency, person_id, Utc::now())?;
     if pairing.person_id != person_id.to_string() {
         return Err(AgentFailure::PolicyDenied);
@@ -504,10 +520,6 @@ pub async fn authorize_remote_dependency(
     if !is_remote_view(view_id) {
         return Err(AgentFailure::PolicyDenied);
     }
-    let window = RemoteCallWindow {
-        deadline: authorization.deadline,
-        cancellation: authorization.cancellation.clone(),
-    };
     let source_query = RemoteSourceQuery {
         view_id,
         connector_id: dependency.source().connector().as_str(),
@@ -529,7 +541,9 @@ pub async fn authorize_remote_dependency(
         .await?
         .ok_or(AgentFailure::AccessReviewRequired)?;
     require_unfenced(operations, dependency.source()).await?;
-    admit_remote_view_binding(&current, grant, dependency.source(), resource)
+    admit_remote_view_binding(&current, grant, dependency.source(), resource)?;
+    check_window(&window)?;
+    remote_dependency_live(dependency, person_id, Utc::now())
 }
 
 async fn exact_view_grant(
@@ -695,3 +709,6 @@ pub async fn read_configured_remote_view(
     )
     .await
 }
+
+#[cfg(test)]
+mod freshness_tests;

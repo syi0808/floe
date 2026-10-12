@@ -558,3 +558,16 @@ discovery defers when its memory comparison projection is partial: omitted facts
 cannot be assumed absent. Already admitted jobs retain their own pinned evidence
 and claim validation. The pending-review list's separate 100-item capacity and
 model-context semantic compaction remain unfinished.
+
+## Remote evidence release time
+
+Context validates remote-view observation/expiry against the time after transport
+and source-continuity checks, then revalidates all sources with a fresh clock at
+final merge. Request-start time cannot reject a newly observed valid response or
+keep an expired response live. Cancellation/deadline checks fence final release.
+
+Recorded-dependency reauthorization checks its call window before owner/transport
+work and checks both that window and dependency expiry after all preview, source
+and grant checks. Producer, source, grant, resource, processing and future-time
+validation are retained. These checks do not extend an evidence lease or relax
+clock-skew rules; an expired dependency must be reacquired through its owner.

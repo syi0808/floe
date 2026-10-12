@@ -57,6 +57,16 @@ initial claim, and cover deferral of new discovery with partial comparison data
 without any model call. Fresh qualification passed 11 Knowledge tests, 142 Vault tests, 274 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. Flutter dependencies remain blocked by the environment network policy; no Flutter/Apple/live-provider qualification is claimed and client/wire source is unchanged. Review backlog
 pagination, remote freshness and inherited Task continuation remain open.
 
+Remote freshness reconstruction replaces request-start freshness with release-time
+validation and rechecks recorded dependency expiry/cancellation/deadline after
+I/O. The synthetic owner-port regressions reproduced rejection of a newly observed
+response, acceptance of expired response data, expiry during continuity checks,
+and dependency reauthorization after expiry/cancellation. The initial generated
+test stub had a Rust delimiter error; after correction the five tests reproduced
+the actual old-path failures. All 15 affected Context tests pass after the fix.
+Fresh aggregate qualification passed 279 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains blocked by environment network policy; client/wire source is unchanged and no Flutter or Apple qualification is added. These tests do not verify cryptographic
+source-preview adapters, a live Gateway/provider or native behavior.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
