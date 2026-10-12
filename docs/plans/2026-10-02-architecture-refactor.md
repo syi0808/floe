@@ -1,5 +1,21 @@
 # Floe architecture refactor: target and execution contract
 
+## Recovery of unpublished work — 2026-10-12
+
+The previous local post-`6c358b` checkout, toolchains and verification logs were
+not available in the current environment when publication resumed. Its reported
+local results are not qualification for reconstructed source. Main remains the
+verified published baseline; unpublished memory-capacity, lossless-compression,
+Core/custody and freshness fixes require reconstruction and fresh validation.
+No existing user profile is reset, and Apple QA remains paused.
+
+The first reconstructed slice preserves candidate authorship through Memory
+approval while decision/mutation actors remain User. On the published baseline,
+two new owner regressions reproduced learned Create and Revise becoming User
+authored; rejection and refusal of Learner self-approval passed. The fix retains
+source references, prior revision attribution and serialized overview origin.
+Fresh qualification passed 254 default workspace tests including doctests, 34 Conversation integrations, 8 additional Calendar/Day/process-kill regressions, production FFI build, architecture boundaries and diff checks. The standalone crash driver is intentionally ignored and exercised by the passing subprocess tests. Flutter source and wire shape are unchanged; Flutter and Apple tests were not rerun in this recovery slice. These counts qualify this reconstructed slice only, not the missing unpublished changes. Implementation and testing remain root-owned.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

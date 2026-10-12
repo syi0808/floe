@@ -150,7 +150,8 @@ pub fn plan_review(
                 payload: candidate.payload.clone(),
                 state: KnowledgeRevisionState::Active,
                 source_refs: candidate.source_refs.clone(),
-                created_by: actor.clone(),
+                // Approval does not change the originating candidate author.
+                created_by: candidate.actor.clone(),
                 created_at: decided_at,
             };
             let mutation = KnowledgeMutation {
@@ -199,4 +200,185 @@ pub fn plan_memory_review(
         decided_at,
         admission,
     )
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    use crate::{LearningEvidenceRef, MemoryOrigin, PersonalMemoryKind, PersonalMemoryValue};
+    use floe_kernel::PersonId;
+
+    fn candidate(actor: KnowledgeActor) -> KnowledgeCandidate {
+        let now = Utc::now();
+        KnowledgeCandidate {
+            schema_version: KNOWLEDGE_VERSION,
+            id: Uuid::new_v4(),
+            person_id: PersonId::new(),
+            observation_id: Uuid::new_v4(),
+            idempotency_key: "origin-regression".into(),
+            kind: KnowledgeKind::Memory,
+            operation: KnowledgeOperation::Create,
+            target_id: None,
+            base_revision: None,
+            payload: KnowledgePayload::Memory {
+                value: PersonalMemoryValue {
+                    kind: PersonalMemoryKind::Preference,
+                    statement: "Prefers tea".into(),
+                    epistemic_status: EpistemicStatus::Fact,
+                    confidence_millis: 900,
+                    valid_from: None,
+                    valid_until: None,
+                    observed_at: now,
+                },
+            },
+            before_hash: None,
+            after_hash: "synthetic-content-hash".into(),
+            source_refs: vec![LearningEvidenceRef {
+                session_id: Uuid::new_v4(),
+                turn_id: Uuid::new_v4(),
+            }],
+            extractor_version: "test".into(),
+            prompt_version: "test".into(),
+            actor,
+            state: KnowledgeCandidateState::Pending,
+            created_at: now,
+        }
+    }
+
+    fn admit_create() -> ReviewAdmission {
+        ReviewAdmission {
+            target_id: Uuid::new_v4(),
+            target_exists: false,
+            current_revision: None,
+            current_payload_hash: None,
+            evidence_independent: true,
+        }
+    }
+
+    #[test]
+    fn approving_a_memory_preserves_its_author_separately_from_the_reviewer() {
+        for (author, origin) in [
+            (KnowledgeActor::User, MemoryOrigin::UserProvided),
+            (
+                KnowledgeActor::Learner {
+                    run_id: Uuid::new_v4(),
+                },
+                MemoryOrigin::Learned,
+            ),
+        ] {
+            let proposed = candidate(author.clone());
+            let person = proposed.person_id;
+            let source_refs = proposed.source_refs.clone();
+            let approved = plan_memory_review(
+                proposed,
+                person,
+                KnowledgeDecisionKind::Approve,
+                Utc::now(),
+                Some(admit_create()),
+            )
+            .unwrap();
+            let revision = approved.result.revision.unwrap();
+            assert_eq!(revision.created_by, author);
+            assert_eq!(revision.source_refs, source_refs);
+            assert_eq!(approved.result.decision.actor, KnowledgeActor::User);
+            assert_eq!(
+                approved.result.mutation.unwrap().actor,
+                KnowledgeActor::User
+            );
+            assert_eq!(
+                crate::project_memory_summary(&revision, person)
+                    .unwrap()
+                    .origin,
+                origin
+            );
+        }
+    }
+
+    #[test]
+    fn a_learned_revision_keeps_its_new_author_and_the_previous_revision_evidence() {
+        let original = candidate(KnowledgeActor::User);
+        let person = original.person_id;
+        let approved = plan_memory_review(
+            original.clone(),
+            person,
+            KnowledgeDecisionKind::Approve,
+            Utc::now(),
+            Some(admit_create()),
+        )
+        .unwrap();
+        let prior = approved.result.revision.unwrap();
+        let mut revised = candidate(KnowledgeActor::Learner {
+            run_id: Uuid::new_v4(),
+        });
+        revised.person_id = person;
+        revised.target_id = Some(prior.target_id);
+        revised.base_revision = Some(1);
+        revised.before_hash = Some(original.after_hash.clone());
+        revised.operation = KnowledgeOperation::Revise;
+        let approved = plan_memory_review(
+            revised.clone(),
+            person,
+            KnowledgeDecisionKind::Approve,
+            Utc::now(),
+            Some(ReviewAdmission {
+                target_id: prior.target_id,
+                target_exists: true,
+                current_revision: Some(prior.clone()),
+                current_payload_hash: Some(original.after_hash),
+                evidence_independent: true,
+            }),
+        )
+        .unwrap();
+        let old = approved.superseded.unwrap();
+        assert_eq!(old.created_by, KnowledgeActor::User);
+        assert_eq!(old.source_refs, prior.source_refs);
+        assert_eq!(old.state, KnowledgeRevisionState::Superseded);
+        let next = approved.result.revision.unwrap();
+        assert_eq!(next.created_by, revised.actor);
+        assert_eq!(next.source_refs, revised.source_refs);
+        assert_eq!(next.revision, 2);
+        let stored = serde_json::to_vec(&next).unwrap();
+        let reopened: KnowledgeRevision = serde_json::from_slice(&stored).unwrap();
+        assert_eq!(reopened, next);
+        assert_eq!(
+            crate::project_memory_summary(&reopened, person)
+                .unwrap()
+                .origin,
+            MemoryOrigin::Learned
+        );
+        assert_eq!(approved.result.decision.actor, KnowledgeActor::User);
+        assert_eq!(
+            approved.result.mutation.unwrap().actor,
+            KnowledgeActor::User
+        );
+    }
+
+    #[test]
+    fn rejecting_learned_memory_never_creates_a_revision_and_learner_cannot_approve() {
+        let proposed = candidate(KnowledgeActor::Learner {
+            run_id: Uuid::new_v4(),
+        });
+        let rejected = plan_memory_review(
+            proposed.clone(),
+            proposed.person_id,
+            KnowledgeDecisionKind::Reject,
+            Utc::now(),
+            None,
+        )
+        .unwrap();
+        assert!(rejected.result.revision.is_none());
+        assert!(rejected.result.mutation.is_none());
+        assert_eq!(rejected.result.decision.actor, KnowledgeActor::User);
+        assert_eq!(rejected.result.candidate.actor, proposed.actor);
+        assert!(matches!(
+            plan_review(
+                proposed.clone(),
+                KnowledgeDecisionKind::Approve,
+                proposed.actor,
+                Utc::now(),
+                None
+            ),
+            Err(AgentFailure::PolicyDenied)
+        ));
+    }
 }

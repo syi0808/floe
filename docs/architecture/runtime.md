@@ -476,3 +476,14 @@ there remains one startup attempt and the existing ready app composition. App-ow
 storage failure codes survive FFI metadata, separating key absence/malformation/
 unavailability, incomplete creation, unsupported format and other store failure.
 A locked production key remains a blocked encrypted host, never plaintext fallback.
+
+## Memory authorship and review
+
+Knowledge revisions retain the originating candidate author. User approval is a
+separate decision and mutation actor; approving a Learner proposal does not turn
+its content into user-provided memory. Create and Revise use the new candidate
+author and evidence, while superseded revisions keep their own origin. Memory
+overview derives its displayed origin from that retained authorship. Review still
+requires the User actor; this attribution change grants no Learner approval
+permission. Use a fresh development profile for the corrected persisted meaning;
+existing local records are not automatically rewritten.

@@ -175,6 +175,7 @@ pub struct KnowledgeRevision {
     pub payload: KnowledgePayload,
     pub state: KnowledgeRevisionState,
     pub source_refs: Vec<LearningEvidenceRef>,
+    /// Candidate author; the reviewer is recorded on the decision and mutation.
     pub created_by: KnowledgeActor,
     pub created_at: DateTime<Utc>,
 }
