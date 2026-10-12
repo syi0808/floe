@@ -487,3 +487,15 @@ overview derives its displayed origin from that retained authorship. Review stil
 requires the User actor; this attribution change grants no Learner approval
 permission. Use a fresh development profile for the corrected persisted meaning;
 existing local records are not automatically rewritten.
+
+## Provider transcript and Calendar review outcomes
+
+Provider wire rendering preserves Preamble entries as assistant text in exact
+transcript order, including retained progress and host Resume markers. History
+and current-turn entries use the same renderer.
+
+Calendar Operations stores all exact reviewed outcomes from Access. A previously
+unreviewed PendingReview record may acquire a reviewed authorization only with
+the matching successor: Approve/Approved, Reject/Rejected or Cancel/Cancelled.
+Negative decisions do not admit dispatch. Existing immutable subject checks,
+revision CAS, decision replay and execution fences remain required.

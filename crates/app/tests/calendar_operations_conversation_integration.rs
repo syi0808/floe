@@ -406,6 +406,70 @@ mod qa {
     }
 
     #[test]
+    fn ask_review_deny_and_dismiss_settle_without_dispatch_and_replay_exactly() {
+        use floe_calendar_operations::ActionStatus;
+        use floe_conversation::InteractionDecisionKind;
+        for (decision, expected) in [
+            (InteractionDecisionKind::Deny, ActionStatus::Rejected),
+            (InteractionDecisionKind::Dismiss, ActionStatus::Cancelled),
+        ] {
+            let scenario =
+                prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+            let interaction = scenario.proposal.interaction.as_ref().unwrap();
+            let command = Uuid::new_v4();
+            let first = decide_with_command_id(
+                &scenario.host,
+                scenario.session_id,
+                interaction,
+                decision,
+                interaction.target_digest,
+                command,
+            )
+            .expect("negative review must settle");
+            let repeated = decide_with_command_id(
+                &scenario.host,
+                scenario.session_id,
+                interaction,
+                decision,
+                interaction.target_digest,
+                command,
+            )
+            .expect("replay the same negative review");
+            let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(first)) =
+                first
+            else {
+                panic!("expected the first interaction result")
+            };
+            let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(
+                repeated,
+            )) = repeated
+            else {
+                panic!("expected the replayed interaction result")
+            };
+            assert_eq!(first.interaction, repeated.interaction);
+            assert_eq!(first.linked, repeated.linked);
+            let settled = inspect(&scenario.host, scenario.proposal.operation.action_ref).unwrap();
+            assert_eq!(settled.status, expected);
+            assert!(
+                decide(
+                    &scenario.host,
+                    scenario.session_id,
+                    interaction,
+                    InteractionDecisionKind::Approve,
+                    interaction.target_digest
+                )
+                .is_err()
+            );
+            assert_eq!(
+                inspect(&scenario.host, scenario.proposal.operation.action_ref).unwrap(),
+                settled
+            );
+            assert_eq!(scenario.executor.snapshot().dispatch_attempts, 0);
+            assert_eq!(scenario.executor.snapshot().external_effects, 0);
+        }
+    }
+
+    #[test]
     fn ask_approval_records_pre_dispatch_failure_and_post_dispatch_ack_loss() {
         let before_dispatch_scenario = prepare_scenario(
             OperationPolicyMode::Ask,

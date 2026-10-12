@@ -16,6 +16,14 @@ authored; rejection and refusal of Learner self-approval passed. The fix retains
 source references, prior revision attribution and serialized overview origin.
 Fresh qualification passed 254 default workspace tests including doctests, 34 Conversation integrations, 8 additional Calendar/Day/process-kill regressions, production FFI build, architecture boundaries and diff checks. The standalone crash driver is intentionally ignored and exercised by the passing subprocess tests. Flutter source and wire shape are unchanged; Flutter and Apple tests were not rerun in this recovery slice. These counts qualify this reconstructed slice only, not the missing unpublished changes. Implementation and testing remain root-owned.
 
+The next reconstruction slice reproduces provider wire rendering dropping retained
+Preambles and Calendar Deny/Dismiss failing after decision admission. The wire
+regression checks exact frame ordering; the real App/Vault/Access scenario checks
+settlement, same-command replay, refusal of later approval and zero dispatch or
+external effects. The initial Calendar test assertion did not compile because
+InteractionResult lacks PartialEq; comparing its exact two fields allowed the
+regression to reproduce the actual Admitted/InvalidInput failure. Fresh final gates passed 255 workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture and diff checks. Flutter source and wire contract are unchanged and its tests were not rerun for this slice. No live provider or Apple behavior is inferred from these fixtures.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

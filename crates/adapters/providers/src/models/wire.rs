@@ -2,8 +2,8 @@
 //!
 //! The canonical model conversation is typed; each provider translates it to
 //! the message shapes its API expects. This module renders the shared OpenAI
-//! role/content/tool-call shapes both transports use today. Preambles never
-//! cross: they were dropped from the wire on the old path too.
+//! role/content/tool-call shapes both transports use today. Preambles, including
+//! host Resume markers, retain their text and chronological assistant position.
 
 use floe_agent_contract::{
     ArtifactPart, ModelConversationEntry, TaskState, USER_INTERACTION_MEDIA_TYPE,
@@ -55,11 +55,11 @@ fn wire_entry(entry: &ModelConversationEntry) -> Vec<Value> {
             "role": "user",
             "content": text,
         })],
-        ModelConversationEntry::Assistant { text, .. } => vec![json!({
+        ModelConversationEntry::Assistant { text, .. }
+        | ModelConversationEntry::Preamble { text, .. } => vec![json!({
             "role": "assistant",
             "content": text,
         })],
-        ModelConversationEntry::Preamble { .. } => vec![],
         ModelConversationEntry::ToolExchange { call, result } => {
             let call_message = json!({
                 "role": "assistant",
@@ -146,5 +146,52 @@ fn wire_entry(entry: &ModelConversationEntry) -> Vec<Value> {
             });
             vec![call_message, result_message]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn preambles_survive_history_and_current_turn_wire_rendering_in_order() {
+        let history = vec![
+            ModelConversationEntry::User {
+                message_id: Uuid::new_v4(),
+                text: "original request".into(),
+            },
+            ModelConversationEntry::Preamble {
+                message_id: Uuid::new_v4(),
+                text: "I will inspect the source.".into(),
+            },
+        ];
+        let current = vec![
+            ModelConversationEntry::Preamble {
+                message_id: Uuid::new_v4(),
+                text: "Resume the retained original request.".into(),
+            },
+            ModelConversationEntry::Assistant {
+                message_id: Uuid::new_v4(),
+                text: "Continuing.".into(),
+            },
+        ];
+        let frames = ModelFrames {
+            run_frame: "run context".into(),
+            history: wire_messages(&history),
+            attempt_context: "attempt context".into(),
+            current_turn: wire_messages(&current),
+        };
+        assert_eq!(
+            frames.messages(),
+            vec![
+                json!({"role":"user", "content":"run context"}),
+                json!({"role":"user", "content":"original request"}),
+                json!({"role":"assistant", "content":"I will inspect the source."}),
+                json!({"role":"user", "content":"attempt context"}),
+                json!({"role":"assistant", "content":"Resume the retained original request."}),
+                json!({"role":"assistant", "content":"Continuing."}),
+            ]
+        );
     }
 }

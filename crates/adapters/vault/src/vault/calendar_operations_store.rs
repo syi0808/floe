@@ -552,10 +552,27 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if next.authorization != current.record.authorization
             && !(current.record.authorization.is_none()
                 && current.record.state == ActionState::PendingReview
-                && next.state == ActionState::Approved
                 && matches!(
-                    next.authorization,
-                    Some(floe_access::OperationDecisionReceipt::ReviewedDecision { .. })
+                    (&next.state, &next.authorization),
+                    (
+                        ActionState::Approved,
+                        Some(floe_access::OperationDecisionReceipt::ReviewedDecision {
+                            decision: floe_access::OperationDecisionKind::Approve,
+                            ..
+                        })
+                    ) | (
+                        ActionState::Rejected,
+                        Some(floe_access::OperationDecisionReceipt::ReviewedDecision {
+                            decision: floe_access::OperationDecisionKind::Reject,
+                            ..
+                        })
+                    ) | (
+                        ActionState::Cancelled,
+                        Some(floe_access::OperationDecisionReceipt::ReviewedDecision {
+                            decision: floe_access::OperationDecisionKind::Cancel,
+                            ..
+                        })
+                    )
                 ))
         {
             return Err(CalendarOperationStoreError::InvalidRecord);
