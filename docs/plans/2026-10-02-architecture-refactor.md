@@ -1,5 +1,20 @@
 # Floe architecture refactor: target and execution contract
 
+## Post-audit correctness work — 2026-10-12
+
+The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
+
+The accepted product decisions are immediate removal of explicitly identified memories (including prevention of relearning from the same old evidence), and compression before destructive history pruning. Forgetting a memory does not implicitly delete the original conversation. Storage compression and model-context summarization have distinct contracts.
+
+Ordered cutover:
+
+1. Repair normalized Manager learning evidence and Manager/Expert recorder retirement. Knowledge continues to own learning admission; Conversation Core remains the sole transcript custody path; uncertainty accounting must survive writer retirement.
+2. Implement exact-target forgetting under Knowledge ownership with provenance-based relearning exclusion and live projection invalidation. Clarify ambiguous user targets; do not preserve forgotten content in a semantic blacklist. Preserve unrelated original transcripts and uncertain external-operation evidence.
+3. Add bounded compression and align storage/read admission limits, then resolve the remaining reproduced boundary, recovery and capacity findings.
+4. Run affected-owner regression tests during iteration, then the single final workspace/architecture gate. Apple/native qualification remains explicitly pending while Mac testing is unavailable.
+
+First checkpoint: replace transactional learning validation of the obsolete inline Session message vector with bounded normalized Manager transcript evidence under the same Vault transaction. Discovery, enqueue and staging must retain Person, Session, revision, turn membership and dependency-coverage checks. Remove the obsolete evidence path instead of restoring inline messages. Verify explicit remember, rejected foreign turns, stale revision, reopen/idempotent enqueue and non-independent evidence. Search learning callers for residual inline-history dependence and update the runtime architecture description with the verified path.
+
 ## Active P3 implementation update — 2026-10-09
 
 P3 implementation and caller cutover is now present on the exact verified base commit `98c463ec3ce80ff329119dcacbf0f37975e5a710` (parent `b871c89a7d5ac8ec59e5eb445d77d89443f49465`; base tree `246ebfc1fc5d42a9d38ab559c2d092959aa7799a`). Calendar Operations owns immutable effect normalization, identity, dispatch intent, provider receipts, uncertainty and reconciliation. Access owns immutable operation subjects, policy, review and decision receipts. The existing encrypted Vault composes operation and Conversation approval-interaction admission atomically; dispatch intent and Access receipt consumption are later committed with current local checks, while external source continuity remains an adapter fence. Conversation publishes and resolves the approval interaction and resumes the same operation without submitting its effect again. Day calls through its inward port without holding its local admission lock across external work; direct Day commands retain actor/source/OS authority independently of Expert Allow/Ask/Deny policy. The four product route groups are Conversation, Connections, Day and Memory. Conversation routes include `conversation.calendar_policy.get/set`, `conversation.calendar_proposal.submit`, `conversation.interaction.resolve/refresh` and `conversation.experts.*`; Day routes include `day.calendar_destinations` and `day.external_calendar_operation.*`. Runtime/native control routes remain separate. No `access.*`, `actions.*`, top-level `experts.*` or top-level Calendar Operations namespace is exposed.

@@ -8972,3 +8972,382 @@ async fn cancelled_expert_task_closes_its_run_and_later_task_starts_a_fresh_run(
     assert_eq!(persisted.snapshot.state, TaskState::Cancelled);
     assert_eq!(persisted.receipt, Some(cancelled));
 }
+
+#[tokio::test]
+async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and_reopen() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".to_owned(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .expect("discover normalized Manager evidence");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].evidence.turn_ids, vec![run.run_id.as_uuid()]);
+    let input = floe_knowledge::explicit_review_input(&snapshots[0], &[], Utc::now())
+        .expect("validate actual transcript evidence")
+        .expect("explicit remember produces a learning input");
+
+    let mut foreign_turn = input.clone();
+    foreign_turn.turn_ids = vec![Uuid::new_v4()];
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_enqueue(&actor, foreign_turn, Utc::now(), &scope)
+            .await,
+        Err(AgentFailure::NotFound)
+    );
+    let mut stale = input.clone();
+    stale.session_revision += 1;
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_enqueue(&actor, stale, Utc::now(), &scope)
+            .await,
+        Err(AgentFailure::StaleContext)
+    );
+
+    let job = scenario
+        .vault()
+        .learner_enqueue(&actor, input.clone(), Utc::now(), &scope)
+        .await
+        .expect("enqueue using the same canonical evidence");
+    scenario.reopen().await;
+    let replay = scenario
+        .vault()
+        .learner_enqueue(&actor, input, Utc::now(), &scope)
+        .await
+        .expect("reopen preserves exact learning admission");
+    assert_eq!(replay.id, job.id);
+    let reopened = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .expect("reopened normalized history remains discoverable");
+    assert_eq!(reopened.len(), 1);
+    assert_eq!(reopened[0].evidence, snapshots[0].evidence);
+    let reopened_input =
+        floe_knowledge::explicit_review_input(&reopened[0], &[], job.input.observed_at)
+            .expect("validate reopened evidence")
+            .expect("retain explicit learning signal");
+    assert_eq!(reopened_input.digest, job.input.digest);
+
+    let foreign_actor = OwnerActor {
+        person_id: PersonId::new(),
+        ..actor.clone()
+    };
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&foreign_actor, 64, &scope)
+            .await
+            .err(),
+        Some(AgentFailure::NotFound)
+    );
+
+    // Use a separate owner fixture for the live-coverage race; reopening a Vault
+    // fences its old executor and is not permission to admit with that generation.
+    let mut scenario = Scenario::new().await;
+    let next = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer green tea.",
+        "You prefer green tea.".to_owned(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: next.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let before_revoke = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .expect("read next independent learning evidence");
+    let next_input = floe_knowledge::explicit_review_input(&before_revoke[0], &[], Utc::now())
+        .expect("validate next evidence")
+        .expect("next explicit signal");
+    remove_owner_coverage(&scenario, next.run_id.as_uuid()).await;
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_enqueue(&actor, next_input, Utc::now(), &scope)
+            .await,
+        Err(AgentFailure::PolicyDenied),
+        "missing live coverage cannot authorize queued learning"
+    );
+    let after_revoke = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .expect("read unknown-coverage discovery without corrupting the Vault");
+    assert!(
+        floe_knowledge::explicit_review_input(&after_revoke[0], &[], Utc::now())
+            .expect("unknown coverage is ineligible rather than corrupt")
+            .is_none()
+    );
+}
+
+async fn append_scripted_expert_source_review(
+    scenario: &Scenario,
+    working: &TaskRecord,
+) -> Result<(Uuid, floe_agent_contract::SourceAccessBlockers), AgentFailure> {
+    use floe_agent_contract::{
+        BatchCursor, JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelStep, ModelUsage, PreparedModelPlan, ProcessingBoundary,
+        ProjectionRef, ValidatedModelBatch,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let vault = scenario.vault();
+    let call = floe_agent_contract::ToolCall {
+        call_id: floe_agent_runtime::stable_call_id(working.execution_id, batch_id, 0),
+        invocation_key: floe_agent_runtime::stable_invocation_key(
+            working.execution_id,
+            batch_id,
+            0,
+            floe_agent_runtime::InvocationKind::Tool,
+        ),
+        tool_id: "calendar.read".into(),
+        definition_revision: 1,
+        input: "{}".into(),
+    };
+    let blockers = floe_agent_contract::SourceAccessBlockers::try_new(vec![
+        floe_context_contract::SourceAccessRequirement::try_new(
+            "floe.source.calendar",
+            None,
+            None,
+            floe_context_contract::GrantOperation::Read,
+            floe_context_contract::GrantConsumer::builtin("manager").unwrap(),
+            floe_context_contract::GrantPurpose::Assistant,
+            vec![],
+            None,
+            floe_context_contract::SourceAccessRequirementKind::SelectResource,
+            None,
+            None,
+            false,
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    vault
+        .append_task_journal(
+            working.execution(),
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: Some(working.snapshot.task_id),
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: working.snapshot.principal.clone(),
+                    device_id: working.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([61; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "result",
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "checkpoint",
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: working.execution_id,
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::CallTool {
+                        tool_id: call.tool_id.clone(),
+                        definition_revision: call.definition_revision,
+                        input: call.input.clone(),
+                    }],
+                    catalog_revision: working.catalog_revision,
+                    tool_revisions: vec![floe_agent_contract::PinnedToolRevision {
+                        tool_id: call.tool_id.clone(),
+                        definition_revision: 1,
+                    }],
+                    agent_revisions: vec![],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: None,
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "checkpoint",
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "intent",
+            JournalEvent::ToolIntent { call: call.clone() },
+        )
+        .await?;
+    vault
+        .append_task_journal(
+            working.execution(),
+            "result",
+            JournalEvent::ToolReviewRequired {
+                call_id: call.call_id,
+                blockers: blockers.clone(),
+            },
+        )
+        .await?;
+    Ok((call.call_id, blockers))
+}
+
+#[tokio::test]
+async fn source_review_blocked_expert_releases_custody_for_the_next_task() {
+    let scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (first, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "read calendar",
+    );
+    let first_key = draft.key.clone();
+    let first = match scenario.vault().admit_task(first, draft).await.unwrap() {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected admission {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    let (call_id, blockers) = append_scripted_expert_source_review(&scenario, &working)
+        .await
+        .unwrap();
+    let current = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    scenario
+        .vault()
+        .settle_task_execution(TaskExecutionCommit {
+            execution: current.execution(),
+            expected_task_revision: current.aggregate_revision,
+            expected_journal_revision: current.journal_revision,
+            terminal: TaskSnapshot {
+                state: TaskState::Blocked,
+                result: None,
+                artifacts: vec![],
+                coverage: DependencyCoverage::Independent,
+                issue: None,
+                blockage: Some(floe_agent_contract::TaskBlockage::SourceRead {
+                    tool_call_id: call_id,
+                    blockers,
+                }),
+                ..current.snapshot.clone()
+            },
+            settlement: None,
+        })
+        .await
+        .expect("commit the terminal source-review receipt");
+    let stored = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.snapshot.state, TaskState::Blocked);
+    assert!(stored.receipt.is_some());
+    let (mut later, mut draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        first.admission.assignment_id,
+        1,
+        "1.0.0",
+        "try a later task",
+    );
+    later.admission = first.admission.clone();
+    draft.key = first_key;
+    let later = match scenario
+        .vault()
+        .admit_task(later, draft)
+        .await
+        .expect("source-review settlement releases the assignment reservation")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected next admission {other:?}"),
+    };
+    start_expert_task(&scenario, &later).await;
+    assert_eq!(
+        scenario
+            .vault()
+            .task(first.snapshot.task_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        stored,
+        "a new Task never reopens or modifies the original Blocked Task"
+    );
+}

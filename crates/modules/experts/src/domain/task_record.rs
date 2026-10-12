@@ -305,13 +305,14 @@ pub(crate) fn project_task_journal(
     Ok(projection)
 }
 
-/// Authenticate a complete stored prefix against its Task-owned watermark.
+/// Authenticate a complete stored prefix against its Task-owned watermark and
+/// return the canonical runtime projection for custody/recovery decisions.
 pub fn validate_task_journal(
     record: &TaskRecord,
     journal: &[JournalEntry],
-) -> Result<(), AgentFailure> {
+) -> Result<JournalProjection, AgentFailure> {
     record.validate(floe_agent_contract::MAX_OUTPUT_BYTES)?;
-    project_task_journal(record, journal).map(|_| ())
+    project_task_journal(record, journal)
 }
 
 /// Derive the one next Task head. Storage appends the entry and this exact

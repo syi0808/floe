@@ -3096,39 +3096,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::StorageUnavailable);
         }
         let journal = self.task_journal_on(transaction, &record).await?;
-        validate_task_journal(&record, &journal)?;
-        let mut unresolved = std::collections::BTreeSet::new();
-        let mut unresolved_models = std::collections::BTreeSet::new();
-        let mut tools = std::collections::HashSet::new();
-        let mut models = std::collections::HashSet::new();
-        let mut delegations = std::collections::HashSet::new();
-        for entry in &journal {
-            match &entry.event {
-                JournalEvent::ModelIntent { attempt_id, .. } => {
-                    models.insert(*attempt_id);
-                }
-                JournalEvent::ModelResult { attempt_id, .. } => {
-                    models.remove(attempt_id);
-                }
-                JournalEvent::ToolIntent { call } => {
-                    tools.insert(call.call_id);
-                }
-                JournalEvent::ToolResult { result } => {
-                    tools.remove(&result.call_id);
-                }
-                JournalEvent::DelegationIntent { request } => {
-                    delegations.insert(request.task_id.as_uuid());
-                }
-                JournalEvent::DelegationResult { receipt } => {
-                    delegations.remove(&receipt.task_id.as_uuid());
-                }
-                _ => {}
-            }
-        }
-        unresolved.extend(tools);
-        unresolved.extend(delegations);
-        unresolved.extend(models.iter().copied());
-        unresolved_models.extend(models);
+        let projection = validate_task_journal(&record, &journal)?;
+        // Runtime owns journal settlement semantics. In particular a durable
+        // ToolReviewRequired settles its tool intent without executing it.
+        // Experts rejects subdelegation, so only tool and model custody remain.
+        let mut unresolved = projection
+            .unresolved_tool_calls
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut unresolved_models = projection
+            .unresolved_attempts
+            .iter()
+            .map(|attempt| attempt.attempt_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        unresolved.extend(unresolved_models.iter().copied());
         if let Some(receipt) = record.receipt.as_ref() {
             for attempt in &receipt.accounting.unresolved_attempts {
                 unresolved.insert(attempt.attempt_id);

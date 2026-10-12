@@ -1047,6 +1047,7 @@ dependencies = [
  "chrono",
  "floe-access",
  "floe-agent-contract",
+ "floe-agent-runtime",
  "floe-calendar-operations",
  "floe-connections",
  "floe-context",

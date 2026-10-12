@@ -70,6 +70,8 @@ pub struct JournalProjection {
     pub delegated_receipts: Vec<TaskExecutionReceipt>,
     pub attempt_refs: Vec<Uuid>,
     pub unresolved_attempts: Vec<UnresolvedModelAttempt>,
+    /// Tool intents lacking either a result or a durable source-review settlement.
+    pub unresolved_tool_calls: Vec<Uuid>,
     pub task_refs: Vec<TaskId>,
 }
 
@@ -809,7 +811,10 @@ pub fn project_execution_journal(
             _ => None,
         })
         .collect();
+    let mut unresolved_tool_calls = tools.keys().copied().collect::<Vec<_>>();
+    unresolved_tool_calls.sort_unstable();
     Ok(JournalProjection {
+        unresolved_tool_calls,
         journal_revision: entries.last().map_or(0, |entry| entry.revision),
         journal_digest: journal_digest(entries)?,
         output,

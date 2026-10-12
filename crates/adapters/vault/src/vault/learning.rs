@@ -1636,7 +1636,20 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         if person_id != self.vault.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
-        let session = self.vault.session_on(self.transaction, session_id).await?;
+        // Learning has no independent history representation. Resolve the same
+        // bounded normalized Manager suffix as discovery, under this transaction.
+        // Scoped Expert Sessions are deliberately outside Manager-only learning.
+        let session = self
+            .vault
+            .manager_session_shell_on(self.transaction, session_id)
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?
+            .ok_or(AgentFailure::NotFound)?;
+        let history = self
+            .vault
+            .read_manager_learning_history_on(self.transaction, session_id, 256, 512 * 1024)
+            .await
+            .map_err(super::conversation_core::owner_store_failure)?;
         let mut coverage = if turn_ids.is_empty() {
             DependencyCoverage::Unknown
         } else {
@@ -1664,13 +1677,12 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
                 Err(_) => return Err(AgentFailure::VaultUnavailable),
             };
         }
-        let mut actual_turn_ids = session
-            .messages
+        let mut actual_turn_ids = history
             .iter()
-            .filter(|message| {
-                !matches!(message, floe_conversation::AgentMessage::Compaction { .. })
+            .filter(|item| {
+                !matches!(item.message, floe_conversation::AgentMessage::Compaction { .. })
             })
-            .map(floe_conversation::AgentMessage::turn_id)
+            .map(|item| item.message.turn_id())
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
