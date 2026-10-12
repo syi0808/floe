@@ -82,6 +82,19 @@ restored that unchanged test without increasing thread stack limits or weakening
 assertions. Fresh qualification passed 145 Vault tests, 282 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests (one opt-in case remained ignored), production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains policy-blocked; Apple/live-provider qualification remains open. This is Continue evidence, not a claim
 that every interaction Resume or live-provider recovery case is complete.
 
+Go QA restoration used the checksum-verified official Go 1.27.2 toolchain.
+The first race run reproduced private-file metadata failures in synthetic storage,
+catalog, HTTP and Views fixtures: testing.TempDir creates numbered children with
+0777 filtered by the process umask, so a normal 022 umask produces 0755. Fixtures
+now explicitly create an owner-only child with os.MkdirTemp through test support;
+production ownership/mode/link checks and the global umask are unchanged. A
+fixture test checks independent directories, exact 0700 mode and the production
+validator. Its initial compile missed the privatefiles package alias and was
+corrected before qualification. Fresh `go test -race -count=1 ./...`, `go vet
+./...`, the explicitly enabled actual Rust-to-Go-to-mock-provider budget path,
+architecture boundaries and diff checks pass. No live provider or Apple Keychain
+behavior is claimed. Only synthetic test setup changed in the server.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

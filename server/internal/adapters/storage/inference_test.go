@@ -11,11 +11,12 @@ import (
 
 	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/inference"
+	"floe/server/internal/testsupport"
 )
 
 func inferenceTestFiles(t *testing.T) (*privatefiles.Files, string) {
 	t.Helper()
-	rootPath := t.TempDir()
+	rootPath := testsupport.PrivateDirectory(t)
 	key := []byte("0123456789abcdef0123456789abcdef")
 	root, err := privatefiles.NewFiles(rootPath, "inference-config-test", key, true)
 	if err != nil {

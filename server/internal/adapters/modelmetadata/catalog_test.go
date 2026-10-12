@@ -9,6 +9,7 @@ import (
 
 	"floe/server/internal/inference"
 	"floe/server/internal/modelcatalog"
+	"floe/server/internal/testsupport"
 	"floe/server/internal/trust"
 )
 
@@ -20,7 +21,7 @@ func TestLocalCatalogEvidenceConfiguresInferenceWithoutCodeChanges(t *testing.T)
 	if err != nil {
 		t.Fatalf("read synthetic local data example: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), modelcatalog.FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), modelcatalog.FileName)
 	if err := modelcatalog.Install(path, data); err != nil {
 		t.Fatalf("install synthetic capability evidence: %v", err)
 	}

@@ -8,12 +8,13 @@ import (
 	ownerstorage "floe/server/internal/adapters/storage"
 	privatefiles "floe/server/internal/adapters/storage/privatefiles"
 	"floe/server/internal/integrations"
+	"floe/server/internal/testsupport"
 	"floe/server/internal/trust"
 )
 
 func testFiles(t *testing.T, scope string) *privatefiles.Files {
 	t.Helper()
-	root, err := privatefiles.NewFiles(t.TempDir(), "p5-synthetic-"+scope, make([]byte, 32), true)
+	root, err := privatefiles.NewFiles(testsupport.PrivateDirectory(t), "p5-synthetic-"+scope, make([]byte, 32), true)
 	if err != nil {
 		t.Fatal(err)
 	}

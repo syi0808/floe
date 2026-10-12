@@ -25,6 +25,7 @@ import (
 	"floe/server/internal/authority"
 	sourcecontract "floe/server/internal/contracts/source"
 	"floe/server/internal/pairing"
+	"floe/server/internal/testsupport"
 	"floe/server/internal/trust"
 	"floe/server/internal/views"
 	viewcontracts "floe/server/internal/views/contracts"
@@ -206,7 +207,7 @@ func approveTestClient(t *testing.T, service *trust.Service, store credentials.S
 
 func newServiceFixture(t *testing.T, provider *scriptedReader, producer *failingProducerTrust) *serviceFixture {
 	t.Helper()
-	directory := t.TempDir()
+	directory := testsupport.PrivateDirectory(t)
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)

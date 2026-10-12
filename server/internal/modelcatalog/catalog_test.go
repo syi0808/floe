@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"floe/server/internal/adapters/storage/privatefiles"
+	"floe/server/internal/testsupport"
 )
 
 func catalogBytes(t *testing.T, revision uint64, version, modelID string) []byte {
@@ -118,7 +119,7 @@ func TestBootstrapAndExampleAreDataOnlyMigratedSuggestions(t *testing.T) {
 }
 
 func TestCapabilityEvidenceUsesValidatedInstallReloadAndRollback(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "suggestions-only", "suggestion-only")); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +224,7 @@ func TestParseAcceptsAdditiveUnknownFields(t *testing.T) {
 		t.Fatalf("known fields were not decoded: %#v", catalog)
 	}
 
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, data); err != nil {
 		t.Fatalf("install unknown additive fields: %v", err)
 	}
@@ -274,7 +275,7 @@ func TestMetadataLeavesUnknownLimitsAbsentAndRequiresProvenance(t *testing.T) {
 }
 
 func TestInstallValidatesBeforeAtomicReplacementAndRetainsPrevious(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	first := catalogBytes(t, 2, "v2", "model-two")
 	if err := Install(path, first); err != nil {
 		t.Fatalf("install first catalog: %v", err)
@@ -315,7 +316,7 @@ func TestValidateAndInstallReadLocalCatalogFile(t *testing.T) {
 	if validated.Revision != 2 || validated.Version != "example-revision-2" {
 		t.Fatalf("unexpected validated example identity: %#v", validated)
 	}
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := InstallFile(path, "example.json"); err != nil {
 		t.Fatalf("install local example file: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestValidateAndInstallReadLocalCatalogFile(t *testing.T) {
 }
 
 func TestReloadKeepsLastKnownGoodAndReportsFailureTime(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	installed := catalogBytes(t, 2, "v2", "selected-model")
 	if err := Install(path, installed); err != nil {
 		t.Fatal(err)
@@ -400,7 +401,7 @@ func assertRetainedStatus(t *testing.T, store *Store, modelID, errorCode string,
 }
 
 func TestRestartUsesValidPreviousWhenCurrentIsMalformed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "last-known-good")); err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +424,7 @@ func TestRestartUsesValidPreviousWhenCurrentIsMalformed(t *testing.T) {
 }
 
 func TestDirectReplacementReloadPersistsLastGoodForCorruptCurrentRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -456,7 +457,7 @@ func TestDirectReplacementReloadPersistsLastGoodForCorruptCurrentRestart(t *test
 }
 
 func TestRestartPrefersNewerLastGoodOverStaleValidCurrent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -482,7 +483,7 @@ func TestRestartPrefersNewerLastGoodOverStaleValidCurrent(t *testing.T) {
 }
 
 func TestRestartChoosesHigherPreviousSnapshotOverLowerCurrent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	writeCatalog(t, path, catalogBytes(t, 2, "current-v2", "lower-current-model"))
 	writeCatalog(t, PreviousPath(path), catalogBytes(t, 3, "previous-v3", "higher-previous-model"))
 
@@ -500,7 +501,7 @@ func TestRestartChoosesHigherPreviousSnapshotOverLowerCurrent(t *testing.T) {
 }
 
 func TestRollbackRevisionExceedsDurableLastGoodWhenCurrentIsStale(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "rollback-target")); err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +554,7 @@ func TestStartupLockFailureUsesSafeStatusCategory(t *testing.T) {
 }
 
 func TestRollbackRestoresPriorModelsWithFreshRevision(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "prior-model")); err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +585,7 @@ func TestRollbackRestoresPriorModelsWithFreshRevision(t *testing.T) {
 }
 
 func TestRestartCompletesPendingRollbackAfterCrashWindow(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	priorData := catalogBytes(t, 2, "v2", "prior-model")
 	currentData := catalogBytes(t, 3, "v3", "current-model")
 	if err := Install(path, priorData); err != nil {
@@ -621,7 +622,7 @@ func TestRestartCompletesPendingRollbackAfterCrashWindow(t *testing.T) {
 }
 
 func TestRollbackRecoveryFailureRemainsVisibleUntilRecovered(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "prior-model")); err != nil {
 		t.Fatal(err)
 	}
@@ -654,7 +655,7 @@ func TestRollbackRecoveryFailureRemainsVisibleUntilRecovered(t *testing.T) {
 }
 
 func TestConcurrentReloadsCannotPublishOlderReadAfterNewer(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 4, "v4", "model-four")); err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +695,7 @@ func TestConcurrentReloadsCannotPublishOlderReadAfterNewer(t *testing.T) {
 }
 
 func TestConcurrentReloadAndInstallPublishesFinalInstalledRevision(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "model-two")); err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +745,7 @@ func TestConcurrentReloadAndInstallPublishesFinalInstalledRevision(t *testing.T)
 }
 
 func TestPeriodicReloadPublishesLocalFileChanges(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -807,7 +808,7 @@ func TestCompetingCatalogInstallsSerializeAcrossProcesses(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("catalog writer lock is enabled on Linux and macOS")
 	}
-	directory := t.TempDir()
+	directory := testsupport.PrivateDirectory(t)
 	path := filepath.Join(directory, FileName)
 	if err := Install(path, catalogBytes(t, 2, "v2", "base-model")); err != nil {
 		t.Fatal(err)
@@ -911,7 +912,7 @@ func TestRefreshIntervalIsBounded(t *testing.T) {
 }
 
 func TestAdditiveFieldsSurviveRollback(t *testing.T) {
-	path := filepath.Join(t.TempDir(), FileName)
+	path := filepath.Join(testsupport.PrivateDirectory(t), FileName)
 	prior := []byte(`{"schema_version":1,"revision":2,"version":"v2","future_root":{"x":1},"providers":[{"provider_id":"codex_oauth","future_provider":"y","models":[{"model_id":"prior-model","source":"migrated","future_model":{"z":true}}]}]}`)
 	if err := Install(path, prior); err != nil {
 		t.Fatal(err)

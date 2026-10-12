@@ -22,6 +22,7 @@ import (
 	"floe/server/internal/inference"
 	"floe/server/internal/modelcatalog"
 	"floe/server/internal/pairing"
+	"floe/server/internal/testsupport"
 	"floe/server/internal/trust"
 )
 
@@ -105,7 +106,7 @@ func newConsoleFixture(t *testing.T) *consoleFixture {
 
 func newConsoleFixtureWithEvidence(t *testing.T, model, endpoint string, capabilities ...string) *consoleFixture {
 	t.Helper()
-	directory := t.TempDir()
+	directory := testsupport.PrivateDirectory(t)
 	catalogPath := filepath.Join(directory, modelcatalog.FileName)
 	if model != "" {
 		facts := make([]modelcatalog.CapabilityEvidenceFact, len(capabilities))
