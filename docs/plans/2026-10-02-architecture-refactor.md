@@ -67,6 +67,21 @@ the actual old-path failures. All 15 affected Context tests pass after the fix.
 Fresh aggregate qualification passed 279 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains blocked by environment network policy; client/wire source is unchanged and no Flutter or Apple qualification is added. These tests do not verify cryptographic
 source-preview adapters, a live Gateway/provider or native behavior.
 
+The inherited-Task Continue regression reproduced a valid carried Task result
+failing normal recording. Investigation found both original-parent checks and a
+collision at the stable typed Task alias. The attempted parent-normalization
+change was discarded: the correct owner behavior is to rejoin the immutable
+original contribution, not create a second producer or duplicate history alias.
+The new private composition verifies actual lineage, complete replay and original
+typed/Core proof for both live and interrupted observers. Tests cover unchanged
+Task ownership, no added history rows, missing/forged replay rejection, exact
+acknowledgement, restart recovery, live-driver takeover rejection and unrelated
+new-turn rejection. Added deeply nested futures exposed a stack overflow in an
+existing Interaction regression; boxing the transaction-composition futures
+restored that unchanged test without increasing thread stack limits or weakening
+assertions. Fresh qualification passed 145 Vault tests, 282 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests (one opt-in case remained ignored), production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains policy-blocked; Apple/live-provider qualification remains open. This is Continue evidence, not a claim
+that every interaction Resume or live-provider recovery case is complete.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

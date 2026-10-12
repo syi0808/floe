@@ -5,6 +5,8 @@
 //! admission, journal, terminal, recovery, and matching Core receipts commit
 //! atomically in their owning Vault composition.
 
+mod manager_task_replay;
+
 use std::collections::HashSet;
 
 #[cfg(test)]
@@ -1619,7 +1621,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let payload = serde_json::to_string(&event).map_err(|_| AgentFailure::InvalidInput)?;
         let mut connection = self.connection()?;
         let (guard, transaction) = self.journal_transaction(&mut connection).await?;
-        let result = async {
+        let result = Box::pin(async {
             match (&event, phase) {
                 (JournalEvent::Output { .. }, "output") => {
                     let (_, recorder) = self.manager_recorder_on(&transaction, run_id).await?;
@@ -1686,6 +1688,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 (JournalEvent::DelegationResult { receipt }, "result") => {
                     let (run, recorder) = self.manager_recorder_on(&transaction, run_id).await?;
+                    if receipt.snapshot.parent_run_id != Some(run_id.as_uuid()) {
+                        // Keep the deep immutable-proof future off the caller's stack.
+                        return Box::pin(self.record_inherited_manager_task_on(
+                            &transaction,
+                            &run,
+                            &recorder,
+                            receipt,
+                            &payload,
+                        ))
+                        .await;
+                    }
                     let coverage = receipt.snapshot.coverage.clone();
                     let task = receipt.snapshot.clone();
                     let execution_receipt = match &receipt.execution {
@@ -1734,7 +1747,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     }
                 }
             }
-        }
+        })
         .await;
         self.finish_conversation_core_transaction(guard, transaction, result)
             .await
@@ -3242,7 +3255,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .journal_transaction(&mut connection)
             .await
             .map_err(start_error)?;
-        let result = async {
+        let result = Box::pin(async {
             let recovery_event = JournalEvent::DelegationResult {
                 receipt: Box::new(receipt.clone()),
             };
@@ -3251,6 +3264,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .reconcile_conversation_delegation_on(&transaction, run_id, receipt)
                 .await
                 .map_err(terminal_owner_error)?;
+            if let JournalEvent::DelegationResult { receipt } = &recovery_event {
+                if receipt.snapshot.parent_run_id != Some(run_id.as_uuid()) {
+                    Box::pin(self.verify_inherited_manager_task_on(&transaction, &record, receipt))
+                        .await?;
+                    if !replay {
+                        super::context_dependencies::merge_context_dependency_coverage(
+                            &transaction,
+                            self.person_id,
+                            record.session_id,
+                            run_id.as_uuid(),
+                            receipt.snapshot.coverage.clone(),
+                        )
+                        .await
+                        .map_err(owner_error)?;
+                    }
+                    return self
+                        .finish_recovered_conversation_custody_on(&transaction, record, replay)
+                        .await;
+                }
+            }
             let alias_id = match &recovery_event {
                 JournalEvent::DelegationResult { receipt } => receipt.task_id.as_uuid(),
                 _ => return Err(owner_evidence_mismatch()),
@@ -3358,7 +3391,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             self.finish_recovered_conversation_custody_on(&transaction, record, replay)
                 .await
-        }
+        })
         .await;
         self.finish_conversation_core_transaction(guard, transaction, result)
             .await

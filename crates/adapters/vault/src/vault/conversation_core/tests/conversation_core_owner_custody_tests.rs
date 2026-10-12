@@ -10862,3 +10862,377 @@ async fn memory_capacity_preserves_all_saved_facts_and_partial_projection_across
         projected
     );
 }
+
+async fn inherited_manager_task_fixture() -> (Scenario, RunRecord, RunRecord, TaskReceipt) {
+    use floe_agent_contract::{JournalEvent, ReplayReceipt, TaskExecutionEvidence};
+    let mut scenario = Scenario::new().await;
+    let (parent, _) = scenario
+        .admit_run_and_append_input("Continue inherited delegation")
+        .await;
+    let mut receipt = actual_terminal_task_for_recovery(&scenario, &parent).await;
+    let entries = scenario
+        .vault()
+        .conversation_journal(parent.run_id)
+        .await
+        .unwrap();
+    let events = entries
+        .iter()
+        .map(|entry| serde_json::from_str::<JournalEvent>(&entry.payload).unwrap())
+        .collect::<Vec<_>>();
+    let request = events
+        .iter()
+        .find_map(|event| match event {
+            JournalEvent::DelegationIntent { request } => Some(request.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let batch = events
+        .iter()
+        .find_map(|event| match event {
+            JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let replay = ReplayReceipt {
+        principal: request.principal.clone(),
+        run_id: request.parent_run_id.and_then(RunId::from_uuid),
+        task_id: Some(request.task_id),
+        agent_id: Some(request.selected_agent_id.clone()),
+        tool_id: None,
+        definition_revision: request.selected_definition_revision,
+        input_digest: floe_agent_contract::delegation_request_digest(&request),
+        invocation_key: request.invocation_key,
+        call_id: request.task_id.as_uuid(),
+        result: receipt
+            .snapshot
+            .result
+            .clone()
+            .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state)),
+        task_result: receipt.snapshot.result.clone(),
+        task_state: Some(receipt.snapshot.state),
+        task_artifacts: receipt.snapshot.artifacts.clone(),
+        task_coverage: receipt.snapshot.coverage.clone(),
+        task_issue: receipt.snapshot.issue,
+        task_execution: match &receipt.execution {
+            TaskExecutionEvidence::Admitted(value) => Some(value.clone()),
+            TaskExecutionEvidence::Unadmitted => None,
+        },
+        tool_artifacts: vec![],
+        tool_coverage: DependencyCoverage::Unknown,
+        tool_issue: None,
+    };
+    receipt.replay = Some(replay);
+    Box::pin(scenario.vault().record_manager_conversation_journal(
+        parent.run_id,
+        "result",
+        JournalEvent::DelegationResult {
+            receipt: Box::new(receipt.clone()),
+        },
+    ))
+    .await
+    .unwrap();
+    // Exhaustion after the Task settles but before its batch cursor advances is
+    // a retained Continue boundary, not permission to execute the Task again.
+    let terminal = scenario.budget_exceeded_owner_run(&parent).await;
+    let (child, _) = scenario
+        .admit_owner_run_reusing_input(&terminal, "Continue")
+        .await;
+    scenario
+        .append_owner_event(
+            child.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            child.run_id,
+            JournalEvent::BatchProgress {
+                cursor: floe_agent_contract::BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    let mut current_request = request;
+    current_request.parent_run_id = Some(child.run_id.as_uuid());
+    scenario
+        .append_owner_event(
+            child.run_id,
+            JournalEvent::DelegationIntent {
+                request: current_request,
+            },
+        )
+        .await;
+    let current = scenario
+        .vault()
+        .conversation_run(child.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let actual = scenario
+        .vault()
+        .task(receipt.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let connection = scenario.vault().connection().unwrap();
+    scenario
+        .vault()
+        .validate_conversation_task_lineage_on(&connection, &current, &actual)
+        .await
+        .expect("fixture represents a valid inherited Task lineage");
+    drop(connection);
+    (scenario, parent, child, receipt)
+}
+
+async fn task_history_counts(scenario: &Scenario) -> (i64, i64) {
+    let connection = scenario.vault().connection().unwrap();
+    (
+        table_count(&connection, "agent_conversation_core_v3_entries").await,
+        table_count(&connection, "agent_conversation_typed_history_entries").await,
+    )
+}
+
+#[tokio::test]
+async fn continued_manager_can_record_an_authenticated_inherited_task_result() {
+    use floe_agent_contract::JournalEvent;
+    let (mut scenario, parent, child, receipt) = Box::pin(inherited_manager_task_fixture()).await;
+    let history_before = task_history_counts(&scenario).await;
+    let canonical_id =
+        manager_contribution_ids(parent.run_id, "delegation", receipt.task_id.as_uuid())
+            .unwrap()
+            .2;
+    let canonical_before =
+        stored_typed_link(scenario.vault(), scenario.person_id, canonical_id).await;
+    for corruption in ["missing_replay", "result"] {
+        let mut invalid = receipt.clone();
+        if corruption == "missing_replay" {
+            invalid.replay = None;
+        } else {
+            invalid.replay.as_mut().unwrap().result = "forged inherited result".into();
+        }
+        let before = settlement_custody_snapshot(&scenario, child.run_id).await;
+        assert!(
+            Box::pin(scenario.vault().record_manager_conversation_journal(
+                child.run_id,
+                "result",
+                JournalEvent::DelegationResult {
+                    receipt: Box::new(invalid)
+                }
+            ))
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, child.run_id).await,
+            before
+        );
+    }
+    let before = settlement_custody_snapshot(&scenario, child.run_id).await;
+    Box::pin(scenario.vault().record_manager_conversation_journal(
+        child.run_id,
+        "result",
+        JournalEvent::DelegationResult {
+            receipt: Box::new(receipt.clone()),
+        },
+    ))
+    .await
+    .expect("an authenticated Continue records the original Task receipt without redispatch");
+    assert_ne!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        before
+    );
+    assert_eq!(
+        task_history_counts(&scenario).await,
+        history_before,
+        "Continue does not duplicate history or its public Task alias"
+    );
+    assert_eq!(
+        stored_typed_link(scenario.vault(), scenario.person_id, canonical_id).await,
+        canonical_before
+    );
+    let task = scenario
+        .vault()
+        .task(receipt.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(task.snapshot.parent_run_id, Some(parent.run_id.as_uuid()));
+    assert_eq!(task.snapshot, receipt.snapshot);
+    let recorded = settlement_custody_snapshot(&scenario, child.run_id).await;
+    Box::pin(scenario.vault().record_manager_conversation_journal(
+        child.run_id,
+        "result",
+        JournalEvent::DelegationResult {
+            receipt: Box::new(receipt.clone()),
+        },
+    ))
+    .await
+    .expect("exact inherited-result replay");
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        recorded
+    );
+    scenario.cancel_owner_run(&child).await;
+    let before_reopen = settlement_custody_snapshot(&scenario, child.run_id).await;
+    scenario.reopen().await;
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        before_reopen
+    );
+}
+
+#[tokio::test]
+async fn interrupted_inherited_task_rejoins_canonical_history_without_redispatch() {
+    let (mut scenario, parent, child, receipt) = Box::pin(inherited_manager_task_fixture()).await;
+    let history_before = task_history_counts(&scenario).await;
+    let before = settlement_custody_snapshot(&scenario, child.run_id).await;
+    assert!(
+        Box::pin(
+            scenario
+                .vault()
+                .reconcile_conversation_delegation_with_core(child.run_id, receipt.clone())
+        )
+        .await
+        .is_err(),
+        "recovery cannot take over a live current-generation observer"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        before
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let recovered = Box::pin(
+        scenario
+            .vault()
+            .reconcile_conversation_delegation_with_core(child.run_id, receipt.clone()),
+    )
+    .await
+    .expect("stale observer reuses the immutable original Task contribution");
+    assert!(matches!(
+        recovered,
+        CoreComposedRecoveryResult::Closed { .. } | CoreComposedRecoveryResult::Retired { .. }
+    ));
+    assert_eq!(task_history_counts(&scenario).await, history_before);
+    let actual = scenario
+        .vault()
+        .task(receipt.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual.snapshot.parent_run_id, Some(parent.run_id.as_uuid()));
+    assert_eq!(actual.snapshot, receipt.snapshot);
+    let after = settlement_custody_snapshot(&scenario, child.run_id).await;
+    assert_eq!(
+        Box::pin(
+            scenario
+                .vault()
+                .reconcile_conversation_delegation_with_core(child.run_id, receipt.clone())
+        )
+        .await
+        .unwrap(),
+        recovered
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        after
+    );
+    scenario.reopen().await;
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, child.run_id).await,
+        after
+    );
+}
+
+#[tokio::test]
+async fn unrelated_new_turn_cannot_adopt_an_inherited_task_result() {
+    use floe_agent_contract::JournalEvent;
+    let (mut scenario, parent, child, receipt) = Box::pin(inherited_manager_task_fixture()).await;
+    Box::pin(scenario.vault().record_manager_conversation_journal(
+        child.run_id,
+        "result",
+        JournalEvent::DelegationResult {
+            receipt: Box::new(receipt.clone()),
+        },
+    ))
+    .await
+    .unwrap();
+    scenario.cancel_owner_run(&child).await;
+    let entries = scenario
+        .vault()
+        .conversation_journal(parent.run_id)
+        .await
+        .unwrap();
+    let events = entries
+        .iter()
+        .map(|entry| serde_json::from_str::<JournalEvent>(&entry.payload).unwrap())
+        .collect::<Vec<_>>();
+    let batch = events
+        .iter()
+        .find_map(|event| match event {
+            JournalEvent::ValidatedBatch { batch } => Some(batch.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let mut request = events
+        .iter()
+        .find_map(|event| match event {
+            JournalEvent::DelegationIntent { request } => Some(request.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let (unrelated, _) = scenario
+        .admit_run_and_append_input("A separate user request")
+        .await;
+    assert!(unrelated.continuation_of.is_none());
+    request.parent_run_id = Some(unrelated.run_id.as_uuid());
+    scenario
+        .append_owner_event(
+            unrelated.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: batch.clone(),
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            unrelated.run_id,
+            JournalEvent::BatchProgress {
+                cursor: floe_agent_contract::BatchCursor {
+                    batch_id: batch.batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(unrelated.run_id, JournalEvent::DelegationIntent { request })
+        .await;
+    let before = settlement_custody_snapshot(&scenario, unrelated.run_id).await;
+    let history = task_history_counts(&scenario).await;
+    assert!(
+        Box::pin(scenario.vault().record_manager_conversation_journal(
+            unrelated.run_id,
+            "result",
+            JournalEvent::DelegationResult {
+                receipt: Box::new(receipt)
+            }
+        ))
+        .await
+        .is_err(),
+        "same Person and Session do not authorize an unrelated Run to adopt Task evidence"
+    );
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, unrelated.run_id).await,
+        before
+    );
+    assert_eq!(task_history_counts(&scenario).await, history);
+}

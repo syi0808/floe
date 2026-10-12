@@ -1247,7 +1247,7 @@ fn typed_output_message(
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    async fn verified_typed_recorder_on(
+    pub(super) async fn verified_typed_recorder_on(
         &self,
         transaction: &Transaction<'_>,
         recorder: &RecorderFence,

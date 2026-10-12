@@ -571,3 +571,21 @@ work and checks both that window and dependency expiry after all preview, source
 and grant checks. Producer, source, grant, resource, processing and future-time
 validation are retained. These checks do not extend an evidence lease or relax
 clock-skew rules; an expired dependency must be reacquired through its owner.
+
+## Continue observes the original Task contribution
+
+A Manager Continue may journal an authenticated replay of a Task admitted by its
+ancestor. The observer does not become the Task's parent or first transcript
+producer. Before acknowledging it, Vault verifies the complete continuation
+lineage and canonical replay, actual Task/execution receipt, and the original
+immutable typed/Core contribution. It reuses that contribution instead of writing
+a second typed row or duplicate public Task alias. Missing original evidence is
+an error, never permission to reconstruct it from a caller's result.
+
+A first live observer acknowledgement still requires its current active recorder,
+Working state and executor generation. Its journal acknowledgement and inherited
+coverage commit atomically. Interrupted-observer recovery uses the same immutable
+proof after the existing recovery owner has authenticated and attached the result;
+then normal custody settlement closes or retires the observer. Exact replay
+remains read-only after terminal state and later generations. Original Task
+parent checks and producer proof are unchanged; unrelated Runs cannot adopt it.
