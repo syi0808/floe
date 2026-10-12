@@ -10378,3 +10378,205 @@ async fn memory_tool_recovery_proves_fenced_absence_without_mutation() {
     assert_memory_forget_recovery(false, false).await;
     assert_memory_forget_recovery(false, true).await;
 }
+#[tokio::test]
+async fn lifetime_transcript_sequence_exceeds_page_scan_limits_and_reopens() {
+    let mut scenario = Scenario::new().await;
+    let mut connection = scenario.vault().connection().unwrap();
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let mut last = None;
+    for index in 0..4098u64 {
+        let mut request = scenario.core_input_request("retained original text");
+        if index > 0 {
+            request.target = AdmissionTarget::AppendToExisting {
+                reference: ConversationReference {
+                    conversation_id: scenario.conversation_id,
+                    branch_id: scenario.branch_id,
+                    identity: scenario.identity.clone(),
+                    head_revision: index,
+                },
+            };
+        }
+        let result = scenario
+            .vault()
+            .append_conversation_input_on(&transaction, request.clone())
+            .await
+            .expect("a lifetime sequence is not a page-size quota");
+        last = Some((request, result.receipt));
+    }
+    transaction.commit().await.unwrap();
+    drop(connection);
+    scenario.reopen().await;
+    let (request, receipt) = last.unwrap();
+    let replay = scenario
+        .vault()
+        .append_conversation_input(request)
+        .await
+        .unwrap();
+    assert_eq!(replay.disposition, AdmissionDisposition::Replayed);
+    assert_eq!(replay.receipt, receipt);
+}
+
+#[tokio::test]
+async fn retained_core_scopes_exceed_scan_page_limits_and_reopen_checks_the_last_page() {
+    let mut scenario = Scenario::new().await;
+    let mut connection = scenario.vault().connection().unwrap();
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    for _ in 0..4097 {
+        let mut request = scenario.core_input_request("retained conversation input");
+        request.target = AdmissionTarget::New {
+            conversation_id: ConversationId::new(),
+            branch_id: ConversationBranchId::new(),
+            identity: scenario.identity.clone(),
+        };
+        scenario
+            .vault()
+            .append_conversation_input_on(&transaction, request)
+            .await
+            .unwrap();
+    }
+    transaction.commit().await.unwrap();
+    drop(connection);
+    scenario.reopen().await;
+    let connection = scenario.vault().connection().unwrap();
+    connection.execute(
+        "UPDATE agent_conversation_core_v3_heads SET head_revision = head_revision + 1 WHERE (conversation_id, branch_id) = (SELECT conversation_id, branch_id FROM agent_conversation_core_v3_heads ORDER BY conversation_id DESC, branch_id DESC LIMIT 1)", (),
+    ).await.unwrap();
+    drop(connection);
+    drop(scenario.vault.take());
+    assert!(
+        EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn retained_owner_receipt_pages_validate_last_and_empty_keys_without_repair() {
+    let mut scenario = Scenario::new().await;
+    for index in 0..=CORE_VALIDATION_PAGE_SIZE {
+        if index > 0 {
+            let SessionStartAdmission::Started(session) = scenario
+                .vault()
+                .start_conversation_session(StartSessionRequest {
+                    principal: scenario.person_id.to_string(),
+                    command_id: CommandId::new(),
+                })
+                .await
+                .unwrap()
+            else {
+                panic!("new independent Session")
+            };
+            scenario.session_id = session.session_id;
+            scenario.session_revision = session.session_revision;
+            scenario.conversation_id = ConversationId::new();
+            scenario.branch_id = ConversationBranchId::new();
+        }
+        let (run, _) = scenario
+            .admit_run_and_append_input("retained owner receipt")
+            .await;
+        assert!(matches!(
+            compose_owner_core_settlement(
+                scenario.vault(),
+                CoreComposedSettlementRequest::Finish {
+                    run_id: run.run_id,
+                    expected_aggregate_revision: run.aggregate_revision,
+                    terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+                }
+            )
+            .await
+            .unwrap(),
+            CoreComposedSettlementResult::Settled { .. }
+        ));
+    }
+    scenario.reopen().await;
+    for (table, column) in [
+        ("agent_conversation_core_v3_owner_bindings", "binding_json"),
+        ("agent_conversation_core_v3_open_receipts", "receipt_json"),
+    ] {
+        let connection = scenario.vault().connection().unwrap();
+        let mut rows = connection
+            .query(
+                &format!("SELECT run_id, {column} FROM {table} ORDER BY run_id DESC LIMIT 1"),
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let run_id: String = row.get(0).unwrap();
+        let original: String = row.get(1).unwrap();
+        drop(rows);
+        connection
+            .execute(
+                &format!("UPDATE {table} SET {column} = '{{}}' WHERE run_id = ?"),
+                [run_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(
+            scenario
+                .vault()
+                .validate_conversation_core_store()
+                .await
+                .is_err(),
+            "inspect the last page of {table}"
+        );
+        let mut rows = connection
+            .query(
+                &format!("SELECT {column} FROM {table} WHERE run_id = ?"),
+                [run_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "{}",
+            "validation never repairs fixture corruption"
+        );
+        drop(rows);
+        connection
+            .execute(
+                &format!("UPDATE {table} SET {column} = ? WHERE run_id = ?"),
+                (original, run_id.clone()),
+            )
+            .await
+            .unwrap();
+        drop(connection);
+        scenario.reopen().await;
+        let connection = scenario.vault().connection().unwrap();
+        connection
+            .execute(
+                &format!("UPDATE {table} SET run_id = '' WHERE run_id = ?"),
+                [run_id.clone()],
+            )
+            .await
+            .unwrap();
+        assert!(
+            scenario
+                .vault()
+                .validate_conversation_core_store()
+                .await
+                .is_err(),
+            "do not skip empty first-page keys in {table}"
+        );
+        connection
+            .execute(
+                &format!("UPDATE {table} SET run_id = ? WHERE run_id = ''"),
+                [run_id],
+            )
+            .await
+            .unwrap();
+        drop(connection);
+        scenario.reopen().await;
+    }
+}

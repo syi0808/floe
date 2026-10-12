@@ -499,3 +499,15 @@ unreviewed PendingReview record may acquire a reviewed authorization only with
 the matching successor: Approve/Approved, Reject/Rejected or Cancel/Cancelled.
 Negative decisions do not admit dispatch. Existing immutable subject checks,
 revision CAS, decision replay and execution fences remain required.
+
+## Retained Core validation
+
+Core transcript sequence numbers are lifetime identities, not page-size budgets.
+Vault startup validates every retained scope, owner binding and recorder-open
+receipt in one read snapshot using keyset pages of at most 128 identities. The
+page bounds working memory, not the lifetime record count. Rows are released
+before owner/evidence lookups; the first page has no synthetic lower-bound key
+that could hide a malformed identifier. Transcript, owner, close/retirement and
+orphan checks remain required. Later-page corruption fails closed without repair
+or history deletion. Other owner admission quotas remain separate, and a full
+integrity scan is still proportional to retained data rather than constant-time.

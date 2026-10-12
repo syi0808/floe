@@ -60,6 +60,8 @@ use turso::transaction::{Transaction, TransactionBehavior};
 use uuid::Uuid;
 
 const MAX_STORED_MESSAGE_BYTES: usize = 132_096;
+// Per-page working-set bound, never a lifetime transcript or owner quota.
+const CORE_VALIDATION_PAGE_SIZE: i64 = 128;
 
 #[cfg(test)]
 pub(super) const CONVERSATION_RECOVERY_FAULT_AFTER_RESULT_JOURNAL: u8 = 1;
@@ -569,7 +571,6 @@ pub(super) async fn load_head_on(
     if encode(&identity)? != identity_json
         || identity.person_id != scope.person_id
         || settled_prefix > head_revision
-        || head_revision > 4096
         || state_revision < head_revision
     {
         return Err(unavailable());
@@ -4867,59 +4868,66 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
     ) -> Result<(), ConversationStoreFailure> {
-        let mut heads = transaction
-            .query(
-                "SELECT conversation_id, branch_id FROM agent_conversation_core_v3_heads WHERE person_id = ? ORDER BY conversation_id, branch_id LIMIT 4097",
-                [self.person_id.to_string()],
-            )
-            .await
-            .map_err(database_error)?;
-        let mut scopes = Vec::new();
-        while let Some(row) = heads.next().await.map_err(database_error)? {
-            if scopes.len() == 4096 {
-                return Err(unavailable());
+        let mut after_scope: Option<(String, String)> = None;
+        loop {
+            let mut heads = match &after_scope {
+                None => transaction.query(
+                    "SELECT conversation_id, branch_id FROM agent_conversation_core_v3_heads WHERE person_id = ? ORDER BY conversation_id, branch_id LIMIT ?",
+                    (self.person_id.to_string(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+                Some((conversation, branch)) => transaction.query(
+                    "SELECT conversation_id, branch_id FROM agent_conversation_core_v3_heads WHERE person_id = ? AND (conversation_id, branch_id) > (?, ?) ORDER BY conversation_id, branch_id LIMIT ?",
+                    (self.person_id.to_string(), conversation.clone(), branch.clone(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+            }.map_err(database_error)?;
+            let mut scopes = Vec::new();
+            while let Some(row) = heads.next().await.map_err(database_error)? {
+                let conversation = row.get::<String>(0).map_err(|_| unavailable())?;
+                let branch = row.get::<String>(1).map_err(|_| unavailable())?;
+                scopes.push(Scope {
+                    person_id: self.person_id,
+                    conversation_id: parse_conversation_id(&conversation)?,
+                    branch_id: parse_branch_id(&branch)?,
+                });
+                after_scope = Some((conversation, branch));
             }
-            scopes.push(Scope {
-                person_id: self.person_id,
-                conversation_id: parse_conversation_id(
-                    &row.get::<String>(0).map_err(|_| unavailable())?,
-                )?,
-                branch_id: parse_branch_id(&row.get::<String>(1).map_err(|_| unavailable())?)?,
-            });
-        }
-        drop(heads);
-        for scope in &scopes {
-            let loaded = load_head_on(transaction, *scope)
-                .await?
-                .ok_or_else(unavailable)?;
-            for sequence in 1..=loaded.state.head_revision {
-                let entry = entry_on(transaction, *scope, sequence)
+            drop(heads);
+            if scopes.is_empty() {
+                break;
+            }
+            for scope in &scopes {
+                let loaded = load_head_on(transaction, *scope)
                     .await?
                     .ok_or_else(unavailable)?;
-                self.validate_producing_task_reference_on(transaction, &entry)
-                    .await?;
-            }
-            let (person, conversation, branch) = scope.sql();
-            let mut active = transaction
-                .query(
-                    "SELECT run_id FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
-                    (person, conversation, branch),
-                )
-                .await
-                .map_err(database_error)?;
-            if let Some(row) = active.next().await.map_err(database_error)? {
-                let run_id = parse_run_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
-                if open_receipt_on(transaction, self.person_id, run_id)
-                    .await?
-                    .is_none()
-                    || close_receipt_on(transaction, self.person_id, run_id)
+                for sequence in 1..=loaded.state.head_revision {
+                    let entry = entry_on(transaction, *scope, sequence)
                         .await?
-                        .is_some()
-                    || retirement_receipt_on(transaction, self.person_id, run_id)
+                        .ok_or_else(unavailable)?;
+                    self.validate_producing_task_reference_on(transaction, &entry)
+                        .await?;
+                }
+                let (person, conversation, branch) = scope.sql();
+                let mut active = transaction
+                    .query(
+                        "SELECT run_id FROM agent_conversation_core_v3_active_recorders WHERE person_id = ? AND conversation_id = ? AND branch_id = ?",
+                        (person, conversation, branch),
+                    )
+                    .await
+                    .map_err(database_error)?;
+                if let Some(row) = active.next().await.map_err(database_error)? {
+                    let run_id = parse_run_id(&row.get::<String>(0).map_err(|_| unavailable())?)?;
+                    if open_receipt_on(transaction, self.person_id, run_id)
                         .await?
-                        .is_some()
-                {
-                    return Err(unavailable());
+                        .is_none()
+                        || close_receipt_on(transaction, self.person_id, run_id)
+                            .await?
+                            .is_some()
+                        || retirement_receipt_on(transaction, self.person_id, run_id)
+                            .await?
+                            .is_some()
+                    {
+                        return Err(unavailable());
+                    }
                 }
             }
         }
@@ -4937,166 +4945,179 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
     ) -> Result<(), ConversationStoreFailure> {
-        let mut bindings = transaction
-            .query(
-                "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? ORDER BY run_id LIMIT 4097",
-                [self.person_id.to_string()],
-            )
-            .await
-            .map_err(database_error)?;
-        let mut binding_runs = Vec::new();
-        while let Some(row) = bindings.next().await.map_err(database_error)? {
-            if binding_runs.len() == 4096 {
-                return Err(unavailable());
+        let mut after_run: Option<String> = None;
+        loop {
+            let mut bindings = match &after_run {
+                None => transaction.query(
+                    "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? ORDER BY run_id LIMIT ?",
+                    (self.person_id.to_string(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+                Some(run_id) => transaction.query(
+                    "SELECT run_id FROM agent_conversation_core_v3_owner_bindings WHERE person_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+                    (self.person_id.to_string(), run_id.clone(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+            }.map_err(database_error)?;
+            let mut binding_runs = Vec::new();
+            while let Some(row) = bindings.next().await.map_err(database_error)? {
+                let raw = row.get::<String>(0).map_err(|_| unavailable())?;
+                binding_runs.push(parse_run_id(&raw)?);
+                after_run = Some(raw);
             }
-            binding_runs.push(parse_run_id(
-                &row.get::<String>(0).map_err(|_| unavailable())?,
-            )?);
-        }
-        drop(bindings);
-        for run_id in binding_runs {
-            let binding = owner_input_binding_on(transaction, self.person_id, run_id)
-                .await?
-                .ok_or_else(unavailable)?;
-            self.verified_owner_evidence_on(
-                transaction,
-                run_id,
-                &binding.identity,
-                binding.conversation_id,
-                binding.branch_id,
-                binding.input,
-                binding.executor_domain,
-                binding.executor_generation,
-            )
-            .await?;
+            drop(bindings);
+            if binding_runs.is_empty() {
+                break;
+            }
+            for run_id in binding_runs {
+                let binding = owner_input_binding_on(transaction, self.person_id, run_id)
+                    .await?
+                    .ok_or_else(unavailable)?;
+                self.verified_owner_evidence_on(
+                    transaction,
+                    run_id,
+                    &binding.identity,
+                    binding.conversation_id,
+                    binding.branch_id,
+                    binding.input,
+                    binding.executor_domain,
+                    binding.executor_generation,
+                )
+                .await?;
+            }
         }
 
-        let mut rows = transaction
-            .query(
-                "SELECT run_id FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? ORDER BY run_id LIMIT 4097",
-                [self.person_id.to_string()],
-            )
-            .await
-            .map_err(database_error)?;
-        let mut run_ids = Vec::new();
-        while let Some(row) = rows.next().await.map_err(database_error)? {
-            if run_ids.len() == 4096 {
-                return Err(unavailable());
+        let mut after_run: Option<String> = None;
+        loop {
+            let mut rows = match &after_run {
+                None => transaction.query(
+                    "SELECT run_id FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? ORDER BY run_id LIMIT ?",
+                    (self.person_id.to_string(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+                Some(run_id) => transaction.query(
+                    "SELECT run_id FROM agent_conversation_core_v3_open_receipts WHERE person_id = ? AND run_id > ? ORDER BY run_id LIMIT ?",
+                    (self.person_id.to_string(), run_id.clone(), CORE_VALIDATION_PAGE_SIZE),
+                ).await,
+            }.map_err(database_error)?;
+            let mut run_ids = Vec::new();
+            while let Some(row) = rows.next().await.map_err(database_error)? {
+                let raw = row.get::<String>(0).map_err(|_| unavailable())?;
+                run_ids.push(parse_run_id(&raw)?);
+                after_run = Some(raw);
             }
-            run_ids.push(parse_run_id(
-                &row.get::<String>(0).map_err(|_| unavailable())?,
-            )?);
+            drop(rows);
+            if run_ids.is_empty() {
+                break;
+            }
+            for run_id in run_ids {
+                let open = open_receipt_on(transaction, self.person_id, run_id)
+                    .await?
+                    .ok_or_else(unavailable)?;
+                let fence = open.fence;
+                let scope = Scope::from_identity(
+                    self.person_id,
+                    &fence.identity,
+                    fence.conversation_id,
+                    fence.branch_id,
+                );
+                let loaded = load_head_on(transaction, scope)
+                    .await?
+                    .ok_or_else(unavailable)?;
+                let input = entry_on(transaction, scope, fence.input.sequence)
+                    .await?
+                    .ok_or_else(unavailable)?;
+                if input.reference != fence.input || input.kind != TranscriptEntryKind::Inbound {
+                    return Err(unavailable());
+                }
+                let (owner, aggregate_revision, terminal_digest) = match fence.executor_domain {
+                    ExecutorDomain::HostRun => {
+                        let (owner, record, terminal_digest) = self
+                            .verified_owner_evidence_on(
+                                transaction,
+                                run_id,
+                                &fence.identity,
+                                fence.conversation_id,
+                                fence.branch_id,
+                                fence.input,
+                                fence.executor_domain,
+                                fence.executor_generation,
+                            )
+                            .await?;
+                        (owner, record.aggregate_revision, terminal_digest)
+                    }
+                    ExecutorDomain::TaskExecution => {
+                        let input = self
+                            .expert_task_owner_for_run_on(transaction, run_id)
+                            .await
+                            .map_err(|failure| owner_error(failure))?;
+                        let record = self
+                            .task_on(transaction, input.execution.task_id)
+                            .await
+                            .map_err(owner_error)?
+                            .ok_or_else(unavailable)?;
+                        let (owner, terminal_digest) = self
+                            .verified_expert_task_owner_evidence_on(
+                                transaction,
+                                run_id,
+                                &fence.identity,
+                                fence.conversation_id,
+                                fence.branch_id,
+                                fence.input,
+                                fence.executor_generation,
+                            )
+                            .await
+                            .map_err(owner_error)?;
+                        (owner, record.aggregate_revision, terminal_digest)
+                    }
+                };
+                let active = active_recorder_on(transaction, scope).await?;
+                let close = close_receipt_on(transaction, self.person_id, run_id).await?;
+                let retired = retirement_receipt_on(transaction, self.person_id, run_id).await?;
+                if u64::try_from(open.opened_head_revision)
+                    .ok()
+                    .is_none_or(|value| value > loaded.state.head_revision)
+                {
+                    return Err(unavailable());
+                }
+                match (active.as_ref() == Some(&fence), close, retired) {
+                    (true, None, None) => {}
+                    (false, Some(receipt), None) => {
+                        if owner.state != OwnerRunState::Terminal
+                            || owner.has_unresolved_recording_work()
+                            || terminal_digest != Some(receipt.terminal_receipt_digest)
+                            || aggregate_revision != receipt.owner_aggregate_revision
+                        {
+                            return Err(unavailable());
+                        }
+                    }
+                    (false, None, Some(receipt)) => {
+                        if !matches!(
+                            owner.state,
+                            OwnerRunState::Terminal | OwnerRunState::PendingTerminal
+                        ) || owner.has_unresolved_recording_work()
+                            || owner.record_digest != receipt.owner_evidence_digest
+                            || receipt.generation_fence.domain != fence.executor_domain
+                            || receipt.generation_fence.old_generation != fence.executor_generation
+                            || receipt.generation_fence.current_generation
+                                <= receipt.generation_fence.old_generation
+                            || receipt.generation_fence.evidence_digest
+                                != receipt.generation_fence_digest
+                        {
+                            return Err(unavailable());
+                        }
+                        let expected = owner_generation_fence(
+                            receipt.generation_fence.domain,
+                            fence.run_id,
+                            receipt.generation_fence.old_generation,
+                            receipt.generation_fence.current_generation,
+                        )?;
+                        if expected != receipt.generation_fence {
+                            return Err(unavailable());
+                        }
+                    }
+                    _ => return Err(unavailable()),
+                }
+            }
         }
-        drop(rows);
-        for run_id in run_ids {
-            let open = open_receipt_on(transaction, self.person_id, run_id)
-                .await?
-                .ok_or_else(unavailable)?;
-            let fence = open.fence;
-            let scope = Scope::from_identity(
-                self.person_id,
-                &fence.identity,
-                fence.conversation_id,
-                fence.branch_id,
-            );
-            let loaded = load_head_on(transaction, scope)
-                .await?
-                .ok_or_else(unavailable)?;
-            let input = entry_on(transaction, scope, fence.input.sequence)
-                .await?
-                .ok_or_else(unavailable)?;
-            if input.reference != fence.input || input.kind != TranscriptEntryKind::Inbound {
-                return Err(unavailable());
-            }
-            let (owner, aggregate_revision, terminal_digest) = match fence.executor_domain {
-                ExecutorDomain::HostRun => {
-                    let (owner, record, terminal_digest) = self
-                        .verified_owner_evidence_on(
-                            transaction,
-                            run_id,
-                            &fence.identity,
-                            fence.conversation_id,
-                            fence.branch_id,
-                            fence.input,
-                            fence.executor_domain,
-                            fence.executor_generation,
-                        )
-                        .await?;
-                    (owner, record.aggregate_revision, terminal_digest)
-                }
-                ExecutorDomain::TaskExecution => {
-                    let input = self
-                        .expert_task_owner_for_run_on(transaction, run_id)
-                        .await
-                        .map_err(|failure| owner_error(failure))?;
-                    let record = self
-                        .task_on(transaction, input.execution.task_id)
-                        .await
-                        .map_err(owner_error)?
-                        .ok_or_else(unavailable)?;
-                    let (owner, terminal_digest) = self
-                        .verified_expert_task_owner_evidence_on(
-                            transaction,
-                            run_id,
-                            &fence.identity,
-                            fence.conversation_id,
-                            fence.branch_id,
-                            fence.input,
-                            fence.executor_generation,
-                        )
-                        .await
-                        .map_err(owner_error)?;
-                    (owner, record.aggregate_revision, terminal_digest)
-                }
-            };
-            let active = active_recorder_on(transaction, scope).await?;
-            let close = close_receipt_on(transaction, self.person_id, run_id).await?;
-            let retired = retirement_receipt_on(transaction, self.person_id, run_id).await?;
-            if u64::try_from(open.opened_head_revision)
-                .ok()
-                .is_none_or(|value| value > loaded.state.head_revision)
-            {
-                return Err(unavailable());
-            }
-            match (active.as_ref() == Some(&fence), close, retired) {
-                (true, None, None) => {}
-                (false, Some(receipt), None) => {
-                    if owner.state != OwnerRunState::Terminal
-                        || owner.has_unresolved_recording_work()
-                        || terminal_digest != Some(receipt.terminal_receipt_digest)
-                        || aggregate_revision != receipt.owner_aggregate_revision
-                    {
-                        return Err(unavailable());
-                    }
-                }
-                (false, None, Some(receipt)) => {
-                    if !matches!(
-                        owner.state,
-                        OwnerRunState::Terminal | OwnerRunState::PendingTerminal
-                    ) || owner.has_unresolved_recording_work()
-                        || owner.record_digest != receipt.owner_evidence_digest
-                        || receipt.generation_fence.domain != fence.executor_domain
-                        || receipt.generation_fence.old_generation != fence.executor_generation
-                        || receipt.generation_fence.current_generation
-                            <= receipt.generation_fence.old_generation
-                        || receipt.generation_fence.evidence_digest
-                            != receipt.generation_fence_digest
-                    {
-                        return Err(unavailable());
-                    }
-                    let expected = owner_generation_fence(
-                        receipt.generation_fence.domain,
-                        fence.run_id,
-                        receipt.generation_fence.old_generation,
-                        receipt.generation_fence.current_generation,
-                    )?;
-                    if expected != receipt.generation_fence {
-                        return Err(unavailable());
-                    }
-                }
-                _ => return Err(unavailable()),
-            }
-        }
+
         Ok(())
     }
 }

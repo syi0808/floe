@@ -24,6 +24,14 @@ external effects. The initial Calendar test assertion did not compile because
 InteractionResult lacks PartialEq; comparing its exact two fields allowed the
 regression to reproduce the actual Admitted/InvalidInput failure. Fresh final gates passed 255 workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture and diff checks. Flutter source and wire contract are unchanged and its tests were not rerun for this slice. No live provider or Apple behavior is inferred from these fixtures.
 
+The Core capacity reconstruction reproduces the 4,098th append failing and a
+valid set of 4,097 independent scopes making Vault reopen fail. Lifetime sequence
+and startup scan quotas are separated from bounded read working sets. New real
+encrypted fixtures test append/reopen/exact replay, last-scope corruption, and
+129 actual settled Runs across multiple binding/receipt pages, including empty-key
+corruption and validation without repair. Other owner admission limits remain
+open. Fresh qualification passed all 133 Vault tests, 258 workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. The 4,098-entry fixture includes actual encrypted reopen and exact admission replay; the multi-page fixtures retain corruption rejection without repair. Flutter/Apple/live-provider qualification is not extended by these results.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
