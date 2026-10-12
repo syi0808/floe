@@ -363,7 +363,7 @@ pub fn settlement_for_learner_result(
     }
 }
 
-const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
+pub(super) const MAX_OBSERVATION_DIGEST_BYTES: usize = 4 * 1024;
 const MAX_EVIDENCE_REFS: usize = 32;
 
 pub fn validate_learner_input(

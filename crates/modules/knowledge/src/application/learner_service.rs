@@ -186,13 +186,21 @@ impl LearnerService {
             return Ok(());
         }
         let mut count = 0;
+        let mut oversized_evidence = false;
         for session in sessions {
             if session.evidence.person_id != self.actor.person_id {
                 return Err(AgentFailure::PolicyDenied);
             }
-            if let Some(input) =
-                super::discovery::explicit_review_input(&session, &memories.memories, now)?
-            {
+            let input =
+                match super::discovery::explicit_review_input(&session, &memories.memories, now) {
+                    Ok(input) => input,
+                    Err(AgentFailure::BudgetExceeded) => {
+                        oversized_evidence = true;
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+            if let Some(input) = input {
                 match self.jobs.enqueue(&self.actor, input, now, scope).await {
                     Ok(_) => count += 1,
                     Err(AgentFailure::Conflict | AgentFailure::StaleContext) => continue,
@@ -203,7 +211,13 @@ impl LearnerService {
                 }
             }
         }
-        Ok(())
+        // Report deferred evidence without making it block other bounded
+        // candidates. Already admitted work is claimed before discovery.
+        if oversized_evidence {
+            Err(AgentFailure::BudgetExceeded)
+        } else {
+            Ok(())
+        }
     }
 
     fn scope(

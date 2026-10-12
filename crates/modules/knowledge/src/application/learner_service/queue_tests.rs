@@ -11,6 +11,7 @@ struct Fixture {
     person: PersonId,
     partial: bool,
     claim_fails: bool,
+    oversized_first: bool,
     calls: Mutex<Vec<&'static str>>,
 }
 impl Fixture {
@@ -120,7 +121,16 @@ impl LearnerJobRepository for Fixture {
             if self.claim_fails {
                 return Err(AgentFailure::StorageUnavailable);
             }
-            Ok(vec![self.session()])
+            let mut sessions = vec![];
+            if self.oversized_first {
+                let mut large = self.session();
+                if let LearningTranscriptMessage::User { text, .. } = &mut large.messages[0] {
+                    *text = format!("Please remember: {}", "x".repeat(4096));
+                }
+                sessions.push(large);
+            }
+            sessions.push(self.session());
+            Ok(sessions)
         })
     }
     fn enqueue<'a>(
@@ -199,11 +209,16 @@ impl ModelPort for Fixture {
         panic!("queue tests must not invoke a model")
     }
 }
-fn service(partial: bool, claim_fails: bool) -> (LearnerService, Arc<Fixture>) {
+fn service(
+    partial: bool,
+    claim_fails: bool,
+    oversized_first: bool,
+) -> (LearnerService, Arc<Fixture>) {
     let fixture = Arc::new(Fixture {
         person: PersonId::new(),
         partial,
         claim_fails,
+        oversized_first,
         calls: Mutex::new(vec![]),
     });
     let learner = LearnerService::new(
@@ -226,7 +241,7 @@ fn service(partial: bool, claim_fails: bool) -> (LearnerService, Arc<Fixture>) {
 
 #[tokio::test]
 async fn existing_queue_is_consulted_before_fallible_discovery() {
-    let (learner, fixture) = service(false, true);
+    let (learner, fixture) = service(false, true, false);
     assert_eq!(
         learner.run_next(Cancellation::new()).await,
         Err(AgentFailure::Conflict)
@@ -236,7 +251,7 @@ async fn existing_queue_is_consulted_before_fallible_discovery() {
 
 #[tokio::test]
 async fn partial_comparison_context_does_not_enqueue_new_memory_candidates() {
-    let (learner, fixture) = service(true, false);
+    let (learner, fixture) = service(true, false, false);
     assert_eq!(learner.run_next(Cancellation::new()).await, Ok(false));
     assert_eq!(
         *fixture.calls.lock().unwrap(),
@@ -246,10 +261,23 @@ async fn partial_comparison_context_does_not_enqueue_new_memory_candidates() {
 
 #[tokio::test]
 async fn complete_comparison_context_discovers_and_then_checks_new_jobs() {
-    let (learner, fixture) = service(false, false);
+    let (learner, fixture) = service(false, false, false);
     assert_eq!(learner.run_next(Cancellation::new()).await, Ok(false));
     assert_eq!(
         *fixture.calls.lock().unwrap(),
         vec!["claim", "discovery", "context", "enqueue", "claim"]
+    );
+}
+
+#[tokio::test]
+async fn oversized_evidence_reports_deferral_but_allows_later_bounded_discovery() {
+    let (learner, fixture) = service(false, false, true);
+    assert_eq!(
+        learner.run_next(Cancellation::new()).await,
+        Err(AgentFailure::BudgetExceeded)
+    );
+    assert_eq!(
+        *fixture.calls.lock().unwrap(),
+        vec!["claim", "discovery", "context", "enqueue"]
     );
 }

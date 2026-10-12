@@ -589,3 +589,15 @@ proof after the existing recovery owner has authenticated and attached the resul
 then normal custody settlement closes or retires the observer. Exact replay
 remains read-only after terminal state and later generations. Original Task
 parent checks and producer proof are unchanged; unrelated Runs cannot adopt it.
+
+### Complete linked evidence for explicit learning
+
+Knowledge discovery preserves the complete linked user message and assistant
+outcome inside its existing 4 KiB observation envelope, including framing bytes.
+It never replaces either with an unmarked 1,536-byte prefix: a late correction or
+negation is part of the evidence. An oversized pair is explicitly deferred with
+BudgetExceeded rather than admitted as a false complete observation. Discovery
+continues checking later bounded candidates and reports the deferral afterward;
+existing queued work is still claimed before discovery. Original conversation
+records remain intact. Owner-controlled semantic compaction is a separate open
+path; storage compression does not establish that capability.

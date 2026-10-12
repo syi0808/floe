@@ -95,6 +95,22 @@ corrected before qualification. Fresh `go test -race -count=1 ./...`, `go vet
 architecture boundaries and diff checks pass. No live provider or Apple Keychain
 behavior is claimed. Only synthetic test setup changed in the server.
 
+The Expert-before-Manager discovery-limit hypothesis did not reproduce on the
+current normalized implementation: actual Expert Task admission/start uses its
+own conversation tables, not agent_sessions. A regression now verifies real
+Expert input, Manager discovery at limit one and encrypted reopen; no production
+query was changed for this stale hypothesis.
+
+A separate learning-evidence regression did reproduce silent loss of a late user
+negation and assistant qualification beyond 1,536 bytes. Discovery now preserves
+both complete linked messages within the existing 4 KiB envelope, preflighting
+framing and UTF-8 byte length. Oversized evidence returns BudgetExceeded rather
+than a silently clipped observation. Later bounded candidates can still be
+considered before the deferral is reported, and queued work remains first. Tests
+cover complete Korean text, exact byte capacity, over-capacity deferral and queue
+isolation without model calls. Fresh qualification passed 15 Knowledge tests, 146 Vault tests, 287 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests (one opt-in case ignored), production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains policy-blocked; Apple/live-provider qualification is unchanged. This does not implement semantic compaction or broaden
+observation limits, and the original transcript remains intact.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

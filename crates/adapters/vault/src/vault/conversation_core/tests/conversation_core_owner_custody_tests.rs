@@ -11236,3 +11236,77 @@ async fn unrelated_new_turn_cannot_adopt_an_inherited_task_result() {
     );
     assert_eq!(task_history_counts(&scenario).await, history);
 }
+
+#[tokio::test]
+async fn learner_discovery_limit_counts_manager_sessions_not_newer_experts() {
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    let mut scenario = Scenario::new().await;
+    let run = Box::pin(complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".to_owned(),
+    ))
+    .await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (task, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "A newer Expert conversation is not a learning candidate",
+    );
+    let task = match scenario
+        .vault()
+        .admit_task(task, draft)
+        .await
+        .expect("admit real newer Expert Task")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected admission {other:?}"),
+    };
+    let working = Box::pin(start_expert_task(&scenario, &task)).await;
+    let expert = scenario
+        .vault()
+        .expert_task_conversation(working.execution())
+        .await
+        .expect("read actual Task-owned Expert conversation");
+    assert!(!expert.conversation.current_turn.is_empty());
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    for reopened in [false, true] {
+        if reopened {
+            scenario.reopen().await;
+        }
+        let snapshots = scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 1, &scope)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "newer Expert must not consume Manager discovery capacity"
+        );
+        assert_eq!(snapshots[0].evidence.turn_ids, vec![run.run_id.as_uuid()]);
+        assert_eq!(snapshots[0].evidence.session_id, run.session_id);
+    }
+}
