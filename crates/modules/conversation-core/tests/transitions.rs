@@ -117,7 +117,7 @@ fn owner(
         journal_revision: 2,
         state,
         record_digest: [7; 32],
-        unresolved_model_attempts: unresolved_effects.clone(),
+        unresolved_model_attempts: vec![],
         unresolved_effects,
     }
 }
@@ -138,7 +138,7 @@ fn close_owner(
             journal_revision: 3,
             state,
             record_digest: [8; 32],
-            unresolved_model_attempts: unresolved.clone(),
+            unresolved_model_attempts: vec![],
             unresolved_effects: unresolved,
         },
         terminal_receipt_digest: [9; 32],
@@ -617,5 +617,46 @@ fn late_task_result_replay_precedes_owner_and_generation_validation() {
             },
         ),
         Err(ConversationFailure::MessageIdConflict)
+    );
+}
+
+#[test]
+fn terminal_model_uncertainty_releases_only_writer_custody_not_settlement_prefix() {
+    let mut fixture = Fixture::new();
+    let input = fixture.append_input("uncertain model request");
+    let start = fixture.start(RunId::new(), input, 1);
+    let open = fixture
+        .core
+        .open_recording(
+            start.clone(),
+            Some(owner(&start, OwnerRunState::Working, vec![])),
+        )
+        .unwrap();
+    let attempt = Uuid::new_v4();
+    let mut evidence = close_owner(&open.fence, OwnerRunState::Terminal, vec![attempt]);
+    evidence.owner.unresolved_model_attempts = vec![attempt];
+    evidence.owner.validate().unwrap();
+    assert!(!evidence.owner.has_unresolved_recording_work());
+    let mut pending = evidence.owner.clone();
+    pending.state = OwnerRunState::PendingTerminal;
+    assert!(
+        pending.has_unresolved_recording_work(),
+        "pending owner intent is not a write fence"
+    );
+    let mut unsettled_tool = evidence.clone();
+    unsettled_tool.owner.unresolved_effects.push(Uuid::new_v4());
+    assert_eq!(
+        fixture
+            .core
+            .close_recording(open.fence.clone(), Some(unsettled_tool), false),
+        Err(ConversationFailure::UnresolvedEffect)
+    );
+    let closed = fixture
+        .core
+        .close_recording(open.fence, Some(evidence), false)
+        .unwrap();
+    assert_eq!(
+        closed.settled_prefix, 0,
+        "writer release does not authorize pruning uncertain evidence"
     );
 }

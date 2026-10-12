@@ -80,12 +80,23 @@ pub struct OwnerRunEvidence {
     /// Owner record references whose effects are still unresolved.
     pub unresolved_effects: Vec<Uuid>,
     /// Unresolved model attempts from the same owner accounting projection.
-    /// This lets narrowly scoped recovery distinguish a late Task result from
-    /// the separate model uncertainty that keeps its recorder open.
+    /// This separates retained usage/outcome uncertainty from exclusive writer
+    /// custody after the execution owner has durably fenced terminal writes.
     pub unresolved_model_attempts: Vec<Uuid>,
 }
 
 impl OwnerRunEvidence {
+    /// Terminal owner state fences subsequent model/output journal writes. An
+    /// unresolved model attempt still carries its original accounting and must
+    /// never be retried implicitly, but cannot retain exclusive transcript
+    /// writing authority forever. Other unsettled contributions retain custody.
+    /// This does not authorize pruning: archival checks retain all uncertainty.
+    pub fn has_unresolved_recording_work(&self) -> bool {
+        self.unresolved_effects.iter().any(|id| {
+            self.state != OwnerRunState::Terminal || !self.unresolved_model_attempts.contains(id)
+        })
+    }
+
     pub fn validate(&self) -> Result<(), ConversationFailure> {
         if !self.run_id.is_valid()
             || !self.person_id.is_valid()
@@ -768,7 +779,7 @@ pub fn close_recording(
     if owner.terminal_receipt_digest == [0; 32] {
         return Err(ConversationFailure::OwnerEvidenceMismatch);
     }
-    if !owner.owner.unresolved_effects.is_empty() {
+    if owner.owner.has_unresolved_recording_work() {
         return Err(ConversationFailure::UnresolvedEffect);
     }
     validate_head_scope(
@@ -860,7 +871,7 @@ pub fn retire_stale_recording(
     {
         return Err(ConversationFailure::OwnerEvidenceMismatch);
     }
-    if !owner.unresolved_effects.is_empty() {
+    if owner.has_unresolved_recording_work() {
         return Err(ConversationFailure::UnresolvedEffect);
     }
     if generation_fence.domain != fence.executor_domain

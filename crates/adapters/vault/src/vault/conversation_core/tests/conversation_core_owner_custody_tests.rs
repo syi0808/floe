@@ -1394,7 +1394,7 @@ async fn composed_terminal_settlement_closes_completed_failed_and_cancelled_runs
 }
 
 #[tokio::test]
-async fn composed_cancellation_commits_owner_outcome_while_unresolved_model_keeps_custody() {
+async fn composed_cancellation_releases_writer_while_preserving_unresolved_model_accounting() {
     let mut scenario = Scenario::new().await;
     let (run, _) = scenario
         .admit_run_and_append_input("cancel with unresolved model intent")
@@ -1408,16 +1408,16 @@ async fn composed_cancellation_commits_owner_outcome_while_unresolved_model_keep
 
     let result = compose_owner_core_settlement(scenario.vault(), request.clone())
         .await
-        .expect("Host cancellation commits while uncertain model evidence retains Core custody");
-    let CoreComposedSettlementResult::CustodyPending { record } = result else {
-        panic!("terminal owner uncertainty must retain recorder custody");
+        .expect("Host cancellation fences writes while uncertain model evidence remains");
+    let CoreComposedSettlementResult::Settled { record, close } = result else {
+        panic!("terminal owner must release the recorder without erasing uncertainty");
     };
     assert_eq!(record.state, RunState::Cancelled);
     assert!(record.pending_terminal.is_none());
     assert_eq!(
         run_settlement_counts(&scenario, run.run_id).await,
-        (0, 1, 0, 0, 1, 0, 1),
-        "owner terminal evidence commits without closing or releasing the recorder"
+        (1, 0, 0, 0, 1, 0, 1),
+        "owner terminal evidence and recorder release commit together"
     );
 
     let journal = scenario
@@ -1445,8 +1445,8 @@ async fn composed_cancellation_commits_owner_outcome_while_unresolved_model_keep
     assert_eq!(
         compose_owner_core_settlement(scenario.vault(), request)
             .await
-            .expect("exact cancellation replay returns retained custody"),
-        CoreComposedSettlementResult::CustodyPending { record },
+            .expect("exact cancellation replay returns the same closed receipt"),
+        CoreComposedSettlementResult::Settled { record, close },
     );
     assert_eq!(
         settlement_custody_snapshot(&scenario, run.run_id).await,
@@ -1729,7 +1729,7 @@ async fn actual_task_result_finishes_pending_current_run_and_closes_core_atomica
 }
 
 #[tokio::test]
-async fn first_late_task_result_inserts_with_unresolved_model_and_keeps_current_custody() {
+async fn first_late_task_result_releases_writer_and_preserves_unresolved_model_accounting() {
     let mut scenario = Scenario::new().await;
     let (run, _) = scenario
         .admit_run_and_append_input("Task result with separate uncertain model attempt")
@@ -1795,20 +1795,20 @@ async fn first_late_task_result_inserts_with_unresolved_model_and_keeps_current_
         .vault()
         .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
         .await
-        .expect("exact actual Task evidence replay preserves model uncertainty and Core custody");
-    let CoreComposedRecoveryResult::CustodyPending { record } = result else {
-        panic!("an unresolved model attempt keeps current-generation custody active");
+        .expect("exact actual Task evidence settles custody and preserves model uncertainty");
+    let CoreComposedRecoveryResult::Closed { record, close } = result else {
+        panic!("all Task contributions settled: terminal model uncertainty cannot hold the writer");
     };
     assert_eq!(record.state, RunState::Cancelled);
     assert!(record.pending_terminal.is_none());
     let after_task_result = settlement_custody_snapshot(&scenario, run.run_id).await;
-    assert_eq!(after_task_result.active_recorder, Some(open.fence.clone()));
-    assert!(after_task_result.close_receipt.is_none());
+    assert!(after_task_result.active_recorder.is_none());
+    assert!(after_task_result.close_receipt.is_some());
     assert!(after_task_result.retirement_receipt.is_none());
     assert_eq!(
         run_settlement_counts(&scenario, run.run_id).await,
-        (0, 1, 0, 0, 1, 0, 1),
-        "Task evidence remains committed without releasing the original recorder"
+        (1, 0, 0, 0, 1, 0, 1),
+        "Task evidence commits before releasing the original recorder"
     );
     let task = scenario
         .vault()
@@ -1937,7 +1937,7 @@ async fn first_late_task_result_inserts_with_unresolved_model_and_keeps_current_
         .vault()
         .activate_conversation_executor()
         .await
-        .expect("advance generation while the uncertain attempt retains custody")
+        .expect("advance generation after the old writer was released")
         .executor_generation;
     assert!(later > open.fence.executor_generation);
     let before_replay = settlement_custody_snapshot(&scenario, run.run_id).await;
@@ -1953,8 +1953,8 @@ async fn first_late_task_result_inserts_with_unresolved_model_and_keeps_current_
             .vault()
             .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
             .await
-            .expect("exact replay returns pending custody before generation-sensitive transitions"),
-        CoreComposedRecoveryResult::CustodyPending { record }
+            .expect("exact replay returns the closed receipt before generation-sensitive transitions"),
+        CoreComposedRecoveryResult::Closed { record, close }
     );
     assert_eq!(
         scenario
@@ -2752,7 +2752,7 @@ async fn stale_working_recovery_keeps_custody_until_task_evidence_then_retires_a
 }
 
 #[tokio::test]
-async fn stale_working_recovery_keeps_old_custody_for_unresolved_model_after_task_result() {
+async fn stale_working_recovery_retires_writer_and_preserves_unresolved_model_accounting() {
     let mut scenario = Scenario::new().await;
     let (run, _) = scenario
         .admit_run_and_append_input("old Run with separate uncertain model attempt")
@@ -2777,18 +2777,19 @@ async fn stale_working_recovery_keeps_old_custody_for_unresolved_model_after_tas
         .await
         .expect("durably fence the old Host Run generation")
         .executor_generation;
-    assert!(later > run.executor_generation);
+    assert!(later > open.fence.executor_generation);
 
     let pending = scenario
         .vault()
         .settle_pending_conversation_terminal_with_core(&recovery_actor(&scenario), run.run_id)
         .await
-        .expect("old Working Run becomes interrupted while Task evidence remains pending");
-    let CoreComposedRecoveryResult::CustodyPending {
+        .expect("old Working Run becomes interrupted after authentic Task evidence was retained");
+    let CoreComposedRecoveryResult::Retired {
         record: pending_record,
+        ..
     } = pending
     else {
-        panic!("stale Host recovery must retain custody for the unresolved model attempt");
+        panic!("stale terminal writer must retire while accounting remains uncertain");
     };
     assert_eq!(pending_record.state, RunState::Interrupted);
     assert!(pending_record.pending_terminal.is_none());
@@ -2796,27 +2797,27 @@ async fn stale_working_recovery_keeps_old_custody_for_unresolved_model_after_tas
         settlement_custody_snapshot(&scenario, run.run_id)
             .await
             .active_recorder,
-        Some(open.fence.clone())
+        None
     );
 
     let settled = scenario
         .vault()
         .reconcile_conversation_delegation_with_core(run.run_id, task_result.clone())
         .await
-        .expect("exact Task result replay leaves old recorder custody for model uncertainty");
-    let CoreComposedRecoveryResult::CustodyPending { record } = settled else {
-        panic!("unresolved model evidence must prevent old-generation retirement");
+        .expect("exact Task result replay retains retirement and model uncertainty");
+    let CoreComposedRecoveryResult::Retired { record, retirement } = settled else {
+        panic!("terminal model uncertainty must not prevent fenced retirement");
     };
     assert_eq!(record.state, RunState::Interrupted);
     assert!(record.pending_terminal.is_none());
     let after_task_result = settlement_custody_snapshot(&scenario, run.run_id).await;
-    assert_eq!(after_task_result.active_recorder, Some(open.fence.clone()));
+    assert_eq!(after_task_result.active_recorder, None);
     assert!(after_task_result.close_receipt.is_none());
-    assert!(after_task_result.retirement_receipt.is_none());
+    assert!(after_task_result.retirement_receipt.is_some());
     assert_eq!(
         run_settlement_counts(&scenario, run.run_id).await,
-        (0, 1, 0, 0, 1, 0, 1),
-        "old custody remains active until all owner uncertainty has proof"
+        (0, 0, 0, 0, 1, 0, 1),
+        "old writer retires without claiming model uncertainty is resolved"
     );
     assert_eq!(
         scenario
@@ -2903,8 +2904,8 @@ async fn stale_working_recovery_keeps_old_custody_for_unresolved_model_after_tas
             .vault()
             .reconcile_conversation_delegation_with_core(run.run_id, task_result)
             .await
-            .expect("exact replay preserves retained old custody after newer fencing"),
-        CoreComposedRecoveryResult::CustodyPending { record }
+            .expect("exact replay preserves the original retirement receipt after newer fencing"),
+        CoreComposedRecoveryResult::Retired { record, retirement }
     );
     assert_eq!(
         settlement_custody_snapshot(&scenario, run.run_id).await,
@@ -9349,5 +9350,303 @@ async fn source_review_blocked_expert_releases_custody_for_the_next_task() {
             .unwrap(),
         stored,
         "a new Task never reopens or modifies the original Blocked Task"
+    );
+}
+
+
+#[tokio::test]
+async fn uncertain_model_accounting_does_not_block_the_next_manager_turn() {
+    for restart in [false, true] {
+        let mut scenario = Scenario::new().await;
+        let (run, _) = scenario
+            .admit_run_and_append_input("original uncertain request")
+            .await;
+        let attempt_id = append_unresolved_model_attempt(&scenario, &run).await;
+        let fence = scenario.last_core_recorder.as_ref().unwrap().fence.clone();
+        let terminal = if restart {
+            scenario.reopen().await;
+            scenario.executor_generation = scenario
+                .vault()
+                .activate_conversation_executor()
+                .await
+                .unwrap()
+                .executor_generation;
+            match scenario
+                .vault()
+                .settle_pending_conversation_terminal_with_core(
+                    &recovery_actor(&scenario),
+                    run.run_id,
+                )
+                .await
+                .expect("recover the crashed execution")
+            {
+                CoreComposedRecoveryResult::Retired { record, .. } => record,
+                other => panic!("fenced terminal execution must release its writer: {other:?}"),
+            }
+        } else {
+            match compose_owner_core_settlement(
+                scenario.vault(),
+                CoreComposedSettlementRequest::Finish {
+                    run_id: run.run_id,
+                    expected_aggregate_revision: run.aggregate_revision,
+                    terminal: RunTerminal::from_failure(AgentFailure::Cancelled),
+                },
+            )
+            .await
+            .expect("cancel the execution")
+            {
+                CoreComposedSettlementResult::Settled { record, .. } => record,
+                other => panic!("terminal execution must release its writer: {other:?}"),
+            }
+        };
+        scenario.session_revision = terminal.session_revision;
+        let before = scenario
+            .vault()
+            .accounted_conversation_receipt(run.run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            before
+                .unresolved_attempts
+                .iter()
+                .any(|attempt| attempt.attempt_id == attempt_id)
+        );
+        let original_journal = scenario
+            .vault()
+            .conversation_journal(run.run_id)
+            .await
+            .unwrap();
+        assert!(
+            compose_typed_recording(
+                scenario.vault(),
+                typed_assistant_request(fence, "late output from the retired model call",)
+            )
+            .await
+            .is_err(),
+            "a terminal model call cannot write late output"
+        );
+        let (next, _) = scenario
+            .admit_run_and_append_input("a new explicit user request")
+            .await;
+        assert_ne!(next.run_id, run.run_id);
+        assert_eq!(
+            scenario
+                .vault()
+                .accounted_conversation_receipt(run.run_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            before,
+            "new admission preserves original uncertain accounting"
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .conversation_journal(run.run_id)
+                .await
+                .unwrap(),
+            original_journal,
+            "recovery never fabricates a result or redispatches the uncertain attempt"
+        );
+        scenario.complete_owner_run(&next).await;
+        scenario.reopen().await;
+        assert_eq!(
+            scenario
+                .vault()
+                .accounted_conversation_receipt(run.run_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            before,
+            "uncertainty survives a subsequent reopen"
+        );
+    }
+}
+
+#[tokio::test]
+async fn recovery_discovers_a_terminal_model_uncertain_recorder_without_pending_tasks() {
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("retained uncertain custody")
+        .await;
+    let attempt = append_unresolved_model_attempt(&scenario, &run).await;
+    // This is the previously valid retained-custody state: authentic terminal
+    // owner and model intent, exact open Core recorder, no delegated Tasks.
+    scenario
+        .vault()
+        .finish_conversation_run(
+            run.run_id,
+            run.aggregate_revision,
+            RunTerminal::from_failure(AgentFailure::Cancelled),
+        )
+        .await
+        .expect("retain the existing uncertain terminal custody fixture");
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let actor = recovery_actor(&scenario);
+    let page = scenario
+        .vault()
+        .conversation_recovery_runs(&actor, None, 64)
+        .await
+        .unwrap();
+    assert!(
+        page.items.contains(&run.run_id),
+        "terminal model-only custody must be discoverable"
+    );
+    let result = scenario
+        .vault()
+        .settle_pending_conversation_terminal_with_core(&actor, run.run_id)
+        .await
+        .expect("recover authenticated terminal custody");
+    assert!(matches!(result, CoreComposedRecoveryResult::Retired { .. }));
+    assert!(
+        !scenario
+            .vault()
+            .conversation_recovery_runs(&actor, None, 64)
+            .await
+            .unwrap()
+            .items
+            .contains(&run.run_id),
+        "retired custody must leave the recovery page"
+    );
+    let accounted = scenario
+        .vault()
+        .accounted_conversation_receipt(run.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        accounted
+            .unresolved_attempts
+            .iter()
+            .any(|entry| entry.attempt_id == attempt)
+    );
+}
+
+#[tokio::test]
+async fn interrupted_expert_model_releases_writer_without_replaying_the_attempt() {
+    use floe_agent_contract::{
+        ModelBindingDigest, ModelBudgetProfile, ModelCapabilities, ModelSelectionCommitment,
+        PreparedModelPlan, ProcessingBoundary, ProjectionRef,
+    };
+    let mut scenario = Scenario::new().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let (first, draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        Uuid::new_v4(),
+        1,
+        "1.0.0",
+        "uncertain Expert request",
+    );
+    let key = draft.key.clone();
+    let first = match scenario.vault().admit_task(first, draft).await.unwrap() {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected admission {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &first).await;
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let vault = scenario.vault();
+    vault
+        .append_task_journal(
+            working.execution(),
+            "intent",
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: Some(working.snapshot.task_id),
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: working.snapshot.principal.clone(),
+                    device_id: working.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([61; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+    scenario.reopen().await;
+    let generation = scenario
+        .vault()
+        .activate_task_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    let interrupted = scenario
+        .vault()
+        .task(first.snapshot.task_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(interrupted.snapshot.state, TaskState::Interrupted);
+    assert!(
+        interrupted
+            .receipt
+            .as_ref()
+            .unwrap()
+            .accounting
+            .unresolved_attempts
+            .iter()
+            .any(|attempt| attempt.attempt_id == attempt_id)
+    );
+    let (mut later, mut draft) = expert_task_fixture(
+        scenario.person_id,
+        generation,
+        TaskId::new(),
+        first.admission.assignment_id,
+        1,
+        "1.0.0",
+        "explicit new Expert request",
+    );
+    later.admission = first.admission.clone();
+    draft.key = key;
+    let later = match scenario
+        .vault()
+        .admit_task(later, draft)
+        .await
+        .expect("fenced Expert writer releases the assignment reservation")
+    {
+        floe_experts::TaskAdmission::Created { record, .. } => record,
+        other => panic!("unexpected next admission {other:?}"),
+    };
+    let working = start_expert_task(&scenario, &later).await;
+    let history = scenario
+        .vault()
+        .expert_task_conversation(working.execution())
+        .await
+        .expect("retained input remains readable after writer retirement");
+    assert_eq!(history.conversation.history.len(), 1);
+    assert_eq!(
+        scenario
+            .vault()
+            .task(first.snapshot.task_id)
+            .await
+            .unwrap()
+            .unwrap(),
+        interrupted,
+        "new Task does not rewrite or retry its uncertain predecessor"
     );
 }

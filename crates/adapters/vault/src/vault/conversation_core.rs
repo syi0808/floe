@@ -3125,7 +3125,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     let owner = self
                         .active_recorder_owner_evidence_on(transaction, &record, &open)
                         .await?;
-                    if !owner.unresolved_effects.is_empty() {
+                    if owner.has_unresolved_recording_work() {
                         let record = if let Some(commit) = blocked_commit {
                             self.finish_blocked_conversation_run_on(transaction, commit)
                                 .await
@@ -3181,7 +3181,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let owner = self
                 .active_recorder_owner_evidence_on(transaction, &record, &open)
                 .await?;
-            if owner.unresolved_effects.is_empty() {
+            if !owner.has_unresolved_recording_work() {
                 return Err(owner_evidence_mismatch());
             }
             return Ok(CoreComposedSettlementResult::OwnerOutcomeDeferred { record });
@@ -3201,7 +3201,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let owner = self
             .active_recorder_owner_evidence_on(transaction, &record, &open)
             .await?;
-        if !owner.unresolved_effects.is_empty() {
+        if owner.has_unresolved_recording_work() {
             return Ok(CoreComposedSettlementResult::CustodyPending { record });
         }
 
@@ -3408,19 +3408,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
 
         // The open-recorder branch validates the exact active Core fence and
-        // the owner's full accounting projection, including both unresolved
-        // model attempts and delegated Task effects. Uncertainty keeps custody
-        // active even if the Host Run has already reached its terminal state.
+        // the owner's full accounting projection. Terminal model uncertainty
+        // retains accounting, while unsettled Task contributions retain custody.
+        // Neither terminal state nor a timeout fabricates a model result.
         let owner = self
             .active_recorder_owner_evidence_on(transaction, &record, &open)
             .await?;
-        if !record.state.is_terminal() || !owner.unresolved_effects.is_empty() {
+        if !record.state.is_terminal() || owner.has_unresolved_recording_work() {
             return Ok(CoreComposedRecoveryResult::CustodyPending { record });
         }
 
-        if replay {
-            // The owner-only path may have committed this exact result without
-            // Core custody. Do not retrofit a close/retirement during replay.
+        if replay && owner.unresolved_model_attempts.is_empty() {
+            // Missing custody evidence for an already settled owner is corruption.
+            // A still-open, model-uncertain terminal recorder is instead a valid
+            // recoverable custody state; the exact active fence was proven above.
             return Err(owner_evidence_mismatch());
         }
 
@@ -3597,7 +3598,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(ConversationStoreFailure::Transition)?;
         if verified_record != *record
             || owner.state != OwnerRunState::Terminal
-            || !owner.unresolved_effects.is_empty()
+            || owner.has_unresolved_recording_work()
             || terminal_digest != Some(transition.receipt.terminal_receipt_digest)
             || transition.receipt.owner_aggregate_revision != record.aggregate_revision
         {
@@ -3662,7 +3663,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         )?;
         if verified_record != *record
             || owner.state != OwnerRunState::Terminal
-            || !owner.unresolved_effects.is_empty()
+            || owner.has_unresolved_recording_work()
             || terminal_digest.is_none()
             || owner.record_digest != receipt.owner_evidence_digest
             || receipt.generation_fence != expected_generation_fence
@@ -5042,7 +5043,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (true, None, None) => {}
                 (false, Some(receipt), None) => {
                     if owner.state != OwnerRunState::Terminal
-                        || !owner.unresolved_effects.is_empty()
+                        || owner.has_unresolved_recording_work()
                         || terminal_digest != Some(receipt.terminal_receipt_digest)
                         || aggregate_revision != receipt.owner_aggregate_revision
                     {
@@ -5053,7 +5054,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     if !matches!(
                         owner.state,
                         OwnerRunState::Terminal | OwnerRunState::PendingTerminal
-                    ) || !owner.unresolved_effects.is_empty()
+                    ) || owner.has_unresolved_recording_work()
                         || owner.record_digest != receipt.owner_evidence_digest
                         || receipt.generation_fence.domain != fence.executor_domain
                         || receipt.generation_fence.old_generation != fence.executor_generation

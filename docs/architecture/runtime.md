@@ -114,12 +114,16 @@ Delegation resolves the actual Task snapshot and execution receipt against the
 producer Run journal. Blocked publication commits the owner interaction and
 typed/Core evidence before terminal settlement and recorder close. During late
 recovery, a newly authenticated TaskResult can be recorded while the Run is
-terminal or pending-terminal and its original recorder remains open for an
-unresolved model attempt. Core grants this narrow recovered Task contribution
-under the existing custody fence only after Vault proves the exact TaskResult
-receipt; no Working state is fabricated and unresolved model accounting stays
-uncertain. Custody closes only after owner settlement proves no remaining
-uncertain work.
+terminal or pending-terminal and its original recorder still holds unsettled
+Task contributions. Core grants this narrow recovered Task contribution under
+the existing custody fence only after Vault proves the exact TaskResult receipt;
+no Working state is fabricated. Durable terminal owner state fences ordinary
+journal/output writes. Once non-model contributions settle, its current recorder
+closes or its older-generation recorder retires, even if a model result remains
+unknown. The original intent, conservative accounting and archival protections
+remain unchanged; release of exclusive writing authority does not settle usage,
+authorize pruning or retry a model call. Recovery discovery includes terminal
+Runs with an authentic retained recorder, not only unresolved delegations.
 
 Compaction commits an exact completed Core prefix, summary, merged current
 coverage, archive manifest and Session CAS together. Archive reads reconstruct

@@ -1170,7 +1170,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             )
                             .await?;
                         if owner.state != OwnerRunState::Terminal
-                            || !owner.unresolved_effects.is_empty()
+                            || owner.has_unresolved_recording_work()
                         {
                             return Err(AgentFailure::Conflict);
                         }
@@ -1366,7 +1366,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             )
                             .await?;
                         if owner.state != OwnerRunState::Terminal
-                            || !owner.unresolved_effects.is_empty()
+                            || owner.has_unresolved_recording_work()
                         {
                             return Err(AgentFailure::Conflict);
                         }
@@ -2071,7 +2071,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 input.execution.executor_generation,
             )
             .await?;
-        if owner.state != OwnerRunState::Terminal || !owner.unresolved_effects.is_empty() {
+        if owner.state != OwnerRunState::Terminal || owner.has_unresolved_recording_work() {
             // The receipt is terminal, but uncertainty still owns this exact
             // recorder and assignment reservation until later proof exists.
             return Ok(());
@@ -3121,11 +3121,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let state = if record.snapshot.state == TaskState::Working {
             OwnerRunState::Working
         } else if terminal_task_state(record.snapshot.state) {
-            if unresolved_effects.is_empty() {
-                OwnerRunState::Terminal
-            } else {
-                OwnerRunState::PendingTerminal
-            }
+            // Task terminal receipts are immutable even if model usage remains
+            // unknown. The recording-work predicate separately guards custody.
+            OwnerRunState::Terminal
         } else {
             return Err(AgentFailure::Conflict);
         };
