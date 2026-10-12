@@ -283,8 +283,22 @@ pub struct RecordingRequest {
 /// derives `result_digest` from the exact Run journal receipt and supplies an
 /// admitted Task reference only when the actual Task owner receipt exists.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RecoveredTaskContribution {
-    pub task_id: TaskId,
+pub enum RecoveredContributionKind {
+    Task { task_id: TaskId },
+    Tool { call_id: Uuid, tool_id: String },
+}
+impl RecoveredContributionKind {
+    pub fn id(&self) -> Uuid {
+        match self {
+            Self::Task { task_id } => task_id.as_uuid(),
+            Self::Tool { call_id, .. } => *call_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveredOwnerContribution {
+    pub kind: RecoveredContributionKind,
     pub result_digest: [u8; 32],
     pub producing_task: Option<TaskEvidenceReference>,
     pub current_executor_generation: u64,
@@ -597,13 +611,13 @@ pub fn record_terminal_entry(
     record_entry_with_owner_state(request, facts, Some(OwnerRunState::Terminal))
 }
 
-/// Append an exact Task result discovered by owner recovery after a terminal
-/// request while the original recorder is still open. The caller must supply
-/// the owner-verified Task receipt reference; this path never grants general
-/// post-terminal output authority.
-pub fn record_task_recovery_entry(
+/// Append an exact Task or local Tool result proved by its owner after a
+/// terminal request while the original recorder is still open. The caller
+/// authenticates the immutable result and its typed provenance; this path
+/// never grants general post-terminal output or mutation authority.
+pub fn record_owner_recovery_entry(
     request: RecordingRequest,
-    recovery: RecoveredTaskContribution,
+    recovery: RecoveredOwnerContribution,
     facts: RecordingFacts,
 ) -> Result<RecordingTransition, ConversationFailure> {
     request.recorder.validate()?;
@@ -615,17 +629,14 @@ pub fn record_task_recovery_entry(
         .as_ref()
         .ok_or(ConversationFailure::OwnerEvidenceMismatch)?;
     if request.recorder.executor_domain != ExecutorDomain::HostRun
-        || !recovery.task_id.is_valid()
+        || recovery.kind.id().is_nil()
         || recovery.result_digest == [0; 32]
         || !matches!(
             owner.state,
             OwnerRunState::Terminal | OwnerRunState::PendingTerminal
         )
-        || request.message.origin != MessageOrigin::Host
         || request.message.evidence.is_none()
-        || owner
-            .unresolved_effects
-            .contains(&recovery.task_id.as_uuid())
+        || owner.unresolved_effects.contains(&recovery.kind.id())
         || recovery.producing_task != request.producing_task
     {
         return Err(ConversationFailure::OwnerEvidenceMismatch);
@@ -644,17 +655,34 @@ pub fn record_task_recovery_entry(
                 && fence.evidence_digest != [0; 32] => {}
         _ => return Err(ConversationFailure::OwnerEvidenceMismatch),
     }
-    match (
-        request.message.task_id,
-        request.producing_task.as_ref(),
-        facts.verified_task_reference.as_ref(),
-    ) {
-        (Some(message_task), Some(producing_task), Some(verified_task))
-            if message_task == recovery.task_id
-                && producing_task.task_id() == recovery.task_id
-                && verified_task == producing_task => {}
-        (None, None, None) if recovery.producing_task.is_none() => {}
-        _ => return Err(ConversationFailure::OwnerEvidenceMismatch),
+    match &recovery.kind {
+        RecoveredContributionKind::Task { task_id } => {
+            if request.message.origin != MessageOrigin::Host {
+                return Err(ConversationFailure::OwnerEvidenceMismatch);
+            }
+            match (
+                request.message.task_id,
+                request.producing_task.as_ref(),
+                facts.verified_task_reference.as_ref(),
+            ) {
+                (Some(message_task), Some(producing_task), Some(verified_task))
+                    if message_task == *task_id
+                        && producing_task.task_id() == *task_id
+                        && verified_task == producing_task => {}
+                (None, None, None) if recovery.producing_task.is_none() => {}
+                _ => return Err(ConversationFailure::OwnerEvidenceMismatch),
+            }
+        }
+        RecoveredContributionKind::Tool { tool_id, .. } => {
+            if !matches!(&request.message.origin, MessageOrigin::Tool { agent_instance_id, tool_id: actual } if *agent_instance_id == request.recorder.identity.agent_instance_id && actual == tool_id)
+                || tool_id.is_empty()
+                || request.message.task_id.is_some()
+                || request.producing_task.is_some()
+                || facts.verified_task_reference.is_some()
+            {
+                return Err(ConversationFailure::OwnerEvidenceMismatch);
+            }
+        }
     }
     record_entry_with_owner_state(request, facts, None)
 }

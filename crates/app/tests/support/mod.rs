@@ -61,6 +61,7 @@ pub enum ModelOutput {
     Answer,
     RepeatedAnswers(usize),
     UnsupportedManagerToolCall,
+    ForgetUnprojectedMemory,
     WaitForCancellation(Arc<GenerateBarrier>),
     ScheduleExpertFlow,
     ScheduleExpertContinuationFlow,
@@ -352,6 +353,7 @@ impl ScriptedModel {
         output: ModelOutput,
     ) -> Self {
         let expected_consumers = match &output {
+            ModelOutput::ForgetUnprojectedMemory => vec![CONVERSATION_CONSUMER.into(); 2],
             ModelOutput::RepeatedAnswers(count) => {
                 vec![CONVERSATION_CONSUMER.into(); *count]
             }
@@ -463,7 +465,14 @@ impl ScriptedModel {
         let consumer_is_conversation = plan.consumer == CONVERSATION_CONSUMER;
         let consumer_is_expert = plan.consumer == floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER;
         let valid_catalog = if !schedule_flow || consumer_is_conversation {
-            request.catalog.tools.is_empty()
+            if request.envelope.run_instructions.response_contract
+                == floe_conversation::FINALIZATION_OUTPUT_CONTRACT
+            {
+                request.catalog.tools.is_empty()
+            } else {
+                request.catalog.tools.len() == 1
+                    && request.catalog.tools[0].id == floe_knowledge::MEMORY_FORGET_TOOL_ID
+            }
         } else if consumer_is_expert {
             request.catalog.tools.len() == 1
                 && request.catalog.tools[0].id == "floe.source.calendar"
@@ -521,7 +530,12 @@ impl ScriptedModel {
         };
         match call_index {
             0 => {
-                if request.catalog.tools.is_empty() {
+                if request
+                    .catalog
+                    .tools
+                    .iter()
+                    .any(|tool| tool.id == floe_knowledge::MEMORY_FORGET_TOOL_ID)
+                {
                     let schedule = request
                         .catalog
                         .cards
@@ -856,6 +870,20 @@ impl PreparedModelTransport for ScriptedTransport {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],
                 }])),
+                ModelOutput::ForgetUnprojectedMemory => {
+                    if call_index == 0 {
+                        Ok(response(vec![ModelStep::CallTool {
+                            tool_id: floe_knowledge::MEMORY_FORGET_TOOL_ID.into(),
+                            definition_revision: 1,
+                            input: serde_json::json!({"target_id": Uuid::new_v4(), "expected_revision": 1}).to_string(),
+                        }]))
+                    } else {
+                        Ok(response(vec![ModelStep::Answer {
+                            text: "That saved memory is not available; nothing was deleted.".into(),
+                            artifacts: vec![],
+                        }]))
+                    }
+                }
                 ModelOutput::UnsupportedManagerToolCall => {
                     Ok(response(vec![ModelStep::CallTool {
                         tool_id: "unsupported.manager.test".into(),

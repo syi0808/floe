@@ -299,7 +299,7 @@ fn live_context(role: ContextProjectionRole, context: &AgentContext) -> AgentCon
 }
 
 /// The non-authoritative envelope summary of the canonical tool catalog: one
-/// read-only capability entry per catalog tool. The catalog itself — owned by
+/// capability entry per catalog tool, preserving its effect classification. The catalog — owned by
 /// Context — is what the Engine validates batches against.
 fn capability_summaries(
     catalog: &AllowedCatalog,
@@ -318,7 +318,7 @@ fn capability_summaries(
                 schema_version: AGENT_SCHEMA_VERSION,
                 id: tool.id.clone(),
                 version: tool.definition_revision.to_string(),
-                read_only: true,
+                read_only: tool.read_only,
                 output_data_class: parse_data_class(&tool.output_data_class)?,
                 input_schema: Some(input_schema),
             })

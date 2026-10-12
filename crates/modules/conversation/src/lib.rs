@@ -114,3 +114,5 @@ pub use application::validate_task_delegation_lineage;
 pub use domain::{
     ConversationCommandKind, SessionStartAdmission, SessionStartFailure, SessionStartRefusal,
 };
+
+pub use application::memory_forget_tool_result;

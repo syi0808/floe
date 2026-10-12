@@ -475,6 +475,7 @@ impl AgentEndpoint for EngineExpertEndpoint {
                     }
                     let descriptor = ToolDescriptor {
                         id: tool.requirement_key.clone(),
+                        read_only: true,
                         definition_revision: self.admission.definition_revision,
                         description: tool.description.clone(),
                         input_schema: tool.input_schema.clone(),

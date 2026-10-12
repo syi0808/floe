@@ -691,7 +691,10 @@ impl ActiveDrive<'_> {
                     .delegation_context
                     .clone()
                     .ok_or(AgentFailure::InvalidInput)?
-                    .bind_projection(projection.coverage.clone())?,
+                    .bind_projection(
+                        projection.coverage.clone(),
+                        &projection.envelope.contextual_data,
+                    )?,
             )
         } else {
             None

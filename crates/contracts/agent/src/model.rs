@@ -68,6 +68,8 @@ impl AgentDefinition {
 #[serde(deny_unknown_fields)]
 pub struct ToolDescriptor {
     pub id: String,
+    /// Descriptive effect classification; never substitutes for owner authorization.
+    pub read_only: bool,
     pub definition_revision: u64,
     pub description: String,
     pub input_schema: String,

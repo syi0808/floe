@@ -92,5 +92,6 @@ pub use application::memory_display::{
 };
 
 pub use application::forget::{
-    MemoryForgetAcknowledgement, MemoryForgetRequest, memory_forget_evidence,
+    MEMORY_FORGET_TOOL_ID, MemoryForgetAcknowledgement, MemoryForgetOrigin, MemoryForgetRequest,
+    MemoryForgetTarget, memory_forget_evidence,
 };

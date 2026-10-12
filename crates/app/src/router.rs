@@ -568,6 +568,7 @@ fn route_command(
                         .forget(
                             &actor,
                             floe_knowledge::MemoryForgetRequest {
+                                origin: floe_knowledge::MemoryForgetOrigin::User,
                                 command_id,
                                 target_id,
                                 expected_revision,

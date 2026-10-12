@@ -195,7 +195,11 @@ fn text_turn_completes_and_persists_transcript_receipt_and_events() {
         vec![PlanStage::Primary, PlanStage::LocalFallback]
     );
     assert_eq!(snapshot.generated.len(), 1);
-    assert!(snapshot.generated[0].catalog.tools.is_empty());
+    assert_eq!(snapshot.generated[0].catalog.tools.len(), 1);
+    assert_eq!(
+        snapshot.generated[0].catalog.tools[0].id,
+        floe_knowledge::MEMORY_FORGET_TOOL_ID
+    );
 }
 
 #[test]
@@ -2457,7 +2461,11 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
 
     let snapshot = assert_script_clean(&recorder);
     assert_eq!(snapshot.generated.len(), 1);
-    assert!(snapshot.generated[0].catalog.tools.is_empty());
+    assert_eq!(snapshot.generated[0].catalog.tools.len(), 1);
+    assert_eq!(
+        snapshot.generated[0].catalog.tools[0].id,
+        floe_knowledge::MEMORY_FORGET_TOOL_ID
+    );
 }
 
 #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
@@ -3257,5 +3265,43 @@ fn memory_forget_is_routed_to_knowledge_with_durable_negative_replay() {
     assert_eq!(
         failure.disposition,
         ProductCommandDisposition::Indeterminate
+    );
+}
+
+#[test]
+fn conversational_forget_rejects_an_unprojected_target_and_preserves_transcript() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::ForgetUnprojectedMemory,
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, USER_TEXT);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Completed);
+    assert_eq!(
+        receipt.output.as_deref(),
+        Some("That saved memory is not available; nothing was deleted.")
+    );
+    let snapshot = assert_script_clean(&recorder);
+    assert_eq!(snapshot.generated.len(), 2);
+    assert!(!snapshot.generated[0].catalog.tools[0].read_only);
+    assert!(
+        snapshot.generated[0]
+            .envelope
+            .discovery
+            .available_capabilities
+            .iter()
+            .any(
+                |capability| capability.id == floe_knowledge::MEMORY_FORGET_TOOL_ID
+                    && !capability.read_only
+            )
+    );
+    assert!(
+        read_session(&host, session_id).messages.iter().any(
+            |message| matches!(message, SessionMessage::User { text, .. } if text == USER_TEXT)
+        )
     );
 }

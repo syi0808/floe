@@ -99,12 +99,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::BudgetExceeded);
         }
 
-        let mut record = self
+        let record = self
             .conversation_run_on(transaction, run_id)
             .await?
             .ok_or(AgentFailure::NotFound)?;
-        let previous_record = record.clone();
-        let mut journal = self.conversation_journal_on(transaction, &record).await?;
+        let journal = self.conversation_journal_on(transaction, &record).await?;
         let mut intents = journal.iter().filter_map(|entry| match &entry.event {
             JournalEvent::DelegationIntent { request } if request.task_id == receipt.task_id => {
                 Some(request)
@@ -209,6 +208,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             _ => return Err(AgentFailure::Conflict),
         }
+        self.append_recovered_conversation_result_on(transaction, record, event, payload)
+            .await
+    }
+
+    pub(super) async fn append_recovered_conversation_result_on(
+        &self,
+        transaction: &Transaction<'_>,
+        mut record: RunRecord,
+        event: JournalEvent,
+        payload: String,
+    ) -> Result<(RunRecord, bool), AgentFailure> {
+        let run_id = record.run_id;
+        let previous_record = self
+            .conversation_run_on(transaction, run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if previous_record != record {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut journal = self.conversation_journal_on(transaction, &record).await?;
         if record.journal_revision >= MAX_JOURNAL_ENTRIES {
             return Err(AgentFailure::BudgetExceeded);
         }

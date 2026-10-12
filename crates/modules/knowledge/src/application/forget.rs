@@ -4,9 +4,31 @@ use floe_kernel::{AgentFailure, CommandId, PersonId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Product commands and Run-owned tool effects have distinct admission proofs.
+/// The AppWire caller cannot supply a Manager origin.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MemoryForgetOrigin {
+    User,
+    ManagerTool {
+        run_id: floe_kernel::RunId,
+        call_id: Uuid,
+    },
+}
+
+pub const MEMORY_FORGET_TOOL_ID: &str = "memory.forget";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryForgetTarget {
+    pub target_id: Uuid,
+    pub expected_revision: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemoryForgetRequest {
+    pub origin: MemoryForgetOrigin,
     pub command_id: CommandId,
     pub target_id: Uuid,
     pub expected_revision: u64,
@@ -18,6 +40,7 @@ impl MemoryForgetRequest {
             || self.target_id.is_nil()
             || self.expected_revision == 0
             || self.expected_revision > i64::MAX as u64
+            || matches!(self.origin, MemoryForgetOrigin::ManagerTool { run_id, call_id } if !run_id.is_valid() || call_id.is_nil())
         {
             return Err(AgentFailure::InvalidInput);
         }

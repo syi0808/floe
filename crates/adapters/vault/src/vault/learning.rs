@@ -2260,7 +2260,7 @@ fn learner_event_key(claim: LearnerClaimRef, event: &JournalEvent) -> Result<Str
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case", deny_unknown_fields)]
-enum StoredMemoryForgetOutcome {
+pub(super) enum StoredMemoryForgetOutcome {
     Forgotten {
         acknowledgement: floe_knowledge::MemoryForgetAcknowledgement,
     },
@@ -2271,9 +2271,9 @@ enum StoredMemoryForgetOutcome {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct StoredMemoryForget {
-    request: floe_knowledge::MemoryForgetRequest,
-    outcome: StoredMemoryForgetOutcome,
+pub(super) struct StoredMemoryForget {
+    pub(super) request: floe_knowledge::MemoryForgetRequest,
+    pub(super) outcome: StoredMemoryForgetOutcome,
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
@@ -2334,6 +2334,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             drop(occupied);
             replay_checked = true;
+            self.validate_memory_forget_origin_on(&transaction, actor, &request, scope).await?;
             let validation = match request.validate() {
                 Err(failure) => Err(failure),
                 Ok(()) => match active_revision_on(&transaction, self.person_id, request.target_id).await? {
@@ -2485,4 +2486,135 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()?;
         result
     }
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    async fn validate_memory_forget_origin_on(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        actor: &OwnerActor,
+        request: &floe_knowledge::MemoryForgetRequest,
+        scope: &ExecutionScope,
+    ) -> Result<(), AgentFailure> {
+        match request.origin {
+            floe_knowledge::MemoryForgetOrigin::User => {
+                if scope.root_run_id().is_some() {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
+            floe_knowledge::MemoryForgetOrigin::ManagerTool { run_id, call_id } => {
+                if scope.root_run_id() != Some(run_id) {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let (run, _) = self
+                    .manager_recorder_on(transaction, run_id)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?;
+                if run.person_id != actor.person_id
+                    || run.device_id != actor.device_id
+                    || run.state != floe_conversation::RunState::Working
+                    || run.pending_terminal.is_some()
+                    || run.executor_generation
+                        != self
+                            .active_conversation_executor_generation(transaction)
+                            .await?
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                let journal = self.conversation_journal_on(transaction, &run).await?;
+                let calls = journal
+                    .iter()
+                    .filter_map(|entry| match &entry.event {
+                        JournalEvent::ToolIntent { call } if call.call_id == call_id => Some(call),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let [call] = calls.as_slice() else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                validate_memory_forget_call(request, run_id, call)?;
+                if journal.iter().any(|entry| matches!(&entry.event, JournalEvent::ToolResult { result } if result.call_id == call_id) || matches!(&entry.event, JournalEvent::ToolReviewRequired { call_id: settled, .. } if *settled == call_id)) {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Read-only effect evidence for a durably fenced Manager invocation. True
+    /// absence never dispatches the operation; the Conversation recovery owner
+    /// records an interrupted, unadmitted result under its original Tool intent.
+    pub(super) async fn memory_forget_tool_receipt_on(
+        &self,
+        transaction: &turso::transaction::Transaction<'_>,
+        actor: &OwnerActor,
+        run_id: RunId,
+        call: &floe_agent_contract::ToolCall,
+    ) -> Result<Option<StoredMemoryForgetOutcome>, AgentFailure> {
+        self.validate_learning_actor(actor)?;
+        if call.tool_id != floe_knowledge::MEMORY_FORGET_TOOL_ID
+            || call.definition_revision != 1
+            || call.call_id.is_nil()
+            || call.invocation_key.as_uuid().is_nil()
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        let mut rows = transaction.query("SELECT person_id, device_id, payload FROM knowledge_forget_commands WHERE command_id = ?", [call.invocation_key.as_uuid().to_string()]).await.map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
+            return Ok(None);
+        };
+        let encoded = row.get::<String>(2).map_err(storage)?;
+        if encoded.len() > 4096
+            || row.get::<String>(0).map_err(storage)? != actor.person_id.to_string()
+            || row.get::<String>(1).map_err(storage)? != actor.device_id
+            || rows.next().await.map_err(database_failure)?.is_some()
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let stored: StoredMemoryForget = decode(&encoded)?;
+        validate_memory_forget_call(&stored.request, run_id, call)?;
+        match &stored.outcome {
+            StoredMemoryForgetOutcome::Forgotten { acknowledgement }
+                if acknowledgement.command_id != stored.request.command_id
+                    || acknowledgement.target_id != stored.request.target_id
+                    || acknowledgement.forgotten_revision != stored.request.expected_revision
+                    || acknowledgement.committed_at.timestamp_millis() < 0 =>
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            StoredMemoryForgetOutcome::Rejected { failure }
+                if !matches!(
+                    failure,
+                    AgentFailure::InvalidInput | AgentFailure::NotFound | AgentFailure::Conflict
+                ) =>
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            _ => {}
+        }
+        Ok(Some(stored.outcome))
+    }
+}
+
+fn validate_memory_forget_call(
+    request: &floe_knowledge::MemoryForgetRequest,
+    run_id: RunId,
+    call: &floe_agent_contract::ToolCall,
+) -> Result<(), AgentFailure> {
+    let target: floe_knowledge::MemoryForgetTarget =
+        serde_json::from_str(&call.input).map_err(|_| AgentFailure::StorageUnavailable)?;
+    if call.tool_id != floe_knowledge::MEMORY_FORGET_TOOL_ID
+        || call.definition_revision != 1
+        || request.origin
+            != (floe_knowledge::MemoryForgetOrigin::ManagerTool {
+                run_id,
+                call_id: call.call_id,
+            })
+        || request.command_id.as_uuid() != call.invocation_key.as_uuid()
+        || request.target_id != target.target_id
+        || request.expected_revision != target.expected_revision
+    {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    Ok(())
 }

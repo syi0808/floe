@@ -282,6 +282,40 @@ where
                     }
                 }
             }
+            // Recover local mutations only from their durable owner receipt, or
+            // prove non-admission after the Run/executor is fenced. Never invoke
+            // a mutating tool from recovery.
+            let projection = floe_agent_runtime::project_execution_journal(
+                &super::super::recovery::journal_binding(&source, &entries),
+                &entries,
+                floe_agent_runtime::JournalProjectionMode::DurablePrefix,
+            )?;
+            for call_id in projection.unresolved_tool_calls {
+                let call = entries
+                    .iter()
+                    .find_map(|entry| match &entry.event {
+                        floe_agent_contract::JournalEvent::ToolIntent { call }
+                            if call.call_id == call_id =>
+                        {
+                            Some(call)
+                        }
+                        _ => None,
+                    })
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if call.tool_id != floe_knowledge::MEMORY_FORGET_TOOL_ID {
+                    waiting = true;
+                    continue;
+                }
+                repository
+                    .reconcile_memory_forget(actor, source.run_id, call_id)
+                    .await?;
+            }
+            // Reconciliation may advance the durable journal and owner state.
+            let source = repository
+                .load_receipt(source.run_id)
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            entries = repository.load_journal(source.run_id).await?;
             for request in crate::unresolved_run_delegations(&source, &entries)? {
                 let original = originals
                     .get(&request.task_id)

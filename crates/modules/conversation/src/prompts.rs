@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::MANAGER_OUTPUT_CONTRACT;
 
 const MANAGER_ROLE: &str = include_str!("../prompts/manager_role.txt");
-pub const MANAGER_ROLE_REVISION: u64 = 8;
+pub const MANAGER_ROLE_REVISION: u64 = 9;
 pub const MANAGER_DEFINITION_ID: &str = "manager-role";
 
 /// Stable default Manager identity for this Person. The runtime registry and

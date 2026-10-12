@@ -49,6 +49,15 @@ pub trait ConversationRepository: Send + Sync {
         receipt: floe_agent_contract::TaskReceipt,
     ) -> BoxFuture<'a, Result<(), AgentFailure>>;
 
+    /// Reconcile a bounded local memory effect from its actual owner receipt.
+    /// This never invokes the tool or dispatches a model/provider request.
+    fn reconcile_memory_forget<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        run_id: RunId,
+        call_id: uuid::Uuid,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+
     fn finish_blocked_run<'a>(
         &'a self,
         commit: crate::BlockedRunCommit,

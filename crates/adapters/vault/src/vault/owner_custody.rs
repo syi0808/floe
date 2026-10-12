@@ -25,8 +25,8 @@ use floe_conversation_contract::{
 };
 use floe_conversation_core::{
     ConversationStoreFailure, ExecutorDomain, RecorderFence, RecordingReceipt, RecordingRequest,
-    RecoveredTaskContribution, TranscriptEntry, TranscriptEntryKind, recording_content_digest,
-    replay_recording_entry,
+    RecoveredContributionKind, RecoveredOwnerContribution, TranscriptEntry, TranscriptEntryKind,
+    recording_content_digest, replay_recording_entry,
 };
 use floe_kernel::{CommandId, PersonId, RunId};
 use serde::{Deserialize, Serialize};
@@ -1251,7 +1251,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
         recorder: &RecorderFence,
-        task_recovery: bool,
+        owner_recovery: bool,
     ) -> Result<(RunRecord, OwnerTranscriptInputMapping), ConversationStoreFailure> {
         recorder
             .validate()
@@ -1311,7 +1311,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if open.fence != *recorder
             || active.as_ref() != Some(recorder)
             || current_generation < recorder.executor_generation
-            || (current_generation > recorder.executor_generation && !task_recovery)
+            || (current_generation > recorder.executor_generation && !owner_recovery)
         {
             return Err(ConversationStoreFailure::Transition(
                 ConversationFailure::WrongWriter,
@@ -1758,11 +1758,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 
-    pub(super) async fn record_task_recovery_typed_conversation_entry_on(
+    pub(super) async fn record_owner_recovery_typed_conversation_entry_on(
         &self,
         transaction: &Transaction<'_>,
         request: TypedConversationRecordingRequest,
-        recovery: RecoveredTaskContribution,
+        recovery: RecoveredOwnerContribution,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
         self.record_typed_conversation_entry_with_policy(transaction, request, Some(recovery))
             .await
@@ -1772,7 +1772,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         transaction: &Transaction<'_>,
         request: TypedConversationRecordingRequest,
-        task_recovery: Option<RecoveredTaskContribution>,
+        owner_recovery: Option<RecoveredOwnerContribution>,
     ) -> Result<RecordingReceipt, ConversationStoreFailure> {
         ensure_core_v3_on(transaction).await?;
         let stored_receipt =
@@ -1807,7 +1807,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ));
         }
         let (run, mapping) = self
-            .verified_typed_recorder_on(transaction, &request.recorder, task_recovery.is_some())
+            .verified_typed_recorder_on(transaction, &request.recorder, owner_recovery.is_some())
             .await?;
         if request.typed_message.turn_id() != request.recorder.run_id.as_uuid()
             || mapping.input != request.recorder.input
@@ -1830,22 +1830,67 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let (original_task_receipt, producing_task) = self
             .verified_typed_task_on(transaction, request.recorder.run_id, &request.typed_message)
             .await?;
-        if task_recovery.is_some()
-            && !matches!(&request.typed_message, AgentMessage::Delegation { .. })
-        {
-            return Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ));
-        }
-        if let Some(recovery) = task_recovery.as_ref()
-            && (match &request.typed_message {
-                AgentMessage::Delegation { task, .. } => task.task_id != recovery.task_id,
-                _ => true,
-            } || recovery.producing_task != producing_task)
-        {
-            return Err(ConversationStoreFailure::Transition(
-                ConversationFailure::OwnerEvidenceMismatch,
-            ));
+        if let Some(recovery) = owner_recovery.as_ref() {
+            let matches_kind = match (&request.typed_message, &recovery.kind) {
+                (
+                    AgentMessage::Delegation { task, .. },
+                    RecoveredContributionKind::Task { task_id },
+                ) => task.task_id == *task_id,
+                (
+                    AgentMessage::Capability {
+                        call_id,
+                        capability_id,
+                        ..
+                    },
+                    RecoveredContributionKind::Tool {
+                        call_id: expected,
+                        tool_id,
+                    },
+                ) => call_id == expected && capability_id == tool_id,
+                _ => false,
+            };
+            if !matches_kind || recovery.producing_task != producing_task {
+                return Err(ConversationStoreFailure::Transition(
+                    ConversationFailure::OwnerEvidenceMismatch,
+                ));
+            }
+            if let RecoveredContributionKind::Tool { call_id, .. } = &recovery.kind {
+                let journal = self
+                    .conversation_journal_on(transaction, &run)
+                    .await
+                    .map_err(owner_error)?;
+                let call = journal
+                    .iter()
+                    .find_map(|entry| match &entry.event {
+                        JournalEvent::ToolIntent { call } if call.call_id == *call_id => Some(call),
+                        _ => None,
+                    })
+                    .ok_or_else(unavailable)?;
+                let result = journal
+                    .iter()
+                    .find_map(|entry| match &entry.event {
+                        JournalEvent::ToolResult { result } if result.call_id == *call_id => {
+                            Some(result)
+                        }
+                        _ => None,
+                    })
+                    .ok_or_else(unavailable)?;
+                let expected = AgentMessage::Capability {
+                    turn_id: run.run_id.as_uuid(),
+                    call_id: *call_id,
+                    capability_id: call.tool_id.clone(),
+                    input: call.input.clone(),
+                    result: result
+                        .issue
+                        .as_ref()
+                        .map_or_else(|| Ok(result.text.clone()), |issue| Err(issue.failure)),
+                };
+                if request.typed_message != expected {
+                    return Err(ConversationStoreFailure::Transition(
+                        ConversationFailure::OwnerEvidenceMismatch,
+                    ));
+                }
+            }
         }
         self.verified_typed_interaction_on(
             transaction,
@@ -1902,8 +1947,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             contribution_id: request.contribution_id,
             producing_task: producing_task.clone(),
         };
-        let receipt = if let Some(recovery) = task_recovery {
-            self.record_task_recovery_entry_on(transaction, core_request, recovery)
+        let receipt = if let Some(recovery) = owner_recovery {
+            self.record_owner_recovery_entry_on(transaction, core_request, recovery)
                 .await?
         } else {
             self.record_conversation_entry_on(transaction, core_request)

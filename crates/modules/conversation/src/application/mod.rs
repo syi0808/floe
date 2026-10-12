@@ -85,3 +85,5 @@ pub use failure_projection::{
 };
 
 pub use coordinator::validate_task_delegation_lineage;
+
+pub use manager_policy::memory_forget_tool_result;

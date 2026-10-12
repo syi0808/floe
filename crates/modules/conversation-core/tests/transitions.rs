@@ -7,8 +7,8 @@ use floe_conversation_contract::{
 use floe_conversation_core::{
     ConversationCore, ExecutorDomain, OwnerGenerationFence, OwnerRunEvidence, OwnerRunState,
     OwnerSettlementEvidence, RecorderFence, RecorderRecoveryState, RecorderStartRequest,
-    RecordingFacts, RecordingRequest, RecoveredTaskContribution,
-    record_task_recovery_entry_transition,
+    RecordingFacts, RecordingRequest, RecoveredContributionKind, RecoveredOwnerContribution,
+    record_owner_recovery_entry_transition,
 };
 use floe_kernel::{CommandId, PersonId, RunId, TaskId};
 use uuid::Uuid;
@@ -541,14 +541,14 @@ fn late_task_result_replay_precedes_owner_and_generation_validation() {
         contribution_id: LogicalContributionId::new(),
         producing_task: Some(task_reference.clone()),
     };
-    let recovery = RecoveredTaskContribution {
-        task_id,
+    let recovery = RecoveredOwnerContribution {
+        kind: RecoveredContributionKind::Task { task_id },
         result_digest: [32; 32],
         producing_task: Some(task_reference.clone()),
         current_executor_generation: 1,
         generation_fence: None,
     };
-    let first = record_task_recovery_entry_transition(
+    let first = record_owner_recovery_entry_transition(
         request.clone(),
         recovery,
         RecordingFacts {
@@ -570,10 +570,12 @@ fn late_task_result_replay_precedes_owner_and_generation_validation() {
     assert!(!first.replayed);
     assert!(first.appended.is_some());
 
-    let replay = record_task_recovery_entry_transition(
+    let replay = record_owner_recovery_entry_transition(
         request.clone(),
-        RecoveredTaskContribution {
-            task_id: TaskId::new(),
+        RecoveredOwnerContribution {
+            kind: RecoveredContributionKind::Task {
+                task_id: TaskId::new(),
+            },
             result_digest: [0; 32],
             producing_task: None,
             current_executor_generation: 0,
@@ -597,10 +599,10 @@ fn late_task_result_replay_precedes_owner_and_generation_validation() {
     let mut changed = request;
     changed.message.text.push_str(" changed");
     assert_eq!(
-        record_task_recovery_entry_transition(
+        record_owner_recovery_entry_transition(
             changed,
-            RecoveredTaskContribution {
-                task_id,
+            RecoveredOwnerContribution {
+                kind: RecoveredContributionKind::Task { task_id },
                 result_digest: [32; 32],
                 producing_task: first.receipt.producing_task.clone(),
                 current_executor_generation: 1,
@@ -659,4 +661,130 @@ fn terminal_model_uncertainty_releases_only_writer_custody_not_settlement_prefix
         closed.settled_prefix, 0,
         "writer release does not authorize pruning uncertain evidence"
     );
+}
+
+#[test]
+fn local_tool_recovery_requires_exact_provenance_and_a_terminal_owner_fence() {
+    let mut fixture = Fixture::new();
+    let input = fixture.append_input("forget exact saved memory");
+    let start = fixture.start(RunId::new(), input, 1);
+    let open = fixture
+        .core
+        .open_recording(
+            start.clone(),
+            Some(owner(&start, OwnerRunState::Working, vec![])),
+        )
+        .unwrap();
+    let call_id = Uuid::new_v4();
+    let mut result = message(
+        MessageOrigin::Tool {
+            agent_instance_id: open.fence.identity.agent_instance_id,
+            tool_id: "memory.forget".into(),
+        },
+        "immutable deletion acknowledgement",
+        None,
+    );
+    result.evidence = Some(MessageEvidenceReference::from_digest([71; 32]));
+    let request = RecordingRequest {
+        recorder: open.fence.clone(),
+        message: result,
+        contribution_id: LogicalContributionId::new(),
+        producing_task: None,
+    };
+    let recovery = RecoveredOwnerContribution {
+        kind: RecoveredContributionKind::Tool {
+            call_id,
+            tool_id: "memory.forget".into(),
+        },
+        result_digest: [72; 32],
+        producing_task: None,
+        current_executor_generation: 1,
+        generation_fence: None,
+    };
+    let facts = |state, unresolved| RecordingFacts {
+        head: fixture.core.head().clone(),
+        active_recorder: Some(open.fence.clone()),
+        owner: Some(owner(&start, state, unresolved)),
+        verified_task_reference: None,
+        stored_receipt: None,
+        message_id_in_transcript: false,
+        previous_prefix_digest: fixture
+            .core
+            .transcript_entries()
+            .last()
+            .unwrap()
+            .prefix_digest,
+    };
+    assert_eq!(
+        record_owner_recovery_entry_transition(
+            request.clone(),
+            recovery.clone(),
+            facts(OwnerRunState::Working, vec![])
+        ),
+        Err(ConversationFailure::OwnerEvidenceMismatch)
+    );
+    assert_eq!(
+        record_owner_recovery_entry_transition(
+            request.clone(),
+            recovery.clone(),
+            facts(OwnerRunState::Terminal, vec![call_id])
+        ),
+        Err(ConversationFailure::OwnerEvidenceMismatch)
+    );
+    let mut forged = request.clone();
+    forged.message.origin = MessageOrigin::Host;
+    assert_eq!(
+        record_owner_recovery_entry_transition(
+            forged,
+            recovery.clone(),
+            facts(OwnerRunState::Terminal, vec![])
+        ),
+        Err(ConversationFailure::OwnerEvidenceMismatch)
+    );
+    let mut wrong_tool = recovery.clone();
+    wrong_tool.kind = RecoveredContributionKind::Tool {
+        call_id,
+        tool_id: "other.mutation".into(),
+    };
+    assert_eq!(
+        record_owner_recovery_entry_transition(
+            request.clone(),
+            wrong_tool,
+            facts(OwnerRunState::Terminal, vec![])
+        ),
+        Err(ConversationFailure::OwnerEvidenceMismatch)
+    );
+    let mut missing_fence = recovery.clone();
+    missing_fence.current_executor_generation = 2;
+    assert_eq!(
+        record_owner_recovery_entry_transition(
+            request.clone(),
+            missing_fence,
+            facts(OwnerRunState::Terminal, vec![])
+        ),
+        Err(ConversationFailure::OwnerEvidenceMismatch)
+    );
+    let recorded = record_owner_recovery_entry_transition(
+        request.clone(),
+        recovery.clone(),
+        facts(OwnerRunState::Terminal, vec![]),
+    )
+    .unwrap();
+    assert!(recorded.appended.is_some());
+    let replay = record_owner_recovery_entry_transition(
+        request,
+        recovery,
+        RecordingFacts {
+            head: fixture.core.head().clone(),
+            active_recorder: None,
+            owner: None,
+            verified_task_reference: None,
+            stored_receipt: Some(recorded.receipt.clone()),
+            message_id_in_transcript: true,
+            previous_prefix_digest: [0; 32],
+        },
+    )
+    .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.receipt, recorded.receipt);
 }

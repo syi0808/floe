@@ -9741,6 +9741,7 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
         .revision
         .unwrap();
     let future_revision = MemoryForgetRequest {
+        origin: floe_knowledge::MemoryForgetOrigin::User,
         command_id: CommandId::new(),
         target_id: first.target_id,
         expected_revision: 2,
@@ -9787,6 +9788,7 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
         "a durable rejection cannot later become a deletion"
     );
     let forget = MemoryForgetRequest {
+        origin: floe_knowledge::MemoryForgetOrigin::User,
         command_id: CommandId::new(),
         target_id: second.target_id,
         expected_revision: 2,
@@ -10013,4 +10015,366 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
             .await,
         Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     );
+}
+
+async fn append_memory_forget_intent(
+    scenario: &Scenario,
+    run: &RunRecord,
+    target: floe_knowledge::MemoryForgetTarget,
+) -> floe_agent_contract::ToolCall {
+    use floe_agent_contract::{
+        BatchCursor, JournalEvent, ModelBindingDigest, ModelBudgetProfile, ModelCapabilities,
+        ModelSelectionCommitment, ModelStep, ModelUsage, PreparedModelPlan, ProcessingBoundary,
+        ValidatedModelBatch,
+    };
+
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = floe_agent_contract::ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let call = floe_agent_contract::ToolCall {
+        call_id: floe_agent_runtime::stable_call_id(run.run_id.as_uuid(), batch_id, 0),
+        invocation_key: floe_agent_runtime::stable_invocation_key(
+            run.run_id.as_uuid(),
+            batch_id,
+            0,
+            floe_agent_runtime::InvocationKind::Tool,
+        ),
+        tool_id: floe_knowledge::MEMORY_FORGET_TOOL_ID.into(),
+        definition_revision: 1,
+        input: serde_json::to_string(&target).unwrap(),
+    };
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: scenario.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([101; 32]),
+                    selection_commitment: Some(ModelSelectionCommitment([102; 32])),
+                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::CallTool {
+                        tool_id: call.tool_id.clone(),
+                        definition_revision: 1,
+                        input: call.input.clone(),
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![floe_agent_contract::PinnedToolRevision {
+                        tool_id: call.tool_id.clone(),
+                        definition_revision: 1,
+                    }],
+                    agent_revisions: vec![],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: None,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(
+            run.run_id,
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+        )
+        .await;
+    scenario
+        .append_owner_event(run.run_id, JournalEvent::ToolIntent { call: call.clone() })
+        .await;
+    call
+}
+
+async fn assert_memory_forget_recovery(applied: bool, stale_executor: bool) {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    use floe_knowledge::{
+        EpistemicStatus, KnowledgeActor, KnowledgeDecisionKind, MemoryDecisionRequest,
+        MemoryStageOrigin, MemoryStageRequest, PersonalMemoryKind, PersonalMemoryValue,
+        StageMemoryCandidate,
+    };
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let ledger = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let now = Utc::now();
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .unwrap();
+    let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
+        .unwrap()
+        .unwrap();
+    let stage = MemoryStageRequest {
+        actor: actor.clone(),
+        now,
+        origin: MemoryStageOrigin::User,
+        request: StageMemoryCandidate {
+            session_id: scenario.session_id,
+            expected_session_revision: run.session_revision,
+            turn_ids: vec![run.run_id.as_uuid()],
+            observation_kind: floe_knowledge::LearningObservationKind::ExplicitRemember,
+            digest: old_input.digest.clone(),
+            value: PersonalMemoryValue {
+                kind: PersonalMemoryKind::Preference,
+                statement: "Prefers tea".into(),
+                epistemic_status: EpistemicStatus::Fact,
+                confidence_millis: 1000,
+                valid_from: None,
+                valid_until: None,
+                observed_at: now,
+            },
+            target_id: None,
+            base_revision: None,
+            extractor_version: "test".into(),
+            prompt_version: "test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        },
+    };
+    let candidate = scenario
+        .vault()
+        .knowledge_stage(stage.clone(), &scope)
+        .await
+        .unwrap();
+    let first = scenario
+        .vault()
+        .knowledge_decide(
+            &actor,
+            MemoryDecisionRequest {
+                command_id: CommandId::new(),
+                candidate_id: candidate.id,
+                kind: KnowledgeDecisionKind::Approve,
+                decided_at: now,
+            },
+            &scope,
+        )
+        .await
+        .unwrap()
+        .revision
+        .unwrap();
+
+    let (forget_run, _) = scenario
+        .admit_run_and_append_input("Forget my saved tea preference.")
+        .await;
+    let call = append_memory_forget_intent(
+        &scenario,
+        &forget_run,
+        floe_knowledge::MemoryForgetTarget {
+            target_id: first.target_id,
+            expected_revision: first.revision,
+        },
+    )
+    .await;
+    let tool_scope = ExecutionScope::root(
+        Cancellation::new(),
+        scope.deadline(),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()).with_run_id(forget_run.run_id),
+    );
+    let request = floe_knowledge::MemoryForgetRequest {
+        origin: floe_knowledge::MemoryForgetOrigin::ManagerTool {
+            run_id: forget_run.run_id,
+            call_id: call.call_id,
+        },
+        command_id: CommandId::from_uuid(call.invocation_key.as_uuid()).unwrap(),
+        target_id: first.target_id,
+        expected_revision: first.revision,
+    };
+    assert!(
+        scenario
+            .vault()
+            .reconcile_manager_memory_forget(&actor, forget_run.run_id, call.call_id)
+            .await
+            .is_err(),
+        "a live driver must not be recovered"
+    );
+    let acknowledgement = if applied {
+        Some(
+            scenario
+                .vault()
+                .knowledge_forget(&actor, request.clone(), now, &tool_scope)
+                .await
+                .expect("apply exact admitted local effect"),
+        )
+    } else {
+        None
+    };
+    if stale_executor {
+        scenario.reopen().await;
+        scenario.executor_generation = scenario
+            .vault()
+            .activate_conversation_executor()
+            .await
+            .unwrap()
+            .executor_generation;
+    } else {
+        scenario
+            .vault()
+            .finish_conversation_run(
+                forget_run.run_id,
+                forget_run.aggregate_revision,
+                RunTerminal::from_failure(AgentFailure::Cancelled),
+            )
+            .await
+            .unwrap();
+    }
+    // Every cutpoint must roll back the result journal, typed payload, Core
+    // contribution and recorder settlement together. The already-committed
+    // Knowledge receipt is intentionally outside this recovery transaction.
+    let before = settlement_custody_snapshot(&scenario, forget_run.run_id).await;
+    for stage in [1, 3] {
+        scenario
+            .vault()
+            .conversation_recovery_fault_stage
+            .store(stage, Ordering::Release);
+        assert!(
+            scenario
+                .vault()
+                .reconcile_manager_memory_forget(&actor, forget_run.run_id, call.call_id)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, forget_run.run_id).await,
+            before
+        );
+    }
+    for stage in [1, 2, 3] {
+        scenario
+            .vault()
+            .conversation_core_typed_write_fault
+            .store(stage, Ordering::Release);
+        assert!(
+            scenario
+                .vault()
+                .reconcile_manager_memory_forget(&actor, forget_run.run_id, call.call_id)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, forget_run.run_id).await,
+            before
+        );
+    }
+    let recovered = scenario
+        .vault()
+        .reconcile_manager_memory_forget(&actor, forget_run.run_id, call.call_id)
+        .await
+        .expect("recover immutable receipt or fenced absence");
+    assert_eq!(
+        recovered.state,
+        if stale_executor {
+            RunState::Interrupted
+        } else {
+            RunState::Cancelled
+        }
+    );
+    let replay = scenario
+        .vault()
+        .reconcile_manager_memory_forget(&actor, forget_run.run_id, call.call_id)
+        .await
+        .expect("exact recovery replay");
+    assert_eq!(recovered, replay);
+    let saved = scenario
+        .vault()
+        .knowledge_read_context(&actor, now, &scope)
+        .await
+        .unwrap();
+    assert_eq!(saved.memories.is_empty(), applied);
+    if let Some(ack) = acknowledgement {
+        assert_eq!(
+            scenario
+                .vault()
+                .knowledge_forget(&actor, request, now, &tool_scope)
+                .await
+                .unwrap(),
+            ack
+        );
+    } else {
+        assert!(
+            scenario
+                .vault()
+                .knowledge_forget(&actor, request, now, &tool_scope)
+                .await
+                .is_err(),
+            "late old execution must not mutate after recovery proves absence"
+        );
+    }
+    scenario.session_revision = recovered.session_revision;
+    scenario
+        .admit_run_and_append_input("The recorder must be available for the next turn.")
+        .await;
+}
+
+#[tokio::test]
+async fn memory_tool_recovery_uses_committed_receipt_without_redispatch() {
+    assert_memory_forget_recovery(true, false).await;
+    assert_memory_forget_recovery(true, true).await;
+}
+
+#[tokio::test]
+async fn memory_tool_recovery_proves_fenced_absence_without_mutation() {
+    assert_memory_forget_recovery(false, false).await;
+    assert_memory_forget_recovery(false, true).await;
 }

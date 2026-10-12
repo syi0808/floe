@@ -158,12 +158,21 @@ impl DelegationContextInput {
     pub fn bind_projection(
         self,
         projection_coverage: DependencyCoverage,
+        projected: &crate::ContextualData,
     ) -> Result<DelegationExecutionContext, AgentFailure> {
         self.validate()?;
+        // Pin exactly the live context used by this model attempt, not the
+        // Run's initial memory snapshot. A later batch must not resurrect a
+        // memory forgotten by an earlier Tool. Stored batches remain immutable.
+        let mut agent_context = self.agent_context;
+        agent_context.projection_version = projected.projection_version;
+        agent_context.memories = projected.memories.clone();
+        agent_context.optional_context_issues = projected.optional_context_issues.clone();
+        agent_context.evidence = projected.evidence.clone();
         let context = DelegationExecutionContext {
             session_id: self.session_id,
             device_id: self.device_id,
-            agent_context: self.agent_context,
+            agent_context,
             max_output_bytes: self.max_output_bytes,
             projection_coverage,
         };
@@ -296,5 +305,67 @@ impl TaskReceipt {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod live_projection_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_delegation_pins_projected_memories_instead_of_initial_run_snapshot() {
+        let memory = crate::ContextMemory {
+            target_id: Uuid::new_v4(),
+            revision: 1,
+            kind: crate::PersonalMemoryKind::Preference,
+            statement: "Prefers tea".into(),
+            epistemic_status: floe_context_contract::EpistemicStatus::Fact,
+            confidence_millis: 1000,
+            observed_at_unix_ms: 1,
+            valid_from_unix_ms: None,
+            valid_until_unix_ms: None,
+            source_refs: vec![floe_context_contract::LearningEvidenceRef {
+                session_id: Uuid::new_v4(),
+                turn_id: Uuid::new_v4(),
+            }],
+        };
+        let input = DelegationContextInput {
+            session_id: Uuid::new_v4(),
+            device_id: "test-device".into(),
+            max_output_bytes: 1024,
+            agent_context: AgentContext {
+                projection_version: 1,
+                persona: None,
+                memories: vec![memory.clone()],
+                optional_context_issues: vec![],
+                evidence: vec![],
+            },
+        };
+        let empty = crate::ContextualData {
+            projection_version: 1,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        };
+        let after_forget = input
+            .clone()
+            .bind_projection(DependencyCoverage::Independent, &empty)
+            .unwrap();
+        assert!(after_forget.agent_context.memories.is_empty());
+        let mut current = memory;
+        current.revision = 2;
+        current.statement = "Prefers coffee".into();
+        let fresh = crate::ContextualData {
+            memories: vec![current.clone()],
+            ..empty
+        };
+        let new_batch = input
+            .bind_projection(DependencyCoverage::Independent, &fresh)
+            .unwrap();
+        assert_eq!(new_batch.agent_context.memories, vec![current]);
+        assert!(
+            after_forget.agent_context.memories.is_empty(),
+            "an already pinned batch remains immutable"
+        );
     }
 }

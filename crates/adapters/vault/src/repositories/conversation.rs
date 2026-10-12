@@ -223,6 +223,20 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         })
     }
 
+    fn reconcile_memory_forget<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        run_id: RunId,
+        call_id: Uuid,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.vault
+                .reconcile_manager_memory_forget(actor, run_id, call_id)
+                .await
+                .map(|_| ())
+        })
+    }
+
     fn recovery_runs<'a>(
         &'a self,
         actor: &'a floe_kernel::OwnerActor,
