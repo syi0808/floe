@@ -32,6 +32,7 @@ pub fn project_memory_summary(
         || revision.target_id.is_nil()
         || revision.revision == 0
         || revision.source_refs.is_empty()
+        || revision.source_refs.len() > MAX_EVIDENCE_REFS
         || revision
             .source_refs
             .iter()
@@ -43,6 +44,7 @@ pub fn project_memory_summary(
         return Err(AgentFailure::VaultUnavailable);
     };
     if value.statement.trim().is_empty()
+        || value.statement.len() > MAX_MEMORY_STATEMENT_BYTES
         || value.confidence_millis > 1000
         || (matches!(value.kind, PersonalMemoryKind::Inference)
             != matches!(value.epistemic_status, EpistemicStatus::Inference))

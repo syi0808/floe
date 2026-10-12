@@ -533,3 +533,28 @@ fresh development profile with a same-snapshot binary. There is no old TEXT
 decoder, automatic profile reset or key replacement. Compression currently covers
 typed-history payloads only; owner snapshots and model-context semantic
 summarization are separate work and are not completed by this storage change.
+
+## Complete Task replay and bounded memory projection
+
+Task result replay is checked by one complete canonical receipt validator shared
+by normal Core evidence resolution and interrupted-Run recovery. It binds the
+delegation-request digest, identities, call correlation, exact snapshot/result,
+execution receipt and all Task/Tool evidence fields. A hash of only the message
+text is not a delegation-request digest. Existing parent lineage, actual Task
+storage, executor and recorder checks remain required; this does not broaden
+which continued Run may claim inherited Task evidence.
+
+Knowledge keeps complete saved facts while projecting at most 32 facts and
+16 KiB of statement bytes into a context. It preserves stable repository order,
+omits whole facts that do not fit and reports BudgetExceeded as a partial-context
+issue. Omitted inspected rows still undergo identity, uniqueness and shape
+validation; expired and non-independent facts are ineligible rather than budget
+omissions. Vault inspects at most 4,096 candidate rows plus a sentinel, checks
+cancellation during that scan and reports scan truncation without deleting data.
+This is bounded selection, not semantic compression or relevance ranking.
+
+Learner checks existing admitted work before fallible new-work discovery. New
+discovery defers when its memory comparison projection is partial: omitted facts
+cannot be assumed absent. Already admitted jobs retain their own pinned evidence
+and claim validation. The pending-review list's separate 100-item capacity and
+model-context semantic compaction remain unfinished.

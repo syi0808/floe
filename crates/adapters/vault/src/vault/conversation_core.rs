@@ -4684,27 +4684,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ConversationStoreFailure::Transition(ConversationFailure::OwnerEvidenceMismatch)
         })?;
         let expected_request_digest = floe_agent_contract::delegation_request_digest(&request);
-        let expected_replay_input_digest: [u8; 32] =
-            Sha256::digest(request.message.as_bytes()).into();
         let exact_receipt = matches!(
             &receipt.execution,
             floe_agent_contract::TaskExecutionEvidence::Admitted(stored) if stored == &verified
         );
-        let replay_matches = receipt.replay.as_ref().is_none_or(|replay| {
-            replay.task_id == Some(reference.task_id())
-                && replay.run_id == Some(run_id)
-                && replay.principal == request.principal
-                && replay.agent_id.as_deref() == Some(request.selected_agent_id.as_str())
-                && replay.definition_revision == request.selected_definition_revision
-                && replay.invocation_key == request.invocation_key
-                && replay.task_execution.as_ref() == Some(&verified)
-                && replay.task_state == Some(task.snapshot.state)
-                && replay.task_result == task.snapshot.result
-                && replay.task_artifacts == task.snapshot.artifacts
-                && replay.task_coverage == task.snapshot.coverage
-                && replay.task_issue == task.snapshot.issue
-                && replay.input_digest == expected_replay_input_digest
-        });
+        let replay_matches =
+            super::conversation_delegation_recovery::validate_task_replay(&request, &receipt)
+                .is_ok();
         if intent_revision == 0
             || result_revision <= intent_revision
             || request.parent_run_id != Some(run_id.as_uuid())

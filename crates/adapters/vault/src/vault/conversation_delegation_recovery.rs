@@ -148,7 +148,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut original = request.clone();
         original.parent_run_id = receipt.snapshot.parent_run_id;
         let input_digest = delegation_request_digest(&original);
-        validate_replay(&original, &receipt)?;
+        validate_task_replay(&original, &receipt)?;
         if replay {
             self.check_access()?;
             return Ok((record, true));
@@ -521,7 +521,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 
-fn validate_replay(request: &DelegationRequest, receipt: &TaskReceipt) -> Result<(), AgentFailure> {
+pub(super) fn validate_task_replay(
+    request: &DelegationRequest,
+    receipt: &TaskReceipt,
+) -> Result<(), AgentFailure> {
     let Some(replay) = &receipt.replay else {
         return Ok(());
     };

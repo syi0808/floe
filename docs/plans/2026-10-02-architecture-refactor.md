@@ -43,6 +43,20 @@ type constraint. Fresh qualification passed 140 Vault tests, 265 default workspa
 reset; a fresh explicitly selected development profile is required for this
 stored-format change. Model-context semantic compaction remains open.
 
+The next reconstructed slice unifies complete Task replay validation and
+bounds memory context selection without making saved-memory count a Conversation
+failure. The actual encrypted Task regression first accepted a forged raw-message
+hash; the canonical validator now rejects that and five other altered replay
+fields atomically, accepts a complete canonical receipt and preserves it across
+cancellation/reopen. Pure Knowledge tests reproduced the 33rd fact and statement
+budget overflow failing the whole projection; the fix preserves complete facts
+and marks partial coverage while continuing validation of inspected omitted rows.
+A real encrypted 33-fact approval/read/reopen test verifies retention and stable
+projection order. Learner queue fixtures reproduce discovery errors masking the
+initial claim, and cover deferral of new discovery with partial comparison data
+without any model call. Fresh qualification passed 11 Knowledge tests, 142 Vault tests, 274 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests, production FFI build, architecture boundaries and diff checks. Flutter dependencies remain blocked by the environment network policy; no Flutter/Apple/live-provider qualification is claimed and client/wire source is unchanged. Review backlog
+pagination, remote freshness and inherited Task continuation remain open.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

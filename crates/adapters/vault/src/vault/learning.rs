@@ -83,9 +83,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 [self.person_id.to_string()],
             ).await.map_err(database_failure)?;
             let mut facts = Vec::new();
+            let mut scan_truncated = false;
             while let Some(row) = rows.next().await.map_err(database_failure)? {
-                if facts.len() >= 4096 { return Err(AgentFailure::BudgetExceeded); }
+                self.check_learning_scope(scope)?;
                 let revision = decode_revision_row(&row, self.person_id, KnowledgeRevisionState::Active)?;
+                project_memory_summary(&revision, self.person_id)?;
+                if facts.len() >= 4096 {
+                    scan_truncated = true;
+                    break;
+                }
                 let independent = evidence_is_independent(
                     &transaction,
                     self.person_id,
@@ -95,7 +101,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             drop(rows);
             self.check_learning_scope(scope)?;
-            project_memory_context(self.person_id, facts, now)
+            let mut projection = project_memory_context(self.person_id, facts, now)?;
+            if scan_truncated {
+                projection.issue = Some(floe_context_contract::ContextIssueReason::BudgetExceeded);
+            }
+            Ok(projection)
         }.await;
         let loaded = finish_transaction(self, transaction, result).await;
         self.check_access()?;

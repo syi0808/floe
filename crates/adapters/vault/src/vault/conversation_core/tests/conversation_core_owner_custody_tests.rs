@@ -10594,3 +10594,271 @@ async fn retained_owner_receipt_pages_validate_last_and_empty_keys_without_repai
         scenario.reopen().await;
     }
 }
+
+#[tokio::test]
+async fn typed_task_replay_uses_complete_canonical_receipt_and_rejects_forgery_atomically() {
+    use floe_agent_contract::{JournalEvent, ReplayReceipt, TaskExecutionEvidence};
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("canonical Task replay")
+        .await;
+    let mut receipt = actual_terminal_task_for_recovery(&scenario, &run).await;
+    let journal = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .unwrap();
+    let request = journal
+        .iter()
+        .find_map(
+            |entry| match serde_json::from_str::<JournalEvent>(&entry.payload).unwrap() {
+                JournalEvent::DelegationIntent { request }
+                    if request.task_id == receipt.task_id =>
+                {
+                    Some(request)
+                }
+                _ => None,
+            },
+        )
+        .expect("actual admitted Task intent");
+    let replay = ReplayReceipt {
+        principal: request.principal.clone(),
+        run_id: request.parent_run_id.and_then(RunId::from_uuid),
+        task_id: Some(request.task_id),
+        agent_id: Some(request.selected_agent_id.clone()),
+        tool_id: None,
+        definition_revision: request.selected_definition_revision,
+        input_digest: floe_agent_contract::delegation_request_digest(&request),
+        invocation_key: request.invocation_key,
+        call_id: request.task_id.as_uuid(),
+        result: receipt
+            .snapshot
+            .result
+            .clone()
+            .unwrap_or_else(|| format!("task {:?}", receipt.snapshot.state)),
+        task_result: receipt.snapshot.result.clone(),
+        task_state: Some(receipt.snapshot.state),
+        task_artifacts: receipt.snapshot.artifacts.clone(),
+        task_coverage: receipt.snapshot.coverage.clone(),
+        task_issue: receipt.snapshot.issue,
+        task_execution: match &receipt.execution {
+            TaskExecutionEvidence::Admitted(value) => Some(value.clone()),
+            TaskExecutionEvidence::Unadmitted => None,
+        },
+        tool_artifacts: vec![],
+        tool_coverage: DependencyCoverage::Unknown,
+        tool_issue: None,
+    };
+    for changed_field in [
+        "raw_message_hash",
+        "call_id",
+        "tool_id",
+        "result",
+        "tool_coverage",
+        "tool_issue",
+    ] {
+        let mut forged = replay.clone();
+        match changed_field {
+            "raw_message_hash" => {
+                forged.input_digest = Sha256::digest(request.message.as_bytes()).into()
+            }
+            "call_id" => forged.call_id = Uuid::new_v4(),
+            "tool_id" => forged.tool_id = Some("not-a-Task".into()),
+            "result" => forged.result = "unowned result".into(),
+            "tool_coverage" => forged.tool_coverage = DependencyCoverage::Independent,
+            _ => forged.tool_issue = Some(AgentFailure::Interrupted),
+        }
+        let mut altered = receipt.clone();
+        altered.replay = Some(forged);
+        let before = settlement_custody_snapshot(&scenario, run.run_id).await;
+        assert!(
+            scenario
+                .vault()
+                .record_manager_conversation_journal(
+                    run.run_id,
+                    "result",
+                    JournalEvent::DelegationResult {
+                        receipt: Box::new(altered)
+                    }
+                )
+                .await
+                .is_err(),
+            "reject forged {changed_field}"
+        );
+        assert_eq!(
+            settlement_custody_snapshot(&scenario, run.run_id).await,
+            before,
+            "forged {changed_field} cannot leave journal, history or custody writes"
+        );
+    }
+    receipt.replay = Some(replay);
+    scenario
+        .vault()
+        .record_manager_conversation_journal(
+            run.run_id,
+            "result",
+            JournalEvent::DelegationResult {
+                receipt: Box::new(receipt.clone()),
+            },
+        )
+        .await
+        .expect("canonical complete Task replay is admitted");
+    let recorded = scenario
+        .vault()
+        .conversation_journal(run.run_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|entry| matches!(
+                serde_json::from_str::<JournalEvent>(&entry.payload).unwrap(),
+                JournalEvent::DelegationResult { receipt: stored } if *stored == receipt
+            ))
+            .count(),
+        1
+    );
+    scenario.cancel_owner_run(&run).await;
+    let before_reopen = settlement_custody_snapshot(&scenario, run.run_id).await;
+    scenario.reopen().await;
+    assert_eq!(
+        settlement_custody_snapshot(&scenario, run.run_id).await,
+        before_reopen,
+        "retained canonical Task replay survives encrypted reopen without repair"
+    );
+}
+
+#[tokio::test]
+async fn memory_capacity_preserves_all_saved_facts_and_partial_projection_across_reopen() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    use floe_knowledge::{
+        EpistemicStatus, KnowledgeActor, KnowledgeDecisionKind, MemoryDecisionRequest,
+        MemoryStageOrigin, MemoryStageRequest, PersonalMemoryKind, PersonalMemoryValue,
+        StageMemoryCandidate,
+    };
+
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let ledger = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let now = Utc::now();
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .unwrap();
+    let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
+        .unwrap()
+        .unwrap();
+    let stage = MemoryStageRequest {
+        actor: actor.clone(),
+        now,
+        origin: MemoryStageOrigin::User,
+        request: StageMemoryCandidate {
+            session_id: scenario.session_id,
+            expected_session_revision: run.session_revision,
+            turn_ids: vec![run.run_id.as_uuid()],
+            observation_kind: floe_knowledge::LearningObservationKind::ExplicitRemember,
+            digest: old_input.digest.clone(),
+            value: PersonalMemoryValue {
+                kind: PersonalMemoryKind::Preference,
+                statement: "Prefers tea".into(),
+                epistemic_status: EpistemicStatus::Fact,
+                confidence_millis: 1000,
+                valid_from: None,
+                valid_until: None,
+                observed_at: now,
+            },
+            target_id: None,
+            base_revision: None,
+            extractor_version: "test".into(),
+            prompt_version: "test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        },
+    };
+    let mut saved = Vec::new();
+    for ordinal in 0..33 {
+        let mut next = stage.clone();
+        next.request.extractor_version = format!("capacity-fixture-{ordinal}");
+        next.request.value.statement = format!("Complete saved preference {ordinal}");
+        let candidate = scenario
+            .vault()
+            .knowledge_stage(next, &scope)
+            .await
+            .unwrap();
+        let revision = scenario
+            .vault()
+            .knowledge_decide(
+                &actor,
+                MemoryDecisionRequest {
+                    command_id: CommandId::new(),
+                    candidate_id: candidate.id,
+                    kind: KnowledgeDecisionKind::Approve,
+                    decided_at: now,
+                },
+                &scope,
+            )
+            .await
+            .unwrap()
+            .revision
+            .unwrap();
+        saved.push(revision.target_id);
+    }
+    saved.sort();
+    let projected = scenario
+        .vault()
+        .knowledge_read_context(&actor, now, &scope)
+        .await
+        .unwrap();
+    assert_eq!(projected.memories.len(), 32);
+    assert_eq!(
+        projected.issue,
+        Some(floe_context_contract::ContextIssueReason::BudgetExceeded)
+    );
+    assert_eq!(
+        projected
+            .memories
+            .iter()
+            .map(|memory| memory.target_id)
+            .collect::<Vec<_>>(),
+        saved[..32]
+    );
+    let overview = scenario
+        .vault()
+        .knowledge_overview(&actor, 100, &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        overview.memories.len(),
+        33,
+        "projection does not delete saved memory"
+    );
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_read_context(&actor, now, &scope)
+            .await
+            .unwrap(),
+        projected
+    );
+}

@@ -138,6 +138,19 @@ impl LearnerService {
         }
         let discovery_id = uuid::Uuid::new_v4();
         let discovery_scope = self.scope(discovery_id, cancellation.clone())?;
+        // Existing claims must not depend on discovering more work.
+        if let Some(job) = self
+            .jobs
+            .claim_review(
+                &self.actor,
+                self.budget.clone(),
+                self.clock.now(),
+                &discovery_scope,
+            )
+            .await?
+        {
+            return self.review_claimed(&job, cancellation).await;
+        }
         self.discover_explicit_reviews(&discovery_scope).await?;
         if cancellation.is_cancelled() {
             return Ok(false);
@@ -167,6 +180,11 @@ impl LearnerService {
             return Err(AgentFailure::BudgetExceeded);
         }
         let memories = self.knowledge.read_context(&self.actor, now, scope).await?;
+        // A partial comparison set cannot establish that a fact is absent.
+        // Already admitted jobs retain their own pinned evidence and are separate.
+        if memories.issue.is_some() {
+            return Ok(());
+        }
         let mut count = 0;
         for session in sessions {
             if session.evidence.person_id != self.actor.person_id {
@@ -535,3 +553,6 @@ pub(crate) fn stage_request(
         created_at: input.observed_at,
     }
 }
+
+#[cfg(test)]
+mod queue_tests;

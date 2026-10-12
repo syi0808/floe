@@ -169,6 +169,7 @@ pub fn project_memory_context(
     let mut memories = Vec::new();
     let mut bytes = 0usize;
     let mut targets = std::collections::HashSet::new();
+    let mut omitted = false;
     for fact in facts {
         project_memory_summary(&fact.revision, person_id)?;
         if !targets.insert(fact.revision.target_id) {
@@ -185,12 +186,14 @@ pub fn project_memory_context(
         {
             continue;
         }
-        bytes = bytes
+        let next_bytes = bytes
             .checked_add(value.statement.len())
             .ok_or(AgentFailure::BudgetExceeded)?;
-        if memories.len() >= MAX_CONTEXT_MEMORIES || bytes > MAX_CONTEXT_MEMORY_BYTES {
-            return Err(AgentFailure::BudgetExceeded);
+        if memories.len() >= MAX_CONTEXT_MEMORIES || next_bytes > MAX_CONTEXT_MEMORY_BYTES {
+            omitted = true;
+            continue;
         }
+        bytes = next_bytes;
         memories.push(ContextMemory {
             target_id: fact.revision.target_id,
             revision: fact.revision.revision,
@@ -206,7 +209,7 @@ pub fn project_memory_context(
     }
     Ok(MemoryContextSnapshot {
         memories,
-        issue: None,
+        issue: omitted.then_some(floe_context_contract::ContextIssueReason::BudgetExceeded),
     })
 }
 
@@ -355,4 +358,125 @@ pub fn validate_memory_stage_replay(
         return Err(AgentFailure::StorageUnavailable);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod context_capacity_tests {
+    use super::*;
+    use floe_context_contract::ContextIssueReason;
+
+    fn fact(person_id: PersonId, ordinal: u128, statement: &str) -> MemoryContextFact {
+        let now = Utc::now();
+        MemoryContextFact {
+            revision: KnowledgeRevision {
+                schema_version: KNOWLEDGE_VERSION,
+                target_id: Uuid::from_u128(ordinal),
+                revision: 1,
+                person_id,
+                kind: KnowledgeKind::Memory,
+                payload: KnowledgePayload::Memory {
+                    value: PersonalMemoryValue {
+                        kind: PersonalMemoryKind::Preference,
+                        statement: statement.into(),
+                        epistemic_status: EpistemicStatus::Fact,
+                        confidence_millis: 900,
+                        valid_from: None,
+                        valid_until: None,
+                        observed_at: now,
+                    },
+                },
+                state: KnowledgeRevisionState::Active,
+                source_refs: vec![LearningEvidenceRef {
+                    session_id: Uuid::new_v4(),
+                    turn_id: Uuid::new_v4(),
+                }],
+                created_by: KnowledgeActor::User,
+                created_at: now,
+            },
+            evidence_independent: true,
+        }
+    }
+
+    #[test]
+    fn saved_memory_count_overflow_is_an_explicit_partial_projection() {
+        let person = PersonId::new();
+        let facts = (1..=33)
+            .map(|id| fact(person, id, "A complete saved fact"))
+            .collect();
+        let projected = project_memory_context(person, facts, Utc::now()).unwrap();
+        assert_eq!(projected.memories.len(), MAX_CONTEXT_MEMORIES);
+        assert_eq!(projected.issue, Some(ContextIssueReason::BudgetExceeded));
+        assert_eq!(
+            projected.memories.first().unwrap().target_id,
+            Uuid::from_u128(1)
+        );
+        assert_eq!(
+            projected.memories.last().unwrap().target_id,
+            Uuid::from_u128(32)
+        );
+    }
+
+    #[test]
+    fn memory_byte_budget_keeps_whole_facts_and_can_admit_a_later_small_fact() {
+        let person = PersonId::new();
+        let large = "x".repeat(2000);
+        let mut facts: Vec<_> = (1..=9).map(|id| fact(person, id, &large)).collect();
+        facts.push(fact(person, 10, "small complete fact"));
+        let projected = project_memory_context(person, facts, Utc::now()).unwrap();
+        assert_eq!(projected.memories.len(), 9);
+        assert_eq!(projected.issue, Some(ContextIssueReason::BudgetExceeded));
+        assert!(
+            projected.memories[..8]
+                .iter()
+                .all(|memory| memory.statement == large)
+        );
+        assert_eq!(projected.memories[8].statement, "small complete fact");
+        assert_eq!(projected.memories[8].target_id, Uuid::from_u128(10));
+    }
+
+    #[test]
+    fn excluded_or_expired_memories_do_not_consume_the_context_budget() {
+        let person = PersonId::new();
+        let now = Utc::now();
+        let mut facts: Vec<_> = (1..=32).map(|id| fact(person, id, "eligible")).collect();
+        let mut dependent = fact(person, 33, "source-dependent");
+        dependent.evidence_independent = false;
+        facts.push(dependent);
+        let mut expired = fact(person, 34, "expired");
+        let KnowledgePayload::Memory { value } = &mut expired.revision.payload else {
+            unreachable!()
+        };
+        value.valid_until = Some(now);
+        facts.push(expired);
+        let projected = project_memory_context(person, facts, now).unwrap();
+        assert_eq!(projected.memories.len(), 32);
+        assert_eq!(projected.issue, None);
+    }
+
+    #[test]
+    fn omitted_memory_rows_still_reject_foreign_duplicate_or_malformed_evidence() {
+        let person = PersonId::new();
+        for corruption in ["foreign", "duplicate", "oversized", "source_refs"] {
+            let mut facts: Vec<_> = (1..=33).map(|id| fact(person, id, "eligible")).collect();
+            let mut invalid = fact(person, 34, "must still be validated");
+            match corruption {
+                "foreign" => invalid.revision.person_id = PersonId::new(),
+                "duplicate" => invalid.revision.target_id = Uuid::from_u128(1),
+                "oversized" => {
+                    let KnowledgePayload::Memory { value } = &mut invalid.revision.payload else {
+                        unreachable!()
+                    };
+                    value.statement = "x".repeat(2049);
+                }
+                _ => {
+                    invalid.revision.source_refs = vec![invalid.revision.source_refs[0].clone(); 33]
+                }
+            }
+            facts.push(invalid);
+            assert!(
+                project_memory_context(person, facts, Utc::now()).is_err(),
+                "{corruption}"
+            );
+        }
+    }
 }
