@@ -585,7 +585,16 @@ impl ConnectionsService {
             )
             .await
             .map_err(source_error)?;
-        if !operation.expected.matches(current.as_ref()) {
+        if !completion_source_matches(
+            self.evidence.as_ref(),
+            actor,
+            &operation,
+            &receipt,
+            current.as_ref(),
+            scope,
+        )
+        .await?
+        {
             return self
                 .advance(
                     &operation,
@@ -597,25 +606,6 @@ impl ConnectionsService {
                     None,
                 )
                 .await;
-        }
-        if let Some(current) = current
-            .as_ref()
-            .filter(|source| source.state() != crate::SourceState::Pending)
-        {
-            let fresh = self.evidence.observe(actor, current, scope).await?;
-            if fresh != receipt.reservation.source {
-                return self
-                    .advance(
-                        &operation,
-                        SourceOperationPhase::RepairRequired {
-                            receipt_id: receipt.commit_id,
-                            reason: SourceRepairReason::SourceChanged,
-                        },
-                        SourceOperationProof::Committed(receipt),
-                        None,
-                    )
-                    .await;
-            }
         }
         if operation.kind == SourceOperationKind::ConnectionDisconnect
             && receipt.reservation.source.gateway.is_some()
@@ -1215,3 +1205,41 @@ pub(super) fn prepare_source_reservation(
     };
     Ok((record, reservation))
 }
+
+// Completion still owns the local source CAS. Remote evidence is an admission
+// condition for expansion, not proof that an already deleted source exists.
+async fn completion_source_matches(
+    evidence: &dyn SourceReviewEvidence,
+    actor: &OwnerActor,
+    operation: &SourceOperationRecord,
+    receipt: &GrantCommitReceipt,
+    current: Option<&SourceConnection>,
+    scope: &ExecutionScope,
+) -> Result<bool, AgentFailure> {
+    if !operation.expected.matches(current) {
+        return Ok(false);
+    }
+    // Access has already durably reduced permission. A provider can now be
+    // unavailable, and a successful first disconnect may have deleted the
+    // source whose preview would otherwise block exact receipt recovery.
+    if matches!(
+        (&operation.kind, &receipt.kind),
+        (
+            SourceOperationKind::ConnectionDisconnect,
+            floe_access::GrantCommitKind::Disconnect
+        ) | (
+            SourceOperationKind::ConnectionObservePause,
+            floe_access::GrantCommitKind::PauseObserve
+        )
+    ) {
+        return Ok(true);
+    }
+    if let Some(current) = current.filter(|source| source.state() != crate::SourceState::Pending) {
+        return Ok(evidence.observe(actor, current, scope).await? == receipt.reservation.source);
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+#[path = "source_completion_tests.rs"]
+mod source_completion_tests;

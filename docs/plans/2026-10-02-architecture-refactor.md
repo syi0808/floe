@@ -1506,3 +1506,25 @@ The subsequent composer/gateway change at `3fd51846` guards destination reloads 
 The final Cloud batch reused the independently reported 100-test Flutter result on the same source tree rather than rerunning it. Rust compilation emitted existing unused/dead-code warnings, including Linux-excluded native bridge and test-support code. No global Flutter analyzer pass is claimed: the older full analysis baseline of 131 infos, 2 warnings and 0 errors belongs to `e74efbfd`, while the later scoped analyses above cover only their changed files. GitHub reported 0 check runs when the code snapshot was published.
 
 Mac QA is paused at the user's request and must not resume merely because the computer reconnects. Actual EventKit writes/recovery, TCC, production Keychain/signing and live-provider/model behavior remain unqualified. Synthetic process-kill recovery proves only its isolated fixture scenarios. P6 remains open pending the broader interaction and native-boundary completion evidence.
+
+### Post-audit committed source reduction completion (R-016)
+
+The canonical Connections completion gate distinguishes a durable Access
+reduction from fresh authority expansion. Local source identity/revision/authority
+CAS remains mandatory, but already committed Disconnect/Pause completion no
+longer depends on provider/OS preview availability. The existing cleanup adapter
+replays the exact retained operation and Gateway/provider-revision expectation;
+review apply still compares fresh evidence. No new wire, persistence format,
+permission, cleanup target or alternate retry path is introduced.
+
+Four owner-port regressions cover deleted remote source after uncertain cleanup,
+Pause permission loss, local CAS drift/absence, and review freshness/error
+propagation. The first two reproduced CapabilityUnavailable/PolicyDenied before
+the correction. These synthetic completion-gate tests do not qualify real HTTP,
+encrypted cross-store recovery or native permission UI. R-015 initial reduction
+admission and R-045 interrupted pre-Access reduction recovery remain separate
+open work; this change does not claim offline initial disconnect is complete.
+Final frozen gates passed 345 workspace tests (including doctests), 61 App
+QA-feature tests with one intentional process-kill child ignored, production FFI
+build, architecture boundaries and diff checks. No Flutter source or wire
+contract changed; Flutter/Apple/live-provider qualification is not extended.
