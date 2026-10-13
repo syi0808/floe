@@ -39,27 +39,22 @@ impl SourceCleanup for GatewaySourceCleanup {
         Box::pin(async move {
             if operation.kind != SourceOperationKind::ConnectionDisconnect
                 || receipt.kind != GrantCommitKind::Disconnect
-                || !operation.matches_evidence(&receipt.reservation)
+                || !operation.matches_reservation(&receipt.reservation)
                 || operation.phase.receipt_id() != Some(receipt.commit_id)
-                || !matches!(
-                    operation.phase,
-                    SourceOperationPhase::CleaningUp { .. }
-                        | SourceOperationPhase::RepairRequired { .. }
-                )
+                || !matches!(operation.phase, SourceOperationPhase::CleaningUp { .. })
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let expected = receipt
-                .reservation
-                .source
-                .gateway
+            let target = operation
+                .cleanup_target
                 .as_ref()
                 .ok_or(AgentFailure::PolicyDenied)?;
-            let revision = receipt
-                .reservation
-                .source
-                .provider_revision
-                .ok_or(AgentFailure::PolicyDenied)?;
+            operation
+                .validate()
+                .map_err(|_| AgentFailure::PolicyDenied)?;
+            receipt.validate()?;
+            let expected = &target.gateway;
+            let revision = target.provider_revision;
             let connection = self
                 .store
                 .load(&expected.person_id, &expected.device_id)

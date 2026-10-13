@@ -1701,21 +1701,38 @@ pub fn start_turn(
         let scope = host_scope(command_id.as_uuid(), Cancellation::new(), OWNER_TIMEOUT);
         services
             .execute_owner(async move {
-                owners
-                    .conversation
-                    .start_turn(
-                        &actor,
-                        StartTurn {
-                            command_id,
-                            session_id,
-                            expected_revision: session.revision,
-                            text,
-                            continuation_ref: None,
-                            retry_of: None,
-                        },
-                        &scope,
-                    )
-                    .await
+                let request = StartTurn {
+                    command_id,
+                    session_id,
+                    expected_revision: session.revision,
+                    text,
+                    continuation_ref: None,
+                    retry_of: None,
+                };
+                loop {
+                    let result = owners
+                        .conversation
+                        .start_turn(&actor, request.clone(), &scope)
+                        .await;
+                    // Busy is a supported admission uncertainty, not permission
+                    // to create a new command or rebase its expected revision.
+                    // Keep the original scope deadline and replay exact intent.
+                    if matches!(
+                        &result,
+                        Err(
+                            floe_kernel::CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                                | floe_kernel::CommandFailure::NotAdmitted(
+                                    AgentFailure::StorageBusy
+                                )
+                        )
+                    ) && tokio::time::Instant::now() + Duration::from_millis(20)
+                        < scope.deadline()
+                    {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        continue;
+                    }
+                    return result;
+                }
             })
             .expect("admit real Conversation turn")
     })

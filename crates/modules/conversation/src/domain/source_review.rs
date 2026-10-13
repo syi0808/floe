@@ -583,7 +583,7 @@ pub enum OwnerResolutionReceipt {
 impl OwnerResolutionReceipt {
     pub fn command_id(&self) -> Uuid {
         match self {
-            Self::SourceProcessing { receipt } => receipt.reservation.command_id,
+            Self::SourceProcessing { receipt } => receipt.reservation.identity().command_id,
             Self::ExpertBinding { receipt } => receipt.command_id.as_uuid(),
             Self::CalendarOperation { decision, .. } => match decision {
                 floe_access::OperationDecisionReceipt::ReviewedDecision { command_id, .. } => {
@@ -595,7 +595,7 @@ impl OwnerResolutionReceipt {
     }
     pub fn operation_id(&self) -> Uuid {
         match self {
-            Self::SourceProcessing { receipt } => receipt.reservation.operation_id,
+            Self::SourceProcessing { receipt } => receipt.reservation.identity().operation_id,
             Self::ExpertBinding { receipt } => receipt.command_id.as_uuid(),
             Self::CalendarOperation { operation_id, .. } => *operation_id,
         }

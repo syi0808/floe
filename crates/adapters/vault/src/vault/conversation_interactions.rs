@@ -918,13 +918,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 receipt.validate()?;
                 let review = access_review_on(transaction, self.person_id, reference).await?;
                 if review.device_id != run.device_id
-                    || receipt.reservation.source != review.source
+                    || receipt.reservation.observed() != Some(&review.source)
                     || !matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference)
                 {
                     return Err(AgentFailure::Conflict);
                 }
                 let mut rows = transaction.query("SELECT payload FROM access_grant_operations WHERE operation_id = ? AND person_id = ?",
-                    (receipt.reservation.operation_id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
+                    (receipt.reservation.identity().operation_id.to_string(), self.person_id.to_string())).await.map_err(database_failure)?;
                 let row = rows
                     .next()
                     .await

@@ -1528,3 +1528,44 @@ Final frozen gates passed 345 workspace tests (including doctests), 61 App
 QA-feature tests with one intentional process-kill child ignored, production FFI
 build, architecture boundaries and diff checks. No Flutter source or wire
 contract changed; Flutter/Apple/live-provider qualification is not extended.
+
+### Local source reduction cutover (R-015 / R-045)
+
+Access owns a typed grant reservation: observed evidence for reviewed admission
+and configuration invalidation, or only the exact durable operation/source
+identity for Pause/Disconnect. Minimal reduction reservations cannot grant or
+expand permission. Connections reserves against its local source CAS before
+Access mutation, and resumes a missing reduction receipt from that retained
+identity after interruption. No external observation is needed to reduce grants.
+
+Remote cleanup remains a separate Connections-owned effect. After durable local
+revocation, Connections may acquire the exact remote cleanup target and persist
+it once before dispatch. The target survives uncertainty and cannot be replaced;
+retries use it without previewing an already deleted source. Failure to acquire
+or settle cleanup retains the source fence and cannot restore local grants.
+Reviewed expansion and configuration keep their fresh evidence checks. The
+cutover migrates Access, Connections, Vault, Conversation receipt consumers and
+the Gateway cleanup adapter together, deleting the old reduction-evidence path.
+Stored receipt/operation shapes change in place: use an explicitly selected
+fresh development profile; do not reset existing profiles or add old decoders.
+
+Seven real encrypted two-store regressions pass: offline Pause and replay after
+close/reopen, local revoke before unavailable cleanup, exact cleanup retry after
+response loss/reopen, interrupted Pause and Disconnect reservation recovery,
+abort exclusion, cross-device rejection, and rejection of a forged reduction
+that tries to reactivate a grant. These are real Connections/Access owners and
+repositories with synthetic external ports, not a native process-kill, live
+Gateway, credential or OS-permission qualification. Seven Connections owner
+regressions additionally cover strict review freshness, local CAS drift,
+immutable target preparation and bounded cleanup data even for 4,096 preview
+resources. The operation journal keeps its 16 KiB bound: it stores only Gateway
+binding/provider revision, not a duplicate preview resource list.
+
+Two App aggregate attempts exposed `Indeterminate(StorageBusy)` at the common
+`start_turn` test helper, first in retained-history pagination and then in the
+summary-shutdown scenario. The helper now follows the supported admission retry
+contract only for NotAdmitted/Indeterminate StorageBusy: identical command ID,
+body and expected revision, bounded by the original scope deadline. It does not
+retry semantic rejection, regenerate an ID, rebase a revision or suppress a
+persistent failure. Exact Run/history and no-redispatch assertions remain.
+Final frozen qualification after the test-harness correction passed 348 workspace tests (including doctests), 61 App QA-feature tests with one intentional process-kill child ignored, production FFI build, architecture boundaries and diff checks. The seven development-storage owner regressions also pass. Existing profiles were not reset; Flutter/Apple/live-provider qualification remains unextended.

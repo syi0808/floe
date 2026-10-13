@@ -57,9 +57,12 @@ pub(super) async fn finalize(
         || original.person_id() != actor.person_id
         || receipt.kind != floe_access::GrantCommitKind::InvalidateSource
         || !operation.expected.matches(Some(original))
-        || receipt.reservation.source != *expected
-        || !operation.matches_evidence(&receipt.reservation)
-        || receipt.reservation.source.gateway.is_some()
+        || receipt.reservation.observed() != Some(expected)
+        || !operation.matches_reservation(&receipt.reservation)
+        || receipt
+            .reservation
+            .observed()
+            .is_some_and(|source| source.gateway.is_some())
     {
         return Err(AgentFailure::Conflict);
     }
@@ -75,6 +78,7 @@ pub(super) async fn finalize(
         check_live()?;
         operation = sources
             .compare_and_swap_operation(SourceOperationChange {
+            prepare_cleanup: None,
                 operation_id: operation.operation_id,
                 expected_revision: operation.revision,
                 expected_source: operation.expected.clone(),
@@ -127,6 +131,7 @@ pub(super) async fn finalize(
     };
     sources
         .compare_and_swap_operation(SourceOperationChange {
+            prepare_cleanup: None,
             operation_id: operation.operation_id,
             expected_revision: operation.revision,
             expected_source: operation.expected.clone(),

@@ -203,9 +203,9 @@ async fn resolve_source_record<R: InteractionRepository + ?Sized>(
     };
     if !matches!(operation.phase, floe_connections::SourceOperationPhase::Completed { receipt_id } if receipt_id == receipt.commit_id)
         || operation.command_id != owner_command_id
-        || receipt.reservation.command_id != owner_command_id
-        || receipt.reservation.operation_id != operation.operation_id
-        || receipt.reservation.source.source.person_id() != actor.person_id
+        || receipt.reservation.identity().command_id != owner_command_id
+        || receipt.reservation.identity().operation_id != operation.operation_id
+        || receipt.reservation.source().person_id() != actor.person_id
         || !matches!(&receipt.kind, floe_access::GrantCommitKind::Reviewed { review } if review == reference)
     {
         return Err(AgentFailure::Conflict);

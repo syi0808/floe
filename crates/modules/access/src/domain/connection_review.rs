@@ -297,6 +297,59 @@ impl SourceReservationEvidence {
     }
 }
 
+/// Admission evidence and authority reduction have different requirements.
+/// A reduction carries no provider freshness claim and can never expand access.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "reservation_kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum GrantReservation {
+    Observed(SourceReservationEvidence),
+    Reduction(GrantOperationIdentity),
+}
+impl GrantReservation {
+    pub fn identity(&self) -> GrantOperationIdentity {
+        match self {
+            Self::Observed(value) => value.identity(),
+            Self::Reduction(value) => value.clone(),
+        }
+    }
+    pub fn source(&self) -> &GrantSourceBinding {
+        match self {
+            Self::Observed(value) => &value.source.source,
+            Self::Reduction(value) => &value.source,
+        }
+    }
+    pub fn observed(&self) -> Option<&SourceExpectation> {
+        match self {
+            Self::Observed(value) => Some(&value.source),
+            Self::Reduction(_) => None,
+        }
+    }
+    pub fn validate_for(&self, kind: &GrantCommitKind) -> Result<(), AgentFailure> {
+        match (self, kind) {
+            (
+                Self::Observed(value),
+                GrantCommitKind::Reviewed { .. } | GrantCommitKind::InvalidateSource,
+            ) => value.validate(),
+            (
+                Self::Reduction(value),
+                GrantCommitKind::PauseObserve | GrantCommitKind::Disconnect,
+            ) => {
+                value.validate()?;
+                if value.source_revision.is_none() {
+                    return Err(AgentFailure::InvalidInput);
+                }
+                Ok(())
+            }
+            _ => Err(AgentFailure::InvalidInput),
+        }
+    }
+}
+
 fn validate_source_device(
     source: &GrantSourceBinding,
     device_id: &str,
@@ -342,7 +395,7 @@ pub struct GrantMutation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrantCommit {
-    pub reservation: SourceReservationEvidence,
+    pub reservation: GrantReservation,
     pub kind: GrantCommitKind,
     pub mutations: Vec<GrantMutation>,
 }
@@ -356,7 +409,7 @@ pub struct GrantResult {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrantCommitReceipt {
-    pub reservation: SourceReservationEvidence,
+    pub reservation: GrantReservation,
     pub kind: GrantCommitKind,
     pub commit_id: Uuid,
     pub grants: Vec<GrantResult>,
@@ -368,7 +421,7 @@ impl GrantCommitReceipt {
         digest(self)
     }
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        self.reservation.validate()?;
+        self.reservation.validate_for(&self.kind)?;
         if self.commit_id.is_nil()
             || self.commit_digest == [0; 32]
             || self.grants.len() > 128
@@ -483,8 +536,8 @@ pub fn validate_commit(
     snapshot: &GrantSnapshot,
     now: DateTime<Utc>,
 ) -> Result<(), AgentFailure> {
-    command.reservation.validate()?;
-    if command.reservation.source.source != snapshot.source || command.mutations.len() > 128 {
+    command.reservation.validate_for(&command.kind)?;
+    if command.reservation.source() != &snapshot.source || command.mutations.len() > 128 {
         return Err(AgentFailure::Conflict);
     }
     match (&command.kind, review) {
@@ -492,7 +545,7 @@ pub fn validate_commit(
             review.validate()?;
             if expected != &review.reference
                 || review.expires_at <= now
-                || review.source != command.reservation.source
+                || command.reservation.observed() != Some(&review.source)
                 || command.mutations
                     != review
                         .views

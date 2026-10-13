@@ -1,6 +1,7 @@
 use crate::{SourceConnection, SourceRepositoryError};
 use floe_access::{
-    GrantAbortReceipt, GrantCommitKind, GrantCommitReceipt, ReviewRef, SourceReservationEvidence,
+    GrantAbortReceipt, GrantCommitKind, GrantCommitReceipt, GrantReservation, ReviewRef,
+    SourceExpectation,
 };
 use floe_context_contract::{GrantSourceBinding, SourceAuthority};
 use serde::{Deserialize, Serialize};
@@ -114,6 +115,8 @@ pub struct SourceOperationRecord {
     pub kind: SourceOperationKind,
     pub phase: SourceOperationPhase,
     pub revision: u64,
+    /// Exact remote effect target, fixed once before cleanup dispatch.
+    pub cleanup_target: Option<SourceCleanupTarget>,
 }
 impl SourceOperationRecord {
     pub fn validate(&self) -> Result<(), SourceRepositoryError> {
@@ -160,6 +163,56 @@ impl SourceOperationRecord {
         {
             return Err(SourceRepositoryError::Corrupt);
         }
+        if matches!(
+            self.kind,
+            SourceOperationKind::ConnectionDisconnect | SourceOperationKind::ConnectionObservePause
+        ) && self.expected.revision.is_none()
+        {
+            return Err(SourceRepositoryError::Corrupt);
+        }
+        if matches!(
+            self.phase,
+            SourceOperationPhase::CleaningUp { .. }
+                | SourceOperationPhase::RepairRequired {
+                    reason: SourceRepairReason::CleanupUncertain,
+                    ..
+                }
+        ) && !self.needs_remote_cleanup()
+        {
+            return Err(SourceRepositoryError::Corrupt);
+        }
+        if matches!(
+            self.phase,
+            SourceOperationPhase::CleaningUp {
+                cleanup_revision: 0,
+                ..
+            }
+        ) {
+            return Err(SourceRepositoryError::Corrupt);
+        }
+        if let Some(target) = &self.cleanup_target {
+            self.validate_cleanup_target(target)?;
+            if matches!(
+                self.phase,
+                SourceOperationPhase::Reserved | SourceOperationPhase::Aborted { .. }
+            ) {
+                return Err(SourceRepositoryError::Corrupt);
+            }
+        }
+        if self.needs_remote_cleanup()
+            && matches!(
+                self.phase,
+                SourceOperationPhase::CleaningUp { .. }
+                    | SourceOperationPhase::Completed { .. }
+                    | SourceOperationPhase::RepairRequired {
+                        reason: SourceRepairReason::CleanupUncertain,
+                        ..
+                    }
+            )
+            && self.cleanup_target.is_none()
+        {
+            return Err(SourceRepositoryError::Corrupt);
+        }
         Ok(())
     }
     pub fn identity(&self) -> floe_access::GrantOperationIdentity {
@@ -175,16 +228,61 @@ impl SourceOperationRecord {
             source_authority: self.expected.authority,
         }
     }
-    pub fn matches_evidence(&self, evidence: &SourceReservationEvidence) -> bool {
-        self.device_id == evidence.device_id
-            && self.operation_id == evidence.operation_id
-            && self.command_id == evidence.command_id
-            && self.request_digest == evidence.request_digest
-            && self.reservation_id == evidence.reservation_id
-            && self.reservation_generation == evidence.reservation_generation
-            && self.expected.source == evidence.source.source
-            && self.expected.revision == evidence.source.revision
-            && self.expected.authority == evidence.source.authority
+    pub fn matches_reservation(&self, reservation: &GrantReservation) -> bool {
+        self.identity() == reservation.identity()
+    }
+    pub fn needs_remote_cleanup(&self) -> bool {
+        self.kind == SourceOperationKind::ConnectionDisconnect
+            && !floe_access::is_device_local_source(self.expected.source.connector().as_str())
+    }
+    fn validate_cleanup_target(
+        &self,
+        target: &SourceCleanupTarget,
+    ) -> Result<(), SourceRepositoryError> {
+        if !self.needs_remote_cleanup()
+            || target.gateway.validate().is_err()
+            || target.provider_revision == 0
+            || target.gateway.person_id != self.expected.source.person_id().to_string()
+            || target.gateway.device_id != self.device_id
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        Ok(())
+    }
+}
+/// Non-secret bounded target for one remote disconnect effect. Source identity
+/// already belongs to the immutable operation; no preview resource list is copied.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceCleanupTarget {
+    pub gateway: floe_access::VerifiedGatewayBinding,
+    pub provider_revision: u64,
+}
+impl SourceCleanupTarget {
+    pub(crate) fn from_observation(
+        operation: &SourceOperationRecord,
+        observed: SourceExpectation,
+    ) -> Result<Self, SourceRepositoryError> {
+        observed
+            .validate()
+            .map_err(|_| SourceRepositoryError::Corrupt)?;
+        observed
+            .validate_device(&operation.device_id)
+            .map_err(|_| SourceRepositoryError::Conflict)?;
+        if observed.source != operation.expected.source
+            || observed.revision != operation.expected.revision
+            || observed.authority != operation.expected.authority
+        {
+            return Err(SourceRepositoryError::Conflict);
+        }
+        let target = Self {
+            gateway: observed.gateway.ok_or(SourceRepositoryError::Conflict)?,
+            provider_revision: observed
+                .provider_revision
+                .ok_or(SourceRepositoryError::Conflict)?,
+        };
+        operation.validate_cleanup_target(&target)?;
+        Ok(target)
     }
 }
 #[derive(Clone, Debug)]
@@ -209,6 +307,8 @@ pub struct SourceOperationChange {
     pub next_phase: SourceOperationPhase,
     pub proof: SourceOperationProof,
     pub successor: Option<SourceConnection>,
+    /// Only the first cleanup dispatch may install this target; later changes retain it.
+    pub prepare_cleanup: Option<SourceCleanupTarget>,
 }
 impl SourceOperationChange {
     pub fn validate(
@@ -229,7 +329,10 @@ impl SourceOperationChange {
         }
         let committed = match &self.proof {
             SourceOperationProof::Committed(receipt) => {
-                if !current.matches_evidence(&receipt.reservation)
+                receipt
+                    .validate()
+                    .map_err(|_| SourceRepositoryError::Corrupt)?;
+                if !current.matches_reservation(&receipt.reservation)
                     || receipt.commit_id.is_nil()
                     || !matches!(
                         (&current.kind, &receipt.kind),
@@ -396,12 +499,31 @@ impl SourceOperationChange {
                 _ => return Err(SourceRepositoryError::Conflict),
             }
         }
+        if let Some(target) = &self.prepare_cleanup {
+            current.validate_cleanup_target(target)?;
+            if !committed
+                || !matches!(current.phase, SourceOperationPhase::GrantCommitted { .. })
+                || !matches!(
+                    self.next_phase,
+                    SourceOperationPhase::CleaningUp {
+                        cleanup_revision: 1,
+                        ..
+                    }
+                )
+                || current.cleanup_target.is_some()
+            {
+                return Err(SourceRepositoryError::Conflict);
+            }
+        }
         // A repeated observation of the same repair receipt is not new state.
         if self.next_phase == current.phase && self.successor.is_none() {
             return Ok(current.clone());
         }
         let mut next = current.clone();
         next.phase = self.next_phase.clone();
+        if let Some(target) = &self.prepare_cleanup {
+            next.cleanup_target = Some(target.clone());
+        }
         next.revision = next
             .revision
             .checked_add(1)

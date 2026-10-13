@@ -1,8 +1,8 @@
 use crate::{
     ConnectionReview, DataAccessGrant, ExpectedGrant, GrantAbort, GrantAbortOutcome, GrantCommit,
-    GrantCommitKind, GrantCommitReceipt, GrantMutation, GrantOperationReceipt, GrantReceiptQuery,
-    GrantRepository, GrantState, ReviewRef, ReviewedView, SourceExpectation,
-    SourceReservationEvidence, TrustedConsumerCatalog,
+    GrantCommitKind, GrantCommitReceipt, GrantMutation, GrantOperationIdentity,
+    GrantOperationReceipt, GrantReceiptQuery, GrantRepository, GrantReservation, GrantState,
+    ReviewRef, ReviewedView, SourceExpectation, SourceReservationEvidence, TrustedConsumerCatalog,
 };
 use chrono::{DateTime, Duration, Utc};
 use floe_context_contract::{
@@ -761,7 +761,7 @@ impl AccessService {
                 .collect();
             self.repository
                 .commit(GrantCommit {
-                    reservation,
+                    reservation: GrantReservation::Observed(reservation),
                     kind: GrantCommitKind::Reviewed { review: reference },
                     mutations,
                 })
@@ -771,21 +771,21 @@ impl AccessService {
     pub fn disconnect<'a>(
         &'a self,
         actor: &'a OwnerActor,
-        reservation: SourceReservationEvidence,
+        reservation: GrantOperationIdentity,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<GrantCommitReceipt, AgentFailure>> {
         Box::pin(async move {
             check(actor, scope)?;
             reservation.validate()?;
             if reservation.device_id != actor.device_id
-                || reservation.source.source.person_id() != actor.person_id
+                || reservation.source.person_id() != actor.person_id
             {
                 return Err(AgentFailure::PolicyDenied);
             }
             if let Some(receipt) = self
                 .repository
                 .receipt(GrantReceiptQuery {
-                    identity: reservation.identity(),
+                    identity: reservation.clone(),
                 })
                 .await?
             {
@@ -798,10 +798,7 @@ impl AccessService {
                     _ => Err(AgentFailure::Conflict),
                 };
             }
-            let snapshot = self
-                .repository
-                .snapshot(reservation.source.source.clone())
-                .await?;
+            let snapshot = self.repository.snapshot(reservation.source.clone()).await?;
             let mut mutations = Vec::new();
             for grant in snapshot
                 .grants
@@ -827,7 +824,7 @@ impl AccessService {
             }
             self.repository
                 .commit(GrantCommit {
-                    reservation,
+                    reservation: GrantReservation::Reduction(reservation),
                     kind: GrantCommitKind::Disconnect,
                     mutations,
                 })
@@ -837,21 +834,21 @@ impl AccessService {
     pub fn pause_observe<'a>(
         &'a self,
         actor: &'a OwnerActor,
-        reservation: SourceReservationEvidence,
+        reservation: GrantOperationIdentity,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<GrantCommitReceipt, AgentFailure>> {
         Box::pin(async move {
             check(actor, scope)?;
             reservation.validate()?;
             if reservation.device_id != actor.device_id
-                || reservation.source.source.person_id() != actor.person_id
+                || reservation.source.person_id() != actor.person_id
             {
                 return Err(AgentFailure::PolicyDenied);
             }
             if let Some(receipt) = self
                 .repository
                 .receipt(GrantReceiptQuery {
-                    identity: reservation.identity(),
+                    identity: reservation.clone(),
                 })
                 .await?
             {
@@ -864,10 +861,7 @@ impl AccessService {
                     _ => Err(AgentFailure::Conflict),
                 };
             }
-            let snapshot = self
-                .repository
-                .snapshot(reservation.source.source.clone())
-                .await?;
+            let snapshot = self.repository.snapshot(reservation.source.clone()).await?;
             let mut mutations = Vec::new();
             for grant in snapshot
                 .grants
@@ -893,7 +887,7 @@ impl AccessService {
             }
             self.repository
                 .commit(GrantCommit {
-                    reservation,
+                    reservation: GrantReservation::Reduction(reservation),
                     kind: GrantCommitKind::PauseObserve,
                     mutations,
                 })
@@ -959,7 +953,7 @@ impl AccessService {
             }
             self.repository
                 .commit(GrantCommit {
-                    reservation,
+                    reservation: GrantReservation::Observed(reservation),
                     kind: GrantCommitKind::InvalidateSource,
                     mutations,
                 })

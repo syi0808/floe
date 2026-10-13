@@ -344,8 +344,8 @@ impl ConnectionsService {
         };
         receipt.validate()?;
         if receipt.kind != floe_access::GrantCommitKind::InvalidateSource
-            || !operation.matches_evidence(&receipt.reservation)
-            || receipt.reservation.source != expected
+            || !operation.matches_reservation(&receipt.reservation)
+            || receipt.reservation.observed() != Some(&expected)
             || expected.gateway.is_some()
         {
             return Err(AgentFailure::Conflict);

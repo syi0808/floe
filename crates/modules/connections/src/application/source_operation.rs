@@ -328,7 +328,7 @@ impl ConnectionsService {
             )
             .await?;
         if let Some(GrantOperationReceipt::Committed(receipt)) = &receipt {
-            if !current.matches_evidence(&receipt.reservation) {
+            if !current.matches_reservation(&receipt.reservation) {
                 return Err(AgentFailure::Conflict);
             }
         }
@@ -469,18 +469,12 @@ impl ConnectionsService {
                     AgentFailure::Conflict,
                 ));
             }
-            let expected = self
-                .evidence
-                .observe(actor, &source, scope)
-                .await
-                .map_err(ConnectionsCommandFailure::NotAdmitted)?;
             let (admission, reservation) = self
-                .reserve(
+                .reserve_reduction(
                     actor,
                     command_id,
                     intent,
-                    None,
-                    expected,
+                    &source,
                     SourceOperationKind::ConnectionDisconnect,
                 )
                 .await?;
@@ -497,7 +491,7 @@ impl ConnectionsService {
                     .receipt(
                         actor,
                         GrantReceiptQuery {
-                            identity: reservation.identity(),
+                            identity: reservation.clone(),
                         },
                         scope,
                     )
@@ -525,6 +519,31 @@ impl ConnectionsService {
         }
         .await;
         self.finish_source_command(command_result, identity).await
+    }
+    async fn reserve_reduction(
+        &self,
+        actor: &OwnerActor,
+        command_id: Uuid,
+        digest: [u8; 32],
+        source: &SourceConnection,
+        kind: SourceOperationKind,
+    ) -> Result<
+        (
+            SourceOperationAdmission,
+            floe_access::GrantOperationIdentity,
+        ),
+        ConnectionsCommandFailure,
+    > {
+        let record = prepare_reduction_reservation(actor, command_id, digest, source, kind)
+            .map_err(ConnectionsCommandFailure::NotAdmitted)?;
+        let identity = record.identity();
+        let admission = self
+            .sources
+            .reserve(SourceOperationReservation { record })
+            .await
+            .map_err(source_error)
+            .map_err(ConnectionsCommandFailure::Indeterminate)?;
+        Ok((admission, identity))
     }
     pub(super) async fn reserve(
         &self,
@@ -557,7 +576,7 @@ impl ConnectionsService {
         if operation.kind == SourceOperationKind::ConnectionConfigure
             || operation.device_id != actor.device_id
             || operation.expected.source.person_id() != actor.person_id
-            || !operation.matches_evidence(&receipt.reservation)
+            || !operation.matches_reservation(&receipt.reservation)
         {
             return Err(AgentFailure::Conflict);
         }
@@ -607,9 +626,29 @@ impl ConnectionsService {
                 )
                 .await;
         }
-        if operation.kind == SourceOperationKind::ConnectionDisconnect
-            && receipt.reservation.source.gateway.is_some()
-        {
+        if operation.needs_remote_cleanup() {
+            if operation.cleanup_target.is_none() {
+                let source = current.as_ref().ok_or(AgentFailure::Conflict)?;
+                let target = self.evidence.observe(actor, source, scope).await?;
+                let target = crate::SourceCleanupTarget::from_observation(&operation, target)
+                    .map_err(source_error)?;
+                operation = self
+                    .sources
+                    .compare_and_swap_operation(SourceOperationChange {
+                        operation_id: operation.operation_id,
+                        expected_revision: operation.revision,
+                        expected_source: operation.expected.clone(),
+                        next_phase: SourceOperationPhase::CleaningUp {
+                            receipt_id: receipt.commit_id,
+                            cleanup_revision: 1,
+                        },
+                        proof: SourceOperationProof::Committed(receipt.clone()),
+                        successor: None,
+                        prepare_cleanup: Some(target),
+                    })
+                    .await
+                    .map_err(source_error)?;
+            }
             if matches!(
                 operation.phase,
                 SourceOperationPhase::GrantCommitted { .. }
@@ -667,6 +706,7 @@ impl ConnectionsService {
         self.ensure_open()?;
         self.sources
             .compare_and_swap_operation(SourceOperationChange {
+                prepare_cleanup: None,
                 operation_id: operation.operation_id,
                 expected_revision: operation.revision,
                 expected_source: operation.expected.clone(),
@@ -805,18 +845,12 @@ impl ConnectionsService {
                     AgentFailure::Conflict,
                 ));
             }
-            let expected = self
-                .evidence
-                .observe(actor, &source, scope)
-                .await
-                .map_err(ConnectionsCommandFailure::NotAdmitted)?;
             let (admission, reservation) = self
-                .reserve(
+                .reserve_reduction(
                     actor,
                     command_id,
                     intent,
-                    None,
-                    expected,
+                    &source,
                     SourceOperationKind::ConnectionObservePause,
                 )
                 .await?;
@@ -830,7 +864,7 @@ impl ConnectionsService {
                     .receipt(
                         actor,
                         GrantReceiptQuery {
-                            identity: reservation.identity(),
+                            identity: reservation.clone(),
                         },
                         scope,
                     )
@@ -908,6 +942,54 @@ impl ConnectionsService {
             }
             None => {
                 let Some(reason) = abort_reason else {
+                    if matches!(
+                        operation.kind,
+                        SourceOperationKind::ConnectionDisconnect
+                            | SourceOperationKind::ConnectionObservePause
+                    ) {
+                        let current = self
+                            .sources
+                            .load(actor.person_id, &operation.expected.source.connection_id())
+                            .await
+                            .map_err(source_error)?;
+                        if !operation.expected.matches(current.as_ref()) {
+                            return Err(AgentFailure::Conflict);
+                        }
+                        let attempted = match operation.kind {
+                            SourceOperationKind::ConnectionDisconnect => {
+                                self.access.disconnect(actor, identity.clone(), scope).await
+                            }
+                            _ => {
+                                self.access
+                                    .pause_observe(actor, identity.clone(), scope)
+                                    .await
+                            }
+                        };
+                        return match self
+                            .access
+                            .receipt(actor, GrantReceiptQuery { identity }, scope)
+                            .await?
+                        {
+                            Some(GrantOperationReceipt::Committed(receipt)) => {
+                                self.reconcile_committed(actor, operation, receipt, scope)
+                                    .await
+                            }
+                            Some(GrantOperationReceipt::Aborted(receipt)) => {
+                                self.advance(
+                                    &operation,
+                                    SourceOperationPhase::Aborted {
+                                        reason: SourceAbortReason::Cancelled,
+                                    },
+                                    SourceOperationProof::Aborted(receipt),
+                                    None,
+                                )
+                                .await
+                            }
+                            None => {
+                                Err(attempted.err().unwrap_or(AgentFailure::StorageUnavailable))
+                            }
+                        };
+                    }
                     if operation.kind != SourceOperationKind::ConnectionReviewApply {
                         return Ok(operation);
                     }
@@ -1062,7 +1144,7 @@ impl ConnectionsService {
         receipt: GrantCommitReceipt,
         scope: &ExecutionScope,
     ) -> Result<SourceOperationRecord, AgentFailure> {
-        if !operation.matches_evidence(&receipt.reservation) {
+        if !operation.matches_reservation(&receipt.reservation) {
             return Err(AgentFailure::Conflict);
         }
         // A configuration successor is persisted in the encrypted product
@@ -1153,6 +1235,14 @@ pub(super) fn prepare_source_reservation(
             AgentFailure::InvalidInput,
         ));
     }
+    if matches!(
+        kind,
+        SourceOperationKind::ConnectionDisconnect | SourceOperationKind::ConnectionObservePause
+    ) {
+        return Err(ConnectionsCommandFailure::NotAdmitted(
+            AgentFailure::InvalidInput,
+        ));
+    }
     actor
         .validate()
         .map_err(ConnectionsCommandFailure::NotAdmitted)?;
@@ -1187,6 +1277,7 @@ pub(super) fn prepare_source_reservation(
         .validate()
         .map_err(ConnectionsCommandFailure::NotAdmitted)?;
     let record = SourceOperationRecord {
+        cleanup_target: None,
         device_id: actor.device_id.clone(),
         operation_id,
         command_id,
@@ -1235,7 +1326,9 @@ async fn completion_source_matches(
         return Ok(true);
     }
     if let Some(current) = current.filter(|source| source.state() != crate::SourceState::Pending) {
-        return Ok(evidence.observe(actor, current, scope).await? == receipt.reservation.source);
+        return Ok(
+            Some(&evidence.observe(actor, current, scope).await?) == receipt.reservation.observed()
+        );
     }
     Ok(true)
 }
@@ -1243,3 +1336,51 @@ async fn completion_source_matches(
 #[cfg(test)]
 #[path = "source_completion_tests.rs"]
 mod source_completion_tests;
+
+fn prepare_reduction_reservation(
+    actor: &OwnerActor,
+    command_id: Uuid,
+    digest: [u8; 32],
+    source: &SourceConnection,
+    kind: SourceOperationKind,
+) -> Result<SourceOperationRecord, AgentFailure> {
+    actor.validate()?;
+    source.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    if source.person_id() != actor.person_id {
+        return Err(AgentFailure::PolicyDenied);
+    }
+    if !matches!(
+        kind,
+        SourceOperationKind::ConnectionDisconnect | SourceOperationKind::ConnectionObservePause
+    ) || command_id.is_nil()
+    {
+        return Err(AgentFailure::InvalidInput);
+    }
+    let operation_id = derived_id(b"floe.source.operation.v1", actor.person_id, command_id);
+    let record = SourceOperationRecord {
+        device_id: actor.device_id.clone(),
+        operation_id,
+        command_id,
+        request_digest: digest,
+        reservation_id: derived_id(b"floe.source.reservation.v1", actor.person_id, operation_id),
+        reservation_generation: 1,
+        expected: SourceOperationExpectation {
+            source: floe_context_contract::GrantSourceBinding::try_new(
+                actor.person_id,
+                source.connection_id().clone(),
+                source.connector_id().clone(),
+                source.execution_owner_id().clone(),
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?,
+            revision: Some(source.revision()),
+            authority: source.source_authority(),
+        },
+        review: None,
+        kind,
+        phase: SourceOperationPhase::Reserved,
+        revision: 1,
+        cleanup_target: None,
+    };
+    record.validate().map_err(|_| AgentFailure::InvalidInput)?;
+    Ok(record)
+}

@@ -45,3 +45,6 @@ pub use lifecycle_receipts::StoredVaultLifecycleReceipt;
 
 #[cfg(all(test, unix, feature = "development-storage"))]
 mod day_capacity_tests;
+
+#[cfg(all(test, unix, feature = "development-storage"))]
+mod source_reduction_tests;

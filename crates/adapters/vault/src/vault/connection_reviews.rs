@@ -212,7 +212,7 @@ impl<Keys: VaultKeyProvider> GrantRepository for EncryptedAgentVault<Keys> {
                     let row = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::NotFound)?;
                     Some(decode::<ConnectionReview>(row.get::<String>(0).map_err(storage)?)?)
                 } else { None };
-                let snapshot = GrantSnapshot { authority_owner: self.vault_id, source: command.reservation.source.source.clone(), grants: self.data_access_grants_for_source_in_transaction(&transaction, &command.reservation.source.source, 128).await? };
+                let snapshot = GrantSnapshot { authority_owner: self.vault_id, source: command.reservation.source().clone(), grants: self.data_access_grants_for_source_in_transaction(&transaction, command.reservation.source(), 128).await? };
                 validate_commit(&command, review.as_ref(), &snapshot, chrono::Utc::now())?;
                 let mut cleanup_ids = Vec::new();
                 for mutation in &command.mutations {
