@@ -273,7 +273,10 @@ impl PersonalSourceDriver for NativePersonalDriver {
         let host_epoch = self
             .attention
             .host_epoch(person_id)
-            .map_err(|_| AgentFailure::PolicyDenied)?;
+            .map_err(|failure| match failure {
+                AgentFailure::CapabilityUnavailable => AgentFailure::StaleContext,
+                other => other,
+            })?;
         self.observations.trusted_attention_observation(
             person_id,
             device_id,
@@ -409,5 +412,59 @@ impl floe_access::PersonalSubjectInspector for NativePersonalDriver {
             .attention_observation(person_id, device_id, now_unix_ms())
             .ok()
             .map(|(_, _, process_incarnation)| process_incarnation)
+    }
+}
+
+#[cfg(test)]
+mod attention_history_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn attention_history_host_disposal_and_replacement_are_stale() {
+        let person = PersonId::new();
+        let driver = NativePersonalDriver {
+            attention: Arc::new(AttentionBroker::new()),
+            personal: Arc::new(PersonalBroker::new()),
+            observations: Arc::new(ObservationRegistry::new()),
+        };
+        driver
+            .attention
+            .register_host(person, "host-1".into())
+            .unwrap();
+        let now = now_unix_ms();
+        let view = AttentionView {
+            schema_version: 1,
+            view_id: "attention.coarse".into(),
+            source_handle: "attention.device".into(),
+            observed_at_unix_ms: now,
+            expires_at_unix_ms: now + 60_000,
+            state: floe_context::AttentionState::Available,
+            confidence_millis: 900,
+            evidence_handles: vec!["attention.fixture".into()],
+        };
+        let (id, incarnation) = driver
+            .commit_attention_projection(person, "host-1", "device-1", &view, &"a".repeat(64))
+            .unwrap();
+        assert_eq!(
+            driver
+                .trusted_attention_observation(person, "device-1", id, incarnation)
+                .unwrap()
+                .0,
+            view
+        );
+        driver.attention.dispose_host(person, "host-1").unwrap();
+        assert_eq!(
+            driver.trusted_attention_observation(person, "device-1", id, incarnation),
+            Err(AgentFailure::StaleContext)
+        );
+        driver
+            .attention
+            .register_host(person, "host-2".into())
+            .unwrap();
+        assert_eq!(
+            driver.trusted_attention_observation(person, "device-1", id, incarnation),
+            Err(AgentFailure::StaleContext)
+        );
     }
 }

@@ -155,7 +155,14 @@ mod tests {
     }
 
     fn dependency() -> ContextDependency {
-        let person_id = PersonId::new();
+        dependency_with_observation(PersonId::new(), Uuid::new_v4(), Uuid::new_v4())
+    }
+
+    fn dependency_with_observation(
+        person_id: PersonId,
+        observation: Uuid,
+        incarnation: Uuid,
+    ) -> ContextDependency {
         let source = GrantSourceBinding::try_new(
             person_id,
             ConnectionId::try_new("fixture.connection").expect("valid connection"),
@@ -181,12 +188,121 @@ mod tests {
             ProcessingRestriction::DeviceOnly,
             Uuid::new_v4(),
             vec![b'x'; 16],
-            Uuid::new_v4(),
-            Uuid::new_v4(),
+            observation,
+            incarnation,
             now,
             now + chrono::Duration::minutes(5),
         )
         .expect("valid source dependency")
+    }
+
+    struct AttentionRegistryResolver {
+        registry: floe_context::ObservationRegistry,
+        now: i64,
+    }
+
+    impl DependencyResolver for AttentionRegistryResolver {
+        fn authorize_memories<'a>(
+            &'a self,
+            _: PersonId,
+            _: &'a [floe_context_contract::MemoryRevisionReference],
+            _: &'a DependencyAuthorization,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Err(AgentFailure::PolicyDenied) })
+        }
+        fn authorize<'a>(
+            &'a self,
+            dependency: &'a ContextDependency,
+            _: &'a DependencyAuthorization,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async move {
+                self.registry
+                    .trusted_attention_observation(
+                        dependency.person_id(),
+                        "device-1",
+                        "host-1",
+                        dependency.observation_id(),
+                        dependency.process_incarnation_id(),
+                        self.now,
+                    )
+                    .map(|_| ())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_attention_registry_evidence_drops_only_derived_history() {
+        let person = PersonId::new();
+        let registry = floe_context::ObservationRegistry::new();
+        let view = floe_context::AttentionView {
+            schema_version: 1,
+            view_id: "attention.coarse".into(),
+            source_handle: "attention.device".into(),
+            observed_at_unix_ms: 1_000,
+            expires_at_unix_ms: 61_000,
+            state: floe_context::AttentionState::Available,
+            confidence_millis: 900,
+            evidence_handles: vec!["attention.fixture".into()],
+        };
+        let (id, incarnation) = registry
+            .commit_trusted_attention_projection(
+                person,
+                "host-1",
+                "device-1",
+                &view,
+                &"a".repeat(64),
+                1_000,
+            )
+            .unwrap();
+        let derived = Uuid::new_v4();
+        let reader = ScriptedEvidence(BTreeMap::from([(
+            derived,
+            DependencyCoverage::dependent(dependency_with_observation(person, id, incarnation))
+                .unwrap(),
+        )]));
+        let old_user = ModelConversationEntry::User {
+            message_id: Uuid::new_v4(),
+            text: "original user input".into(),
+        };
+        let current = ModelConversationEntry::User {
+            message_id: Uuid::new_v4(),
+            text: "an unrelated new question".into(),
+        };
+        let conversation = ModelConversation {
+            history: vec![
+                old_user.clone(),
+                ModelConversationEntry::Assistant {
+                    message_id: derived,
+                    text: "derived from past attention".into(),
+                },
+            ],
+            current_turn: vec![current.clone()],
+        };
+        let resolver = AttentionRegistryResolver {
+            registry,
+            now: 61_000,
+        };
+        let authorization = DependencyAuthorization {
+            deadline: tokio::time::Instant::now() + Duration::from_secs(5),
+            cancellation: floe_execution::Cancellation::new(),
+        };
+        let projected = project_model_conversation_history(
+            &reader,
+            Uuid::new_v4(),
+            &conversation,
+            Some(&resolver),
+            &authorization,
+        )
+        .await
+        .unwrap();
+        assert_eq!(projected.conversation.history, vec![old_user]);
+        assert_eq!(projected.conversation.current_turn, vec![current]);
+        assert!(projected.authorized_history_dependencies.is_empty());
+        assert_eq!(
+            conversation.history.len(),
+            2,
+            "projection never rewrites the original transcript"
+        );
     }
 
     fn tool_exchange(call_id: Uuid, coverage: DependencyCoverage) -> ModelConversationEntry {

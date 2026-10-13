@@ -435,6 +435,28 @@ boundaries and diff checks. The 129-turn history/reopen regression passed in
 348.80 seconds. This is synthetic owner-path qualification, not live-provider or
 Apple/UI qualification. The broader audit remains open and root-owned.
 
+## Attention history lifecycle correction — 2026-10-13
+
+Direct owner tests reproduced R-007's error mismatch: expired/evicted Attention
+observations and a disposed native host returned PolicyDenied, making ordinary
+historical projection fail instead of dropping stale derived content. Context's
+observation owner now reports lifecycle absence as StaleContext while rejecting
+known foreign principal/device claims and malformed identities. The native adapter
+maps only host CapabilityUnavailable to StaleContext; other failures propagate.
+The existing history projection keeps the user's original/current messages and
+omits the expired derived entry without changing the stored transcript.
+Six focused registry, actual native-broker/driver and Conversation projection
+cases pass, covering both clocks, bounded-cache eviction, host replacement,
+process loss, identity denial and unchanged live evidence. Projection uses an
+in-process registry resolver; these cases do not claim complete grant/native OS
+or persisted App end-to-end qualification. Existing authority-failure projection
+regressions remain mandatory. Fresh frozen qualification passed 341 default
+workspace tests including doctests, 61 App QA tests (one intentionally ignored
+subprocess driver exercised by passing crash tests), production FFI build,
+architecture boundaries and diff checks. The full 39-case Conversation suite,
+including 129-turn history and reopen, passed in 355.93 seconds. No Flutter, Apple
+or live-provider qualification is added; the broader root-owned audit continues.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

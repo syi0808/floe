@@ -300,10 +300,26 @@ impl ObservationRegistry {
         process_incarnation: Uuid,
         now_unix_ms: i64,
     ) -> Result<(AttentionView, String), AgentFailure> {
+        if observation_id.is_nil()
+            || process_incarnation.is_nil()
+            || device_id.trim().is_empty()
+            || host_epoch.trim().is_empty()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
         let mut observations = self
             .trusted_attention
             .lock()
             .map_err(|_| AgentFailure::Interrupted)?;
+        // A known observation cannot be claimed by another principal/device.
+        // Missing or expired process-local evidence is instead stale: callers
+        // still validate grants and recorded proof before using this lookup.
+        if observations.iter().any(|observation| {
+            observation.observation_id == observation_id
+                && (observation.person_id != person_id || observation.device_id != device_id)
+        }) {
+            return Err(AgentFailure::PolicyDenied);
+        }
         observations.retain(|observation| {
             observation.view.expires_at_unix_ms > now_unix_ms
                 && observation.observed_monotonic.elapsed() < observation.monotonic_ttl
@@ -324,7 +340,7 @@ impl ObservationRegistry {
                     observation.native_subject_fingerprint.clone(),
                 )
             })
-            .ok_or(AgentFailure::PolicyDenied)
+            .ok_or(AgentFailure::StaleContext)
     }
 
     /// Forget every attention projection for one Person.
@@ -465,4 +481,197 @@ pub fn valid_native_subject_fingerprint(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod attention_history_tests {
+    use super::*;
+
+    fn view(now: i64) -> AttentionView {
+        AttentionView {
+            schema_version: 1,
+            view_id: "attention.coarse".into(),
+            source_handle: "attention.device".into(),
+            observed_at_unix_ms: now,
+            expires_at_unix_ms: now + 60_000,
+            state: crate::AttentionState::Available,
+            confidence_millis: 900,
+            evidence_handles: vec!["attention.fixture".into()],
+        }
+    }
+
+    fn commit(registry: &ObservationRegistry, person: PersonId) -> (Uuid, Uuid) {
+        registry
+            .commit_trusted_attention_projection(
+                person,
+                "host-1",
+                "device-1",
+                &view(1_000),
+                &"a".repeat(64),
+                1_000,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn attention_history_expiry_is_stale_on_both_clocks() {
+        for monotonic in [false, true] {
+            let registry = ObservationRegistry::new();
+            let person = PersonId::new();
+            let (id, incarnation) = commit(&registry, person);
+            if monotonic {
+                registry
+                    .trusted_attention
+                    .lock()
+                    .unwrap()
+                    .front_mut()
+                    .unwrap()
+                    .monotonic_ttl = Duration::ZERO;
+            }
+            let now = if monotonic { 1_000 } else { 61_000 };
+            assert_eq!(
+                registry.trusted_attention_observation(
+                    person,
+                    "device-1",
+                    "host-1",
+                    id,
+                    incarnation,
+                    now
+                ),
+                Err(AgentFailure::StaleContext)
+            );
+        }
+    }
+
+    #[test]
+    fn attention_history_eviction_and_host_lifecycle_are_stale() {
+        let registry = ObservationRegistry::new();
+        let person = PersonId::new();
+        let (first, incarnation) = commit(&registry, person);
+        let mut latest = first;
+        for _ in 0..MAX_TRUSTED_ATTENTION {
+            latest = commit(&registry, person).0;
+        }
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-1",
+                first,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::StaleContext)
+        );
+        assert!(
+            registry
+                .trusted_attention_observation(
+                    person,
+                    "device-1",
+                    "host-1",
+                    latest,
+                    incarnation,
+                    1_000
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-2",
+                latest,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::StaleContext)
+        );
+        registry.invalidate_trusted_attention(person).unwrap();
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-1",
+                latest,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::StaleContext)
+        );
+        let restarted = ObservationRegistry::new();
+        assert_eq!(
+            restarted.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-1",
+                latest,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::StaleContext)
+        );
+    }
+
+    #[test]
+    fn attention_history_known_foreign_identity_remains_denied() {
+        let registry = ObservationRegistry::new();
+        let person = PersonId::new();
+        let (id, incarnation) = commit(&registry, person);
+        assert_eq!(
+            registry.trusted_attention_observation(
+                PersonId::new(),
+                "device-1",
+                "host-1",
+                id,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "other-device",
+                "host-1",
+                id,
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::PolicyDenied)
+        );
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-1",
+                Uuid::nil(),
+                incarnation,
+                1_000
+            ),
+            Err(AgentFailure::InvalidInput)
+        );
+        assert_eq!(
+            registry.trusted_attention_observation(
+                person,
+                "device-1",
+                "host-1",
+                id,
+                Uuid::nil(),
+                1_000
+            ),
+            Err(AgentFailure::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn attention_history_live_identity_preserves_exact_view_and_subject() {
+        let registry = ObservationRegistry::new();
+        let person = PersonId::new();
+        let (id, incarnation) = commit(&registry, person);
+        let (retained, subject) = registry
+            .trusted_attention_observation(person, "device-1", "host-1", id, incarnation, 1_001)
+            .unwrap();
+        assert_eq!(retained, view(1_000));
+        assert_eq!(subject, "a".repeat(64));
+    }
 }

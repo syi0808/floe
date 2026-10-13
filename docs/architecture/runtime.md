@@ -17,6 +17,15 @@ attempt. A restored final Answer can still complete within that last iteration.
 Token/cost accounting, deadline, cancellation and durable effect receipts remain
 independent fences; recovery never resets them to obtain another iteration.
 
+Retained Attention evidence is process/host scoped. An expired or evicted
+observation, a previous host epoch, or a disposed native host is `StaleContext`
+when reauthorizing history. Context omits only the derived historical entry under
+that result; the original transcript and the current user turn are preserved.
+Known cross-person/device observation claims remain `PolicyDenied`, malformed
+lookup identities remain `InvalidInput`, and lock/infrastructure failures are not
+converted into staleness. Grant, subject and recorded-proof validation remain
+mandatory before retained evidence can authorize any new model input.
+
 ## Build-selected storage custody
 
 Composition selects one custody profile at build time. Rust's default `os-keyring`

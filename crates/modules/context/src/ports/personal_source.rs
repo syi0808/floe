@@ -134,6 +134,8 @@ pub trait PersonalSourceDriver: Sync {
 
     /// The attention projection a stored dependency was recorded against, and
     /// the device subject that answered it.
+    /// Expired, evicted or previous-host evidence returns `StaleContext`;
+    /// invalid authority and infrastructure failures retain their own errors.
     fn trusted_attention_observation(
         &self,
         person_id: PersonId,
