@@ -438,12 +438,18 @@ func (s *Service) Trace(p trust.OperatorPrincipal, id string) (AuditRecord, erro
 
 func (s *Service) DenyConfiguration() { s.mu.Lock(); defer s.mu.Unlock(); s.unavailable = true }
 
-// GenerationDrained is true only after every call captured from this exact
-// engine generation has returned. Cancellation alone does not release a lease.
-func (s *Service) GenerationDrained(generation uint64) bool {
+// GenerationsThroughDrained is a retirement barrier: a credential may have been
+// shared by any earlier configuration generation. Later generations cannot refer
+// to the retired slot. Cancellation alone does not release a running call's lease.
+func (s *Service) GenerationsThroughDrained(generation uint64) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.leases[generation] == 0
+	for leased, count := range s.leases {
+		if leased <= generation && count > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) Generation() uint64 {

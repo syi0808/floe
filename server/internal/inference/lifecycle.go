@@ -449,7 +449,7 @@ func (c *Configuration) cleanupDurable(ctx context.Context, restart bool) error 
 		if contentHasSlot(configurationContent(c.state), item.Slot) {
 			return errors.New("cleanup slot still referenced")
 		}
-		if !restart && !c.engine.GenerationDrained(item.RetiredGeneration) {
+		if !restart && !c.engine.GenerationsThroughDrained(item.RetiredGeneration) {
 			continue
 		}
 		deleteErr := c.credentials.DeleteProviderCredential(ctx, item.Slot)

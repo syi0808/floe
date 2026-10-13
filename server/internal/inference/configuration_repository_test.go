@@ -874,15 +874,39 @@ func TestInFlightGenerationLeaseSurvivesCancellationAndDefersCleanup(t *testing.
 		t.Fatal("inference did not start mock provider")
 	}
 	cancel()
+	// A route-only generation still uses the same credential. The running
+	// request belongs to an older generation than the eventual retirement.
+	if err := owner.UpdateRoute(context.Background(), trust.OperatorPrincipal{}, RouteUpdate{OperationID: trust.NewID(), Purpose: string(QuickResponse), Target: "managed_openai_compatible_quick_response", Enabled: true, ReasoningEffort: "medium"}); err != nil {
+		close(blocker.release)
+		t.Fatal(err)
+	}
+	if engine.Generation() != 3 {
+		close(blocker.release)
+		t.Fatal("intermediate configuration generation missing")
+	}
 	result := owner.UpdateProvider(context.Background(), trust.OperatorPrincipal{}, ProviderUpdate{OperationID: trust.NewID(), Provider: "openai_compatible", BaseURL: "https://example.invalid", APIKey: "synthetic-new-key", Purposes: map[string]PurposeModel{"quick_response": {Model: "model-b", ReasoningEffort: "medium"}}})
 	if result != nil {
 		close(blocker.release)
 		t.Fatalf("replacement failed: %#v", result)
 	}
-	if credentials.credential(oldSlot) != "synthetic-old-key" || engine.GenerationDrained(2) {
+	owner.mu.Lock()
+	cleanupErr := owner.cleanupDurable(context.Background(), false)
+	owner.mu.Unlock()
+	if cleanupErr != nil {
+		close(blocker.release)
+		t.Fatal(cleanupErr)
+	}
+	if credentials.credential(oldSlot) != "synthetic-old-key" || engine.GenerationsThroughDrained(2) {
 		close(blocker.release)
 		t.Fatal("cancellation or adoption falsely drained pinned generation")
 	}
+	// A live lease from the replacement generation must not delay old-slot cleanup.
+	_, _, _, releaseNew, err := engine.currentLeased(context.Background(), QuickResponse)
+	if err != nil {
+		close(blocker.release)
+		t.Fatal(err)
+	}
+	defer releaseNew()
 	select {
 	case err := <-invokeDone:
 		close(blocker.release)
@@ -902,8 +926,8 @@ func TestInFlightGenerationLeaseSurvivesCancellationAndDefersCleanup(t *testing.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if credentials.credential(oldSlot) != "" || !engine.GenerationDrained(2) {
-		t.Fatal("retired credential did not clean up after exact generation drained")
+	if credentials.credential(oldSlot) != "" || !engine.GenerationsThroughDrained(3) || engine.GenerationsThroughDrained(4) {
+		t.Fatal("retirement barrier did not distinguish prior and replacement generations")
 	}
 }
 

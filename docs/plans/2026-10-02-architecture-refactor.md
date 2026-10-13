@@ -543,6 +543,25 @@ fixtures and diff checks passed. Stored layout changes require an explicitly
 selected fresh development profile; no existing profile is reset. Rust remains
 unchanged, so its prior frozen gates are retained rather than rerun.
 
+## Shared credential generation retirement correction — 2026-10-13
+
+Root reproduced R-044 in the actual Inference lease and Configuration cleanup
+path. A blocked generation-2 request retained a credential through a route-only
+generation 3; rotating it then deleted the slot because cleanup checked only the
+idle generation 3. Cancellation had not settled the earlier provider request.
+
+The service now supplies one retirement barrier over all leases at or below the
+recorded generation. Configuration cleanup uses that barrier; no second credential
+lease registry is introduced. The regression forces cleanup while the old request
+is blocked, verifies the slot remains, then releases it while keeping a generation-4
+lease alive and verifies cleanup completes. This establishes lifetime ordering,
+not a claim of actual provider failure or credential disclosure in the old code.
+
+Focused Inference race checks and final `go test -race ./...` pass (all 14
+packages with tests), along with `go vet ./...`, the import graph including
+16 negative fixtures and diff checks. No stored meaning or profile layout changes
+in this slice.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
