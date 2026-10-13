@@ -175,7 +175,10 @@ impl LearnerService {
         scope: &ExecutionScope,
     ) -> Result<(), AgentFailure> {
         let now = self.clock.now();
-        let sessions = self.jobs.discovery_sessions(&self.actor, 64, scope).await?;
+        let sessions = self
+            .jobs
+            .discovery_sessions(&self.actor, 64, now, scope)
+            .await?;
         if sessions.len() > 64 {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -191,11 +194,23 @@ impl LearnerService {
             if session.evidence.person_id != self.actor.person_id {
                 return Err(AgentFailure::PolicyDenied);
             }
+            if session.discovery.session_id != session.evidence.session_id
+                || session.discovery.source_revision != session.evidence.revision
+                || session.discovery.completed_run_id.is_nil()
+            {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let defer = crate::LearningDiscoveryDisposition::Deferred {
+                until: now + chrono::Duration::minutes(1),
+            };
             let input =
                 match super::discovery::explicit_review_input(&session, &memories.memories, now) {
                     Ok(input) => input,
                     Err(AgentFailure::BudgetExceeded) => {
                         oversized_evidence = true;
+                        self.jobs
+                            .settle_discovery(&self.actor, session.discovery, defer, now, scope)
+                            .await?;
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -203,11 +218,43 @@ impl LearnerService {
             if let Some(input) = input {
                 match self.jobs.enqueue(&self.actor, input, now, scope).await {
                     Ok(_) => count += 1,
-                    Err(AgentFailure::Conflict | AgentFailure::StaleContext) => continue,
+                    Err(
+                        AgentFailure::Conflict
+                        | AgentFailure::StaleContext
+                        | AgentFailure::PolicyDenied,
+                    ) => {
+                        // Another worker may have atomically consumed the entry.
+                        match self
+                            .jobs
+                            .settle_discovery(&self.actor, session.discovery, defer, now, scope)
+                            .await
+                        {
+                            Ok(()) | Err(AgentFailure::Conflict) => {}
+                            Err(error) => return Err(error),
+                        }
+                        continue;
+                    }
                     Err(error) => return Err(error),
                 }
                 if count == 8 {
                     break;
+                }
+            } else {
+                let disposition =
+                    if super::discovery::explicit_learning_evidence_turns(&session.messages)?
+                        .is_empty()
+                    {
+                        crate::LearningDiscoveryDisposition::Ignored
+                    } else {
+                        defer
+                    };
+                match self
+                    .jobs
+                    .settle_discovery(&self.actor, session.discovery, disposition, now, scope)
+                    .await
+                {
+                    Ok(()) | Err(AgentFailure::Conflict) => {}
+                    Err(error) => return Err(error),
                 }
             }
         }

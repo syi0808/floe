@@ -64,6 +64,14 @@ pub(super) const KNOWLEDGE: &[SchemaObject] = &[
         "CREATE TABLE knowledge_forgotten_evidence (person_id TEXT NOT NULL, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, PRIMARY KEY(person_id, session_id, turn_id))",
     ),
     SchemaObject::table(
+        "learning_discovery_queue",
+        "CREATE TABLE learning_discovery_queue (sequence INTEGER PRIMARY KEY CHECK (sequence > 0), run_id TEXT NOT NULL UNIQUE CHECK (length(run_id) = 36), person_id TEXT NOT NULL CHECK (length(person_id) = 36), session_id TEXT NOT NULL CHECK (length(session_id) = 36), source_revision INTEGER NOT NULL CHECK (source_revision > 0), terminal_digest TEXT NOT NULL CHECK (length(terminal_digest) = 64), state TEXT NOT NULL CHECK (state IN ('pending', 'ignored', 'enqueued')), available_at_ms INTEGER NOT NULL CHECK (available_at_ms >= 0), job_id TEXT CHECK (job_id IS NULL OR length(job_id) = 36))",
+    ),
+    SchemaObject::index(
+        "learning_discovery_ready",
+        "CREATE INDEX learning_discovery_ready ON learning_discovery_queue(person_id, state, available_at_ms, sequence)",
+    ),
+    SchemaObject::table(
         "learner_review_jobs",
         "CREATE TABLE learner_review_jobs (id TEXT PRIMARY KEY, person_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL, available_at TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(person_id, idempotency_key))",
     ),

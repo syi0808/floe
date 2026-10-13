@@ -19,8 +19,24 @@ pub enum LearningTranscriptMessage {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LearningDiscoveryRef {
+    pub session_id: Uuid,
+    pub completed_run_id: Uuid,
+    pub source_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LearningDiscoveryDisposition {
+    /// No explicit request, or its exact source was deliberately forgotten.
+    Ignored,
+    /// Temporary ineligibility never permanently consumes the source.
+    Deferred { until: DateTime<Utc> },
+}
+
 #[derive(Clone, Debug)]
 pub struct LearningSessionSnapshot {
+    pub discovery: LearningDiscoveryRef,
     pub evidence: crate::LearningEvidenceSnapshot,
     pub messages: Vec<LearningTranscriptMessage>,
 }
@@ -30,8 +46,17 @@ pub trait LearnerJobRepository: Send + Sync {
         &'a self,
         actor: &'a OwnerActor,
         limit: usize,
+        now: DateTime<Utc>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<Vec<LearningSessionSnapshot>, AgentFailure>>;
+    fn settle_discovery<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        reference: LearningDiscoveryRef,
+        disposition: LearningDiscoveryDisposition,
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
     fn enqueue<'a>(
         &'a self,
         actor: &'a OwnerActor,

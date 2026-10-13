@@ -257,6 +257,8 @@ pub struct KnowledgeDecisionResult {
 pub struct LearningEvidenceSnapshot {
     pub person_id: PersonId,
     pub session_id: Uuid,
+    /// Exact highest terminal Session revision of the selected source Runs,
+    /// independent of later Session activity; original Core entries prove membership.
     pub revision: u64,
     pub outcome: Option<LearningOutcome>,
     pub personal: bool,

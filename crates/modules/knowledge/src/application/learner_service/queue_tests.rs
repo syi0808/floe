@@ -21,10 +21,16 @@ impl Fixture {
     fn session(&self) -> LearningSessionSnapshot {
         let turn = Uuid::new_v4();
         let message = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
         LearningSessionSnapshot {
+            discovery: LearningDiscoveryRef {
+                session_id,
+                completed_run_id: turn,
+                source_revision: 1,
+            },
             evidence: LearningEvidenceSnapshot {
                 person_id: self.person,
-                session_id: Uuid::new_v4(),
+                session_id,
                 revision: 1,
                 outcome: Some(LearningOutcome::Completed),
                 personal: true,
@@ -114,6 +120,7 @@ impl LearnerJobRepository for Fixture {
         &'a self,
         actor: &'a OwnerActor,
         limit: usize,
+        now: DateTime<Utc>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<Vec<LearningSessionSnapshot>, AgentFailure>> {
         self.call("discovery");
@@ -132,6 +139,17 @@ impl LearnerJobRepository for Fixture {
             sessions.push(self.session());
             Ok(sessions)
         })
+    }
+    fn settle_discovery<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        reference: LearningDiscoveryRef,
+        disposition: LearningDiscoveryDisposition,
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        self.call("settle_discovery");
+        Box::pin(async { Ok(()) })
     }
     fn enqueue<'a>(
         &'a self,
@@ -265,7 +283,14 @@ async fn complete_comparison_context_discovers_and_then_checks_new_jobs() {
     assert_eq!(learner.run_next(Cancellation::new()).await, Ok(false));
     assert_eq!(
         *fixture.calls.lock().unwrap(),
-        vec!["claim", "discovery", "context", "enqueue", "claim"]
+        vec![
+            "claim",
+            "discovery",
+            "context",
+            "enqueue",
+            "settle_discovery",
+            "claim"
+        ]
     );
 }
 
@@ -278,6 +303,13 @@ async fn oversized_evidence_reports_deferral_but_allows_later_bounded_discovery(
     );
     assert_eq!(
         *fixture.calls.lock().unwrap(),
-        vec!["claim", "discovery", "context", "enqueue"]
+        vec![
+            "claim",
+            "discovery",
+            "context",
+            "settle_discovery",
+            "enqueue",
+            "settle_discovery"
+        ]
     );
 }

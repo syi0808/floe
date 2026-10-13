@@ -1603,17 +1603,33 @@ pub fn disconnect_fixture_calendar(
         let actor = caller.owner_actor();
         services
             .execute_owner(async move {
-                owners
-                    .connections
-                    .disconnect(
-                        &actor,
-                        Uuid::new_v4(),
-                        source_ref,
-                        revision,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())
+                let command_id = Uuid::new_v4();
+                let scope = host_scope(command_id, Cancellation::new(), Duration::from_secs(30));
+                loop {
+                    let result = owners
+                        .connections
+                        .disconnect(&actor, command_id, source_ref, revision, &scope)
+                        .await;
+                    // Exercise the supported exact-command retry contract.
+                    // Never rebase the revision, allocate a replacement ID,
+                    // or treat a committed negative receipt as transient.
+                    if matches!(
+                        &result,
+                        Err(floe_connections::ConnectionsCommandFailure::NotAdmitted(
+                            AgentFailure::StorageBusy
+                        ) | floe_connections::ConnectionsCommandFailure::Indeterminate(
+                            AgentFailure::StorageBusy
+                        ) | floe_connections::ConnectionsCommandFailure::Admitted(
+                            AgentFailure::StorageBusy
+                        ))
+                    ) && tokio::time::Instant::now() + Duration::from_millis(20)
+                        < scope.deadline()
+                    {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        continue;
+                    }
+                    return result.map_err(|failure| failure.into_failure());
+                }
             })
             .expect("revoke the fixture calendar's Access grants through Connections/Access")
     })

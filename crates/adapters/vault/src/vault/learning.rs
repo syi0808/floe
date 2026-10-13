@@ -1,3 +1,5 @@
+mod discovery;
+
 use super::database_failure;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
@@ -8,24 +10,24 @@ use floe_agent_contract::{
     AgentFailure, CommandId, DataClass, ExecutionScope, JournalEntry, JournalEvent, OwnerActor,
     RunId,
 };
-use floe_conversation::{AgentMessage, AgentOutcome};
+use floe_conversation::AgentMessage;
 use floe_kernel::CommandFailure;
 use floe_knowledge::{
-    EvidenceReader, KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState,
-    KnowledgeDecisionKind, KnowledgeDecisionResult, KnowledgeKind, KnowledgeOperation,
-    KnowledgeRevision, KnowledgeRevisionState, LearnerBudget, LearnerClaimJournal, LearnerClaimRef,
-    LearnerJobClaim, LearnerJobSettlement, LearnerJobState, LearnerJournalHead, LearnerReviewInput,
+    KnowledgeActor, KnowledgeCandidate, KnowledgeCandidateState, KnowledgeDecisionKind,
+    KnowledgeDecisionResult, KnowledgeKind, KnowledgeOperation, KnowledgeRevision,
+    KnowledgeRevisionState, LearnerBudget, LearnerClaimJournal, LearnerClaimRef, LearnerJobClaim,
+    LearnerJobSettlement, LearnerJobState, LearnerJournalHead, LearnerReviewInput,
     LearnerReviewJob, LearningEvidenceRef, LearningEvidenceSnapshot, LearningObservation,
-    LearningOutcome, LearningSessionSnapshot, LearningTranscriptMessage, MAX_LEARNER_JOB_ATTEMPTS,
-    MemoryContextFact, MemoryDecisionRequest, MemoryOverviewSnapshot, MemoryReviewSnapshot,
-    MemoryStageOrigin, MemoryStageReceipt, MemoryStageRequest, StageMemoryCandidate,
-    admit_learning_evidence, advance_learner_journal, claim_learner_job, learner_job_key,
-    memory_stage_identity, memory_stage_receipt, new_learner_job, plan_memory_review,
-    plan_memory_stage, project_memory_context, project_memory_summary, recover_learner_claim,
-    reject_learner_claim, settle_learner_job, validate_learner_budget, validate_learner_input,
-    validate_learner_journal, validate_learner_settlement, validate_learner_stage,
-    validate_memory_overview_limit, validate_memory_review_candidate, validate_memory_stage_replay,
-    validate_review_actor, validate_review_candidate, validate_stage_request,
+    LearningOutcome, LearningTranscriptMessage, MAX_LEARNER_JOB_ATTEMPTS, MemoryContextFact,
+    MemoryDecisionRequest, MemoryOverviewSnapshot, MemoryReviewSnapshot, MemoryStageOrigin,
+    MemoryStageReceipt, MemoryStageRequest, StageMemoryCandidate, admit_learning_evidence,
+    advance_learner_journal, claim_learner_job, learner_job_key, memory_stage_identity,
+    memory_stage_receipt, new_learner_job, plan_memory_review, plan_memory_stage,
+    project_memory_context, project_memory_summary, recover_learner_claim, reject_learner_claim,
+    settle_learner_job, validate_learner_budget, validate_learner_input, validate_learner_journal,
+    validate_learner_settlement, validate_learner_stage, validate_memory_overview_limit,
+    validate_memory_review_candidate, validate_memory_stage_replay, validate_review_actor,
+    validate_review_candidate, validate_stage_request,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -467,122 +469,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         finish_command_transaction(self, transaction, result, replay_checked, prior_command).await
     }
 
-    pub(crate) async fn learner_discovery_sessions(
-        &self,
-        actor: &OwnerActor,
-        limit: usize,
-        scope: &ExecutionScope,
-    ) -> Result<Vec<LearningSessionSnapshot>, AgentFailure> {
-        self.validate_learning_actor(actor)?;
-        self.check_learning_scope(scope)?;
-        if limit == 0 || limit > 64 {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut connection = self.connection()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Deferred)
-            .await
-            .map_err(database_failure)?;
-        let result = async {
-            let mut rows = transaction
-                .query(
-                    "SELECT id, revision FROM agent_sessions ORDER BY rowid DESC LIMIT ?",
-                    [i64::try_from(limit).map_err(|_| AgentFailure::InvalidInput)?],
-                )
-                .await
-                .map_err(database_failure)?;
-            let mut snapshots = Vec::new();
-            while let Some(row) = rows.next().await.map_err(database_failure)? {
-                let stored_id = row.get::<String>(0).map_err(storage)?;
-                let stored_revision = row.get::<i64>(1).map_err(storage)?;
-                let session_id = Uuid::parse_str(&stored_id).map_err(unavailable)?;
-                let Some(session) = self
-                    .manager_session_shell_on(&transaction, session_id)
-                    .await
-                    .map_err(super::conversation_core::owner_store_failure)?
-                else {
-                    // Scoped Expert Sessions have their own Task-owned
-                    // history and are outside Manager-only learning.
-                    continue;
-                };
-                if session.person_id != self.person_id
-                    || session.id != session_id
-                    || i64::try_from(session.revision)
-                        .map_err(|_| AgentFailure::StorageUnavailable)?
-                        != stored_revision
-                {
-                    return Err(AgentFailure::VaultUnavailable);
-                }
-                self.payload(&session)?;
-                let history = self
-                    .read_manager_learning_history_on(&transaction, session.id, 256, 512 * 1024)
-                    .await
-                    .map_err(super::conversation_core::owner_store_failure)?;
-                let messages =
-                    learning_transcript_messages(self, &transaction, session.id, &history).await?;
-                let actual_turns = floe_knowledge::explicit_learning_evidence_turns(&messages)?;
-                let sources = actual_turns
-                    .iter()
-                    .map(|turn_id| LearningEvidenceRef {
-                        session_id: session.id,
-                        turn_id: *turn_id,
-                    })
-                    .collect::<Vec<_>>();
-                if learning_evidence_was_forgotten(&transaction, self.person_id, &sources).await? {
-                    continue;
-                }
-                let evidence_reader = TransactionLearningEvidence {
-                    vault: self,
-                    transaction: &transaction,
-                };
-                let evidence = if actual_turns.is_empty() {
-                    LearningEvidenceSnapshot {
-                        person_id: session.person_id,
-                        session_id: session.id,
-                        revision: session.revision,
-                        outcome: session.last_outcome.map(learning_outcome),
-                        personal: session.scope.is_none()
-                            && session.data_classes == [DataClass::Personal],
-                        active_turn: session.active_turn.is_some(),
-                        pending_output: session.pending_output.is_some(),
-                        turn_ids: Vec::new(),
-                        coverage: DependencyCoverage::Unknown,
-                        purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
-                    }
-                } else {
-                    evidence_reader
-                        .read_learning_evidence(self.person_id, session.id, &actual_turns)
-                        .await?
-                };
-                if evidence.session_id != session.id
-                    || evidence.revision != session.revision
-                    || evidence.person_id != self.person_id
-                {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                let snapshot = LearningSessionSnapshot { evidence, messages };
-                let bounded_bytes = snapshot.messages.iter().fold(0usize, |total, message| {
-                    total.saturating_add(match message {
-                        LearningTranscriptMessage::User { text, .. }
-                        | LearningTranscriptMessage::Assistant { text, .. } => {
-                            text.len().saturating_add(64)
-                        }
-                        LearningTranscriptMessage::Other => 8,
-                    })
-                });
-                if bounded_bytes > 512 * 1024 {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
-                snapshots.push(snapshot);
-            }
-            drop(rows);
-            self.check_learning_scope(scope)?;
-            Ok(snapshots)
-        }
-        .await;
-        finish_transaction(self, transaction, result).await
-    }
-
     pub(crate) async fn learner_enqueue(
         &self,
         actor: &OwnerActor,
@@ -611,10 +497,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 if replay_input != existing.input {
                     return Err(AgentFailure::Conflict);
                 }
+                let reference = floe_knowledge::LearningDiscoveryRef {
+                    session_id: existing.input.session_id,
+                    completed_run_id: *existing.input.turn_ids.last().ok_or(AgentFailure::StorageUnavailable)?,
+                    source_revision: existing.input.session_revision,
+                };
+                if self.learning_discovery_run_on(&transaction, reference).await?.1 != "enqueued" {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
                 self.check_learning_scope(scope)?;
                 return Ok(existing);
             }
             validate_learner_source(self, &transaction, &input).await?;
+            let reference = floe_knowledge::LearningDiscoveryRef {
+                session_id: input.session_id,
+                completed_run_id: *input.turn_ids.last().ok_or(AgentFailure::InvalidInput)?,
+                source_revision: input.session_revision,
+            };
+            let (_, discovery_state) = self.learning_discovery_run_on(&transaction, reference).await?;
+            if discovery_state != "pending" { return Err(AgentFailure::Conflict); }
+
             let job = new_learner_job(input, available_at)?;
             let encoded = payload(&job)?;
             if encoded.len() > MAX_LEARNER_JOB_BYTES {
@@ -624,6 +526,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 "INSERT INTO learner_review_jobs (id, person_id, idempotency_key, state, attempts, available_at, payload) VALUES (?, ?, ?, 'queued', 0, ?, ?)",
                 (job.id.to_string(), self.person_id.to_string(), job.idempotency_key.clone(), timestamp(job.available_at), encoded),
             ).await.map_err(database_failure)?;
+            let changed = transaction.execute(
+                "UPDATE learning_discovery_queue SET state = 'enqueued', job_id = ? WHERE person_id = ? AND run_id = ? AND state = 'pending' AND source_revision = ?",
+                (job.id.to_string(), self.person_id.to_string(), reference.completed_run_id.to_string(), reference.source_revision as i64),
+            ).await.map_err(database_failure)?;
+            if changed != 1 { return Err(AgentFailure::Conflict); }
             self.check_learning_scope(scope)?;
             Ok(job)
         }.await;
@@ -1683,20 +1590,56 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         if learning_evidence_was_forgotten(self.transaction, person_id, &sources).await? {
             return Err(AgentFailure::PolicyDenied);
         }
-        // Learning has no independent history representation. Resolve the same
-        // bounded normalized Manager suffix as discovery, under this transaction.
-        // Scoped Expert Sessions are deliberately outside Manager-only learning.
+        // Pin completed source Runs, not the mutable latest Session revision or
+        // its current active turn. Exact Core entries remain authoritative across
+        // later turns and compaction; this is not a >= revision compatibility rule.
         let session = self
             .vault
             .manager_session_shell_on(self.transaction, session_id)
             .await
             .map_err(super::conversation_core::owner_store_failure)?
             .ok_or(AgentFailure::NotFound)?;
-        let history = self
-            .vault
-            .read_manager_learning_history_on(self.transaction, session_id, 256, 512 * 1024)
-            .await
-            .map_err(super::conversation_core::owner_store_failure)?;
+        if turn_ids.len() > 32 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
+        let mut history = Vec::new();
+        let mut revision = 0u64;
+        let mut active_turn = false;
+        let mut completed = false;
+        let mut bytes = 0usize;
+        let mut aliases = HashSet::new();
+        for turn_id in turn_ids {
+            let run_id = RunId::from_uuid(*turn_id).ok_or(AgentFailure::InvalidInput)?;
+            let run = self
+                .vault
+                .conversation_run_on(self.transaction, run_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            run.validate(person_id)?;
+            if run.session_id != session_id {
+                return Err(AgentFailure::NotFound);
+            }
+            revision = revision.max(run.session_revision);
+            if run.state == floe_conversation::RunState::Completed {
+                completed = true;
+                for item in self
+                    .vault
+                    .read_manager_learning_turn_on(self.transaction, &run)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?
+                {
+                    if aliases.insert(item.alias_id) {
+                        bytes = bytes.saturating_add(item.encoded_bytes);
+                        if bytes > 512 * 1024 {
+                            return Err(AgentFailure::BudgetExceeded);
+                        }
+                        history.push(item);
+                    }
+                }
+            } else if !run.state.is_terminal() {
+                active_turn = true;
+            }
+        }
         let mut coverage = if turn_ids.is_empty() {
             DependencyCoverage::Unknown
         } else {
@@ -1741,11 +1684,11 @@ impl<Keys: VaultKeyProvider> floe_knowledge::EvidenceReader
         Ok(LearningEvidenceSnapshot {
             person_id: session.person_id,
             session_id: session.id,
-            revision: session.revision,
-            outcome: session.last_outcome.map(learning_outcome),
+            revision,
+            outcome: completed.then_some(LearningOutcome::Completed),
             personal: session.scope.is_none() && session.data_classes == [DataClass::Personal],
-            active_turn: session.active_turn.is_some(),
-            pending_output: session.pending_output.is_some(),
+            active_turn,
+            pending_output: active_turn,
             turn_ids: actual_turn_ids,
             coverage,
             purpose: floe_knowledge::EvidenceProjectionPurpose::Learning,
@@ -1793,20 +1736,6 @@ async fn validate_learner_source<Keys: VaultKeyProvider>(
         }
     }
     Ok(())
-}
-
-fn learning_outcome(outcome: AgentOutcome) -> LearningOutcome {
-    match outcome {
-        AgentOutcome::Completed => LearningOutcome::Completed,
-        AgentOutcome::Blocked {
-            run_id,
-            review_group_id,
-        } => LearningOutcome::Blocked {
-            run_id,
-            review_group_id,
-        },
-        AgentOutcome::Halted { reason } => LearningOutcome::Halted { reason },
-    }
 }
 
 struct MemoryDecisionReceipt {

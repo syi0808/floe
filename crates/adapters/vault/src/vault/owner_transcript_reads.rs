@@ -6,8 +6,6 @@
 //! remain separately bounded validation I/O outside the encoded payload
 //! counter.
 
-use std::collections::HashSet;
-
 use super::context_dependencies::{
     ContextDependencyCoverageHeader, hydrate_context_dependency_coverage_on,
     preflight_context_dependency_coverage_on,
@@ -654,29 +652,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .map_err(owner_store_failure)
     }
 
-    /// Read the bounded newest Manager history suffix used by explicit
-    /// learning discovery without loading the owner Session vector. The
-    /// caller owns the same Deferred transaction used to read owner state and
-    /// learning evidence. It never expands a compacted prefix from the
-    /// archive; only the bounded live suffix after the checkpoint is read.
-    pub(super) async fn read_manager_learning_history_on(
+    /// Resolve a completed Manager turn by exact owner aliases, including retained
+    /// entries before the compaction checkpoint. Learning never substitutes a
+    /// recent suffix or a semantic summary for the original user and answer.
+    pub(super) async fn read_manager_learning_turn_on(
         &self,
         transaction: &Transaction<'_>,
-        session_id: Uuid,
-        max_messages: usize,
-        max_bytes: usize,
+        run: &floe_conversation::RunRecord,
     ) -> Result<Vec<SessionHistoryMessage>, ConversationStoreFailure> {
-        if session_id.is_nil() || max_messages == 0 || max_bytes == 0 {
-            return Err(ConversationStoreFailure::Transition(
-                ConversationFailure::InvalidInput,
-            ));
+        run.validate(self.person_id).map_err(owner_error)?;
+        if run.state != floe_conversation::RunState::Completed {
+            return Err(owner_mismatch());
         }
-        let Some(binding) =
-            manager_session_binding_for_session_on(transaction, self.person_id, session_id).await?
-        else {
-            validate_manager_pristine_session_on(transaction, self.person_id, session_id).await?;
-            return Ok(Vec::new());
-        };
+        let output = run.output.as_ref().ok_or_else(owner_mismatch)?;
+        let binding =
+            manager_session_binding_for_session_on(transaction, self.person_id, run.session_id)
+                .await?
+                .ok_or_else(owner_mismatch)?;
         let target = ConversationReadTarget {
             identity: binding.identity,
             conversation_id: binding.conversation_id,
@@ -687,86 +679,63 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let scope = scope_for(self.person_id, &target);
         let head = load_head_on(transaction, scope)
             .await?
-            .ok_or(ConversationStoreFailure::InvalidTranscriptReadTarget)?;
-        if head.state.identity != target.identity {
+            .ok_or_else(unavailable)?;
+        if head.state.identity != target.identity || head.state.head_revision == 0 {
             return Err(owner_mismatch());
         }
-        let checkpoint_sequence = checkpoint_on(transaction, scope)
+        let through = entry_on(transaction, scope, head.state.head_revision)
             .await?
-            .map_or(0, |checkpoint| checkpoint.through.sequence);
-        let limit = max_messages.min(256);
-        let byte_limit = max_bytes.min(MAX_TRANSCRIPT_PAGE_BYTES);
-        let mut messages = Vec::with_capacity(limit.min(64));
-        let mut encoded_bytes = 0usize;
-        let mut before_sequence = None;
-        let mut stop_suffix = false;
-
-        while messages.len() < limit && !stop_suffix {
-            let take = (limit - messages.len()).min(MAX_TRANSCRIPT_PAGE_ENTRIES);
-            let mut sequences = reverse_page_sequences_on(
-                transaction,
-                scope,
-                head.state.head_revision,
-                before_sequence,
-                take.saturating_add(1),
-            )
-            .await?;
-            let batch_has_more = sequences.len() > take;
-            if batch_has_more {
-                sequences.truncate(take);
-            }
-            if sequences.is_empty() {
-                break;
-            }
-            for sequence in sequences.iter().copied() {
-                if sequence <= checkpoint_sequence {
-                    stop_suffix = true;
-                    break;
-                }
-                let entry = entry_on(transaction, scope, sequence)
+            .ok_or_else(unavailable)?
+            .reference;
+        let boundary = TranscriptReadBoundary {
+            target: target.clone(),
+            head_revision: head.state.head_revision,
+            through: Some(through),
+        };
+        let answer = AgentMessage::Assistant {
+            turn_id: run.run_id.as_uuid(),
+            text: output.clone(),
+        };
+        let aliases = [run.user_message_id, manager_session_message_alias(&answer)];
+        let mut messages = Vec::with_capacity(2);
+        let mut bytes = 0usize;
+        for alias in aliases {
+            let reference =
+                manager_session_alias_on(transaction, self.person_id, run.session_id, alias)
                     .await?
-                    .ok_or_else(unavailable)?;
-                self.validate_producing_task_reference_on(transaction, &entry)
-                    .await?;
-                let preflight = self
-                    .preflight_owner_entry_on(transaction, &target, session_id, &entry, scope)
-                    .await?;
-                let item_bytes = preflight.encoded_bytes();
-                if item_bytes > byte_limit.saturating_sub(encoded_bytes) {
-                    if messages.is_empty() {
-                        return Err(ConversationStoreFailure::PageItemExceedsBudget);
-                    }
-                    stop_suffix = true;
-                    break;
-                }
-                let message = self
-                    .resolve_manager_transcript_entry_preflighted_on(
-                        transaction,
-                        session_id,
-                        entry,
-                        preflight,
-                    )
-                    .await?;
-                encoded_bytes = encoded_bytes
-                    .checked_add(message.encoded_bytes)
-                    .ok_or_else(unavailable)?;
-                messages.push(message);
-                if messages.len() >= limit {
-                    break;
-                }
+                    .ok_or_else(owner_mismatch)?;
+            let (scope, entry) = self
+                .exact_core_entry_on(
+                    transaction,
+                    &target,
+                    &boundary,
+                    TranscriptEntryLookup::Reference(reference),
+                )
+                .await?;
+            let preflight = self
+                .preflight_owner_entry_on(transaction, &target, run.session_id, &entry, scope)
+                .await?;
+            bytes = bytes
+                .checked_add(preflight.encoded_bytes())
+                .ok_or_else(unavailable)?;
+            if bytes > MAX_TRANSCRIPT_PAGE_BYTES {
+                return Err(ConversationStoreFailure::PageItemExceedsBudget);
             }
-            if messages.len() >= limit || stop_suffix || !batch_has_more {
-                break;
-            }
-            before_sequence = sequences.last().copied();
+            messages.push(
+                self.resolve_manager_transcript_entry_preflighted_on(
+                    transaction,
+                    run.session_id,
+                    entry,
+                    preflight,
+                )
+                .await?,
+            );
         }
-        messages.reverse();
-        let mut aliases = HashSet::with_capacity(messages.len());
-        if messages
-            .iter()
-            .any(|message| !aliases.insert(message.alias_id))
+        if !matches!(&messages[0].message, AgentMessage::User { message_id, .. } if *message_id == run.user_message_id)
+            || messages[1].message != answer
+            || messages[0].transcript_sequence >= messages[1].transcript_sequence
         {
-            return Err(unavailable());
+            return Err(owner_mismatch());
         }
         Ok(messages)
     }

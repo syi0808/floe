@@ -946,6 +946,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(database_failure)?;
+        if next.state == RunState::Completed {
+            self.enqueue_learning_discovery_on(transaction, &next)
+                .await?;
+        }
         self.enqueue_resume_on(transaction, &next).await?;
         self.check_access()?;
         Ok(next)

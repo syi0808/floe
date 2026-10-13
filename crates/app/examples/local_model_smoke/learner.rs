@@ -115,7 +115,7 @@ fn owner_call<T: Send + 'static>(
 fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {
     let foreground = owner_call(host, |owners, actor, scope| {
         Box::pin(async move {
-            let lease = owners.knowledge.foreground_lease()?;
+            let lease = owners.knowledge.foreground_lease(scope).await?;
             let overview = owners.connections.overview(actor, scope).await?;
             if !overview.sources.is_empty()
                 || overview.gateways.iter().any(|gateway| {

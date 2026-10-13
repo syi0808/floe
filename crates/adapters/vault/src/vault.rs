@@ -398,6 +398,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.validate_conversation_core_store().await?;
         }
         self.validate_manager_compaction_store().await?;
+        self.validate_learning_discovery_store().await?;
         conversations::validate_schema(&connection).await?;
         tasks::validate_schema(&connection).await?;
         self.validate_context_cleanup().await?;

@@ -172,13 +172,38 @@ impl<Keys: VaultKeyProvider + 'static> LearnerJobRepository for VaultKnowledgeRe
         &'a self,
         actor: &'a OwnerActor,
         limit: usize,
+        now: DateTime<Utc>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<Vec<LearningSessionSnapshot>, AgentFailure>> {
         Box::pin(async move {
             self.authorize(actor)?;
             check_scope(scope)?;
             let result = scope
-                .run(self.vault.learner_discovery_sessions(actor, limit, scope))
+                .run(
+                    self.vault
+                        .learner_discovery_sessions(actor, limit, now, scope),
+                )
+                .await;
+            self.after_scoped(result, scope)
+        })
+    }
+
+    fn settle_discovery<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        reference: floe_knowledge::LearningDiscoveryRef,
+        disposition: floe_knowledge::LearningDiscoveryDisposition,
+        now: DateTime<Utc>,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.authorize(actor)?;
+            check_scope(scope)?;
+            let result = scope
+                .run(
+                    self.vault
+                        .learner_settle_discovery(actor, reference, disposition, now, scope),
+                )
                 .await;
             self.after_scoped(result, scope)
         })

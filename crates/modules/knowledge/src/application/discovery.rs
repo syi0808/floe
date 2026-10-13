@@ -155,10 +155,16 @@ mod tests {
     fn snapshot(user: String, answer: String) -> LearningSessionSnapshot {
         let turn = Uuid::new_v4();
         let message = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
         LearningSessionSnapshot {
+            discovery: LearningDiscoveryRef {
+                session_id,
+                completed_run_id: turn,
+                source_revision: 1,
+            },
             evidence: LearningEvidenceSnapshot {
                 person_id: floe_kernel::PersonId::new(),
-                session_id: Uuid::new_v4(),
+                session_id,
                 revision: 1,
                 outcome: Some(LearningOutcome::Completed),
                 personal: true,

@@ -24,7 +24,8 @@ pub use ports::learner_projection::{
     LearnerProjectionRequest,
 };
 pub use ports::learner_repository::{
-    LearnerJobRepository, LearnerJournalFactory, LearningSessionSnapshot, LearningTranscriptMessage,
+    LearnerJobRepository, LearnerJournalFactory, LearningDiscoveryDisposition,
+    LearningDiscoveryRef, LearningSessionSnapshot, LearningTranscriptMessage,
 };
 pub mod application {
     pub mod discovery;

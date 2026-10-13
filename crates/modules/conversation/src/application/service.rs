@@ -437,9 +437,11 @@ where
             // Keep the retained-driver proof through outer error settlement.
             // The wake is declared first so this guard drops before notification.
             let driver_guard = guard;
+            // Foreground priority spans both execution and outer error
+            // settlement; dropping it must not admit learner writes early.
+            let mut _foreground = None;
             let mut request = request;
             let outcome = async {
-                let _foreground = state.dependencies.knowledge.foreground_lease()?;
                 let read_scope = ExecutionScope::root(
                     request.cancellation.child_scope(),
                     request.deadline,
@@ -450,10 +452,22 @@ where
                     .root_lease(),
                     TraceContext::new(request.command_id.as_uuid()).with_run_id(run_id),
                 );
-                let memory_snapshot = state
-                    .dependencies
-                    .knowledge
-                    .read_context(&actor, &read_scope)
+                _foreground = Some(
+                    state
+                        .dependencies
+                        .knowledge
+                        .foreground_lease(&read_scope)
+                        .await?,
+                );
+                // Other local owners can still be writing. Retry only this
+                // read-only observation, before any model or tool dispatch.
+                let memory_snapshot =
+                    super::coordinator::retry_pre_dispatch_storage_busy(&read_scope, || {
+                        state
+                            .dependencies
+                            .knowledge
+                            .read_context(&actor, &read_scope)
+                    })
                     .await?;
                 let context = AgentContext {
                     projection_version: 1,

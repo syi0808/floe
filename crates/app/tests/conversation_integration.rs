@@ -214,9 +214,12 @@ fn manager_normalized_history_pages_exactly_across_reopen() {
     for _ in 0..TURN_COUNT {
         let command = start_turn(&host, session_id, USER_TEXT);
         assert!(run_ids.insert(command.run_id.as_uuid()));
+        let receipt = wait_terminal_run(&host, command.run_id);
         assert_eq!(
-            wait_terminal_run(&host, command.run_id).state,
-            RunState::Completed
+            receipt.state,
+            RunState::Completed,
+            "turn {}: {receipt:?}",
+            run_ids.len()
         );
     }
 

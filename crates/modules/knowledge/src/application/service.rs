@@ -40,7 +40,10 @@ pub trait KnowledgeForget: Send + Sync {
 pub trait KnowledgeOwner: KnowledgeRead + KnowledgeForget {
     fn activate<'a>(&'a self, scope: &'a ExecutionScope)
     -> BoxFuture<'a, Result<(), AgentFailure>>;
-    fn foreground_lease(&self) -> Result<crate::KnowledgeForegroundLease, AgentFailure>;
+    fn foreground_lease<'a>(
+        &'a self,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::KnowledgeForegroundLease, AgentFailure>>;
     fn close_admission(&self);
     fn shutdown<'a>(&'a self) -> BoxFuture<'a, Result<(), AgentFailure>>;
     fn overview<'a>(
@@ -173,9 +176,17 @@ impl KnowledgeOwner for KnowledgeService {
             Ok(())
         })
     }
-    fn foreground_lease(&self) -> Result<crate::KnowledgeForegroundLease, AgentFailure> {
-        self.authorize(&self.actor)?;
-        crate::KnowledgeForegroundLease::acquire(self.scheduling.clone())
+    fn foreground_lease<'a>(
+        &'a self,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::KnowledgeForegroundLease, AgentFailure>> {
+        Box::pin(async move {
+            self.authorize(&self.actor)?;
+            let lease =
+                crate::KnowledgeForegroundLease::acquire(self.scheduling.clone(), scope).await?;
+            self.authorize(&self.actor)?;
+            Ok(lease)
+        })
     }
     fn close_admission(&self) {
         self.closing.store(true, Ordering::Release);

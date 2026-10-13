@@ -413,11 +413,37 @@ Conversational forgetting uses the same Knowledge owner through a narrow Manager
 
 `KnowledgeService` owns confirmed-memory reads, safe review projections, user decisions and the Learner lifecycle. Context receives the narrow `KnowledgeRead` capability. Product review returns `MemoryReviewDisplay` with candidate text, kind, confidence, source count, validity and owner-derived actions; decision acknowledgement exposes actual command/candidate/decision/time and resulting target/revision. Storage hashes, idempotency keys, source references and raw candidate envelopes remain internal. Only a user decision activates a staged memory.
 
-Knowledge discovers explicit learning signals from stored Conversation evidence, including the original User message identity of a resumed Assistant answer. Discovery and transactional evidence validation read the same bounded normalized Manager transcript suffix under a Vault snapshot; the Session metadata shell is not a second transcript. Requested turn membership, Session revision and live dependency coverage are checked before learning admission. Scoped Expert histories and compacted-away evidence do not become eligible through an inline-history fallback. It admits only eligible completed independent evidence and records an immutable job input. A claimed job pins Person/device, budget and claim generation. `ContextLearnerProjection` re-reads that actual claim and evidence and projects against the Engine's prepared plan and exact correction operation. The Learner has an empty Tool/delegation catalog and uses the same Engine, ModelPort and canonical JournalEvent sequence as other roles.
+Knowledge owns a durable discovery queue of completed Manager Runs. The owner
+terminal transaction appends an identity-only entry alongside its terminal
+receipt and Core settlement. Discovery reads at most 64 due entries in settlement
+order, not the latest Sessions. Exact original User and completed Assistant
+entries resolve through normalized owner/Core bindings, including retained
+entries before a compaction checkpoint; summaries are never learning evidence.
+The evidence revision is the exact highest terminal Session revision of those
+selected source Runs, not today's mutable Session revision. Person, original-user
+linkage, terminal outcome, membership, live coverage, current-memory revisions
+and explicit-forget exclusions remain checked. Later ordinary or active turns do
+not rewrite completed source proof. Experts produce no discovery entries.
+
+Enqueue commits the immutable job and consumes its exact discovery entry in one
+transaction. Non-requested or explicitly forgotten sources are acknowledged by
+Knowledge; a forgotten source returns no message text. Oversized or temporarily
+ineligible sources receive bounded deferral so later entries can be considered.
+Partial comparison-memory projections still defer new discovery. Reopen validates
+the retained queue in pages, its terminal receipts, and each consumed job link;
+missing completed-Run entries fail closed. The obsolete suffix discovery path is
+removed. The stored queue is a fresh-profile cutover, with no automatic import,
+repair or reset of incompatible profiles.
+
+A claimed job pins Person/device, budget and claim generation.
+`ContextLearnerProjection` re-reads that actual claim and source evidence and
+projects against the Engine's prepared plan and exact correction operation. The
+Learner has an empty Tool/delegation catalog and uses the same Engine, ModelPort
+and canonical JournalEvent sequence as other roles.
 
 Each claim has one durable journal and authenticated head. Unknown or unresolved attempts remain conservatively charged and cannot be retried automatically. Recovery of an empty journal or a known acknowledged Output retains the same claim; acknowledged Output is parsed/staged without another model call. Candidate staging is Pending-only and idempotent under an immutable full-request stage receipt. Same candidate-key reuse with changed payload, revision, time or claim proof conflicts.
 
-Knowledge owns background discovery and execution scheduling. Conversation holds `KnowledgeForegroundLease` through its admitted driver and finalization; that owner lease preempts active background learning. Closing the owner stops new admissions and cancels its generation. Shutdown drains admitted memory operations and the retained Learner/background driver under one bounded deadline, reporting timeout without claiming unfinished work has stopped or erasing durable journal evidence.
+Knowledge owns background discovery and execution scheduling. Foreground lease acquisition first fences new Learner admissions and requests cancellation of the active background lease, then asynchronously waits for that retained lease to drain under the caller's deadline/cancellation scope. A cancellation request alone is not proof that the background transaction has ended. A cancelled/closed acquisition releases its foreground admission. Conversation holds `KnowledgeForegroundLease` through its admitted driver, finalization and outer error settlement; background writes cannot restart merely because execution returned an error. Closing the owner stops new admissions and cancels its generation. Shutdown drains admitted memory operations and the retained Learner/background driver under one bounded deadline, reporting timeout without claiming unfinished work has stopped or erasing durable journal evidence.
 
 ### Durable interactions
 

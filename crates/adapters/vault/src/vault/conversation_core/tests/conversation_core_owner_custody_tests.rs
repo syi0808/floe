@@ -655,6 +655,7 @@ struct SettlementCustodySnapshot {
     input_binding: Option<OwnerInputBinding>,
     coverage: Option<(i64, String)>,
     terminal_receipt: Option<String>,
+    learning_discovery: Option<String>,
     resume_rows: Vec<(String, String, String, String, Option<String>, String)>,
     review_audits: Vec<(String, String, String, String)>,
     interactions: Vec<(
@@ -748,6 +749,18 @@ async fn settlement_custody_snapshot(
         super::super::super::conversations::terminal_receipt_on(&transaction, run_id)
             .await
             .expect("read exact terminal receipt");
+
+    let mut discovery_rows = transaction.query(
+        "SELECT json_array(sequence, run_id, person_id, session_id, source_revision, terminal_digest, state, available_at_ms, job_id) FROM learning_discovery_queue WHERE run_id = ?",
+        [run_id.as_uuid().to_string()],
+    ).await.unwrap();
+    let learning_discovery = discovery_rows
+        .next()
+        .await
+        .unwrap()
+        .map(|row| row.get::<String>(0).unwrap());
+    assert!(discovery_rows.next().await.unwrap().is_none());
+    drop(discovery_rows);
 
     let mut rows = transaction
         .query(
@@ -873,6 +886,7 @@ async fn settlement_custody_snapshot(
         input_binding,
         coverage,
         terminal_receipt,
+        learning_discovery,
         resume_rows,
         review_audits,
         interactions,
@@ -6209,23 +6223,18 @@ async fn owner_reverse_page_counts_cumulative_envelopes_and_preserves_cursor() {
         .expect("record second page output");
     remove_owner_coverage(&scenario, older_run.run_id.as_uuid()).await;
     remove_owner_coverage(&scenario, newer_run.run_id.as_uuid()).await;
-    let mut connection = scenario
-        .vault()
-        .connection()
-        .expect("connect to normalized learning history");
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Deferred)
-        .await
-        .expect("begin normalized learning history read");
     let learning_history = scenario
         .vault()
-        .read_manager_learning_history_on(&transaction, scenario.session_id, 256, 512 * 1024)
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            crate::vault::ManagerHistoryView::Transcript,
+            256,
+            512 * 1024,
+        )
         .await
-        .expect("read bounded Manager learning suffix from normalized history");
-    transaction
-        .commit()
-        .await
-        .expect("commit normalized learning history read");
+        .expect("read bounded normalized product transcript")
+        .messages;
     assert_eq!(learning_history.len(), 4);
     assert!(matches!(
         learning_history
@@ -9052,7 +9061,7 @@ async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and
     );
     let snapshots = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .expect("discover normalized Manager evidence");
     assert_eq!(snapshots.len(), 1);
@@ -9094,16 +9103,33 @@ async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and
     assert_eq!(replay.id, job.id);
     let reopened = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .expect("reopened normalized history remains discoverable");
-    assert_eq!(reopened.len(), 1);
-    assert_eq!(reopened[0].evidence, snapshots[0].evidence);
-    let reopened_input =
-        floe_knowledge::explicit_review_input(&reopened[0], &[], job.input.observed_at)
-            .expect("validate reopened evidence")
-            .expect("retain explicit learning signal");
-    assert_eq!(reopened_input.digest, job.input.digest);
+    assert!(
+        reopened.is_empty(),
+        "atomic enqueue consumes the discovery entry across reopen"
+    );
+    let mut connection = scenario.vault().connection().unwrap();
+    let transaction = connection
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+        .await
+        .unwrap();
+    let persisted = scenario
+        .vault()
+        .read_manager_learning_turn_on(&transaction, &run)
+        .await
+        .unwrap();
+    assert_eq!(
+        persisted.len(),
+        2,
+        "consuming discovery preserves exact original transcript evidence"
+    );
+    assert!(
+        matches!(&persisted[0].message, floe_conversation::AgentMessage::User { text, .. }
+        if text == "Please remember that I prefer tea.")
+    );
+    transaction.commit().await.unwrap();
 
     let foreign_actor = OwnerActor {
         person_id: PersonId::new(),
@@ -9112,7 +9138,7 @@ async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and
     assert_eq!(
         scenario
             .vault()
-            .learner_discovery_sessions(&foreign_actor, 64, &scope)
+            .learner_discovery_sessions(&foreign_actor, 64, chrono::Utc::now(), &scope)
             .await
             .err(),
         Some(AgentFailure::NotFound)
@@ -9134,7 +9160,7 @@ async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and
     };
     let before_revoke = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .expect("read next independent learning evidence");
     let next_input = floe_knowledge::explicit_review_input(&before_revoke[0], &[], Utc::now())
@@ -9151,7 +9177,7 @@ async fn manager_learning_uses_normalized_evidence_through_discovery_enqueue_and
     );
     let after_revoke = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .expect("read unknown-coverage discovery without corrupting the Vault");
     assert!(
@@ -9734,7 +9760,7 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
     let now = Utc::now();
     let snapshots = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .unwrap();
     let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
@@ -9983,7 +10009,7 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
     assert!(
         scenario
             .vault()
-            .learner_discovery_sessions(&actor, 64, &scope)
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
             .await
             .unwrap()
             .is_empty()
@@ -10209,7 +10235,7 @@ async fn assert_memory_forget_recovery(applied: bool, stale_executor: bool) {
     let now = Utc::now();
     let snapshots = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .unwrap();
     let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
@@ -10798,7 +10824,7 @@ async fn memory_capacity_preserves_all_saved_facts_and_partial_projection_across
     let now = Utc::now();
     let snapshots = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .unwrap();
     let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
@@ -11334,7 +11360,7 @@ async fn learner_discovery_limit_counts_manager_sessions_not_newer_experts() {
         }
         let snapshots = scenario
             .vault()
-            .learner_discovery_sessions(&actor, 1, &scope)
+            .learner_discovery_sessions(&actor, 1, chrono::Utc::now(), &scope)
             .await
             .unwrap();
         assert_eq!(
@@ -11381,7 +11407,7 @@ async fn memory_review_backlog_drains_in_bounded_pages_without_losing_candidates
     let now = Utc::now();
     let snapshots = scenario
         .vault()
-        .learner_discovery_sessions(&actor, 64, &scope)
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
         .await
         .unwrap();
     let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
@@ -13054,3 +13080,503 @@ mod compaction_active_tests;
 
 #[path = "session_resume_tests.rs"]
 mod session_resume_tests;
+
+#[tokio::test]
+async fn completed_explicit_learning_survives_a_later_ordinary_turn_and_new_sessions() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    let mut scenario = Scenario::new().await;
+    let explicit = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let ordinary =
+        complete_manager_turn_with_output(&mut scenario, "What is two plus two?", "Four.".into())
+            .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: explicit.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    for stage in 0..3 {
+        if stage == 1 {
+            for _ in 0..65 {
+                scenario
+                    .vault()
+                    .start_conversation_session(floe_conversation::StartSessionRequest {
+                        principal: scenario.person_id.to_string(),
+                        command_id: CommandId::new(),
+                    })
+                    .await
+                    .expect("create a later pristine Manager Session");
+            }
+        }
+        if stage == 2 {
+            scenario.reopen().await;
+        }
+        let snapshots = scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+            .await
+            .unwrap();
+        let inputs = snapshots
+            .iter()
+            .filter_map(|snapshot| {
+                floe_knowledge::explicit_review_input(snapshot, &[], Utc::now()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            inputs.len(),
+            1,
+            "completed explicit source survives discovery stage {stage}"
+        );
+        assert_eq!(inputs[0].turn_ids, vec![explicit.run_id.as_uuid()]);
+        assert!(!inputs[0].turn_ids.contains(&ordinary.run_id.as_uuid()));
+    }
+}
+
+#[tokio::test]
+async fn learning_discovery_consumes_exact_sources_and_claims_across_later_activity() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    let mut scenario = Scenario::new().await;
+    let explicit = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let ordinary =
+        complete_manager_turn_with_output(&mut scenario, "Hello.", "Hello.".into()).await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: explicit.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(snapshots.len(), 2);
+    let first = snapshots
+        .iter()
+        .find(|item| item.discovery.completed_run_id == explicit.run_id.as_uuid())
+        .unwrap();
+    let last = snapshots
+        .iter()
+        .find(|item| item.discovery.completed_run_id == ordinary.run_id.as_uuid())
+        .unwrap();
+    assert_eq!(
+        scenario
+            .vault()
+            .learner_settle_discovery(
+                &actor,
+                first.discovery,
+                floe_knowledge::LearningDiscoveryDisposition::Ignored,
+                chrono::Utc::now(),
+                &scope
+            )
+            .await,
+        Err(AgentFailure::PolicyDenied),
+        "an explicit eligible source cannot be silently discarded"
+    );
+    let input = floe_knowledge::explicit_review_input(first, &[], Utc::now())
+        .unwrap()
+        .unwrap();
+    assert_eq!(input.session_revision, explicit.session_revision);
+    assert_ne!(input.session_revision, ordinary.session_revision);
+    let job = scenario
+        .vault()
+        .learner_enqueue(&actor, input.clone(), Utc::now(), &scope)
+        .await
+        .unwrap();
+    let replay = scenario
+        .vault()
+        .learner_enqueue(&actor, input, Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(job, replay);
+    scenario
+        .vault()
+        .learner_settle_discovery(
+            &actor,
+            last.discovery,
+            floe_knowledge::LearningDiscoveryDisposition::Ignored,
+            chrono::Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap();
+    scenario
+        .vault()
+        .learner_settle_discovery(
+            &actor,
+            last.discovery,
+            floe_knowledge::LearningDiscoveryDisposition::Ignored,
+            chrono::Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap();
+    assert!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let request = scenario.owner_request("A later live turn does not rewrite completed evidence.");
+    scenario
+        .vault()
+        .admit_manager_conversation_turn(request, scenario.identity.clone())
+        .await
+        .unwrap();
+    let claim = scenario
+        .vault()
+        .learner_claim_review(
+            &actor,
+            floe_knowledge::LearnerBudget::default(),
+            Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap()
+        .expect("the completed source pin survives unrelated current Session activity");
+    assert_eq!(claim.id, job.id);
+    scenario.reopen().await;
+    assert!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn learning_discovery_reads_archived_exact_turn_and_defers_without_starving_next() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    let mut scenario = Scenario::new().await;
+    let explicit = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let ordinary =
+        complete_manager_turn_with_output(&mut scenario, "Hello.", "Hello.".into()).await;
+    scenario
+        .vault()
+        .compact_manager_session(
+            scenario.session_id,
+            scenario.session_revision,
+            explicit.run_id.as_uuid(),
+            "A deliberately incomplete summary.".into(),
+        )
+        .await
+        .unwrap();
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: explicit.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    scenario.reopen().await;
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 1, chrono::Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(snapshots.len(), 1);
+    let input = floe_knowledge::explicit_review_input(&snapshots[0], &[], Utc::now())
+        .unwrap()
+        .unwrap();
+    assert!(input.digest.contains("Please remember that I prefer tea."));
+    assert!(!input.digest.contains("incomplete summary"));
+    assert_eq!(input.session_revision, explicit.session_revision);
+    scenario
+        .vault()
+        .learner_settle_discovery(
+            &actor,
+            snapshots[0].discovery,
+            floe_knowledge::LearningDiscoveryDisposition::Deferred {
+                until: Utc::now() + chrono::Duration::minutes(1),
+            },
+            chrono::Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap();
+    let next = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 1, chrono::Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        next[0].discovery.completed_run_id,
+        ordinary.run_id.as_uuid()
+    );
+    scenario
+        .vault()
+        .learner_settle_discovery(
+            &actor,
+            next[0].discovery,
+            floe_knowledge::LearningDiscoveryDisposition::Ignored,
+            chrono::Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap();
+    let due = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 1, Utc::now() + chrono::Duration::minutes(2), &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        due[0].discovery.completed_run_id,
+        explicit.run_id.as_uuid(),
+        "discovery uses the Knowledge owner's clock without sleeping or reading another wall clock"
+    );
+    // Exact original source remains present and can be admitted independently of the scheduling delay.
+    let job = scenario
+        .vault()
+        .learner_enqueue(&actor, input, Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(job.input.turn_ids, vec![explicit.run_id.as_uuid()]);
+    scenario.reopen().await;
+    assert!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn learning_discovery_reopen_checks_queue_entries_after_the_first_page() {
+    let mut scenario = Scenario::new().await;
+    for _ in 0..65 {
+        complete_manager_turn_with_output(&mut scenario, "Hello.", "Hello.".into()).await;
+    }
+    scenario.reopen().await;
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute(
+            "UPDATE learning_discovery_queue SET terminal_digest = ? WHERE sequence = 65",
+            ["0".repeat(64)],
+        )
+        .await
+        .unwrap();
+    drop(connection);
+    drop(scenario.vault.take());
+    assert!(
+        EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+            .await
+            .is_err(),
+        "the final queue page is validated without repair"
+    );
+}
+
+#[tokio::test]
+async fn learning_discovery_forget_exclusion_drains_without_returning_source_text() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    // The actual memory.forget command's exclusion write is exercised separately.
+    // Seed that same identity-only exclusion before this pending source is drained.
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute(
+            "INSERT INTO knowledge_forgotten_evidence(person_id,session_id,turn_id) VALUES(?,?,?)",
+            (
+                scenario.person_id.to_string(),
+                run.session_id.to_string(),
+                run.run_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+    drop(connection);
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let budget = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        budget.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+        .await
+        .unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert!(snapshots[0].messages.is_empty());
+    assert!(
+        floe_knowledge::explicit_review_input(&snapshots[0], &[], Utc::now())
+            .unwrap()
+            .is_none()
+    );
+    scenario
+        .vault()
+        .learner_settle_discovery(
+            &actor,
+            snapshots[0].discovery,
+            floe_knowledge::LearningDiscoveryDisposition::Ignored,
+            chrono::Utc::now(),
+            &scope,
+        )
+        .await
+        .unwrap();
+    scenario.reopen().await;
+    assert!(
+        scenario
+            .vault()
+            .learner_discovery_sessions(&actor, 64, chrono::Utc::now(), &scope)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn learning_discovery_missing_or_falsely_ignored_source_fails_closed_on_reopen() {
+    for remove in [false, true] {
+        let mut scenario = Scenario::new().await;
+        let run = complete_manager_turn_with_output(
+            &mut scenario,
+            "Please remember that I prefer tea.",
+            "You prefer tea.".into(),
+        )
+        .await;
+        let connection = scenario.vault().connection().unwrap();
+        if remove {
+            connection
+                .execute(
+                    "DELETE FROM learning_discovery_queue WHERE run_id = ?",
+                    [run.run_id.as_uuid().to_string()],
+                )
+                .await
+                .unwrap();
+        } else {
+            connection
+                .execute(
+                    "UPDATE learning_discovery_queue SET state = 'ignored' WHERE run_id = ?",
+                    [run.run_id.as_uuid().to_string()],
+                )
+                .await
+                .unwrap();
+        }
+        drop(connection);
+        drop(scenario.vault.take());
+        assert!(
+            EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+                .await
+                .is_err(),
+            "lost or falsely consumed source is not silently repaired"
+        );
+    }
+}
+
+#[tokio::test]
+async fn manager_terminal_publication_retains_exact_outcome_across_writer_contention() {
+    use floe_conversation::ConversationRepository;
+    let mut scenario = Scenario::new().await;
+    let (run, _) = scenario
+        .admit_run_and_append_input("synthetic capacity refusal")
+        .await;
+    let vault = Arc::new(scenario.vault.take().expect("take isolated Vault"));
+    let repository =
+        crate::VaultConversationRepository::new(vault.clone(), scenario.identity.clone());
+    let writer =
+        crate::write_fence::JournalWriteGuard::acquire(&vault.unavailable, &vault.journal_writes)
+            .expect("hold an unrelated local journal writer");
+    let (result, ()) = tokio::join!(
+        repository.finish_run(
+            run.run_id,
+            run.aggregate_revision,
+            RunTerminal::from_failure(AgentFailure::ModelInputCapacityExceeded)
+        ),
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            drop(writer);
+        }
+    );
+    let receipt = result.expect("publish exact terminal result after the other writer drains");
+    assert_eq!(
+        receipt.issue,
+        Some(AgentFailure::ModelInputCapacityExceeded)
+    );
+    assert_eq!(receipt.state, RunState::Failed);
+    assert!(receipt.attempt_refs.is_empty());
+    let replay = repository
+        .finish_run(
+            run.run_id,
+            run.aggregate_revision,
+            RunTerminal::from_failure(AgentFailure::ModelInputCapacityExceeded),
+        )
+        .await
+        .expect("exact terminal replay");
+    assert_eq!(replay, receipt);
+    drop(repository);
+    scenario.vault = Some(
+        Arc::try_unwrap(vault)
+            .ok()
+            .expect("release adapter custody"),
+    );
+    scenario.reopen().await;
+    let stored = scenario
+        .vault()
+        .conversation_run(run.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.issue, Some(AgentFailure::ModelInputCapacityExceeded));
+}

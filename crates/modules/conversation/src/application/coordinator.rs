@@ -29,7 +29,7 @@ const PRE_DISPATCH_STORAGE_RETRY_DELAY: Duration = Duration::from_millis(20);
 /// dispatch has started. Re-run the complete local observation while the
 /// admitted Run remains Working, then fail only on cancellation/deadline or a
 /// non-transient owner result.
-async fn retry_pre_dispatch_storage_busy<T, Attempt, AttemptFuture>(
+pub(super) async fn retry_pre_dispatch_storage_busy<T, Attempt, AttemptFuture>(
     scope: &ExecutionScope,
     mut attempt: Attempt,
 ) -> Result<T, AgentFailure>
@@ -1583,5 +1583,90 @@ mod model_selection_tests {
                 "a claimed child cannot switch selection before finishing the batch"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod pre_dispatch_storage_tests {
+    use super::*;
+    use floe_execution::{Cancellation, budget::BudgetConfig};
+    use std::cell::Cell;
+
+    fn scope(duration: Duration) -> ExecutionScope {
+        ExecutionScope::root(
+            Cancellation::default(),
+            tokio::time::Instant::now() + duration,
+            BudgetLedger::new(BudgetConfig::new(0, 0), Default::default()).root_lease(),
+            TraceContext::new(uuid::Uuid::new_v4()),
+        )
+    }
+
+    #[tokio::test]
+    async fn pre_dispatch_storage_retries_busy_observation_without_substituting_a_value() {
+        let scope = scope(Duration::from_secs(1));
+        let attempts = Cell::new(0);
+        let value = retry_pre_dispatch_storage_busy(&scope, || {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if attempts.get() <= 2 {
+                Err(AgentFailure::StorageBusy)
+            } else {
+                Ok("exact current memory observation")
+            })
+        })
+        .await;
+        assert_eq!(value, Ok("exact current memory observation"));
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn pre_dispatch_storage_preserves_non_busy_failures_and_owner_bounds() {
+        for failure in [
+            AgentFailure::StorageUnavailable,
+            AgentFailure::PolicyDenied,
+            AgentFailure::StaleContext,
+            AgentFailure::VaultUnavailable,
+            AgentFailure::Interrupted,
+            AgentFailure::Cancelled,
+        ] {
+            let scope = scope(Duration::from_secs(1));
+            let attempts = Cell::new(0);
+            let result: Result<(), _> = retry_pre_dispatch_storage_busy(&scope, || {
+                attempts.set(attempts.get() + 1);
+                std::future::ready(Err(failure))
+            })
+            .await;
+            assert_eq!(result, Err(failure));
+            assert_eq!(attempts.get(), 1);
+        }
+        for cancelled in [false, true] {
+            let scope = scope(if cancelled {
+                Duration::from_secs(1)
+            } else {
+                Duration::ZERO
+            });
+            if cancelled {
+                scope.cancellation().cancel();
+            }
+            let result = retry_pre_dispatch_storage_busy(&scope, || async {
+                panic!("expired or cancelled owner must not perform an observation");
+                #[allow(unreachable_code)]
+                Ok(())
+            })
+            .await;
+            assert_eq!(
+                result,
+                Err(if cancelled {
+                    AgentFailure::Cancelled
+                } else {
+                    AgentFailure::DeadlineExceeded
+                })
+            );
+        }
+        let scope = scope(Duration::from_millis(25));
+        let result: Result<(), _> = retry_pre_dispatch_storage_busy(&scope, || {
+            std::future::ready(Err(AgentFailure::StorageBusy))
+        })
+        .await;
+        assert_eq!(result, Err(AgentFailure::DeadlineExceeded));
     }
 }
