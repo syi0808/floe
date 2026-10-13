@@ -1,6 +1,8 @@
 package gmail
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"floe/server/internal/adapters/storage/privatefiles"
@@ -14,9 +16,8 @@ import (
 )
 
 const (
-	indexVersion      = 1
+	indexVersion      = 2
 	indexFileName     = "index.json"
-	maxIndexItems     = 10_000
 	maxIndexBytes     = 8 * 1024 * 1024
 	maxLogisticsItems = 48
 )
@@ -32,7 +33,8 @@ type Index struct {
 type indexState struct {
 	SchemaVersion       int                   `json:"schema_version"`
 	ConnectionID        string                `json:"connection_id"`
-	HistoryID           string                `json:"history_id,omitempty"`
+	QueryDigest         string                `json:"query_digest,omitempty"`
+	SnapshotDigest      string                `json:"snapshot_digest,omitempty"`
 	Messages            map[string]Metadata   `json:"messages"`
 	LastSuccessAtUnixMS *int64                `json:"last_success_at_unix_ms,omitempty"`
 	LastFailure         *integrations.Failure `json:"last_failure,omitempty"`
@@ -57,57 +59,48 @@ func OpenIndex(files *storage.Files, connectionID string) (*Index, error) {
 	return index, nil
 }
 
-func (index *Index) ApplyFull(messages []Metadata, historyID string) error {
+func (index *Index) ReplaceQuerySnapshot(messages []Metadata, query string) error {
 	index.mu.Lock()
 	defer index.mu.Unlock()
-	if !validID(historyID) || len(messages) > maxIndexItems {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 512 || len(messages) > MaxSyncItems {
 		return ErrInvalidInput
 	}
-	next := indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID, HistoryID: historyID, Messages: map[string]Metadata{}, LastSuccessAtUnixMS: index.state.LastSuccessAtUnixMS, LastFailure: cloneFailure(index.state.LastFailure)}
+	queryHash := sha256.Sum256([]byte(query))
+	next := indexState{SchemaVersion: indexVersion, ConnectionID: index.connectionID,
+		QueryDigest: hex.EncodeToString(queryHash[:]), Messages: map[string]Metadata{},
+		LastSuccessAtUnixMS: index.state.LastSuccessAtUnixMS, LastFailure: cloneFailure(index.state.LastFailure)}
 	for _, message := range messages {
 		if validateMetadata(message) != nil || next.Messages[message.ID].ID != "" {
 			return ErrInvalidInput
 		}
 		next.Messages[message.ID] = cloneMetadata(message)
 	}
+	digest, err := querySnapshotDigest(next.QueryDigest, next.Messages)
+	if err != nil {
+		return err
+	}
+	next.SnapshotDigest = digest
 	return index.commit(next)
 }
 
-func (index *Index) ApplyDelta(upserts []Metadata, deletedIDs []string, previousHistoryID, historyID string) error {
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	if !validID(previousHistoryID) || !validID(historyID) || index.state.HistoryID != previousHistoryID {
-		return ErrInvalidInput
+func querySnapshotDigest(queryDigest string, messages map[string]Metadata) (string, error) {
+	// encoding/json orders string map keys; source identity is independent of
+	// provider page order but includes exact selected query and metadata.
+	data, err := json.Marshal(struct {
+		Query    string              `json:"query"`
+		Messages map[string]Metadata `json:"messages"`
+	}{queryDigest, messages})
+	if err != nil {
+		return "", ErrInvalidInput
 	}
-	next := cloneIndexState(index.state)
-	for _, message := range upserts {
-		if validateMetadata(message) != nil {
-			return ErrInvalidInput
-		}
-		next.Messages[message.ID] = cloneMetadata(message)
-	}
-	seen := map[string]bool{}
-	for _, id := range deletedIDs {
-		if !validID(id) || seen[id] {
-			return ErrInvalidInput
-		}
-		seen[id] = true
-		delete(next.Messages, id)
-	}
-	if len(next.Messages) > maxIndexItems {
-		return ErrInvalidInput
-	}
-	next.HistoryID = historyID
-	return index.commit(next)
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:]), nil
 }
 
-func (index *Index) HistoryID() (string, error) {
-	index.mu.Lock()
-	defer index.mu.Unlock()
-	if index.unavailable {
-		return "", storage.ErrUnavailable
-	}
-	return index.state.HistoryID, nil
+func validDigest(value string) bool {
+	decoded, err := hex.DecodeString(value)
+	return err == nil && len(decoded) == sha256.Size && value == strings.ToLower(value)
 }
 
 func (index *Index) RecordSync(now time.Time, failureKind string) error {
@@ -145,6 +138,9 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 	if len(query) > 512 || cursor < 0 || limit < 1 || limit > MaxPageItems {
 		return views.CommunicationView{}, ErrInvalidInput
 	}
+	if index.state.SnapshotDigest == "" {
+		return views.CommunicationView{}, ErrUnavailable
+	}
 	needle := strings.ToLower(strings.TrimSpace(query))
 	matches := make([]Metadata, 0, len(index.state.Messages))
 	for _, message := range index.state.Messages {
@@ -164,7 +160,7 @@ func (index *Index) Communication(query string, cursor, limit int, now time.Time
 	}
 	end := min(cursor+limit, len(matches))
 	view := views.CommunicationView{SchemaVersion: 1, ViewID: "mail.communication", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: end == len(matches), Items: []views.CommunicationItem{}}
-	view.SourceHandle, _ = SourceHandle(index.connectionID, "communication:"+index.state.HistoryID)
+	view.SourceHandle, _ = SourceHandle(index.connectionID, "communication:"+index.state.SnapshotDigest)
 	if !view.CoverageComplete {
 		next := end
 		view.NextCursor = &next
@@ -187,6 +183,9 @@ func (index *Index) Logistics(now time.Time) (views.LogisticsView, error) {
 	if index.unavailable {
 		return views.LogisticsView{}, storage.ErrUnavailable
 	}
+	if index.state.SnapshotDigest == "" {
+		return views.LogisticsView{}, ErrUnavailable
+	}
 	matches := make([]Metadata, 0, maxLogisticsItems)
 	for _, message := range index.state.Messages {
 		if logisticsKind(message.Subject+"\n"+message.Snippet) != "" {
@@ -202,7 +201,7 @@ func (index *Index) Logistics(now time.Time) (views.LogisticsView, error) {
 	view := views.LogisticsView{
 		SchemaVersion: 1, ViewID: "life.logistics", ObservedAtUnixMS: now.UnixMilli(), ExpiresAtUnixMS: now.Add(5 * time.Minute).UnixMilli(), CoverageComplete: len(matches) <= maxLogisticsItems, Items: []views.LogisticsItem{},
 	}
-	view.SourceHandle, _ = SourceHandle(index.connectionID, "logistics:"+index.state.HistoryID)
+	view.SourceHandle, _ = SourceHandle(index.connectionID, "logistics:"+index.state.SnapshotDigest)
 	for _, message := range matches[:min(len(matches), maxLogisticsItems)] {
 		summary := strings.TrimSpace(message.Subject)
 		if summary == "" {
@@ -270,9 +269,23 @@ func (index *Index) commit(next indexState) error {
 }
 
 func (index *Index) validateState() error {
-	if index.state.SchemaVersion != indexVersion || index.state.ConnectionID != index.connectionID || index.state.Messages == nil || len(index.state.Messages) > maxIndexItems || (index.state.HistoryID != "" && !validID(index.state.HistoryID)) || (index.state.LastSuccessAtUnixMS != nil && *index.state.LastSuccessAtUnixMS < 0) || (index.state.LastFailure != nil && (!validFailure(index.state.LastFailure.Kind) || index.state.LastFailure.ObservedAtUnixMS < 0)) {
+	if index.state.SchemaVersion != indexVersion || index.state.ConnectionID != index.connectionID || index.state.Messages == nil || len(index.state.Messages) > MaxSyncItems || (index.state.LastSuccessAtUnixMS != nil && *index.state.LastSuccessAtUnixMS < 0) || (index.state.LastFailure != nil && (!validFailure(index.state.LastFailure.Kind) || index.state.LastFailure.ObservedAtUnixMS < 0)) {
 		return ErrInvalidInput
 	}
+	if index.state.SnapshotDigest == "" {
+		if index.state.QueryDigest != "" || len(index.state.Messages) != 0 {
+			return ErrInvalidInput
+		}
+	} else {
+		if !validDigest(index.state.QueryDigest) || !validDigest(index.state.SnapshotDigest) {
+			return ErrInvalidInput
+		}
+		expected, err := querySnapshotDigest(index.state.QueryDigest, index.state.Messages)
+		if err != nil || expected != index.state.SnapshotDigest {
+			return ErrInvalidInput
+		}
+	}
+
 	for id, message := range index.state.Messages {
 		if id != message.ID || validateMetadata(message) != nil {
 			return ErrInvalidInput
@@ -293,7 +306,7 @@ func cloneMetadata(message Metadata) Metadata {
 	return message
 }
 func cloneIndexState(state indexState) indexState {
-	next := indexState{SchemaVersion: state.SchemaVersion, ConnectionID: state.ConnectionID, HistoryID: state.HistoryID, Messages: map[string]Metadata{}, LastSuccessAtUnixMS: state.LastSuccessAtUnixMS, LastFailure: cloneFailure(state.LastFailure)}
+	next := indexState{SchemaVersion: state.SchemaVersion, ConnectionID: state.ConnectionID, QueryDigest: state.QueryDigest, SnapshotDigest: state.SnapshotDigest, Messages: map[string]Metadata{}, LastSuccessAtUnixMS: state.LastSuccessAtUnixMS, LastFailure: cloneFailure(state.LastFailure)}
 	for id, message := range state.Messages {
 		next.Messages[id] = cloneMetadata(message)
 	}

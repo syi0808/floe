@@ -365,8 +365,6 @@ func failureFor(err error) string {
 		return "credential_expired"
 	case errors.Is(err, ErrRateLimited):
 		return "rate_limited"
-	case errors.Is(err, ErrCheckpointExpired):
-		return "stale"
 	case errors.Is(err, ErrInvalidResponse):
 		return "partial_fetch"
 	default:

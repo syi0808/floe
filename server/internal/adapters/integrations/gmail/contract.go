@@ -15,12 +15,11 @@ func ConnectorDescriptor() integrations.Descriptor {
 		return integrations.Capability{SchemaVersion: 1, ID: id, Version: "1.0.0", Authority: "observe", RequiredScopes: []string{readonlyScope}, OutputViewID: output}
 	}
 	return integrations.Descriptor{
-		SchemaVersion: 1, ID: "gmail", Version: "1.0.0", Provider: "gmail",
+		SchemaVersion: 1, ID: "gmail", Version: "1.1.0", Provider: "gmail",
 		Execution: map[string]any{"kind": "server"},
 		Capabilities: []integrations.Capability{
 			capability("mail.search", "mail.communication"),
 			capability("mail.threads.read", "mail.communication"),
-			capability("mail.changes", "mail.communication"),
 			capability("mail.logistics.read", "life.logistics"),
 		},
 		Views: []views.ViewDescriptor{

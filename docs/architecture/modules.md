@@ -164,7 +164,17 @@ uses a fresh isolated profile.
 Logical file purpose and root identity are AEAD-bound. Trust, Integrations and
 Inference retain their schema, validation, transitions and indeterminate-write
 fences behind typed repositories. Trust state/producer identity/admin token,
-integration journals, inference configuration and Gmail index are encrypted.
+integration journals, inference configuration and Gmail index are encrypted. The Gmail
+index is a bounded query-selected snapshot, not a mailbox-history mirror.
+Every read refreshes membership with the configured provider query, including
+relative-time expiry; only a fully fetched selection replaces the encrypted
+snapshot. The existing 500-item limit refuses overflow rather than asserting
+complete coverage for a silently truncated index. Schema-2 index proof binds
+the query digest and exact selected metadata to view source identity. Failed
+refreshes do not publish old-query views. Gmail history deltas and the obsolete
+mail.changes capability are removed; account-identity admission remains
+unchanged. Unsupported old cache schemas fail closed without automatic reset;
+use an explicitly selected fresh development profile.
 Node releases its profile lease after owner shutdown and after the storage
 lifetime guard drains in-flight file I/O. Closed capabilities reject later
 writes. Explicit local administrator token retrieval opens an existing root

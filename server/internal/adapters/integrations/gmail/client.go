@@ -27,7 +27,6 @@ var (
 	ErrInvalidInput      = errors.New("invalid gmail request")
 	ErrCredentialExpired = errors.New("gmail credential expired")
 	ErrRateLimited       = errors.New("gmail rate limited")
-	ErrCheckpointExpired = errors.New("gmail checkpoint expired")
 	ErrUnavailable       = errors.New("gmail unavailable")
 	ErrBodyApproval      = errors.New("gmail body read requires explicit approval")
 	ErrInvalidResponse   = errors.New("invalid gmail response")
@@ -67,18 +66,6 @@ type Metadata struct {
 	Subject    string   `json:"subject,omitempty"`
 	Date       string   `json:"date,omitempty"`
 	Snippet    string   `json:"snippet,omitempty"`
-}
-
-type ChangePage struct {
-	Added      []MessageRef `json:"added"`
-	Changed    []MessageRef `json:"changed"`
-	Deleted    []MessageRef `json:"deleted"`
-	HistoryID  string       `json:"history_id"`
-	NextCursor string       `json:"next_cursor,omitempty"`
-}
-
-type Profile struct {
-	HistoryID string `json:"historyId"`
 }
 
 func New(tokens TokenSource) (*Client, error) {
@@ -146,18 +133,14 @@ func (client *Client) ReadMetadata(ctx context.Context, messageID string) (Metad
 	if err := client.get(ctx, "/users/me/messages/"+url.PathEscape(messageID)+"?"+parameters.Encode(), &response); err != nil {
 		return Metadata{}, err
 	}
-	return response.metadata()
-}
-
-func (client *Client) Profile(ctx context.Context) (Profile, error) {
-	var profile Profile
-	if err := client.get(ctx, "/users/me/profile", &profile); err != nil {
-		return Profile{}, err
+	metadata, err := response.metadata()
+	if err != nil {
+		return Metadata{}, err
 	}
-	if !validID(profile.HistoryID) {
-		return Profile{}, ErrInvalidResponse
+	if metadata.ID != messageID {
+		return Metadata{}, ErrInvalidResponse
 	}
-	return profile, nil
+	return metadata, nil
 }
 
 func (client *Client) ReadBody(ctx context.Context, messageID string, authority BodyReadAuthority) (string, error) {
@@ -176,50 +159,6 @@ func (client *Client) ReadBody(ctx context.Context, messageID string, authority 
 		return "", ErrInvalidResponse
 	}
 	return body, nil
-}
-
-func (client *Client) Changes(ctx context.Context, startHistoryID, cursor string, limit int) (ChangePage, error) {
-	if !validID(startHistoryID) || !validCursor(cursor) || limit < 1 || limit > MaxPageItems {
-		return ChangePage{}, ErrInvalidInput
-	}
-	parameters := url.Values{"startHistoryId": {startHistoryID}, "maxResults": {strconv.Itoa(limit)}}
-	parameters.Add("historyTypes", "messageAdded")
-	parameters.Add("historyTypes", "messageDeleted")
-	parameters.Add("historyTypes", "labelAdded")
-	parameters.Add("historyTypes", "labelRemoved")
-	if cursor != "" {
-		parameters.Set("pageToken", cursor)
-	}
-	var response historyResponse
-	if err := client.get(ctx, "/users/me/history?"+parameters.Encode(), &response); err != nil {
-		return ChangePage{}, err
-	}
-	page := ChangePage{HistoryID: response.HistoryID, NextCursor: response.NextPageToken}
-	if !validID(page.HistoryID) || !validCursor(page.NextCursor) {
-		return ChangePage{}, ErrInvalidResponse
-	}
-	seenAdded, seenChanged, seenDeleted := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	for _, history := range response.History {
-		for _, added := range history.MessagesAdded {
-			if err := appendRef(&page.Added, added.Message, seenAdded); err != nil {
-				return ChangePage{}, err
-			}
-		}
-		for _, deleted := range history.MessagesDeleted {
-			if err := appendRef(&page.Deleted, deleted.Message, seenDeleted); err != nil {
-				return ChangePage{}, err
-			}
-		}
-		for _, changed := range append(history.LabelsAdded, history.LabelsRemoved...) {
-			if err := appendRef(&page.Changed, changed.Message, seenChanged); err != nil {
-				return ChangePage{}, err
-			}
-		}
-	}
-	if len(page.Added)+len(page.Changed)+len(page.Deleted) > limit*3 {
-		return ChangePage{}, ErrInvalidResponse
-	}
-	return page, nil
 }
 
 func (client *Client) get(ctx context.Context, path string, output any) error {
@@ -250,9 +189,6 @@ func (client *Client) get(ctx context.Context, path string, output any) error {
 		case http.StatusTooManyRequests:
 			return ErrRateLimited
 		case http.StatusNotFound:
-			if strings.Contains(path, "/history?") {
-				return ErrCheckpointExpired
-			}
 			return ErrInvalidInput
 		default:
 			return ErrUnavailable
@@ -310,20 +246,6 @@ type messageResponse struct {
 	Snippet      string   `json:"snippet"`
 	Payload      payload  `json:"payload"`
 }
-type historyMessage struct {
-	Message messageResponse `json:"message"`
-}
-type historyEntry struct {
-	MessagesAdded   []historyMessage `json:"messagesAdded"`
-	MessagesDeleted []historyMessage `json:"messagesDeleted"`
-	LabelsAdded     []historyMessage `json:"labelsAdded"`
-	LabelsRemoved   []historyMessage `json:"labelsRemoved"`
-}
-type historyResponse struct {
-	History       []historyEntry `json:"history"`
-	NextPageToken string         `json:"nextPageToken"`
-	HistoryID     string         `json:"historyId"`
-}
 
 func (message messageResponse) metadata() (Metadata, error) {
 	if !validID(message.ID) || !validID(message.ThreadID) || !validID(message.HistoryID) || len(message.Snippet) > 1024 || len(message.LabelIDs) > 128 {
@@ -366,17 +288,6 @@ func textBody(part payload) (string, bool, error) {
 		}
 	}
 	return "", false, nil
-}
-
-func appendRef(target *[]MessageRef, message messageResponse, seen map[string]bool) error {
-	if !validID(message.ID) || !validID(message.ThreadID) {
-		return ErrInvalidResponse
-	}
-	if !seen[message.ID] {
-		*target = append(*target, MessageRef{ID: message.ID, ThreadID: message.ThreadID})
-		seen[message.ID] = true
-	}
-	return nil
 }
 
 func validID(value string) bool {
