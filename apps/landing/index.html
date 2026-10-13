@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#FBFAFF">
+    <meta name="description" content="Floe is an open-source personal assistant in development. A calm place for your day, your context, and what comes next.">
+    <meta property="og:title" content="Floe — A little more room for your day">
+    <meta property="og:description" content="A calm, contextual personal workspace. Open source and taking shape.">
+    <meta property="og:type" content="website">
+    <title>Floe — A little more room for your day</title>
+    <link rel="icon" type="image/svg+xml" href="assets/floe-mascot.svg">
+    <link rel="preload" href="assets/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="site.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+        <symbol id="i-external" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></symbol>
+        <symbol id="i-day" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M8 3v4m8-4v4M4 10h16m-12 4h3"/></symbol>
+        <symbol id="i-task" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8 12 3 3 5-6"/></symbol>
+        <symbol id="i-note" viewBox="0 0 24 24"><path d="M14 3H7a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V9zm0 0v6h6M8 13h8m-8 4h5"/></symbol>
+        <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+        <symbol id="i-github" viewBox="0 0 24 24"><path d="M9 19c-4.5 1.5-4.5-2.5-6-3m12 6v-4a3.5 3.5 0 0 0-1-2.7c3.3-.4 6.7-1.6 6.7-7.3A5.7 5.7 0 0 0 19.2 4a5.3 5.3 0 0 0-.1-4s-1.3-.4-4.2 1.5a14.4 14.4 0 0 0-7.6 0C4.4-.4 3.1 0 3.1 0A5.3 5.3 0 0 0 3 4a5.7 5.7 0 0 0-1.5 4c0 5.7 3.4 6.9 6.7 7.3A3.5 3.5 0 0 0 7.2 18v4" transform="translate(2 2) scale(.83)"/></symbol>
+      </defs>
+    </svg>
+
+    <header class="site-header wrap">
+      <a class="wordmark" href="#" aria-label="Floe home"><img src="assets/floe-mascot.svg" width="44" height="44" alt=""><span>floe</span></a>
+      <nav aria-label="Main navigation">
+        <a href="#experience">The experience</a>
+        <a href="#principles">Our approach</a>
+        <a href="https://github.com/syi0808/floe" class="source-link">GitHub <svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero wrap" aria-labelledby="hero-title">
+        <p class="eyebrow"><span class="brand-dot" aria-hidden="true"></span> A personal assistant, taking shape</p>
+        <h1 id="hero-title">A little more room<br>for your day.</h1>
+        <p class="hero-description">Your plans, your thoughts, the things that matter.<br class="wide-break"> Floe is being built to help them flow together.</p>
+        <div class="hero-actions">
+          <a class="button primary" data-squircle="sm" href="#experience">Explore the experience <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="quiet-link" href="https://github.com/syi0808/floe">Follow on GitHub <svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></a>
+        </div>
+        <p class="development-note">Open source. In active development.</p>
+      </section>
+
+      <section id="experience" class="experience wrap" aria-labelledby="experience-title">
+        <div class="section-overline"><h2 id="experience-title">A day with Floe</h2><span>Interactive illustration · Sample content</span></div>
+        <div class="workspace" data-squircle="frame">
+          <div class="workspace-topline" aria-hidden="true"><span class="window-dots"><i></i><i></i><i></i></span><span>A little breathing room</span><span class="window-spacer"></span></div>
+          <div class="workspace-body">
+            <aside class="workspace-sidebar" aria-label="Illustration navigation">
+              <span class="workspace-brand"><img src="assets/floe-mascot.svg" alt="" width="38" height="38"> floe</span>
+              <div class="demo-tabs" role="tablist" aria-label="Explore the sample workspace" aria-orientation="vertical">
+                <button class="demo-tab" id="tab-day" role="tab" aria-selected="true" aria-controls="panel-day" data-squircle="sm"><svg class="icon" aria-hidden="true"><use href="#i-day"/></svg> Day Canvas</button>
+                <button class="demo-tab" id="tab-tasks" role="tab" aria-selected="false" aria-controls="panel-tasks" tabindex="-1" data-squircle="sm"><svg class="icon" aria-hidden="true"><use href="#i-task"/></svg> Tasks</button>
+                <button class="demo-tab" id="tab-notes" role="tab" aria-selected="false" aria-controls="panel-notes" tabindex="-1" data-squircle="sm"><svg class="icon" aria-hidden="true"><use href="#i-note"/></svg> Notes</button>
+              </div>
+              <p class="sidebar-note">One day.<br>Your own rhythm.</p>
+            </aside>
+            <div class="workspace-content">
+              <section class="demo-panel" id="panel-day" role="tabpanel" aria-labelledby="tab-day" tabindex="0">
+                <div class="canvas-heading"><div><p class="small-label">Tuesday, October 13</p><h3>Today, at your pace.</h3></div><svg class="sun-icon" aria-hidden="true"><use href="#i-sun"/></svg></div>
+                <div class="day-layout">
+                  <div class="timeline">
+                    <div class="timeline-heading"><h4>Now and next</h4><span>Sample day</span></div>
+                    <div class="time-row"><time datetime="10:00">10:00</time><div class="event event-blue" data-squircle="sm"><span class="event-category">Personal time</span><strong>A little space to focus</strong><span>10:00 – 11:00</span></div></div>
+                    <div class="now-marker"><span>10:24</span><div><i aria-hidden="true"></i><span>Now</span></div></div>
+                    <div class="time-row"><time datetime="11:30">11:30</time><div class="event event-neutral" data-squircle="sm"><span class="event-category">Work</span><strong>Design catch-up</strong><span>11:30 – 12:00</span></div></div>
+                    <div class="breathing-room"><span aria-hidden="true"></span><p>Room between things.</p></div>
+                    <div class="time-row"><time datetime="12:30">12:30</time><div class="event event-mint" data-squircle="sm"><span class="event-category">Personal time</span><strong>A walk by the water</strong><span>12:30 – 13:00</span></div></div>
+                  </div>
+                  <div class="context-rail">
+                    <div class="rail-card" data-squircle="lg"><h4>Your own rhythm</h4><label class="task-row"><input type="checkbox" data-task="outline"><span>Outline the next chapter</span></label><label class="task-row"><input type="checkbox" data-task="book"><span>Return the library book</span></label><p class="demo-hint">Try checking a task. This stays in the illustration.</p></div>
+                    <div class="rail-card note-card" data-squircle="lg"><div class="note-heading"><svg class="icon" aria-hidden="true"><use href="#i-note"/></svg><h4>A note to self</h4></div><p>Leave a little room between things.<br>Not every moment needs a plan.</p></div>
+                  </div>
+                </div>
+              </section>
+              <section class="demo-panel" id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" tabindex="0" hidden>
+                <div class="canvas-heading"><div><p class="small-label">A few things for today</p><h3>Your own rhythm.</h3></div><svg class="sun-icon" aria-hidden="true"><use href="#i-task"/></svg></div>
+                <div class="task-surface" data-squircle="lg"><h4>Today’s tasks</h4><label class="task-row task-row-large"><input type="checkbox" data-task="outline"><span><strong>Outline the next chapter</strong><small>A first thought is enough to begin.</small></span></label><label class="task-row task-row-large"><input type="checkbox" data-task="book"><span><strong>Return the library book</strong><small>On the way to the afternoon walk.</small></span></label><label class="task-row task-row-large"><input type="checkbox" data-task="tea"><span><strong>Pick up tea</strong><small>A little something for later.</small></span></label></div>
+                <p class="panel-footnote">Sample tasks. Changes are local to this page and reset on reload.</p>
+              </section>
+              <section class="demo-panel" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes" tabindex="0" hidden>
+                <div class="canvas-heading"><div><p class="small-label">Something worth keeping</p><h3>A place for your thoughts.</h3></div><svg class="sun-icon" aria-hidden="true"><use href="#i-note"/></svg></div>
+                <article class="sample-note" data-squircle="lg"><p class="small-label">Sample note · Personal</p><h4>Room between things</h4><p>Leave a little room between things. Not every moment needs a plan.</p><p>Take the longer way home. Bring a book. Let the next idea arrive when it’s ready.</p><div class="note-rule" aria-hidden="true"></div><p class="note-signoff">A thought to come back to.</p></article>
+                <p class="panel-footnote">Illustrative content inspired by Floe’s Notes collection.</p>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div class="experience-caption"><p>A Day Canvas for what’s now. Space for what’s next.</p><p>Try Day Canvas, Tasks, and Notes above.</p></div>
+        <p class="sr-only" id="demo-status" role="status"></p>
+        <noscript><p class="no-script">The Day Canvas illustration is shown above. Enable JavaScript to explore the sample Tasks and Notes views; all other content and links work without it.</p></noscript>
+      </section>
+
+      <section id="principles" class="principles wrap" aria-labelledby="principles-title">
+        <div class="principles-intro"><p class="eyebrow">The way we’re building</p><h2 id="principles-title">Helpful should<br>feel quiet.</h2><p>Floe’s starting point is your life.<br>More context should mean less to manage.</p><img class="quiet-mascot" src="assets/floe-mascot.svg" width="128" height="128" alt="Floe’s soft lavender mascot"></div>
+        <div class="principle-list">
+          <article><span class="principle-number">01</span><div><h3>Your day comes first</h3><p>What’s happening now, what’s coming next, and the notes and tasks around them. The important things get room to be seen.</p></div></article>
+          <article><span class="principle-number">02</span><div><h3>One assistant. A continuous thread.</h3><p>The aim is context you can return to, without explaining your situation from the beginning. One Floe, with your day in view.</p></div></article>
+          <article><span class="principle-number">03</span><div><h3>A suggestion leaves you in control</h3><p>Floe is designed to propose before consequential changes. You should be able to see what will change, and decide what Floe may do.</p></div></article>
+        </div>
+      </section>
+
+      <section id="development" class="development wrap" aria-labelledby="development-title">
+        <div class="development-heading"><div><p class="eyebrow">An open work in progress</p><h2 id="development-title">Taking shape,<br>in the open.</h2></div><p>Floe is pre-stable. The current focus is macOS stability and product quality. You can explore the source, read the thinking, and follow what comes next.</p></div>
+        <div class="status-columns">
+          <div class="status-column"><h3><span class="status-mark present" aria-hidden="true"></span>In the client today</h3><p>Foundations you can find in the source.</p><ul><li>Day Canvas and a responsive application shell</li><li>Tasks, task detail, and a Notes collection</li><li>A shared Calm Flow visual system</li></ul><p class="status-footnote">Individual actions depend on connected application services. This illustration is not a live client.</p></div>
+          <div class="status-column"><h3><span class="status-mark future" aria-hidden="true"></span>The direction ahead</h3><p>Product intentions, with no release dates promised.</p><ul><li>Voice interaction and platform-aware invocation</li><li>Continuity and handoff across devices</li><li>Quiet, timely, contextual assistance</li></ul><a class="quiet-link" href="https://github.com/syi0808/floe/blob/main/docs/product/roadmap.md">Read the capability roadmap <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
+        </div>
+      </section>
+
+      <section class="invitation wrap" data-squircle="xl" aria-labelledby="invitation-title">
+        <div><p class="eyebrow">A calmer kind of personal workspace</p><h2 id="invitation-title">Follow the flow.</h2><p>Start with the idea. Stay for what it becomes.</p></div>
+        <div class="invitation-actions"><a class="button primary" data-squircle="sm" href="https://github.com/syi0808/floe"><svg class="icon" aria-hidden="true"><use href="#i-github"/></svg> Explore the repository <svg class="icon" aria-hidden="true"><use href="#i-external"/></svg></a><a class="quiet-link" href="https://github.com/syi0808/floe/blob/main/docs/product/README.md">Read the product vision <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a></div>
+      </section>
+    </main>
+
+    <footer class="site-footer wrap"><a class="wordmark" href="#" aria-label="Floe home"><img src="assets/floe-mascot.svg" alt="" width="36" height="36"><span>floe</span></a><p>A little more room for your day.</p><nav aria-label="Project links"><a href="https://github.com/syi0808/floe/blob/main/DESIGN.md">Design system</a><a href="https://github.com/syi0808/floe/blob/main/docs/README.md">Documentation</a></nav></footer>
+  </body>
+</html>
