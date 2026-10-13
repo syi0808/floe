@@ -108,7 +108,7 @@ impl PreparedModelCall for Prepared {
             let receipt = attempt.settle_observed(Some(10), Some(10))?;
             Ok(ModelResponse {
                 attempt_id: request.attempt_id,
-                steps: vec![ModelStep::Answer {
+                output: Ok(vec![ModelStep::Answer {
                     text: if matches!(self.behavior, Behavior::InvalidAnswer) {
                         " invalid "
                     } else {
@@ -116,7 +116,7 @@ impl PreparedModelCall for Prepared {
                     }
                     .into(),
                     artifacts: vec![],
-                }],
+                }]),
                 usage: ModelUsage {
                     tokens: receipt.charged_tokens,
                     cost_micros: receipt.charged_cost_micros,

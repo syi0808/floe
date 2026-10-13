@@ -1005,7 +1005,7 @@ mod tests {
         let valid = model_request(&plan, "synthetic end-to-end request");
         let response = prepared.generate(valid, &scope).await.unwrap();
         assert!(
-            matches!(response.steps.as_slice(), [ModelStep::Answer { text, .. }] if text == "Synthetic completion")
+            matches!(response.output.as_ref().unwrap().as_slice(), [ModelStep::Answer { text, .. }] if text == "Synthetic completion")
         );
         assert_eq!(response.usage.tokens, 17);
     }

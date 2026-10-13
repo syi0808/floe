@@ -2455,7 +2455,18 @@ fn unsupported_manager_tool_call_is_rejected_without_execution() {
     );
 
     let snapshot = assert_script_clean(&recorder);
-    assert_eq!(snapshot.generated.len(), 1);
+    assert_eq!(
+        snapshot.generated.len(),
+        2,
+        "one correction only; both unknown proposals remain inert"
+    );
+    assert_eq!(
+        snapshot.plans.len(),
+        2,
+        "correction must reuse the selected plan"
+    );
+    assert_eq!(receipt.attempt_refs.len(), 2);
+    assert!(snapshot.generated[1].envelope.attempt.correction.is_some());
     assert_eq!(snapshot.generated[0].catalog.tools.len(), 1);
     assert_eq!(
         snapshot.generated[0].catalog.tools[0].id,
@@ -3398,4 +3409,119 @@ fn model_capacity_recovery_preserves_no_redispatch_and_failure_boundaries() {
 #[test]
 fn model_capacity_summary_shutdown_does_not_redispatch_on_reopen() {
     support::compaction::run_compaction_shutdown_case();
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn completed_invalid_model_output_gets_one_accounted_correction() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::InvalidCompletionThenAnswer(AgentFailure::ServerModelInvalidOutput),
+    );
+    let recorder = model.recorder();
+    let (profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, USER_TEXT);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(
+        receipt.state,
+        RunState::Completed,
+        "a completed invalid output should reach bounded Runtime correction: {receipt:?}"
+    );
+    assert_eq!(receipt.output.as_deref(), Some(REPLY));
+    let snapshot = assert_script_clean(&recorder);
+    assert_eq!(snapshot.generated.len(), 2);
+    assert_ne!(
+        snapshot.generated[0].attempt_id,
+        snapshot.generated[1].attempt_id
+    );
+    assert!(snapshot.generated[0].envelope.attempt.correction.is_none());
+    assert!(snapshot.generated[1].envelope.attempt.correction.is_some());
+    assert_eq!(receipt.attempt_refs.len(), 2);
+    let results: Vec<_> = journal_events(&host, command.run_id)
+        .into_iter()
+        .filter_map(|event| {
+            if let floe_agent_contract::JournalEvent::ModelResult { usage, .. } = event {
+                Some((usage.tokens, usage.cost_micros))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(results, vec![(19, 23), (19, 23)]);
+    assert_eq!(
+        snapshot.plans.len(),
+        2,
+        "correction reuses one Primary/local selection"
+    );
+    drop(host);
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    let replay = wait_terminal_run(&reopened, command.run_id);
+    assert_eq!(replay.output.as_deref(), Some(REPLY));
+    assert_eq!(replay.attempt_refs, receipt.attempt_refs);
+    assert_eq!(
+        assert_script_clean(&recorder).generated.len(),
+        2,
+        "completed correction is never redispatched after reopen"
+    );
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn invalid_transport_or_authority_failure_never_enters_output_correction() {
+    for (output, expected, unknown) in [
+        (
+            ModelOutput::FailAfterDispatch(AgentFailure::ServerModelInvalidOutput),
+            AgentFailure::ServerModelInvalidOutput,
+            true,
+        ),
+        (
+            ModelOutput::FailAfterDispatch(AgentFailure::DeadlineExceeded),
+            AgentFailure::DeadlineExceeded,
+            true,
+        ),
+        (
+            ModelOutput::InvalidCompletionThenAnswer(AgentFailure::PolicyDenied),
+            AgentFailure::PolicyDenied,
+            false,
+        ),
+    ] {
+        let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, output);
+        let recorder = model.recorder();
+        let (profile, host) = create_ready_app(&model);
+        let session_id = start_session(&host);
+        let command = start_turn(&host, session_id, USER_TEXT);
+        let receipt = wait_terminal_run(&host, command.run_id);
+        assert_eq!(receipt.issue, Some(expected));
+        assert!(receipt.state.is_terminal());
+        assert_eq!(receipt.attempt_refs.len(), 1);
+        assert_eq!(assert_script_clean(&recorder).generated.len(), 1);
+        let results: Vec<_> = journal_events(&host, command.run_id)
+            .into_iter()
+            .filter_map(|event| {
+                if let floe_agent_contract::JournalEvent::ModelResult { accounting, .. } = event {
+                    Some(accounting)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].unknown_tokens, unknown);
+        assert_eq!(results[0].unknown_cost, unknown);
+        drop(host);
+        let reopened = profile.open(&model);
+        assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+        assert_eq!(
+            wait_terminal_run(&reopened, command.run_id).issue,
+            Some(expected)
+        );
+        assert_eq!(
+            assert_script_clean(&recorder).generated.len(),
+            1,
+            "restart cannot redispatch an uncertain or denied attempt"
+        );
+    }
 }

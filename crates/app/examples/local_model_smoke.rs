@@ -212,9 +212,21 @@ async fn main() -> std::process::ExitCode {
     };
     match support::invoke(prepared.as_ref(), request, &scope, &journal).await {
         Ok(response) => {
+            let steps = match response.output {
+                Ok(steps) => steps,
+                Err(rejection) => {
+                    println!(
+                        "{}",
+                        json!({"schema_version":1,"failure":floe_agent_contract::AgentFailure::from(rejection),
+                        "charged_tokens":response.usage.tokens,"cost_micros":response.usage.cost_micros,
+                        "accounting":response.accounting,"journal":journal.path(),"personal_data":false})
+                    );
+                    return std::process::ExitCode::FAILURE;
+                }
+            };
             println!(
                 "{}",
-                json!({"schema_version":1,"status":"passed","output":response.steps,
+                json!({"schema_version":1,"status":"passed","output":steps,
                 "charged_tokens":response.usage.tokens,"cost_micros":response.usage.cost_micros,
                 "accounting":response.accounting,"journal":journal.path(),"personal_data":false})
             );

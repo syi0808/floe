@@ -526,7 +526,10 @@ async fn run_case(
         };
         let (steps, failure) =
             match super::support::invoke(prepared.as_ref(), request, &scope, journal).await {
-                Ok(response) => (response.steps, None),
+                Ok(response) => match response.output {
+                    Ok(steps) => (steps, None),
+                    Err(rejection) => (vec![], Some(rejection.into())),
+                },
                 Err(failure) => (vec![], Some(failure)),
             };
         let report = report_case(

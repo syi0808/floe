@@ -60,6 +60,7 @@ pub enum PrimaryBehavior {
 pub enum ModelOutput {
     Answer,
     FailAfterDispatch(AgentFailure),
+    InvalidCompletionThenAnswer(AgentFailure),
     UnsupportedManagerToolCall,
     ForgetUnprojectedMemory,
     WaitForCancellation(Arc<GenerateBarrier>),
@@ -151,7 +152,7 @@ impl ScriptRecorder {
             .0
             .lock()
             .map_err(|_| ModelObservationError::StorageUnavailable)?;
-        let call_index = state.plans.len() / 2;
+        let call_index = state.generated.len();
         let expected_stage = if state.plans.len() % 2 == 0 {
             PlanStage::Primary
         } else {
@@ -263,7 +264,25 @@ impl ScriptRecorder {
             ));
             return Err(AgentFailure::InvalidInput);
         }
-        let expected_plan_index = state.generated.len() * 2 + 1;
+        let ordinary_generations = state
+            .generated
+            .iter()
+            .filter(|prior| prior.envelope.attempt.correction.is_none())
+            .count();
+        let plan_index = if request.envelope.attempt.correction.is_some() {
+            ordinary_generations
+                .checked_sub(1)
+                .ok_or(AgentFailure::InvalidInput)?
+        } else {
+            ordinary_generations
+        };
+        let expected_plan_index = plan_index * 2 + 1;
+        if state.plans.len() != expected_plan_index + 1 {
+            state
+                .violations
+                .push("correction did not retain the exact selected plan".into());
+            return Err(AgentFailure::InvalidInput);
+        }
         let Some(((stage, observed_plan), binding)) = state
             .plans
             .get(expected_plan_index)
@@ -354,7 +373,9 @@ impl ScriptedModel {
         output: ModelOutput,
     ) -> Self {
         let expected_consumers = match &output {
-            ModelOutput::ForgetUnprojectedMemory => vec![CONVERSATION_CONSUMER.into(); 2],
+            ModelOutput::ForgetUnprojectedMemory
+            | ModelOutput::InvalidCompletionThenAnswer(_)
+            | ModelOutput::UnsupportedManagerToolCall => vec![CONVERSATION_CONSUMER.into(); 2],
             ModelOutput::ScheduleExpertFlow => vec![
                 CONVERSATION_CONSUMER.into(),
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
@@ -872,6 +893,22 @@ impl PreparedModelTransport for ScriptedTransport {
             )?;
             match &self.model.output {
                 ModelOutput::FailAfterDispatch(failure) => Err(*failure),
+                ModelOutput::InvalidCompletionThenAnswer(failure) => {
+                    if call_index == 0 {
+                        Ok(CanonicalModelResponse {
+                            output: Err(*failure),
+                            usage: ProviderUsageObservation {
+                                tokens: Some(19),
+                                cost_micros: Some(23),
+                            },
+                        })
+                    } else {
+                        Ok(response(vec![ModelStep::Answer {
+                            text: SCRIPTED_REPLY.into(),
+                            artifacts: vec![],
+                        }]))
+                    }
+                }
                 ModelOutput::Answer => Ok(response(vec![ModelStep::Answer {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],

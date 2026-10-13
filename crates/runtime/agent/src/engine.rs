@@ -602,7 +602,8 @@ impl ActiveDrive<'_> {
                     let receipt = receipt.ok_or(AgentFailure::StorageUnavailable)?;
                     self.record_model_result(attempt_id, Some(receipt)).await?;
                     self.attempts.push(attempt_id);
-                    if response.usage.tokens != receipt.charged_tokens
+                    if response.attempt_id != attempt_id
+                        || response.usage.tokens != receipt.charged_tokens
                         || response.usage.cost_micros != receipt.charged_cost_micros
                         || response.accounting != receipt.accounting
                     {
@@ -631,17 +632,21 @@ impl ActiveDrive<'_> {
         projection: &AuthorizedModelProjection,
         response: &ModelResponse,
     ) -> Result<(ValidatedModelBatch, Vec<Option<String>>), AgentFailure> {
-        if response.attempt_id != attempt_id || response.steps.is_empty() {
+        let steps = response
+            .output
+            .as_ref()
+            .map_err(|rejection| AgentFailure::from(*rejection))?;
+        if steps.is_empty() {
             return Err(AgentFailure::InvalidModelOutput);
         }
         let encoded_steps =
-            serde_json::to_vec(&response.steps).map_err(|_| AgentFailure::InvalidModelOutput)?;
+            serde_json::to_vec(steps).map_err(|_| AgentFailure::InvalidModelOutput)?;
         if encoded_steps.len() > self.request.max_output_bytes {
             return Err(AgentFailure::BudgetExceeded);
         }
-        validate_batch_shape(&response.steps)?;
-        let corrections = validate_model_steps(&response.steps, &self.request.allowed_catalog)?;
-        let mut validated_steps = response.steps.clone();
+        validate_batch_shape(steps)?;
+        let corrections = validate_model_steps(steps, &self.request.allowed_catalog)?;
+        let mut validated_steps = steps.to_vec();
         for step in &mut validated_steps {
             if let ModelStep::Answer { text, artifacts } = step {
                 let payload = self.ports.validator.validate(
@@ -682,12 +687,10 @@ impl ActiveDrive<'_> {
         {
             return Err(AgentFailure::BudgetExceeded);
         }
-        let (tool_revisions, agent_revisions) =
-            pin_revisions(&response.steps, &self.request.allowed_catalog);
+        let (tool_revisions, agent_revisions) = pin_revisions(steps, &self.request.allowed_catalog);
         // A delegating batch binds the exact execution context before anything
         // is dispatched; batches without a Delegate step persist none.
-        let delegation_context = if response
-            .steps
+        let delegation_context = if steps
             .iter()
             .any(|step| matches!(step, ModelStep::Delegate { .. }))
         {
@@ -1157,12 +1160,7 @@ impl ActiveDrive<'_> {
 }
 
 fn is_correctable(failure: &AgentFailure) -> bool {
-    matches!(
-        failure,
-        AgentFailure::InvalidModelOutput
-            | AgentFailure::LocalModelInvalidOutput
-            | AgentFailure::ServerModelInvalidOutput
-    )
+    floe_agent_contract::ModelOutputRejection::try_from(*failure).is_ok()
 }
 
 /// Pin only references that matched the catalog at validation time. Steps that

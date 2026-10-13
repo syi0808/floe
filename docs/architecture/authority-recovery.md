@@ -133,6 +133,12 @@ turn admission, an explicit retry retains that Cancel identity. A Stop for a Run
 that is no longer known active sends no command and restores the UI's non-stopping
 state. Detached query completions cannot publish stale client state.
 
+## Completed model output and bounded correction
+
+Inference preserves a trustworthy completed response as `ModelResponse.output`: accepted steps or a closed `ModelOutputRejection`, together with its exact attempt and settled accounting. Codec/schema-invalid output, including unregistered proposed Tool/Expert aliases, has no executable capability authority. Runtime records its attempt result before using the existing single correction allowance, with a new attempt and projection under the same prepared selection and normal source/budget fences. A repeated rejection terminates without a third correction call. Output rejection is not inferred from usage certainty: a completed response can still have conservatively charged unknown usage.
+
+Transport/envelope uncertainty, timeout, cancellation, release-time authority loss and unrelated failures remain errors from `PreparedModelCall`. They never enter output correction or trigger failure-based provider fallback. Response correlation/accounting mismatch also terminates before correction. Recovery retains every attempted charge and never reissues an uncertain attempt to obtain output or usage. Direct diagnostic consumers must handle rejected completed output explicitly rather than report a successful invocation as a valid answer.
+
 ## Terminal writer custody and uncertain model accounting
 
 A durable terminal Manager Run or Expert Task fences further ordinary model/output journal writes. Conversation Core verifies that exact owner state and active recorder before releasing exclusive transcript writing authority. Unsettled non-model contributions still block close/retirement; a terminal model attempt with an unknown result does not. Current-generation close requires authenticated terminal receipt evidence; stale retirement additionally requires the durable owner-generation fence. Pending-terminal intent, observer timeout and screen disposal do not supply these proofs.

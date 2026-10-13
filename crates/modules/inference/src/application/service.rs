@@ -338,16 +338,26 @@ where
         // Settle trusted accounting before output policy or release checks.
         let receipt = attempt.settle_observed(response.usage.tokens, response.usage.cost_micros)?;
         revalidate_model_dispatch(&fence).await?;
-        let steps = response.output?;
-        validate_output(
-            &steps,
-            &request.catalog,
-            &request.projection.envelope.run_instructions.output_format,
-            max_output_bytes,
-        )?;
+        let output = response.output.and_then(|steps| {
+            validate_output(
+                &steps,
+                &request.catalog,
+                &request.projection.envelope.run_instructions.output_format,
+                max_output_bytes,
+            )?;
+            Ok(steps)
+        });
+        let output = match output {
+            Ok(steps) => Ok(steps),
+            // Only a trustworthy completed output can carry this rejection.
+            // Authority/transport failures retain the ordinary error path.
+            Err(failure) => Err(floe_agent_contract::ModelOutputRejection::try_from(
+                failure,
+            )?),
+        };
         Ok(ModelResponse {
             attempt_id: request.attempt_id,
-            steps,
+            output,
             usage: ModelUsage {
                 tokens: receipt.charged_tokens,
                 cost_micros: receipt.charged_cost_micros,

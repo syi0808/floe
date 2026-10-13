@@ -314,11 +314,43 @@ pub struct ToolCall {
     pub input: String,
 }
 
+/// A completed provider output rejected by codec/schema validation. This is
+/// distinct from transport uncertainty or revoked authority, which remain
+/// errors from PreparedModelCall and must never be automatically reissued.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelOutputRejection {
+    Invalid,
+    InvalidLocal,
+    InvalidServer,
+}
+
+impl TryFrom<AgentFailure> for ModelOutputRejection {
+    type Error = AgentFailure;
+    fn try_from(failure: AgentFailure) -> Result<Self, Self::Error> {
+        match failure {
+            AgentFailure::InvalidModelOutput => Ok(Self::Invalid),
+            AgentFailure::LocalModelInvalidOutput => Ok(Self::InvalidLocal),
+            AgentFailure::ServerModelInvalidOutput => Ok(Self::InvalidServer),
+            other => Err(other),
+        }
+    }
+}
+impl From<ModelOutputRejection> for AgentFailure {
+    fn from(rejection: ModelOutputRejection) -> Self {
+        match rejection {
+            ModelOutputRejection::Invalid => Self::InvalidModelOutput,
+            ModelOutputRejection::InvalidLocal => Self::LocalModelInvalidOutput,
+            ModelOutputRejection::InvalidServer => Self::ServerModelInvalidOutput,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelResponse {
     pub attempt_id: Uuid,
-    pub steps: Vec<ModelStep>,
+    pub output: Result<Vec<ModelStep>, ModelOutputRejection>,
     pub usage: ModelUsage,
     pub accounting: floe_execution::budget::ModelAccounting,
 }
@@ -433,5 +465,41 @@ mod model_selection_tests {
                 .is_ok(),
             "an already validated pending batch remains replayable"
         );
+    }
+}
+
+#[cfg(test)]
+mod completed_output_tests {
+    use super::*;
+    #[test]
+    fn completed_output_rejection_cannot_reclassify_authority_or_uncertainty() {
+        for failure in [
+            AgentFailure::InvalidModelOutput,
+            AgentFailure::LocalModelInvalidOutput,
+            AgentFailure::ServerModelInvalidOutput,
+        ] {
+            let rejection = ModelOutputRejection::try_from(failure).unwrap();
+            assert_eq!(AgentFailure::from(rejection), failure);
+            assert_eq!(
+                serde_json::from_str::<ModelOutputRejection>(
+                    &serde_json::to_string(&rejection).unwrap()
+                )
+                .unwrap(),
+                rejection
+            );
+        }
+        for failure in [
+            AgentFailure::PolicyDenied,
+            AgentFailure::CapabilityDenied,
+            AgentFailure::StorageUnavailable,
+            AgentFailure::Cancelled,
+            AgentFailure::DeadlineExceeded,
+            AgentFailure::ServerModelTimeout,
+            AgentFailure::ServerModelUnavailable,
+            AgentFailure::QuotaExceeded,
+        ] {
+            assert_eq!(ModelOutputRejection::try_from(failure), Err(failure));
+        }
+        assert!(serde_json::from_str::<ModelOutputRejection>("\"policy_denied\"").is_err());
     }
 }

@@ -129,7 +129,7 @@ pub(crate) fn decode_agent_step(
                 .cards
                 .iter()
                 .find(|definition| definition.card.id == delegation.agent_id)
-                .ok_or(AgentFailure::CapabilityDenied)?;
+                .ok_or(AgentFailure::ServerModelInvalidOutput)?;
             if delegation.message.trim().is_empty() {
                 return Err(AgentFailure::ServerModelInvalidOutput);
             }
@@ -152,7 +152,7 @@ pub(crate) fn decode_agent_step(
                 .tools
                 .iter()
                 .find(|tool| tool_name(&tool.id) == capability_id)
-                .ok_or(AgentFailure::CapabilityDenied)?;
+                .ok_or(AgentFailure::ServerModelInvalidOutput)?;
             Ok(floe_agent_contract::ModelStep::CallTool {
                 tool_id: descriptor.id.clone(),
                 definition_revision: descriptor.definition_revision,
@@ -294,4 +294,70 @@ pub(crate) fn valid_alias(value: &str) -> bool {
         && value
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+#[cfg(test)]
+mod output_rejection_tests {
+    use super::*;
+    use floe_agent_contract::{AllowedCatalog, ModelStep, ToolDescriptor};
+
+    #[test]
+    fn unknown_tool_and_expert_aliases_are_inert_invalid_output() {
+        let catalog = AllowedCatalog::default();
+        for step in [
+            WireStep::Call {
+                capability_id: tool_name("unknown.tool"),
+                input: "{}".into(),
+            },
+            WireStep::Call {
+                capability_id: tool_name(DELEGATION_CAPABILITY_ID),
+                input: json!({"agent_id":"unknown.agent", "message":"Synthetic assignment"})
+                    .to_string(),
+            },
+        ] {
+            assert_eq!(
+                decode_agent_step(step, &catalog),
+                Err(AgentFailure::ServerModelInvalidOutput)
+            );
+        }
+    }
+
+    #[test]
+    fn valid_alias_keeps_catalog_revision_and_malformed_arguments_stay_inert() {
+        let catalog = AllowedCatalog {
+            revision: 1,
+            cards: vec![],
+            tools: vec![ToolDescriptor {
+                id: "known.tool".into(),
+                read_only: true,
+                definition_revision: 7,
+                description: "Synthetic reader".into(),
+                input_schema: "{\"type\":\"object\"}".into(),
+                output_data_class: "synthetic".into(),
+            }],
+        };
+        assert!(matches!(
+            decode_agent_step(
+                WireStep::Call {
+                    capability_id: tool_name("known.tool"),
+                    input: "{}".into()
+                },
+                &catalog
+            ),
+            Ok(ModelStep::CallTool {
+                definition_revision: 7,
+                ..
+            })
+        ));
+        assert_eq!(
+            decode_agent_step(
+                WireStep::Call {
+                    capability_id: tool_name("known.tool"),
+                    input: "[1]".into()
+                },
+                &catalog
+            ),
+            Err(AgentFailure::ServerModelInvalidOutput)
+        );
+    }
 }
