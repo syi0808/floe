@@ -362,8 +362,8 @@ mod tests {
                 capabilities: ModelCapabilities::chat(),
                 boundary: ProcessingBoundary::Device,
                 binding_digest: ModelBindingDigest([2; 32]),
-                selection_commitment: Some(ModelSelectionCommitment([1; 32])),
-                budget_profile: Some(ModelBudgetProfile::unknown()),
+                selection_commitment: ModelSelectionCommitment([1; 32]),
+                budget_profile: ModelBudgetProfile::unknown(),
             },
         }
     }
@@ -613,7 +613,7 @@ mod tests {
         );
         let mut event = intent(&head);
         if let JournalEvent::ModelIntent { plan, .. } = &mut event {
-            plan.selection_commitment = None;
+            plan.selection_commitment = ModelSelectionCommitment([0; 32]);
         }
         assert!(
             advance_compaction_journal(&head, &source, &[JournalEntry { revision: 1, event }])

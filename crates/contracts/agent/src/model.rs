@@ -183,7 +183,7 @@ impl EngineRequest {
             {
                 return Err(AgentFailure::PolicyDenied);
             }
-            // A historical batch without a complete selection pin may still
+            // A batch-only projection without its parent selection lineage may still
             // replay its already validated steps. The Engine rejects the
             // following model attempt before projection or provider handoff.
             crate::ModelSelectionState::Unproven if self.resume.is_none() => {
@@ -453,11 +453,11 @@ mod model_selection_tests {
     }
 
     #[test]
-    fn unproven_legacy_selection_allows_only_a_pending_batch_resume() {
+    fn unproven_parent_lineage_allows_only_a_pending_batch_resume() {
         assert_eq!(
             request(ModelSelectionState::Unproven, None).validate(),
             Err(AgentFailure::PolicyDenied),
-            "historical evidence without a complete pin cannot start a model dispatch"
+            "a batch without its parent selection lineage cannot start a model dispatch"
         );
         assert!(
             request(ModelSelectionState::Unproven, Some(pending_resume()))

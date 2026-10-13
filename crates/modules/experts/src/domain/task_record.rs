@@ -334,8 +334,8 @@ pub fn advance_task_journal(
     let (last, prefix) = journal.split_last().ok_or(AgentFailure::InvalidInput)?;
     let prior_projection = project_task_journal(record, prefix)?;
     if let JournalEvent::ModelIntent { plan, .. } = &last.event {
-        // Historical evidence remains readable, but a new append must keep
-        // the execution pin and cannot recover from an Unproven prefix.
+        // A new append must preserve the complete execution pin and cannot
+        // reconstruct a missing parent lineage from an Unproven prefix.
         floe_agent_contract::validate_model_intent_selection(
             &prior_projection.model_selection,
             plan,
@@ -626,8 +626,8 @@ mod model_selection_append_tests {
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: ModelBindingDigest([2; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([commitment; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         }
     }
 
@@ -651,11 +651,10 @@ mod model_selection_append_tests {
     fn task_owner_requires_complete_stable_selection_on_each_new_intent() {
         let record = task_record();
         let mut incomplete = plan(&record, 1);
-        incomplete.selection_commitment = None;
-        incomplete.budget_profile = None;
+        incomplete.selection_commitment = ModelSelectionCommitment([0; 32]);
         assert_eq!(
             advance_task_journal(&record, &[intent(&record, Uuid::new_v4(), incomplete)]),
-            Err(AgentFailure::PolicyDenied)
+            Err(AgentFailure::InvalidInput)
         );
 
         let first = intent(&record, Uuid::new_v4(), plan(&record, 1));
@@ -672,21 +671,20 @@ mod model_selection_append_tests {
     }
 
     #[test]
-    fn task_owner_does_not_dispatch_from_a_historical_unproven_prefix() {
+    fn task_owner_rejects_corrupt_selection_in_the_durable_prefix() {
         let mut record = task_record();
-        let mut legacy = plan(&record, 1);
-        legacy.selection_commitment = None;
-        legacy.budget_profile = None;
-        let entry = intent(&record, Uuid::new_v4(), legacy);
+        let mut invalid = plan(&record, 1);
+        invalid.selection_commitment = ModelSelectionCommitment([0; 32]);
+        let entry = intent(&record, Uuid::new_v4(), invalid);
         record.journal_revision = 1;
         record.journal_digest = floe_agent_runtime::journal_digest(std::slice::from_ref(&entry))
-            .expect("historical journal digest");
+            .expect("corrupt journal fixture digest");
         let mut next = intent(&record, Uuid::new_v4(), plan(&record, 2));
         next.revision = 2;
         assert_eq!(
             advance_task_journal(&record, &[entry, next]),
-            Err(AgentFailure::PolicyDenied),
-            "permissive historical projection cannot authorize a new Task model handoff"
+            Err(AgentFailure::StorageUnavailable),
+            "invalid stored proof cannot project or authorize a new Task model handoff"
         );
     }
 }

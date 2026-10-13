@@ -991,11 +991,8 @@ mod tests {
         );
         let prepared = planner.prepare(request, &scope).await.unwrap();
         let plan = prepared.plan().clone();
-        assert_eq!(
-            plan.budget_profile.as_ref(),
-            Some(&observed.capability.budget_profile)
-        );
-        plan.validate_for_dispatch().unwrap();
+        assert_eq!(&plan.budget_profile, &observed.capability.budget_profile);
+        plan.validate().unwrap();
         let oversized = model_request(&plan, &"한".repeat(3000));
         assert_eq!(
             prepared.generate(oversized, &scope).await,

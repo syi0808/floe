@@ -469,7 +469,7 @@ impl ActiveDrive<'_> {
             )
             .await?;
         let plan = prepared.plan().clone();
-        plan.validate_for_dispatch()?;
+        plan.validate()?;
         if plan.principal != plan_request.principal
             || plan.device_id != plan_request.device_id
             || plan.purpose != plan_request.purpose
@@ -1766,7 +1766,7 @@ mod model_selection_tests {
         )
         .unwrap();
         request.model_selection =
-            ModelSelectionState::Pinned(plan.model_execution_selection().unwrap().unwrap());
+            ModelSelectionState::Pinned(plan.model_execution_selection().unwrap());
         request.max_iterations = max_iterations;
         let batch_id = Uuid::new_v4();
         request.resume = Some(floe_agent_contract::EngineResumeState {
@@ -2014,7 +2014,7 @@ mod model_selection_tests {
     }
 
     #[tokio::test]
-    async fn legacy_unproven_selection_is_rejected_before_model_preparation() {
+    async fn unproven_parent_lineage_is_rejected_before_model_preparation() {
         let execution_id = Uuid::new_v4();
         let ledger = BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default());
         let request = EngineRequest {
@@ -2068,7 +2068,7 @@ mod model_selection_tests {
         assert_eq!(
             model.0.load(Ordering::SeqCst),
             0,
-            "legacy evidence without a complete selection cannot prepare a new provider call"
+            "a batch without its parent selection lineage cannot prepare a new provider call"
         );
     }
 
@@ -2200,8 +2200,8 @@ mod model_selection_tests {
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: ModelBindingDigest([2; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([commitment; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         }
     }
 

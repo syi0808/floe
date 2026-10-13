@@ -238,7 +238,7 @@ fn effective_input_data_classes(
 }
 
 fn validate_input(input: &ContextProjectionInput<'_>) -> Result<(), AgentFailure> {
-    input.plan.validate_for_dispatch()?;
+    input.plan.validate()?;
     if !input
         .plan
         .capabilities

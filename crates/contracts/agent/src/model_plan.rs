@@ -150,7 +150,8 @@ impl ModelExecutionSelection {
 }
 
 /// Selection state restored for one logical Agent execution.
-/// `Unproven` represents historical evidence that lacks a complete pin.
+/// `Unproven` marks a batch-only continuation whose current projection lacks
+/// the original selection lineage. It never authorizes new model dispatch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelSelectionState {
     Fresh,
@@ -178,13 +179,11 @@ pub struct PreparedModelPlan {
     pub capabilities: ModelCapabilities,
     pub boundary: ProcessingBoundary,
     pub binding_digest: ModelBindingDigest,
-    /// Opaque target/revision commitment. Missing only in historical evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection_commitment: Option<ModelSelectionCommitment>,
-    /// Newly admitted plans always pin a profile. `None` is retained only for
-    /// previously persisted evidence; it is never sufficient for dispatch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_profile: Option<ModelBudgetProfile>,
+    /// Opaque target/revision commitment pinned by the selected provider.
+    pub selection_commitment: ModelSelectionCommitment,
+    /// Every admitted or stored plan pins a complete budget profile. Unknown
+    /// provider limits are represented inside the profile, not by absent proof.
+    pub budget_profile: ModelBudgetProfile,
 }
 
 impl PreparedModelPlan {
@@ -192,12 +191,8 @@ impl PreparedModelPlan {
         if self.operation_id.is_nil() {
             return Err(AgentFailure::InvalidInput);
         }
-        if let Some(profile) = &self.budget_profile {
-            profile.validate()?;
-        }
-        if let Some(commitment) = &self.selection_commitment {
-            commitment.validate()?;
-        }
+        self.budget_profile.validate()?;
+        self.selection_commitment.validate()?;
         ModelPlanRequest {
             principal: self.principal.clone(),
             device_id: self.device_id.clone(),
@@ -208,16 +203,10 @@ impl PreparedModelPlan {
         .validate()
     }
 
-    pub fn model_execution_selection(
-        &self,
-    ) -> Result<Option<ModelExecutionSelection>, AgentFailure> {
-        let (Some(commitment), Some(budget_profile)) =
-            (self.selection_commitment, self.budget_profile.as_ref())
-        else {
-            return Ok(None);
-        };
+    pub fn model_execution_selection(&self) -> Result<ModelExecutionSelection, AgentFailure> {
+        self.validate()?;
         let selection = ModelExecutionSelection {
-            commitment,
+            commitment: self.selection_commitment,
             principal: self.principal.clone(),
             device_id: self.device_id.clone(),
             purpose: self.purpose.clone(),
@@ -225,32 +214,20 @@ impl PreparedModelPlan {
             capabilities: self.capabilities.clone(),
             boundary: self.boundary,
             binding_digest: self.binding_digest,
-            budget_profile: budget_profile.clone(),
+            budget_profile: self.budget_profile.clone(),
         };
-        selection.validate()?;
-        Ok(Some(selection))
-    }
-
-    /// Validate a fresh plan before projection or provider dispatch.
-    pub fn validate_for_dispatch(&self) -> Result<(), AgentFailure> {
-        self.validate()?;
-        self.model_execution_selection()?
-            .ok_or(AgentFailure::PolicyDenied)?
-            .validate()
+        Ok(selection)
     }
 }
 
 /// Validate a newly admitted ModelIntent against the state produced by the
-/// already durable prefix. Historical journal projection remains permissive;
-/// owners call this only for the new append before committing it.
+/// already durable prefix. Every decoded plan has the same required proof;
+/// owners additionally enforce execution-stable selection before append.
 pub fn validate_model_intent_selection(
     prior: &ModelSelectionState,
     plan: &PreparedModelPlan,
 ) -> Result<ModelExecutionSelection, AgentFailure> {
-    plan.validate_for_dispatch()?;
-    let selection = plan
-        .model_execution_selection()?
-        .ok_or(AgentFailure::PolicyDenied)?;
+    let selection = plan.model_execution_selection()?;
     match prior {
         ModelSelectionState::Fresh => Ok(selection),
         ModelSelectionState::Pinned(pinned) if *pinned == selection => Ok(selection),
@@ -283,27 +260,63 @@ mod tests {
     const LEGACY_PLAN: &str =
         include_str!("../../../../testdata/r3a/legacy-prepared-model-plan.json");
 
-    fn legacy_plan() -> PreparedModelPlan {
-        serde_json::from_str(LEGACY_PLAN)
-            .expect("legacy plan without budget_profile remains readable")
+    fn complete_plan() -> PreparedModelPlan {
+        let mut value: serde_json::Value = serde_json::from_str(LEGACY_PLAN).unwrap();
+        value["selection_commitment"] = serde_json::to_value([7u8; 32]).unwrap();
+        value["budget_profile"] = serde_json::to_value(ModelBudgetProfile::unknown()).unwrap();
+        serde_json::from_value(value).unwrap()
     }
 
     #[test]
-    fn legacy_plan_roundtrip_preserves_bytes_and_requires_profile_for_dispatch() {
-        let plan = legacy_plan();
-        assert!(plan.validate().is_ok(), "stored evidence remains valid");
-        assert_eq!(serde_json::to_string(&plan).unwrap(), LEGACY_PLAN.trim());
-        assert_eq!(plan.model_execution_selection().unwrap(), None);
+    fn prepared_plan_requires_complete_selection_and_budget_at_decode() {
+        let mut value: serde_json::Value = serde_json::from_str(LEGACY_PLAN).unwrap();
+        value["selection_commitment"] = serde_json::to_value([7u8; 32]).unwrap();
+        value["budget_profile"] = serde_json::to_value(ModelBudgetProfile::unknown()).unwrap();
+        let complete: PreparedModelPlan = serde_json::from_value(value.clone()).unwrap();
+        complete.validate().unwrap();
+        let mut invalid = complete.clone();
+        invalid.selection_commitment = ModelSelectionCommitment([0; 32]);
+        assert!(invalid.model_execution_selection().is_err());
+        let mut invalid = complete.clone();
+        invalid.budget_profile.framing.max_messages = 0;
+        assert!(invalid.model_execution_selection().is_err());
+        let mut invalid = complete.clone();
+        invalid.operation_id = Uuid::nil();
+        assert!(invalid.model_execution_selection().is_err());
+        for field in ["selection_commitment", "budget_profile"] {
+            let mut missing = value.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                serde_json::from_value::<PreparedModelPlan>(missing).is_err(),
+                "missing {field} must not become a readable historical plan"
+            );
+            let mut null = value.clone();
+            null[field] = serde_json::Value::Null;
+            assert!(
+                serde_json::from_value::<PreparedModelPlan>(null).is_err(),
+                "null {field} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn complete_plan_roundtrip_retains_every_required_proof() {
+        let plan = complete_plan();
+        plan.validate().unwrap();
+        let encoded = serde_json::to_vec(&plan).unwrap();
+        let decoded: PreparedModelPlan = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, plan);
+        assert_eq!(serde_json::to_vec(&decoded).unwrap(), encoded);
+        assert!(serde_json::from_str::<PreparedModelPlan>(LEGACY_PLAN).is_err());
         assert_eq!(
-            plan.validate_for_dispatch(),
-            Err(AgentFailure::PolicyDenied),
-            "a missing profile cannot authorize a new dispatch"
+            plan.model_execution_selection().unwrap().budget_profile,
+            plan.budget_profile
         );
     }
 
     #[test]
-    fn legacy_task_receipt_preserves_source_review_digest_without_profile_field() {
-        let plan = legacy_plan();
+    fn current_task_receipt_preserves_source_review_digest_with_required_profile() {
+        let plan = complete_plan();
         let projection_operation_id =
             Uuid::parse_str("44444444-4444-4444-8444-444444444444").unwrap();
         let blocker = SourceAccessRequirement::try_new(
@@ -366,8 +379,8 @@ mod tests {
             accounting: TaskModelAccounting::default(),
         };
         let encoded = serde_json::to_vec(&receipt).unwrap();
-        assert!(!String::from_utf8_lossy(&encoded).contains("budget_profile"));
-        assert!(!String::from_utf8_lossy(&encoded).contains("selection_commitment"));
+        assert!(String::from_utf8_lossy(&encoded).contains("budget_profile"));
+        assert!(String::from_utf8_lossy(&encoded).contains("selection_commitment"));
         let decoded: TaskExecutionReceipt = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, receipt);
         assert!(

@@ -1424,7 +1424,7 @@ mod model_selection_tests {
     }
 
     #[test]
-    fn unproven_historical_selection_never_becomes_a_dispatch_pin() {
+    fn unproven_parent_lineage_never_becomes_a_dispatch_pin() {
         assert_eq!(
             reconcile_resume_selection(&ModelSelectionState::Unproven, &ModelSelectionState::Fresh,),
             Ok(ModelSelectionState::Unproven)

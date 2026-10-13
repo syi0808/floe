@@ -152,7 +152,7 @@ fn fixture() -> (
         head_revision: 6,
     };
     let source = CompactionSource {
-            authority: crate::CompactionAuthority::Idle,
+        authority: crate::CompactionAuthority::Idle,
         session_id: Uuid::new_v4(),
         session_revision: 3,
         data_classes: vec![DataClass::Personal],
@@ -194,8 +194,8 @@ fn fixture() -> (
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: ModelBindingDigest([1; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([2; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([2; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         },
         role: compaction_role_spec(),
         conversation: compaction_seed(job.claim.execution_id),

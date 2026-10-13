@@ -38,11 +38,7 @@ impl InferenceAvailability {
         Ok(Self {
             boundary: prepared.plan().boundary,
             capabilities: prepared.plan().capabilities.clone(),
-            budget_profile: prepared
-                .plan()
-                .budget_profile
-                .clone()
-                .ok_or(AgentFailure::PolicyDenied)?,
+            budget_profile: prepared.plan().budget_profile.clone(),
         })
     }
 }
@@ -126,8 +122,8 @@ where
                         capabilities: capability.capabilities,
                         boundary: capability.boundary,
                         binding_digest: capability.binding_digest,
-                        selection_commitment: Some(capability.selection_commitment),
-                        budget_profile: Some(capability.budget_profile.clone()),
+                        selection_commitment: capability.selection_commitment,
+                        budget_profile: capability.budget_profile.clone(),
                     };
                     let prepared: Box<dyn PreparedModelCall> = Box::new(PreparedInferenceCall {
                         plan,
@@ -248,11 +244,7 @@ where
             attempt_id: request.attempt_id,
             envelope: request.projection.envelope.clone(),
             catalog: request.catalog.clone(),
-            budget_profile: self
-                .plan
-                .budget_profile
-                .clone()
-                .ok_or(AgentFailure::PolicyDenied)?,
+            budget_profile: self.plan.budget_profile.clone(),
             input_data_classes: request.projection.input_data_classes.clone(),
             remaining_tokens: tokens,
             remaining_cost_micros: cost,

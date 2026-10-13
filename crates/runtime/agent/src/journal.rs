@@ -843,21 +843,14 @@ fn record_model_selection(
     state: &mut ModelSelectionState,
     plan: &floe_agent_contract::PreparedModelPlan,
 ) -> Result<(), AgentFailure> {
-    match plan.model_execution_selection()? {
-        Some(selection) => match state {
-            ModelSelectionState::Fresh => {
-                *state = ModelSelectionState::Pinned(selection);
-            }
-            ModelSelectionState::Pinned(pinned) if *pinned == selection => {}
-            ModelSelectionState::Pinned(_) => return Err(AgentFailure::StorageUnavailable),
-            ModelSelectionState::Unproven => {}
-        },
-        None => match state {
-            ModelSelectionState::Fresh | ModelSelectionState::Pinned(_) => {
-                *state = ModelSelectionState::Unproven;
-            }
-            ModelSelectionState::Unproven => {}
-        },
+    let selection = plan.model_execution_selection()?;
+    match state {
+        ModelSelectionState::Fresh => *state = ModelSelectionState::Pinned(selection),
+        ModelSelectionState::Pinned(pinned) if *pinned == selection => {}
+        ModelSelectionState::Pinned(_) => return Err(AgentFailure::StorageUnavailable),
+        // Only the actual parent lineage may resolve a batch-only projection.
+        // Seeing a later plan cannot reconstruct that missing proof.
+        ModelSelectionState::Unproven => {}
     }
     Ok(())
 }
@@ -923,8 +916,8 @@ mod model_selection_tests {
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: ModelBindingDigest([2; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([commitment; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         }
     }
 
@@ -935,7 +928,7 @@ mod model_selection_tests {
         record_model_selection(&mut selection, &first).expect("pin first selection");
         assert_eq!(
             selection,
-            ModelSelectionState::Pinned(first.model_execution_selection().unwrap().unwrap())
+            ModelSelectionState::Pinned(first.model_execution_selection().unwrap())
         );
         record_model_selection(&mut selection, &first).expect("same selection is stable");
         assert_eq!(
@@ -946,13 +939,8 @@ mod model_selection_tests {
     }
 
     #[test]
-    fn legacy_model_intent_without_selection_evidence_remains_unproven() {
-        let mut legacy = plan(1);
-        legacy.selection_commitment = None;
-        legacy.budget_profile = None;
-        let mut selection = ModelSelectionState::Fresh;
-        record_model_selection(&mut selection, &legacy).expect("read legacy evidence");
-        assert_eq!(selection, ModelSelectionState::Unproven);
+    fn later_plan_does_not_reconstruct_unproven_parent_lineage() {
+        let mut selection = ModelSelectionState::Unproven;
         record_model_selection(&mut selection, &plan(2)).expect("retain conservative state");
         assert_eq!(selection, ModelSelectionState::Unproven);
     }

@@ -2368,8 +2368,8 @@ mod model_selection_owner_tests {
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: floe_agent_contract::ModelBindingDigest([2; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([commitment; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([commitment; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         }
     }
 
@@ -2691,8 +2691,7 @@ mod model_selection_owner_tests {
         let attempt_id = Uuid::new_v4();
         let projection_ref = ProjectionRef::new();
         let mut incomplete = plan(&record, 1);
-        incomplete.selection_commitment = None;
-        incomplete.budget_profile = None;
+        incomplete.selection_commitment = ModelSelectionCommitment([0; 32]);
         assert_eq!(
             append_event(
                 &vault,
@@ -2700,7 +2699,7 @@ mod model_selection_owner_tests {
                 model_intent(attempt_id, projection_ref, incomplete),
             )
             .await,
-            Err(AgentFailure::PolicyDenied),
+            Err(AgentFailure::InvalidInput),
             "a newly appended plan must include complete model and budget evidence"
         );
 
@@ -2800,8 +2799,7 @@ mod model_selection_owner_tests {
                 ModelSelectionState::Pinned(
                     parent_plan
                         .model_execution_selection()
-                        .expect("valid parent plan")
-                        .expect("complete parent selection")
+                        .expect("complete valid parent selection")
                 )
             );
             assert_eq!(
@@ -2973,15 +2971,22 @@ mod model_selection_owner_tests {
     }
 
     #[tokio::test]
-    async fn run_owner_rejects_new_dispatch_after_historical_unproven_intent() {
+    async fn run_owner_rejects_missing_required_proof_without_repairing_stored_intent() {
         let StartedRun {
             vault, mut record, ..
         } = start_run().await;
-        let mut legacy = plan(&record, 1);
-        legacy.selection_commitment = None;
-        legacy.budget_profile = None;
-        let event = model_intent(Uuid::new_v4(), ProjectionRef::new(), legacy);
-        let payload = serde_json::to_string(&event).expect("serialize historical intent");
+        let event = model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&record, 1));
+        let mut encoded = serde_json::to_value(&event).unwrap();
+        encoded["plan"]
+            .as_object_mut()
+            .unwrap()
+            .remove("selection_commitment");
+        encoded["plan"]
+            .as_object_mut()
+            .unwrap()
+            .remove("budget_profile");
+        let payload = serde_json::to_string(&encoded).expect("serialize incomplete stored intent");
+        let original_payload = payload.clone();
         let connection = vault.connection().expect("connect test Vault");
         connection
             .execute(
@@ -2989,15 +2994,15 @@ mod model_selection_owner_tests {
                 (record.run_id.as_uuid().to_string(), payload),
             )
             .await
-            .expect("seed a readable historical prefix");
+            .expect("seed unsupported incomplete proof for rejection");
         record.journal_revision = 1;
         connection
             .execute(
                 "UPDATE agent_conversation_runs SET journal_revision = 1, payload = ? WHERE run_id = ?",
-                (encode_record(&record).expect("encode historical Run head"), record.run_id.as_uuid().to_string()),
+                (encode_record(&record).expect("encode the matching test Run head"), record.run_id.as_uuid().to_string()),
             )
             .await
-            .expect("advance historical Run head");
+            .expect("advance the test Run head without repairing its intent");
         assert_eq!(
             append_event(
                 &vault,
@@ -3005,8 +3010,25 @@ mod model_selection_owner_tests {
                 model_intent(Uuid::new_v4(), ProjectionRef::new(), plan(&record, 2)),
             )
             .await,
-            Err(AgentFailure::PolicyDenied),
-            "old evidence remains projectable but cannot authorize a newly appended dispatch"
+            Err(AgentFailure::StorageUnavailable),
+            "missing stored proof is rejected before projection or new dispatch"
+        );
+        let mut rows = connection
+            .query(
+                "SELECT payload FROM agent_conversation_journal WHERE run_id = ? AND revision = 1",
+                [record.run_id.as_uuid().to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            original_payload,
+            "a rejected old profile must not be repaired or reset"
         );
     }
 }

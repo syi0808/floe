@@ -5386,8 +5386,8 @@ mod tests {
             capabilities: ModelCapabilities::chat(),
             boundary: ProcessingBoundary::Device,
             binding_digest: ModelBindingDigest([91; 32]),
-            selection_commitment: Some(ModelSelectionCommitment([92; 32])),
-            budget_profile: Some(ModelBudgetProfile::unknown()),
+            selection_commitment: ModelSelectionCommitment([92; 32]),
+            budget_profile: ModelBudgetProfile::unknown(),
         };
         let projection_operation_id = Uuid::new_v4();
         let blockers = floe_context_contract::SourceAccessBlockers::try_new(vec![source.clone()])
@@ -6172,8 +6172,8 @@ mod tests {
                         capabilities: ModelCapabilities::chat(),
                         boundary: ProcessingBoundary::Device,
                         binding_digest: ModelBindingDigest([71; 32]),
-                        selection_commitment: Some(ModelSelectionCommitment([72; 32])),
-                        budget_profile: Some(ModelBudgetProfile::unknown()),
+                        selection_commitment: ModelSelectionCommitment([72; 32]),
+                        budget_profile: ModelBudgetProfile::unknown(),
                     },
                 },
             )
@@ -6524,8 +6524,8 @@ mod tests {
                             capabilities: ModelCapabilities::chat(),
                             boundary: ProcessingBoundary::Device,
                             binding_digest: ModelBindingDigest([61; 32]),
-                            selection_commitment: Some(ModelSelectionCommitment([62; 32])),
-                            budget_profile: Some(ModelBudgetProfile::unknown()),
+                            selection_commitment: ModelSelectionCommitment([62; 32]),
+                            budget_profile: ModelBudgetProfile::unknown(),
                         },
                     },
                 )
@@ -6721,8 +6721,8 @@ mod tests {
                                     capabilities: ModelCapabilities::chat(),
                                     boundary: ProcessingBoundary::Device,
                                     binding_digest: ModelBindingDigest([61; 32]),
-                                    selection_commitment: Some(ModelSelectionCommitment([62; 32])),
-                                    budget_profile: Some(ModelBudgetProfile::unknown()),
+                                    selection_commitment: ModelSelectionCommitment([62; 32]),
+                                    budget_profile: ModelBudgetProfile::unknown(),
                                 },
                             },
                         )
