@@ -644,7 +644,7 @@ impl ActiveDrive<'_> {
         if encoded_steps.len() > self.request.max_output_bytes {
             return Err(AgentFailure::BudgetExceeded);
         }
-        validate_batch_shape(steps)?;
+        floe_agent_contract::validate_model_batch_shape(steps)?;
         let corrections = validate_model_steps(steps, &self.request.allowed_catalog)?;
         let mut validated_steps = steps.to_vec();
         for step in &mut validated_steps {
@@ -1511,67 +1511,6 @@ fn verify_resumed_task_replay(
     .ok_or(AgentFailure::InvalidInput)
 }
 
-/// Maximum steps in one model batch, carried over from the legacy path.
-const MAX_BATCH_STEPS: usize = 16;
-
-/// Maximum tool calls in one tool batch, carried over from the legacy path.
-const MAX_BATCH_TOOL_CALLS: usize = 8;
-
-/// Whole-batch grammar, checked before any per-step validation or dispatch.
-/// An answer batch is exactly one final answer with no tool or delegation;
-/// a tool batch carries no answer or delegation; a delegation batch carries
-/// exactly one delegation and nothing else executable. Every preamble leads
-/// its batch: no preamble may follow an executable step.
-fn validate_batch_shape(steps: &[ModelStep]) -> Result<(), AgentFailure> {
-    if steps.is_empty() || steps.len() > MAX_BATCH_STEPS {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    if let Some(first_executable) = steps
-        .iter()
-        .position(|step| !matches!(step, ModelStep::Preamble { .. }))
-    {
-        if steps[first_executable..]
-            .iter()
-            .any(|step| matches!(step, ModelStep::Preamble { .. }))
-        {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-    } else {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    let mut answers = 0;
-    let mut tools = 0;
-    let mut delegations = 0;
-    for step in steps {
-        match step {
-            ModelStep::Answer { .. } => answers += 1,
-            ModelStep::CallTool { .. } => tools += 1,
-            ModelStep::Delegate { .. } => delegations += 1,
-            ModelStep::Preamble { .. } => {}
-        }
-    }
-    if answers > 0 {
-        if answers != 1
-            || tools != 0
-            || delegations != 0
-            || !matches!(steps.last(), Some(ModelStep::Answer { .. }))
-        {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-    } else if tools > 0 {
-        if delegations != 0 || tools > MAX_BATCH_TOOL_CALLS {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-    } else if delegations > 0 {
-        if delegations != 1 {
-            return Err(AgentFailure::InvalidModelOutput);
-        }
-    } else {
-        return Err(AgentFailure::InvalidModelOutput);
-    }
-    Ok(())
-}
-
 fn validate_model_steps(
     steps: &[ModelStep],
     catalog: &floe_agent_contract::AllowedCatalog,
@@ -1861,6 +1800,92 @@ mod model_selection_tests {
             },
         });
         request
+    }
+
+    #[tokio::test]
+    async fn restored_batch_grammar_is_rejected_before_any_effect_or_journal_write() {
+        let tool = ModelStep::CallTool {
+            tool_id: "test.read".into(),
+            definition_revision: 1,
+            input: "{}".into(),
+        };
+        let preamble = ModelStep::Preamble {
+            text: "Reading".into(),
+        };
+        let answer = ModelStep::Answer {
+            text: "Answer".into(),
+            artifacts: vec![],
+        };
+        let mut oversized = vec![preamble.clone(); 16];
+        oversized.push(tool.clone());
+        for steps in [
+            vec![tool.clone(), preamble.clone()],
+            vec![preamble.clone()],
+            vec![tool.clone(); 9],
+            oversized,
+            vec![answer.clone(), tool.clone()],
+            vec![answer.clone(), answer],
+        ] {
+            let mut request = resume_iteration_request(1);
+            let resume = request.resume.as_mut().unwrap();
+            let valid_batch = resume.validated_batch.clone();
+            resume.validated_batch.steps = steps;
+            resume.cursor.next_step_index = 0;
+            let source = crate::JournalExecutionBinding {
+                principal: request.principal.clone(),
+                device_id: request.device_id.clone(),
+                execution_id: request.execution_id,
+                catalog_revision: request.allowed_catalog.revision,
+                root_run_id: None,
+                owning_task_id: None,
+            };
+            let entry = floe_agent_contract::JournalEntry {
+                revision: 1,
+                event: JournalEvent::ValidatedBatch {
+                    batch: resume.validated_batch.clone(),
+                },
+            };
+            for mode in [
+                crate::JournalProjectionMode::DurablePrefix,
+                crate::JournalProjectionMode::Recoverable,
+            ] {
+                let valid_entry = floe_agent_contract::JournalEntry {
+                    revision: 1,
+                    event: JournalEvent::ValidatedBatch {
+                        batch: valid_batch.clone(),
+                    },
+                };
+                assert!(crate::project_execution_journal(&source, &[valid_entry], mode).is_ok());
+                assert!(matches!(
+                    crate::project_execution_journal(&source, &[entry.clone()], mode),
+                    Err(AgentFailure::StorageUnavailable)
+                ));
+            }
+            let journal = ResumeJournal::default();
+            let tools = ResumeTools::default();
+            let model = CountingModel(AtomicUsize::new(0));
+            let never = NeverCalledPorts;
+            let result = Engine::default()
+                .drive(
+                    request,
+                    EnginePorts {
+                        projection: &never,
+                        model: &model,
+                        tools: &tools,
+                        delegation: &never,
+                        journal: &journal,
+                        validator: &ContractValidator,
+                    },
+                )
+                .await;
+            assert!(
+                matches!(result, Err(AgentFailure::InvalidInput)),
+                "invalid stored grammar was accepted: {result:?}"
+            );
+            assert_eq!(tools.0.load(Ordering::SeqCst), 0);
+            assert_eq!(model.0.load(Ordering::SeqCst), 0);
+            assert!(journal.0.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

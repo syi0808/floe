@@ -79,8 +79,7 @@ impl ValidatedModelBatch {
             || self.attempt_id.is_nil()
             || self.projection_ref.as_uuid().is_nil()
             || self.batch_id.is_nil()
-            || self.steps.is_empty()
-            || self.steps.len() > 1024
+            || crate::validate_model_batch_shape(&self.steps).is_err()
             || self
                 .tool_revisions
                 .iter()

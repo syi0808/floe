@@ -2421,9 +2421,10 @@ mod model_selection_owner_tests {
                     definition_revision: 1,
                     input: "{}".into(),
                 },
-                ModelStep::Answer {
-                    text: "A persisted answer.".into(),
-                    artifacts: vec![],
+                ModelStep::CallTool {
+                    tool_id: "floe.source.calendar".into(),
+                    definition_revision: 1,
+                    input: r#"{"cursor":"next-page"}"#.into(),
                 },
             ],
             catalog_revision: record.expert_environment.revision,
@@ -2449,13 +2450,21 @@ mod model_selection_owner_tests {
             &batch.execution_id,
             format!("{}:{}:{ordinal}:tool", batch.execution_id, batch.batch_id).as_bytes(),
         );
+        let ModelStep::CallTool {
+            tool_id,
+            definition_revision,
+            input,
+        } = &batch.steps[ordinal as usize]
+        else {
+            panic!("fixture cursor must name its exact Tool step");
+        };
         floe_agent_contract::ToolCall {
             call_id,
             invocation_key: InvocationKey::from_uuid(invocation_key)
                 .expect("stable invocation key is non-nil"),
-            tool_id: "floe.source.calendar".into(),
-            definition_revision: 1,
-            input: "{}".into(),
+            tool_id: tool_id.clone(),
+            definition_revision: *definition_revision,
+            input: input.clone(),
         }
     }
 
@@ -2635,6 +2644,31 @@ mod model_selection_owner_tests {
             )
             .await
             .expect("replay the stored batch through its acknowledged cursor");
+            if next_step_index < pending_batch.steps.len() as u32 {
+                let call = stable_tool_call(pending_batch, next_step_index);
+                append_event(
+                    vault,
+                    child.run_id,
+                    JournalEvent::ToolIntent { call: call.clone() },
+                )
+                .await
+                .expect("record the remaining inherited Tool intent");
+                append_event(
+                    vault,
+                    child.run_id,
+                    JournalEvent::ToolResult {
+                        result: floe_agent_contract::ToolResult {
+                            call_id: call.call_id,
+                            text: "Persisted next-page observation.".into(),
+                            artifacts: vec![],
+                            coverage: DependencyCoverage::Independent,
+                            issue: None,
+                        },
+                    },
+                )
+                .await
+                .expect("settle the remaining inherited Tool before advancing its cursor");
+            }
         }
         append_event(
             vault,

@@ -6489,96 +6489,99 @@ mod tests {
                 projection_coverage: DependencyCoverage::Independent,
             };
             let execution_id = run.run_id.as_uuid();
-            let attempt_id = Uuid::new_v4();
-            let projection_ref = ProjectionRef::new();
-            let batch_id = Uuid::new_v4();
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::ModelIntent {
-                    attempt_id,
-                    parent_task_id: None,
-                    reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
-                        tokens: 128,
-                        cost_micros: 128,
-                    },
-                    projection_ref,
-                    plan: PreparedModelPlan {
-                        operation_id: Uuid::new_v4(),
-                        principal: self.person_id.to_string(),
-                        device_id: run.device_id.clone(),
-                        purpose: "everyday_assistance".into(),
-                        consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
-                        capabilities: ModelCapabilities::chat(),
-                        boundary: ProcessingBoundary::Device,
-                        binding_digest: ModelBindingDigest([61; 32]),
-                        selection_commitment: Some(ModelSelectionCommitment([62; 32])),
-                        budget_profile: Some(ModelBudgetProfile::unknown()),
-                    },
-                },
-            )
-            .await;
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::ModelResult {
-                    attempt_id,
-                    usage: floe_agent_contract::ModelUsage::default(),
-                    accounting: floe_execution::budget::ModelAccounting {
-                        observed_tokens: None,
-                        observed_cost_micros: None,
-                        unknown_tokens: true,
-                        unknown_cost: true,
-                    },
-                },
-            )
-            .await;
             assert!(matches!(task_count, 1 | 2));
             assert!(parent_result_count <= task_count);
+            assert!(
+                task_count <= parent_result_count + 1,
+                "a new delegation waits for the prior result"
+            );
             let task_messages = ["Task A input", "Task B input"][..task_count].to_vec();
-            let batch = ValidatedModelBatch {
-                execution_id,
-                attempt_id,
-                projection_ref,
-                batch_id,
-                steps: task_messages
-                    .iter()
-                    .map(|message| floe_agent_contract::ModelStep::Delegate {
+            let mut references = Vec::new();
+            let mut task_receipts = Vec::new();
+            for (task_index, message) in task_messages.iter().enumerate() {
+                // Runtime emits one delegation per model batch. Two owner
+                // receipts must come from two sequential completed batches.
+                let ordinal = 0u32;
+                let attempt_id = Uuid::new_v4();
+                let projection_ref = ProjectionRef::new();
+                let batch_id = Uuid::new_v4();
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::ModelIntent {
+                        attempt_id,
+                        parent_task_id: None,
+                        reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                            tokens: 128,
+                            cost_micros: 128,
+                        },
+                        projection_ref,
+                        plan: PreparedModelPlan {
+                            operation_id: Uuid::new_v4(),
+                            principal: self.person_id.to_string(),
+                            device_id: run.device_id.clone(),
+                            purpose: "everyday_assistance".into(),
+                            consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                            capabilities: ModelCapabilities::chat(),
+                            boundary: ProcessingBoundary::Device,
+                            binding_digest: ModelBindingDigest([61; 32]),
+                            selection_commitment: Some(ModelSelectionCommitment([62; 32])),
+                            budget_profile: Some(ModelBudgetProfile::unknown()),
+                        },
+                    },
+                )
+                .await;
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::ModelResult {
+                        attempt_id,
+                        usage: floe_agent_contract::ModelUsage::default(),
+                        accounting: floe_execution::budget::ModelAccounting {
+                            observed_tokens: None,
+                            observed_cost_micros: None,
+                            unknown_tokens: true,
+                            unknown_cost: true,
+                        },
+                    },
+                )
+                .await;
+                let batch = ValidatedModelBatch {
+                    execution_id,
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![floe_agent_contract::ModelStep::Delegate {
                         agent_id: "fixture.expert".into(),
                         definition_revision: 1,
                         message: (*message).into(),
                         context_refs: vec![],
-                    })
-                    .collect(),
-                catalog_revision: run.expert_environment.revision,
-                tool_revisions: vec![],
-                agent_revisions: vec![PinnedAgentRevision {
-                    agent_id: "fixture.expert".into(),
-                    definition_revision: 1,
-                }],
-                projection_coverage: DependencyCoverage::Independent,
-                delegation_context: Some(execution_context.clone()),
-            };
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::ValidatedBatch {
-                    batch: batch.clone(),
-                },
-            )
-            .await;
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::BatchProgress {
-                    cursor: floe_agent_contract::BatchCursor {
-                        batch_id,
-                        next_step_index: 0,
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![PinnedAgentRevision {
+                        agent_id: "fixture.expert".into(),
+                        definition_revision: 1,
+                    }],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: Some(execution_context.clone()),
+                };
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::ValidatedBatch {
+                        batch: batch.clone(),
                     },
-                },
-            )
-            .await;
+                )
+                .await;
+                self.append_owner_event(
+                    run.run_id,
+                    JournalEvent::BatchProgress {
+                        cursor: floe_agent_contract::BatchCursor {
+                            batch_id,
+                            next_step_index: 0,
+                        },
+                    },
+                )
+                .await;
 
-            let mut references = Vec::new();
-            let mut task_receipts = Vec::new();
-            for (ordinal, message) in task_messages.iter().enumerate() {
-                let ordinal = ordinal as u32;
                 let task_id = TaskId::from_uuid(Uuid::new_v5(
                     &execution_id,
                     format!("{execution_id}:{batch_id}:{ordinal}:task").as_bytes(),
@@ -6694,7 +6697,7 @@ mod tests {
                     )
                     .await
                     .expect("start Task execution fixture");
-                if first_task_has_unresolved_model_attempt && ordinal == 0 {
+                if first_task_has_unresolved_model_attempt && task_index == 0 {
                     self.vault()
                         .append_task_journal(
                             working.execution(),
@@ -6753,7 +6756,7 @@ mod tests {
                     replay: None,
                     execution: TaskExecutionEvidence::Admitted(receipt.clone()),
                 };
-                if (ordinal as usize) < parent_result_count {
+                if task_index < parent_result_count {
                     let event = JournalEvent::DelegationResult {
                         receipt: Box::new(task_receipt.clone()),
                     };
@@ -6768,32 +6771,28 @@ mod tests {
                 }
                 task_receipts.push(task_receipt);
                 references.push(receipt.reference.clone());
-                if (ordinal as usize) < parent_result_count
-                    && ordinal + 1 < task_messages.len() as u32
-                {
+
+                if task_index < parent_result_count {
                     self.append_owner_event(
                         run.run_id,
                         JournalEvent::BatchProgress {
                             cursor: floe_agent_contract::BatchCursor {
                                 batch_id,
-                                next_step_index: ordinal + 1,
+                                next_step_index: 1,
                             },
                         },
                     )
                     .await;
+                    if task_index + 1 < task_messages.len() {
+                        self.append_owner_event(
+                            run.run_id,
+                            JournalEvent::Checkpoint {
+                                iteration: (task_index + 1) as u32,
+                            },
+                        )
+                        .await;
+                    }
                 }
-            }
-            if parent_result_count == task_messages.len() {
-                self.append_owner_event(
-                    run.run_id,
-                    JournalEvent::BatchProgress {
-                        cursor: floe_agent_contract::BatchCursor {
-                            batch_id,
-                            next_step_index: parent_result_count as u32,
-                        },
-                    },
-                )
-                .await;
             }
             (references, task_receipts)
         }

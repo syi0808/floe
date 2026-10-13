@@ -2797,7 +2797,7 @@ async fn stale_working_recovery_retires_writer_and_preserves_unresolved_model_ac
     scenario
         .append_owner_event(
             run.run_id,
-            floe_agent_contract::JournalEvent::Checkpoint { iteration: 1 },
+            floe_agent_contract::JournalEvent::Checkpoint { iteration: 2 },
         )
         .await;
     let unresolved_attempt = append_unresolved_model_attempt(&scenario, &run).await;

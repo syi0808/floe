@@ -14,6 +14,7 @@ mod history;
 mod interaction;
 mod message;
 mod model;
+mod model_batch;
 mod model_budget;
 mod model_conversation;
 mod model_plan;
@@ -72,6 +73,7 @@ pub use model::{
     ModelOutputRejection, ModelRequest, ModelResponse, ModelStep, ModelUsage, RoleSpec, ToolCall,
     ToolDescriptor, ValidatedFinalPayload, validate_tool_input,
 };
+pub use model_batch::validate_model_batch_shape;
 pub use model_budget::{
     AGENT_CONVERSATION_BYTES, BudgetProvenance, CatalogBudgetFacts, CatalogMetadataStatus,
     GATEWAY_INSTRUCTION_BYTES, GATEWAY_MESSAGE_COUNT, GATEWAY_OUTPUT_BYTES, GATEWAY_REQUEST_BYTES,
