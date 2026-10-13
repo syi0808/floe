@@ -8,10 +8,10 @@ use floe_agent_contract::AgentFailure;
 use floe_calendar_operations::{
     ActionDecision, ActionDigest, ActionOrigin, ActionPage, ActionReconciliation, ActionRecord,
     ActionState, AdmittedOperation, CalendarOperationStoreError, CollectionAck, CollectionTicket,
-    DispatchAdmission, DispatchIntent, ExecutionSettlement, OperationAdmission, PreDispatchStop,
-    RecoveryPage, acknowledge_action_collection, action_digest, decision_intent_digest,
-    invalidate_action_dependency, invalidate_action_policy, prepare_action_dispatch, settle_action,
-    stop_action, validate_action_admission,
+    DispatchAdmission, DispatchIntent, ExecutionSettlement, OperationAdmission,
+    OperationAdmissionResolution, PreDispatchStop, RecoveryPage, acknowledge_action_collection,
+    action_digest, decision_intent_digest, invalidate_action_dependency, invalidate_action_policy,
+    prepare_action_dispatch, settle_action, stop_action, validate_action_admission,
 };
 use floe_kernel::{CommandFailure, PersonId};
 use turso::transaction::{Transaction, TransactionBehavior};
@@ -624,7 +624,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     ) -> Result<Option<CommandReceipt>, CalendarOperationStoreError> {
         let mut rows = transaction
             .query(
-                "SELECT kind, intent_digest, action_id FROM actions_command_receipts WHERE person_id = ? AND command_id = ?",
+                "SELECT kind, intent_digest, action_id, CASE WHEN length(CAST(rejection AS BLOB)) <= 128 THEN rejection ELSE NULL END FROM actions_command_receipts WHERE person_id = ? AND command_id = ?",
                 (person_id.to_string(), command_id.to_string()),
             )
             .await
@@ -632,7 +632,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let Some(row) = rows.next().await.map_err(sql_error)? else {
             return Ok(None);
         };
+        let rejection_text = row
+            .get::<String>(3)
+            .map_err(|_| CalendarOperationStoreError::CorruptRecord)?;
+        let rejection = if rejection_text.is_empty() {
+            None
+        } else {
+            Some(
+                serde_json::from_str::<AgentFailure>(&rejection_text)
+                    .map_err(|_| CalendarOperationStoreError::CorruptRecord)?,
+            )
+        };
         let receipt = CommandReceipt {
+            rejection,
             kind: row
                 .get::<String>(0)
                 .map_err(|_| CalendarOperationStoreError::CorruptRecord)?,
@@ -649,7 +661,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             "submit" | "decision" | "reconciliation" | "authority"
         ) || !digest_text_is_valid(&receipt.intent_digest)
             || (is_authority && !receipt.action_id.is_empty())
-            || (!is_authority && !canonical_uuid(&receipt.action_id))
+            || (receipt.rejection.is_some()
+                && (receipt.kind != "submit" || !receipt.action_id.is_empty()))
+            || (!is_authority && receipt.rejection.is_none() && !canonical_uuid(&receipt.action_id))
             || rows.next().await.map_err(sql_error)?.is_some()
         {
             return Err(CalendarOperationStoreError::CorruptRecord);
@@ -672,7 +686,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let action_id = action_id.map(|id| id.to_string()).unwrap_or_default();
         let changed = transaction
             .execute(
-                "INSERT INTO actions_command_receipts (person_id, command_id, kind, intent_digest, action_id) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO actions_command_receipts (person_id, command_id, kind, intent_digest, action_id, rejection) VALUES (?, ?, ?, ?, ?, '')",
                 (
                     person_id.to_string(),
                     command_id.to_string(),
@@ -1235,7 +1249,10 @@ fn actions_command_rolled_back_failure(
     replay_checked: bool,
     prior_command: bool,
 ) -> CommandFailure<CalendarOperationStoreError> {
-    if prior_command || !replay_checked {
+    if matches!(error, CalendarOperationStoreError::Rejected(_)) && replay_checked && prior_command
+    {
+        CommandFailure::NotApplied(error)
+    } else if prior_command || !replay_checked {
         CommandFailure::Indeterminate(error)
     } else {
         CommandFailure::NotApplied(error)
@@ -1289,6 +1306,7 @@ mod command_finish_tests {
 
 #[derive(Clone, Debug)]
 struct CommandReceipt {
+    rejection: Option<AgentFailure>,
     kind: String,
     intent_digest: String,
     action_id: String,
@@ -1344,6 +1362,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         *prior_command = true;
         if receipt.kind != kind || receipt.intent_digest != digest_hex(digest) {
             return Err(CalendarOperationStoreError::Conflict);
+        }
+        if let Some(reason) = receipt.rejection {
+            return Err(CalendarOperationStoreError::Rejected(reason));
         }
         self.record_for_command_receipt(transaction, person_id, &receipt)
             .await
@@ -1522,10 +1543,76 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.finish_actions_transaction(transaction, result).await
     }
 
+    /// A committed negative receipt and a positive admission compete for the
+    /// same primary key under one immediate transaction. A prepared value has
+    /// no authority to overwrite either result, including after restart.
+    pub(crate) async fn actions_reject_admission(
+        &self,
+        person_id: PersonId,
+        command_id: Uuid,
+        request_digest: ActionDigest,
+        reason: AgentFailure,
+    ) -> Result<OperationAdmissionResolution, CommandFailure<CalendarOperationStoreError>> {
+        let mut connection = self
+            .connection()
+            .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+        let result = async {
+            self.ensure_actions_schema(&transaction).await?;
+            if person_id != self.person_id || command_id.is_nil() {
+                return Err(CalendarOperationStoreError::InvalidRecord);
+            }
+            if super::conversations::command_occupant(&transaction, command_id)
+                .await
+                .map_err(invalid_record)?
+                .is_some()
+            {
+                return Err(CalendarOperationStoreError::Conflict);
+            }
+            if let Some(receipt) = self
+                .command_receipt(&transaction, person_id, command_id)
+                .await?
+            {
+                if receipt.kind != "submit" || receipt.intent_digest != digest_hex(&request_digest) {
+                    return Err(CalendarOperationStoreError::Conflict);
+                }
+                return match receipt.rejection {
+                    Some(reason) => Ok(OperationAdmissionResolution::Rejected(reason)),
+                    None => Ok(OperationAdmissionResolution::Admitted(
+                        self.record_for_command_receipt(&transaction, person_id, &receipt).await?,
+                    )),
+                };
+            }
+            let rejection = serde_json::to_string(&reason)
+                .map_err(|_| CalendarOperationStoreError::InvalidRecord)?;
+            let changed = transaction.execute(
+                "INSERT INTO actions_command_receipts (person_id, command_id, kind, intent_digest, action_id, rejection) VALUES (?, ?, 'submit', ?, '', ?)",
+                (person_id.to_string(), command_id.to_string(), digest_hex(&request_digest), rejection),
+            ).await.map_err(sql_error)?;
+            if changed != 1 {
+                return Err(CalendarOperationStoreError::Conflict);
+            }
+            Ok(OperationAdmissionResolution::Rejected(reason))
+        }.await;
+        // Even rollback/commit acknowledgement failure is indeterminate here:
+        // no caller may discard the command until this receipt is observable.
+        self.finish_actions_transaction(transaction, result)
+            .await
+            .map_err(CommandFailure::Indeterminate)
+    }
+
     pub(crate) async fn actions_admit(
         &self,
         admission: OperationAdmission,
     ) -> Result<AdmittedOperation, CommandFailure<CalendarOperationStoreError>> {
+        let identity = (
+            admission.record.person_id,
+            admission.command_id,
+            admission.request_digest,
+        );
         let mut connection = self
             .connection()
             .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
@@ -1543,8 +1630,33 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &mut prior_command,
             )
             .await;
-        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+        match self
+            .finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
             .await
+        {
+            Err(CommandFailure::NotApplied(CalendarOperationStoreError::Rejected(reason))) => Err(
+                CommandFailure::NotApplied(CalendarOperationStoreError::Rejected(reason)),
+            ),
+            Err(CommandFailure::NotApplied(
+                error @ (CalendarOperationStoreError::StorageBusy
+                | CalendarOperationStoreError::Unavailable
+                | CalendarOperationStoreError::VaultLocked
+                | CalendarOperationStoreError::CorruptRecord),
+            )) => Err(CommandFailure::Indeterminate(error)),
+            Err(CommandFailure::NotApplied(error)) => match self
+                .actions_reject_admission(identity.0, identity.1, identity.2, error.into())
+                .await?
+            {
+                OperationAdmissionResolution::Rejected(reason) => Err(CommandFailure::NotApplied(
+                    CalendarOperationStoreError::Rejected(reason),
+                )),
+                OperationAdmissionResolution::Admitted(record) => Ok(AdmittedOperation {
+                    record,
+                    replayed: true,
+                }),
+            },
+            other => other,
+        }
     }
 
     pub(super) async fn actions_admit_on(
@@ -2244,3 +2356,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
     }
 }
+
+#[cfg(all(test, feature = "development-storage"))]
+#[path = "calendar_admission_tests.rs"]
+mod admission_tests;

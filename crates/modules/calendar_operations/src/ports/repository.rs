@@ -28,6 +28,9 @@ pub enum CalendarOperationStoreError {
     CorruptRecord,
     #[error("Pending Expert Action capacity is exhausted")]
     BudgetExceeded,
+    /// Exact submission identity has a durable negative receipt.
+    #[error("Calendar submission was durably rejected: {0:?}")]
+    Rejected(floe_kernel::AgentFailure),
 }
 
 impl From<CalendarOperationStoreError> for floe_kernel::AgentFailure {
@@ -41,6 +44,7 @@ impl From<CalendarOperationStoreError> for floe_kernel::AgentFailure {
             CalendarOperationStoreError::Conflict => Self::Conflict,
             CalendarOperationStoreError::InvalidRecord => Self::InvalidInput,
             CalendarOperationStoreError::BudgetExceeded => Self::BudgetExceeded,
+            CalendarOperationStoreError::Rejected(reason) => reason,
         }
     }
 }
@@ -59,6 +63,13 @@ pub struct OperationAdmission {
     pub request_digest: ActionDigest,
     pub publication: Option<OperationApprovalPublicationContext>,
     pub record: ActionRecord,
+}
+
+/// First durable result wins; rejection cannot overwrite an admitted command.
+#[derive(Clone, Debug)]
+pub enum OperationAdmissionResolution {
+    Admitted(ActionRecord),
+    Rejected(floe_kernel::AgentFailure),
 }
 
 /// Immutable Conversation correlation included in an Expert proposal's
@@ -196,6 +207,18 @@ pub trait CalendarOperationsRepository: Send + Sync {
         command_id: Uuid,
         request_digest: ActionDigest,
     ) -> BoxFuture<'a, Result<Option<ActionRecord>, CalendarOperationStoreError>>;
+    /// Commit a negative receipt only if this exact submission is still vacant.
+    /// Storage/namespace uncertainty never proves a whole-command rejection.
+    fn reject_admission<'a>(
+        &'a self,
+        person_id: PersonId,
+        command_id: Uuid,
+        request_digest: ActionDigest,
+        reason: floe_kernel::AgentFailure,
+    ) -> BoxFuture<
+        'a,
+        Result<OperationAdmissionResolution, CommandFailure<CalendarOperationStoreError>>,
+    >;
     fn admit<'a>(
         &'a self,
         admission: OperationAdmission,

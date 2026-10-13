@@ -6,8 +6,8 @@ use floe_access::{OperationAuthorizationPolicy, OperationPolicyChange};
 use floe_calendar_operations::{
     ActionDecision, ActionPage, ActionReconciliation, ActionRecord, AdmittedOperation,
     CalendarOperationStoreError, CalendarOperationsRepository, CollectionAck, CollectionTicket,
-    DispatchAdmission, DispatchIntent, ExecutionSettlement, OperationAdmission, PreDispatchStop,
-    RecoveryPage,
+    DispatchAdmission, DispatchIntent, ExecutionSettlement, OperationAdmission,
+    OperationAdmissionResolution, PreDispatchStop, RecoveryPage,
 };
 use floe_execution::BoxFuture;
 use floe_kernel::CommandFailure;
@@ -152,6 +152,23 @@ impl<Keys: VaultKeyProvider> CalendarOperationsRepository
         Box::pin(async move {
             self.vault
                 .actions_find_admission(person_id, command_id, request_digest)
+                .await
+        })
+    }
+
+    fn reject_admission<'a>(
+        &'a self,
+        person_id: PersonId,
+        command_id: Uuid,
+        request_digest: [u8; 32],
+        reason: floe_kernel::AgentFailure,
+    ) -> BoxFuture<
+        'a,
+        Result<OperationAdmissionResolution, CommandFailure<CalendarOperationStoreError>>,
+    > {
+        Box::pin(async move {
+            self.vault
+                .actions_reject_admission(person_id, command_id, request_digest, reason)
                 .await
         })
     }

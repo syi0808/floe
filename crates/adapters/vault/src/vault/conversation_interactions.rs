@@ -79,6 +79,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if admission.command_id.is_nil() || admission.record.person_id != self.person_id {
             return Err(CommandFailure::NotAdmitted(AgentFailure::CapabilityDenied));
         }
+        let identity = (
+            admission.record.person_id,
+            admission.command_id,
+            admission.request_digest,
+        );
         let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -207,9 +212,35 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             })
         }
         .await;
-        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
-            .await
-            .map_err(|failure| failure.map_failure(AgentFailure::from))
+        let result = self
+            .finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
+            .await;
+        match result {
+            Err(CommandFailure::NotApplied(
+                floe_calendar_operations::CalendarOperationStoreError::Rejected(reason),
+            )) => Err(CommandFailure::NotApplied(reason)),
+            Err(CommandFailure::NotApplied(
+                error @ (floe_calendar_operations::CalendarOperationStoreError::StorageBusy
+                | floe_calendar_operations::CalendarOperationStoreError::Unavailable
+                | floe_calendar_operations::CalendarOperationStoreError::VaultLocked
+                | floe_calendar_operations::CalendarOperationStoreError::CorruptRecord),
+            )) => Err(CommandFailure::Indeterminate(error.into())),
+            Err(CommandFailure::NotApplied(error)) => match self
+                .actions_reject_admission(identity.0, identity.1, identity.2, error.into())
+                .await
+                .map_err(|failure| failure.map_failure(AgentFailure::from))?
+            {
+                floe_calendar_operations::OperationAdmissionResolution::Rejected(reason) => {
+                    Err(CommandFailure::NotApplied(reason))
+                }
+                // A competing positive admission won after rollback. Preserve
+                // its ID; replay must finish the canonical publication path.
+                floe_calendar_operations::OperationAdmissionResolution::Admitted(_) => {
+                    Err(CommandFailure::Admitted(error.into()))
+                }
+            },
+            other => other.map_err(|failure| failure.map_failure(AgentFailure::from)),
+        }
     }
 
     async fn verify_operation_approval_origin_on(

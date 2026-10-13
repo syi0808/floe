@@ -149,8 +149,9 @@ impl CalendarOperationsService {
         self.complete_admission(actor, record, scope).await
     }
 
-    /// Normalize and fence a selected Expert proposal without persisting it.
-    /// Conversation uses this value to atomically compose operation admission
+    /// Successful preparation returns an unadmitted Expert proposal. A terminal
+    /// rejection is persisted before reporting NotApplied, excluding late work.
+    /// Conversation uses a prepared value to atomically compose operation admission
     /// with its own approval interaction in the Vault.
     pub async fn prepare_expert_proposal(
         &self,
@@ -242,8 +243,11 @@ impl CalendarOperationsService {
             .repository
             .find_admission(actor.person_id, command_id, request_digest)
             .await
-            .map_err(|error| {
-                floe_kernel::CommandFailure::Indeterminate(AgentFailure::from(error))
+            .map_err(|error| match error {
+                CalendarOperationStoreError::Rejected(reason) => {
+                    floe_kernel::CommandFailure::NotApplied(reason)
+                }
+                other => floe_kernel::CommandFailure::Indeterminate(AgentFailure::from(other)),
             })?
         {
             self.validate_record_actor(actor, &record)
@@ -492,12 +496,44 @@ impl CalendarOperationsService {
             Ok::<_, AgentFailure>(OperationAdmission {
                 command_id,
                 request_digest,
-                publication,
+                publication: publication.clone(),
                 record,
             })
         }
-        .await
-        .map_err(floe_kernel::CommandFailure::NotApplied)?;
-        Ok(admission)
+        .await;
+        match admission {
+            Ok(admission) => Ok(admission),
+            // A temporary inability to validate is not a terminal rejection.
+            // Preserve the same ID for retry, without manufacturing absence.
+            Err(
+                reason @ (AgentFailure::StorageBusy
+                | AgentFailure::StorageUnavailable
+                | AgentFailure::VaultUnavailable
+                | AgentFailure::VaultLocked
+                | AgentFailure::Cancelled
+                | AgentFailure::DeadlineExceeded
+                | AgentFailure::Interrupted),
+            ) => Err(floe_kernel::CommandFailure::Indeterminate(reason)),
+            Err(reason) => match self
+                .repository
+                .reject_admission(actor.person_id, command_id, request_digest, reason)
+                .await
+                .map_err(|failure| failure.map_failure(AgentFailure::from))?
+            {
+                OperationAdmissionResolution::Rejected(reason) => {
+                    Err(floe_kernel::CommandFailure::NotApplied(reason))
+                }
+                OperationAdmissionResolution::Admitted(record) => {
+                    self.validate_record_actor(actor, &record)
+                        .map_err(floe_kernel::CommandFailure::Admitted)?;
+                    Ok(OperationAdmission {
+                        command_id,
+                        request_digest,
+                        publication,
+                        record,
+                    })
+                }
+            },
+        }
     }
 }

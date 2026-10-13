@@ -75,7 +75,9 @@ impl CalendarOperationsService {
     /// Serialize Calendar Operations command families by the shared immutable
     /// command ID. The guard keeps replay lookup and mutable-source validation
     /// in one per-owner interval. Admission transactions recheck the shared
-    /// Vault namespace before commit, including Conversation handoffs.
+    /// Vault namespace before commit, including Conversation handoffs. The
+    /// guard is only local sequencing: durable positive/negative submission
+    /// receipts, not this guard, exclude a delayed prepared admission.
     pub(super) async fn lock_command(
         &self,
         command_id: Uuid,

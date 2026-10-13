@@ -136,7 +136,7 @@ pub(super) const ACTIONS: &[SchemaObject] = &[
     ),
     SchemaObject::table(
         "actions_command_receipts",
-        "CREATE TABLE actions_command_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('submit', 'decision', 'reconciliation', 'authority')), intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), action_id TEXT NOT NULL, PRIMARY KEY (person_id, command_id), CHECK ((kind = 'authority' AND action_id = '') OR (kind <> 'authority' AND action_id <> '')))",
+        "CREATE TABLE actions_command_receipts (person_id TEXT NOT NULL, command_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('submit', 'decision', 'reconciliation', 'authority')), intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), action_id TEXT NOT NULL, rejection TEXT NOT NULL, PRIMARY KEY (person_id, command_id), CHECK ((rejection = '' AND ((kind = 'authority' AND action_id = '') OR (kind <> 'authority' AND action_id <> ''))) OR (kind = 'submit' AND action_id = '' AND length(rejection) BETWEEN 1 AND 128)))",
     ),
     SchemaObject::table(
         "actions_settlement_receipts",
