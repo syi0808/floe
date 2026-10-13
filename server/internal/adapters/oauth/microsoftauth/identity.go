@@ -19,7 +19,7 @@ import (
 const maxIdentityResponseBytes = 64 << 10
 
 func (runtime *Runtime) requiresProviderIdentity() bool {
-	return runtime.credentialName == calendarCredentialName
+	return runtime.credentialNamespace == calendarCredentialName
 }
 
 func (runtime *Runtime) requestedScope() string {

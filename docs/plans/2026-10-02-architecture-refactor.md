@@ -562,6 +562,24 @@ packages with tests), along with `go vet ./...`, the import graph including
 16 negative fixtures and diff checks. No stored meaning or profile layout changes
 in this slice.
 
+## Microsoft Calendar bound identity correction — 2026-10-13
+
+Root reproduced R-035 through `NewCalendar` with a real connection-scoped
+`CredentialSlot`: comparing that hashed slot with the bare Calendar namespace
+incorrectly disabled required identity verification and omitted `openid profile`.
+The runtime now selects the identity policy from its immutable credential namespace,
+while credential reads and exact release checks retain the full connection slot.
+Mail/Teams profiles retain their distinct policy; no identity admission is weakened.
+
+Actual constructor and OAuth-token/metadata/JWKS adapter tests use only loopback
+HTTP, in-memory synthetic credentials and locally generated RSA signatures. They
+cover valid identity, nonce/audience/issuer/expiry/signature rejection, missing
+ID token, exact slot/identity release, token gating and re-verification after runtime
+recreation. This is not Microsoft live OAuth or full hosted-connection/GUI QA.
+Focused race tests and final `go test -race ./...` pass (15 packages with
+tests), along with `go vet ./...`, the import graph with 16 negative fixtures
+and diff checks. No persisted-layout change is introduced by this correction.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
