@@ -314,6 +314,7 @@ mod tests {
         let source = CompactionSource {
             session_id: Uuid::new_v4(),
             session_revision: 5,
+            data_classes: vec![floe_agent_contract::DataClass::Synthetic],
             through: TranscriptReference {
                 conversation_id: head.conversation_id,
                 branch_id: head.branch_id,
@@ -384,6 +385,12 @@ mod tests {
             CompactionRecovery::NotStarted
         );
         let mut changed = source.clone();
+        changed.data_classes = vec![floe_agent_contract::DataClass::Personal];
+        assert!(validate_compaction_journal(&head, &changed, &[]).is_err());
+        changed = source.clone();
+        changed.messages[0].message_id = Uuid::nil();
+        assert!(changed.validate().is_err());
+        changed = source.clone();
         changed.messages[0].text.push('!');
         assert!(validate_compaction_journal(&head, &changed, &[]).is_err());
         changed = source.clone();

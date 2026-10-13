@@ -1,3 +1,5 @@
+mod compaction_repository;
+pub use compaction_repository::{CompactionAdmission, CompactionRepository};
 mod conversation_repository;
 mod interaction_repository;
 mod session_archive_repository;

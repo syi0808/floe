@@ -369,7 +369,8 @@ impl CompactionRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompactionReceipt {
     pub session_id: Uuid,
     pub session_revision: u64,

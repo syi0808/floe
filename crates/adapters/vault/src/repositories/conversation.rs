@@ -1,3 +1,4 @@
+mod compaction;
 use std::sync::Arc;
 
 use crate::{

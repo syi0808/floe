@@ -6,7 +6,8 @@ use crate::{AgentFailure, AgentMessage, BoxFuture};
 pub const MAX_ARCHIVE_PROJECTION_BYTES: usize = 128 * 1024;
 pub const MAX_ARCHIVE_PROJECTION_MESSAGES: usize = crate::MAX_AGENT_MESSAGES;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArchivePointer {
     pub archive_id: Uuid,
     pub source_revision: u64,

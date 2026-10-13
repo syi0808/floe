@@ -661,5 +661,11 @@ answer can be replayed through current authorization and the archive CAS, while
 an unresolved or uncertain attempt cannot be started again. An empty journal is
 not itself dispatch authority: executor-generation custody, current source
 eligibility and live Context/Inference checks are still required. The pure
-journal contract is implemented; durable job admission and automatic lifecycle
-wiring remain an active cutover in the architecture plan.
+journal contract and encrypted custody are implemented. Admission stores the
+source, data classes, empty journal and executor fence atomically in an optional
+schema family created only by the owner write. One pending execution is allowed
+per Session. Bounded read-only startup validation covers all retained rows;
+partial schema and malformed records are not repaired. A replacement device
+retires old work, while same-device recovery adopts only safe empty/output
+states under a newer executor fence. Automatic lifecycle wiring, projection and
+proof-driven checkpoint installation remain an active cutover in the plan.

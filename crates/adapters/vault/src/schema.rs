@@ -66,6 +66,7 @@ pub(crate) enum Family {
     Interactions,
     Tasks,
     ExpertTaskConversationsV1,
+    ConversationCompactionV1,
     Cleanup,
     Registry,
     Gateway,
@@ -89,6 +90,7 @@ impl Family {
             Self::Interactions => encrypted::INTERACTIONS,
             Self::Tasks => encrypted::TASKS,
             Self::ExpertTaskConversationsV1 => encrypted::EXPERT_TASK_CONVERSATIONS_V1,
+            Self::ConversationCompactionV1 => encrypted::CONVERSATION_COMPACTION_V1,
             Self::Cleanup => encrypted::CLEANUP,
             Self::Registry => encrypted::REGISTRY,
             Self::Gateway => gateway::GATEWAY_OBJECTS,
@@ -224,6 +226,7 @@ fn declarations(layout: Layout) -> Result<(), SchemaFailure> {
         validate_family_declarations(Family::ConversationCoreOutputsV2, &mut names)?;
         validate_family_declarations(Family::ConversationOwnerCustodyV2, &mut names)?;
         validate_family_declarations(Family::ExpertTaskConversationsV1, &mut names)?;
+        validate_family_declarations(Family::ConversationCompactionV1, &mut names)?;
     }
     Ok(())
 }
@@ -333,11 +336,21 @@ pub(crate) async fn inspect(connection: &Connection, layout: Layout) -> Result<(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ConversationCompactionV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::ConversationCoreV3)?;
         validate_optional_family_presence(&stored, Family::ConversationCoreOutputsV2)?;
         validate_optional_family_presence(&stored, Family::TypedHistoryV2)?;
         validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV2)?;
         validate_optional_family_presence(&stored, Family::ExpertTaskConversationsV1)?;
+        validate_optional_family_presence(&stored, Family::ConversationCompactionV1)?;
+        if family_present(&stored, Family::ConversationCompactionV1) {
+            conversation_compaction_family_v1_present(connection).await?;
+        }
         if family_present(&stored, Family::ConversationCoreOutputsV2)
             && !family_present(&stored, Family::ConversationCoreV3)
         {
@@ -610,6 +623,48 @@ pub(crate) async fn ensure_expert_task_conversations_family_v1(
     inspect_declared(connection, Family::ExpertTaskConversationsV1, &stored).await
 }
 
+/// Read-only inspection must not create even an empty compaction family.
+pub(crate) async fn conversation_compaction_family_v1_present(
+    connection: &Connection,
+) -> Result<bool, SchemaFailure> {
+    let stored = inventory(connection).await?;
+    validate_conversation_core_marker_versions(connection, &stored).await?;
+    validate_optional_family_presence(&stored, Family::ConversationCompactionV1)?;
+    if !family_present(&stored, Family::ConversationCompactionV1) {
+        return Ok(false);
+    }
+    if !family_present(&stored, Family::ConversationCoreV3) {
+        return Err(unsupported(
+            "agent_conversation_compaction_schema_v1",
+            "extension_without_core_v3",
+        ));
+    }
+    inspect_declared(connection, Family::ConversationCompactionV1, &stored).await?;
+    Ok(true)
+}
+
+/// Only an explicit Conversation compaction admission calls this inside the
+/// same write transaction that persists the pinned source and empty journal.
+pub(crate) async fn ensure_conversation_compaction_family_v1(
+    connection: &Connection,
+) -> Result<(), SchemaFailure> {
+    let mut names = BTreeSet::new();
+    validate_family_declarations(Family::ConversationCompactionV1, &mut names)?;
+    if conversation_compaction_family_v1_present(connection).await? {
+        return Ok(());
+    }
+    let stored = inventory(connection).await?;
+    if !family_present(&stored, Family::ConversationCoreV3) {
+        return Err(unsupported(
+            "agent_conversation_compaction_schema_v1",
+            "extension_without_core_v3",
+        ));
+    }
+    create_family(connection, Family::ConversationCompactionV1).await?;
+    let stored = inventory(connection).await?;
+    inspect_declared(connection, Family::ConversationCompactionV1, &stored).await
+}
+
 pub(crate) async fn inspect_family(
     connection: &Connection,
     family: Family,
@@ -659,9 +714,19 @@ pub(crate) async fn inspect_family(
                 .iter()
                 .map(|object| object.name),
         );
+        expected.extend(
+            Family::ConversationCompactionV1
+                .objects()
+                .iter()
+                .map(|object| object.name),
+        );
         validate_optional_family_presence(&stored, Family::TypedHistoryV2)?;
         validate_optional_family_presence(&stored, Family::ConversationOwnerCustodyV2)?;
         validate_optional_family_presence(&stored, Family::ExpertTaskConversationsV1)?;
+        validate_optional_family_presence(&stored, Family::ConversationCompactionV1)?;
+        if family_present(&stored, Family::ConversationCompactionV1) {
+            conversation_compaction_family_v1_present(connection).await?;
+        }
         if family_present(&stored, Family::TypedHistoryV2) {
             inspect_declared(connection, Family::TypedHistoryV2, &stored).await?;
         }

@@ -11792,3 +11792,510 @@ async fn compaction_source_prefers_sixteen_recent_entries_without_byte_pressure(
         Err(AgentFailure::InvalidInput)
     );
 }
+
+async fn compaction_custody_fixture() -> (
+    Scenario,
+    floe_kernel::OwnerActor,
+    floe_conversation::CompactionAdmission,
+) {
+    let mut scenario = Scenario::new().await;
+    for index in 0..8 {
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("{index}:{}", "a".repeat(20 * 1024)))
+            .await;
+        scenario.cancel_owner_run(&run).await;
+    }
+    let actor = floe_kernel::OwnerActor {
+        person_id: scenario.person_id,
+        device_id: "compaction-fixture".into(),
+        runtime_epoch: 1,
+    };
+    let request = floe_conversation::CompactionAdmission {
+        session_id: scenario.session_id,
+        expected_session_revision: scenario.session_revision,
+        source_byte_limit: floe_conversation::COMPACTION_TRIGGER_BYTES,
+        max_tokens: 1000,
+        max_cost_micros: 1000,
+        max_output_bytes: 1024,
+    };
+    (scenario, actor, request)
+}
+
+fn compaction_custody_intent(actor: &floe_kernel::OwnerActor) -> floe_agent_contract::JournalEvent {
+    use floe_agent_contract::*;
+    JournalEvent::ModelIntent {
+        attempt_id: Uuid::new_v4(),
+        parent_task_id: None,
+        reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+            tokens: 100,
+            cost_micros: 100,
+        },
+        projection_ref: ProjectionRef::new(),
+        plan: PreparedModelPlan {
+            operation_id: Uuid::new_v4(),
+            principal: actor.person_id.to_string(),
+            device_id: actor.device_id.clone(),
+            purpose: floe_conversation::CONVERSATION_PURPOSE.into(),
+            consumer: floe_conversation::COMPACTION_CONSUMER.into(),
+            capabilities: ModelCapabilities::chat(),
+            boundary: ProcessingBoundary::Device,
+            binding_digest: ModelBindingDigest([2; 32]),
+            selection_commitment: Some(ModelSelectionCommitment([1; 32])),
+            budget_profile: Some(ModelBudgetProfile::unknown()),
+        },
+    }
+}
+
+#[tokio::test]
+async fn compaction_custody_admission_is_atomic_replayed_and_generation_fenced() {
+    use floe_conversation::{CompactionDisposition, CompactionRecovery};
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let connection = scenario.vault().connection().unwrap();
+    assert!(
+        !crate::schema::conversation_compaction_family_v1_present(&connection)
+            .await
+            .unwrap()
+    );
+    assert!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 8)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(
+        !crate::schema::conversation_compaction_family_v1_present(&connection)
+            .await
+            .unwrap(),
+        "reads never initialize the extension"
+    );
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let same = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.claim, same.claim);
+    assert_eq!(same.revision, 1);
+    assert_eq!(same.head, job.head);
+    let mut changed = request.clone();
+    changed.max_tokens += 1;
+    assert!(matches!(
+        scenario
+            .vault()
+            .admit_manager_compaction(&actor, changed)
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+    let foreign = floe_kernel::OwnerActor {
+        person_id: PersonId::new(),
+        ..actor.clone()
+    };
+    assert!(matches!(
+        scenario
+            .vault()
+            .load_manager_compaction(&foreign, job.claim)
+            .await,
+        Err(AgentFailure::PolicyDenied)
+    ));
+    assert_eq!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 1)
+            .await
+            .unwrap()
+            .items,
+        vec![job.claim.execution_id]
+    );
+    drop(connection);
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let recovered = scenario
+        .vault()
+        .recover_manager_compaction(&actor, job.claim.execution_id)
+        .await
+        .unwrap();
+    assert_eq!(recovered.head, job.head);
+    assert_eq!(recovered.source, job.source);
+    assert!(recovered.claim.executor_generation > job.claim.executor_generation);
+    assert_eq!(
+        floe_conversation::recover_compaction_journal(
+            &recovered.head,
+            &recovered.source,
+            &recovered.entries
+        )
+        .unwrap(),
+        CompactionRecovery::NotStarted
+    );
+    assert!(matches!(
+        scenario
+            .vault()
+            .append_manager_compaction(&actor, job.claim, compaction_custody_intent(&actor))
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+    scenario
+        .vault()
+        .retire_manager_compaction(&actor, recovered.claim, AgentFailure::Cancelled)
+        .await
+        .unwrap();
+    scenario
+        .vault()
+        .retire_manager_compaction(&actor, recovered.claim, AgentFailure::Cancelled)
+        .await
+        .unwrap();
+    let retired = scenario
+        .vault()
+        .load_manager_compaction(&actor, recovered.claim)
+        .await
+        .unwrap();
+    assert_eq!(
+        retired.disposition,
+        CompactionDisposition::Retired {
+            failure: AgentFailure::Cancelled
+        }
+    );
+    assert!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 8)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn compaction_custody_intent_ack_replay_and_lost_result_ack_preserve_attempt() {
+    use floe_agent_contract::{JournalEvent, ModelUsage};
+    use floe_conversation::CompactionDisposition;
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    let event = compaction_custody_intent(&actor);
+    let attempt_id = match &event {
+        JournalEvent::ModelIntent { attempt_id, .. } => *attempt_id,
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        scenario
+            .vault()
+            .append_manager_compaction(&actor, job.claim, event.clone())
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .append_manager_compaction(&actor, job.claim, event)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .load_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    assert!(
+        matches!(
+            scenario
+                .vault()
+                .retire_manager_compaction(&actor, job.claim, AgentFailure::Cancelled)
+                .await,
+            Err(AgentFailure::Conflict)
+        ),
+        "live unresolved attempt is not erased by retirement"
+    );
+    scenario
+        .vault()
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        scenario
+            .vault()
+            .append_manager_compaction(
+                &actor,
+                job.claim,
+                JournalEvent::ModelResult {
+                    attempt_id,
+                    usage: ModelUsage {
+                        tokens: 100,
+                        cost_micros: 100
+                    },
+                    accounting: floe_execution::budget::ModelAccounting {
+                        observed_tokens: None,
+                        observed_cost_micros: None,
+                        unknown_tokens: true,
+                        unknown_cost: true
+                    },
+                }
+            )
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let recovered = scenario
+        .vault()
+        .recover_manager_compaction(&actor, job.claim.execution_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered.entries.len(),
+        2,
+        "lost acknowledgement did not lose the result"
+    );
+    assert_eq!(
+        recovered.disposition,
+        CompactionDisposition::Retired {
+            failure: AgentFailure::Interrupted
+        }
+    );
+    let projection = floe_conversation::validate_compaction_journal(
+        &recovered.head,
+        &recovered.source,
+        &recovered.entries,
+    )
+    .unwrap();
+    assert_eq!(projection.attempt_refs, vec![attempt_id]);
+    assert_eq!(projection.usage.tokens, 100);
+    assert!(projection.unresolved_attempts.is_empty());
+    assert!(matches!(
+        scenario
+            .vault()
+            .append_manager_compaction(&actor, recovered.claim, compaction_custody_intent(&actor))
+            .await,
+        Err(AgentFailure::Conflict)
+    ));
+}
+
+#[tokio::test]
+async fn compaction_custody_new_turn_invalidates_source_before_any_intent() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    let (run, _) = scenario
+        .admit_run_and_append_input("new foreground turn wins")
+        .await;
+    scenario.cancel_owner_run(&run).await;
+    assert!(matches!(
+        scenario
+            .vault()
+            .append_manager_compaction(&actor, job.claim, compaction_custody_intent(&actor))
+            .await,
+        Err(AgentFailure::Conflict | AgentFailure::StaleContext)
+    ));
+    assert!(
+        scenario
+            .vault()
+            .load_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    scenario
+        .vault()
+        .retire_manager_compaction(&actor, job.claim, AgentFailure::StaleContext)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn compaction_custody_open_rejects_corrupt_retained_journal_without_repair() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let mut job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    scenario
+        .vault()
+        .retire_manager_compaction(&actor, job.claim, AgentFailure::Cancelled)
+        .await
+        .unwrap();
+    job = scenario
+        .vault()
+        .load_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    job.head.source_digest[0] ^= 1;
+    let corrupted = serde_json::to_string(&job).unwrap();
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute(
+            "UPDATE agent_conversation_compactions_v1 SET payload = ? WHERE execution_id = ?",
+            (corrupted.clone(), job.claim.execution_id.to_string()),
+        )
+        .await
+        .unwrap();
+    drop(scenario.vault.take());
+    assert!(matches!(
+        EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    ));
+    let mut rows = connection
+        .query(
+            "SELECT payload FROM agent_conversation_compactions_v1 WHERE execution_id = ?",
+            [job.claim.execution_id.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap(),
+        corrupted
+    );
+}
+
+#[tokio::test]
+async fn compaction_custody_partial_family_is_rejected_without_ddl_repair() {
+    let (scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute("DROP INDEX agent_conversation_compactions_pending_v1", ())
+        .await
+        .unwrap();
+    assert!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 8)
+            .await
+            .is_err()
+    );
+    let mut rows = connection.query("SELECT count(*) FROM sqlite_schema WHERE name = 'agent_conversation_compactions_pending_v1'", ()).await.unwrap();
+    assert_eq!(
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+        0
+    );
+    let mut rows = connection
+        .query(
+            "SELECT count(*) FROM agent_conversation_compactions_v1 WHERE execution_id = ?",
+            [job.claim.execution_id.to_string()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn compaction_custody_new_device_retires_instead_of_replaying_old_work() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let replacement = floe_kernel::OwnerActor {
+        device_id: "replacement-device".into(),
+        ..actor
+    };
+    let recovered = scenario
+        .vault()
+        .recover_manager_compaction(&replacement, job.claim.execution_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered.disposition,
+        floe_conversation::CompactionDisposition::Retired {
+            failure: AgentFailure::Interrupted
+        }
+    );
+    assert_eq!(recovered.head, job.head);
+    assert!(recovered.entries.is_empty());
+    assert!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&replacement, None, 8)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn compaction_custody_empty_index_key_is_not_hidden_by_first_page_cursor() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute(
+            "UPDATE agent_conversation_compactions_v1 SET execution_id = '' WHERE execution_id = ?",
+            [job.claim.execution_id.to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 8)
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    ));
+    drop(scenario.vault.take());
+    assert!(matches!(
+        EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    ));
+}

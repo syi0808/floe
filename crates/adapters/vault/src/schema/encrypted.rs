@@ -499,3 +499,25 @@ pub(super) const REGISTRY: &[SchemaObject] = &[SchemaObject::table(
     "agent_expert_registry",
     "CREATE TABLE agent_expert_registry (id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL, payload TEXT NOT NULL)",
 )];
+
+/// New optional state only; admission never rewrites an existing Run/Task or
+/// repairs a partial family. The bounded payload is the one execution journal.
+pub(super) const CONVERSATION_COMPACTION_V1: &[SchemaObject] = &[
+    SchemaObject::marker(
+        "agent_conversation_compaction_schema_v1",
+        1,
+        "CREATE TABLE agent_conversation_compaction_schema_v1 (id INTEGER PRIMARY KEY CHECK(id = 1), version INTEGER NOT NULL CHECK(version = 1))",
+    ),
+    SchemaObject::table(
+        "agent_conversation_compactions_v1",
+        "CREATE TABLE agent_conversation_compactions_v1 (execution_id TEXT NOT NULL, person_id TEXT NOT NULL, session_id TEXT NOT NULL, executor_generation INTEGER NOT NULL, revision INTEGER NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(person_id, execution_id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_compactions_pending_v1",
+        "CREATE UNIQUE INDEX agent_conversation_compactions_pending_v1 ON agent_conversation_compactions_v1(person_id, session_id) WHERE state = 'pending'",
+    ),
+    SchemaObject::index(
+        "agent_conversation_compactions_recovery_v1",
+        "CREATE INDEX agent_conversation_compactions_recovery_v1 ON agent_conversation_compactions_v1(person_id, state, execution_id)",
+    ),
+];

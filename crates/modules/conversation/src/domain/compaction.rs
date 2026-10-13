@@ -6,8 +6,8 @@ use floe_conversation_contract::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Start before the transport's 128-entry/128-KiB framing ceilings. These are
-/// structural guards; Inference still applies the selected model's token budget.
+/// Start before the transcript/archive structural ceilings. Inference still
+/// applies the selected transport's actual codec and model-context limits.
 pub const COMPACTION_TRIGGER_MESSAGES: usize = 96;
 pub const COMPACTION_TRIGGER_BYTES: usize = 96 * 1024;
 pub const COMPACTION_MIN_RETAIN_ENTRIES: u64 = 2;
@@ -18,6 +18,7 @@ pub const COMPACTION_PREFERRED_RETAIN_ENTRIES: u64 = 16;
 pub struct CompactionSource {
     pub session_id: Uuid,
     pub session_revision: u64,
+    pub data_classes: Vec<floe_agent_contract::DataClass>,
     pub head: ConversationReference,
     pub previous_checkpoint: Option<ConversationCheckpoint>,
     pub through: TranscriptReference,
@@ -54,7 +55,14 @@ impl CompactionSource {
             .and_then(|count| usize::try_from(count).ok())
             .and_then(|count| count.checked_add(usize::from(self.previous_checkpoint.is_some())))
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if self.session_id.is_nil()
+        if self.data_classes.is_empty()
+            || self.data_classes.len() > floe_agent_contract::MAX_INPUT_DATA_CLASSES
+            || self
+                .data_classes
+                .iter()
+                .enumerate()
+                .any(|(index, class)| self.data_classes[..index].contains(class))
+            || self.session_id.is_nil()
             || self.session_revision == 0
             || self.through_turn_id.is_nil()
             || self.prefix_digest == [0; 32]
@@ -76,7 +84,7 @@ impl CompactionSource {
         if self
             .messages
             .iter()
-            .any(|message| !ids.insert(message.message_id))
+            .any(|message| message.message_id.is_nil() || !ids.insert(message.message_id))
             || self.previous_checkpoint.as_ref().is_some_and(|checkpoint| {
                 self.messages.first().is_none_or(|message| {
                     message.role != floe_agent_contract::MessageRole::Assistant

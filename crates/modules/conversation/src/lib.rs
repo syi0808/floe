@@ -122,3 +122,7 @@ pub use application::{
     COMPACTION_CONSUMER, CompactionJournalHead, CompactionRecovery, advance_compaction_journal,
     recover_compaction_journal, validate_compaction_journal, validate_compaction_summary,
 };
+
+pub use application::{CompactionClaim, CompactionDisposition, CompactionExecution};
+
+pub use ports::{CompactionAdmission, CompactionRepository};

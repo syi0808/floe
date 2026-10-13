@@ -1,3 +1,5 @@
+mod compaction_execution;
+pub use compaction_execution::{CompactionClaim, CompactionDisposition, CompactionExecution};
 mod compaction_journal;
 pub use compaction_journal::{
     COMPACTION_CONSUMER, CompactionJournalHead, CompactionRecovery, advance_compaction_journal,

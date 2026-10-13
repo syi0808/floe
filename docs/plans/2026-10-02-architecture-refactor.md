@@ -209,23 +209,58 @@ checkpoint does not yet persist jobs, dispatch summaries or install checkpoints
 automatically; the next dependency-closed slice wires these owner rules into
 Vault custody and the Conversation lifecycle.
 
-The compaction storage extension will follow the existing optional-family
+The compaction storage extension follows the existing optional-family
 pattern: absent state is initialized only by explicit owner admission, never by
 open/read or repair of partial objects. A job and its sole execution journal are
 bound to the active Conversation executor generation. Recovery either adopts an
 empty execution or commits a recorded answer after current source/coverage/CAS
 checks; an uncertain attempted execution is retired without redispatch. No
 existing Run or Task meaning is reinterpreted and no stored profile is reset.
+Durable custody checkpoint: admission now atomically selects and stores the exact
+source, its admitted data classes, an empty journal and the active executor
+fence. There is at most one pending execution per Session. Exact event replay
+returns its original acknowledgement; changed source/foreground admission stops
+a new intent. Result/accounting settlement does not require the old source to
+remain current after handoff. A lost result acknowledgement survives reopen;
+uncertain execution is retired with its journal intact. Empty work can be
+adopted only by a newer executor on the original device; a replacement device
+retires it instead of replaying it. Live unresolved attempts cannot be erased by
+ordinary retirement. Retained rows are validated by a bounded keyset scan on
+open, including malformed first keys, without repair. Reads never create the
+optional family, and a partial family fails closed. Seven encrypted custody
+regressions pass; the wider compaction subset passes 13 tests, alongside six
+pure journal tests. The frozen custody candidate passed 308 default workspace
+tests including doctests, 58 App QA tests (one subprocess entry ignored), the
+production FFI build, architecture boundaries and diff checks. No new Flutter,
+Apple, Go or real-model qualification is claimed. Automatic scheduling, model
+projection and proof-driven checkpoint completion remain unimplemented at this
+checkpoint.
+
 The automatic cutover must use the recorded Answer's projection coverage when
 installing its summary, separately from original archive-entry coverage. The
 current manual archive helper conservatively merges the entire prefix; that is
-not sufficient for an automatically filtered source after revocation. Retired
-or forgotten derived content must not re-enter the summary, and stale dependency
+not sufficient for an automatically filtered source after revocation. Revoked
+source-derived content must not re-enter the summary, and stale dependency
 coverage must not make an otherwise authorized new summary immediately unusable.
+Compaction must not reload forgotten confirmed memories or create new learning
+evidence from its summary. This does not erase the original conversation: the
+accepted forget contract preserves transcripts and excludes the old evidence
+from relearning, rather than maintaining a semantic blacklist.
 The durable completion transaction will validate the source pin and answer
 journal proof, keep original entry coverage unchanged, and install the exact
 summary coverage. The unused caller-supplied-summary production route is removed
 at this cutover rather than retained as an alternate authority path.
+
+Automatic-activation gates found during direct caller review: the existing
+Vault history reader serves both product paging and compacted model history.
+These projections must be separated at the owner/adapter contract before the
+scheduler is enabled, so a model checkpoint cannot hide original chat entries
+or invalidate their product cursors. The existing archive commit also advances
+Session revision. The lifecycle/client contract must explicitly reconcile that
+revision change; it must not silently rebase a retained immutable command or
+pretend that publishing an old Run receipt announces a new Session revision.
+Qualification must cover a next user command racing with compaction and paging
+old messages after checkpoint installation.
 
 Ordered cutover and acceptance:
 

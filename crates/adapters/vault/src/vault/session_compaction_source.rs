@@ -239,6 +239,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             let selected = CompactionSource {
                 session_id,
                 session_revision: expected_revision,
+                data_classes: session.data_classes.clone(),
                 head: head.state.reference(),
                 previous_checkpoint: checkpoint.clone(),
                 through,

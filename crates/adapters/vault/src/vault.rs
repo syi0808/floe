@@ -53,6 +53,7 @@ mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
 mod schema_lifecycle;
 mod session_archive;
+mod session_compaction_execution;
 mod session_compaction_source;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
@@ -396,6 +397,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             self.validate_conversation_core_store().await?;
         }
+        self.validate_manager_compaction_store().await?;
         conversations::validate_schema(&connection).await?;
         tasks::validate_schema(&connection).await?;
         self.validate_context_cleanup().await?;
