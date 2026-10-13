@@ -119,6 +119,14 @@ func New(config Config) (*Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Configuration owns a cleanup worker as soon as OpenConfiguration succeeds.
+	// Stop it before the runtime and encrypted storage are released on any later
+	// startup failure; successful ownership transfers to Node.Close.
+	defer func() {
+		if failed {
+			configuration.Close()
+		}
+	}()
 	engine, err := authority.New(authority.Options{Trust: t})
 	if err != nil {
 		return nil, err
