@@ -111,6 +111,23 @@ cover complete Korean text, exact byte capacity, over-capacity deferral and queu
 isolation without model calls. Fresh qualification passed 15 Knowledge tests, 146 Vault tests, 287 default workspace tests including doctests, 34 Conversation integrations, 9 additional Calendar/Day/process-kill tests (one opt-in case ignored), production FFI build, architecture boundaries and diff checks. Flutter dependency restoration remains policy-blocked; Apple/live-provider qualification is unchanged. This does not implement semantic compaction or broaden
 observation limits, and the original transcript remains intact.
 
+## Resumed direct improvements — 2026-10-13
+
+The restored checkout starts from main 2e4ca99. Calendar display-label regression
+reproduced rejection of a valid 516-byte qualified name and an exact 1,024-byte
+owner-supported name. Protocol and Dart now use the Day display bound without
+truncating names; resource/authority identities are unchanged. New client tests
+cover event labels and source/resource coverage plus over-budget rejection.
+
+The encrypted 101-candidate memory-review fixture reproduced whole-query
+BudgetExceeded. Knowledge now returns the oldest 100 validated candidates plus a
+validated sentinel-derived, required has_more flag. Display, protocol, FFI and
+Dart callers migrate together; old optional/implicit page semantics are not
+retained. Client decisions reload the bounded queue, and clear/failure drops the
+continuation marker. The fixture verifies exact ordering, reopen, page advance
+and complete drain; original candidate/decision records remain intact.
+Protocol rejects missing or contradictory page metadata. Fresh validation passed 291 default Rust workspace tests including doctests, 34 Conversation integrations, 9 Calendar/Day/process-kill integrations (one opt-in case ignored), the production FFI build, architecture boundaries and diff checks. Five standalone cases executed the actual Dart memory-page decoder. Flutter dependency restoration timed out in initial diagnostics and the supported escalation returned a policy block for https://pub.dev:443; Flutter analyze, widget tests and Apple builds remain unverified. The new client tests are present but are not claimed as passed. Automatic semantic compaction remains open.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

@@ -152,6 +152,7 @@ pub(crate) fn query_out(
             }
             let review = MemoryReviewDisplayDto {
                 person_id: reference(snapshot.person_id.0)?,
+                has_more: snapshot.has_more,
                 candidates: snapshot
                     .candidates
                     .into_iter()

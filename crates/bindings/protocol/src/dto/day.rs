@@ -13,6 +13,8 @@ const MAX_DAY_COVERAGE_SOURCES: usize = 64;
 const MAX_DAY_COVERAGE_RESOURCES: usize = 256;
 const MAX_DAY_DISPLAY_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DAY_TIMESTAMP_BYTES: usize = 64;
+// Display names follow the Day owner, including qualified account + calendar names.
+const MAX_DAY_CALENDAR_LABEL_BYTES: usize = 1024;
 const MAX_DAY_REVISION: u64 = i64::MAX as u64;
 const MAX_CIVIL_RANGE_DAYS: i64 = 31;
 const MAX_RANGE_OFFSET_SECONDS: u32 = 86_400;
@@ -130,7 +132,7 @@ pub enum SourceRefDto {
 impl SourceRefDto {
     fn validate(&self) -> Result<(), &'static str> {
         if let Self::Calendar { calendar_label, .. } = self {
-            if calendar_label.is_empty() || calendar_label.len() > 256 {
+            if calendar_label.is_empty() || calendar_label.len() > MAX_DAY_CALENDAR_LABEL_BYTES {
                 return Err("day.item.source.calendar_label");
             }
         }
@@ -715,7 +717,7 @@ pub(crate) fn validate_instant(value: &str) -> Result<DateTime<FixedOffset>, &'s
 }
 
 fn validate_calendar_label(value: &str) -> Result<(), &'static str> {
-    if value.is_empty() || value.len() > 256 {
+    if value.is_empty() || value.len() > MAX_DAY_CALENDAR_LABEL_BYTES {
         Err("day.calendar.label")
     } else {
         Ok(())
@@ -798,4 +800,31 @@ fn validate_snapshot_bytes(value: &DaySnapshotDto) -> Result<(), &'static str> {
         }
     }
     serde_json::to_writer(Counter(0), value).map_err(|_| "day.snapshot.byte_budget")
+}
+
+#[cfg(test)]
+mod calendar_label_tests {
+    use super::*;
+
+    #[test]
+    fn qualified_calendar_labels_preserve_both_full_names() {
+        let label = format!("{} · {}", "a".repeat(256), "b".repeat(256));
+        assert_eq!(label.len(), 516);
+        let source = SourceRefDto::Calendar {
+            source_ref: UuidRefDto::new(Uuid::new_v4()).unwrap(),
+            calendar_ref: UuidRefDto::new(Uuid::new_v4()).unwrap(),
+            calendar_label: label.clone(),
+        };
+        assert_eq!(source.validate(), Ok(()));
+        assert_eq!(validate_calendar_label(&label), Ok(()));
+    }
+
+    #[test]
+    fn day_calendar_labels_match_owner_utf8_byte_capacity() {
+        let exact = format!("{}a", "가".repeat(341));
+        assert_eq!(exact.len(), 1024);
+        assert_eq!(validate_calendar_label(&exact), Ok(()));
+        assert!(validate_calendar_label(&format!("{exact}b")).is_err());
+        assert!(validate_calendar_label("").is_err());
+    }
 }

@@ -219,6 +219,7 @@ pub struct MemoryOverviewSnapshot {
 pub struct MemoryReviewSnapshot {
     pub person_id: PersonId,
     pub candidates: Vec<KnowledgeCandidate>,
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

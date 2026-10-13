@@ -8,6 +8,8 @@ import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 
 const _maxDayItems = 10000;
+// Matches the Day owner and protocol display-label byte capacity.
+const _maxDayCalendarLabelBytes = 1024;
 const _maxDaySnapshotBytes = 4 * 1024 * 1024;
 const _maxRevision = 0x7fffffffffffffff;
 final _uuidPattern = RegExp(
@@ -1277,7 +1279,7 @@ String _displayText(Object? value, String field) {
 }
 
 String _calendarLabel(Object? value) {
-  if (value is! String || value.isEmpty || utf8.encode(value).length > 256) {
+  if (value is! String || value.isEmpty || utf8.encode(value).length > _maxDayCalendarLabelBytes) {
     throw const FormatException('Invalid Day Calendar label.');
   }
   return value;

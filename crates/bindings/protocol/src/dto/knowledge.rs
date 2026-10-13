@@ -44,10 +44,11 @@ pub struct MemoryCandidateSummaryDto {
 pub struct MemoryReviewDisplayDto {
     pub person_id: UuidRefDto,
     pub candidates: Vec<MemoryCandidateSummaryDto>,
+    pub has_more: bool,
 }
 impl MemoryReviewDisplayDto {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.candidates.len() > 100 {
+        if self.candidates.len() > 100 || (self.has_more && self.candidates.len() != 100) {
             return Err("knowledge.candidates");
         }
         let mut ids = std::collections::HashSet::new();
@@ -106,5 +107,22 @@ impl MemoryForgetAcknowledgementDto {
             return Err("knowledge.forget_acknowledgement");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod review_page_tests {
+    use super::*;
+    #[test]
+    fn review_page_requires_explicit_noncontradictory_continuation() {
+        let missing = serde_json::json!({"person_id": "11111111-1111-4111-8111-111111111111", "candidates": []});
+        assert!(serde_json::from_value::<MemoryReviewDisplayDto>(missing.clone()).is_err());
+        let mut complete = missing;
+        complete["has_more"] = serde_json::json!(false);
+        let page: MemoryReviewDisplayDto = serde_json::from_value(complete.clone()).unwrap();
+        assert!(page.validate().is_ok());
+        complete["has_more"] = serde_json::json!(true);
+        let invalid: MemoryReviewDisplayDto = serde_json::from_value(complete).unwrap();
+        assert!(invalid.validate().is_err());
     }
 }

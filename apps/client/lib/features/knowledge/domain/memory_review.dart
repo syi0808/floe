@@ -94,18 +94,24 @@ final class AgentMemoryReviewOverview {
   const AgentMemoryReviewOverview({
     required this.personId,
     required this.candidates,
+    required this.hasMore,
   });
 
   final String personId;
   final List<AgentMemoryCandidate> candidates;
+  final bool hasMore;
 
   factory AgentMemoryReviewOverview.fromJson(Map<String, dynamic> json) {
-    _exactKeys(json, const {'person_id', 'candidates'});
+    _exactKeys(json, const {'person_id', 'candidates', 'has_more'});
     final candidates = _objects(
       json['candidates'],
       100,
       'review.candidates',
     ).map(AgentMemoryCandidate.fromJson).toList(growable: false);
+    final hasMore = json['has_more'];
+    if (hasMore is! bool || (hasMore && candidates.length != 100)) {
+      throw const FormatException('Invalid memory review page.');
+    }
     if (candidates.map((candidate) => candidate.id).toSet().length !=
         candidates.length) {
       throw const FormatException('Duplicate memory candidate.');
@@ -113,6 +119,7 @@ final class AgentMemoryReviewOverview {
     return AgentMemoryReviewOverview(
       personId: _uuid(json['person_id'], 'review.person_id'),
       candidates: List.unmodifiable(candidates),
+      hasMore: hasMore,
     );
   }
 }

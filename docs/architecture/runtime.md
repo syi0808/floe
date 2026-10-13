@@ -601,3 +601,20 @@ continues checking later bounded candidates and reports the deferral afterward;
 existing queued work is still claimed before discovery. Original conversation
 records remain intact. Owner-controlled semantic compaction is a separate open
 path; storage compression does not establish that capability.
+
+### Bounded memory review queue
+
+Knowledge review returns the oldest 100 pending candidates plus a required
+`has_more` flag, selected in one snapshot with one validated sentinel row. Queue
+length does not turn the whole query into BudgetExceeded. A flagged page is full;
+short and empty pages cannot claim more items. Decisions retain their immutable
+command identity and trigger a fresh oldest-first read, admitting the next pending
+candidate into the visible window without deleting unreviewed candidates. The
+same required flag passes through Knowledge display, AppWire and the client; the
+settings surface explains that more proposals are waiting. It is a draining
+review queue, not an offset cursor or a second approval path.
+
+Day Calendar display labels preserve the owner's existing 1,024-byte UTF-8
+capacity through protocol and client decoding, including grouped account and
+calendar names. This is presentation text only; resource identity, authority and
+write-destination constraints remain separately validated.

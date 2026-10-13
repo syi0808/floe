@@ -31,6 +31,7 @@ pub struct MemoryCandidateSummary {
 pub struct MemoryReviewDisplay {
     pub person_id: PersonId,
     pub candidates: Vec<MemoryCandidateSummary>,
+    pub has_more: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MemoryDecisionAcknowledgement {
@@ -45,7 +46,10 @@ pub struct MemoryDecisionAcknowledgement {
 pub fn project_memory_review(
     snapshot: &MemoryReviewSnapshot,
 ) -> Result<MemoryReviewDisplay, AgentFailure> {
-    if !snapshot.person_id.is_valid() || snapshot.candidates.len() > 100 {
+    if !snapshot.person_id.is_valid()
+        || snapshot.candidates.len() > 100
+        || (snapshot.has_more && snapshot.candidates.len() != 100)
+    {
         return Err(AgentFailure::BudgetExceeded);
     }
     let mut seen = std::collections::HashSet::new();
@@ -97,6 +101,7 @@ pub fn project_memory_review(
     Ok(MemoryReviewDisplay {
         person_id: snapshot.person_id,
         candidates,
+        has_more: snapshot.has_more,
     })
 }
 

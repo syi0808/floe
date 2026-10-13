@@ -26,6 +26,7 @@ final class AgentMemoryController extends ChangeNotifier {
   bool _disposed = false;
 
   List<AgentMemoryCandidate>? candidates;
+  bool hasMoreCandidates = false;
   String? reviewFailure;
   AgentMemoryOverview? overview;
   String? failure;
@@ -94,9 +95,11 @@ final class AgentMemoryController extends ChangeNotifier {
       final loadedReview = await _readReview();
       if (!_isCurrent(generation)) return;
       candidates = loadedReview.candidates;
+      hasMoreCandidates = loadedReview.hasMore;
     } on Object catch (error) {
       if (!_isCurrent(generation)) return;
       candidates = null;
+      hasMoreCandidates = false;
       reviewFailure = _failure(error);
       _reportFatal(error, generation);
     } finally {
@@ -221,6 +224,7 @@ final class AgentMemoryController extends ChangeNotifier {
       // Never keep displaying forgotten text if the subsequent refresh fails.
       overview = null;
       candidates = null;
+      hasMoreCandidates = false;
       await _reloadAfterDecision(generation);
     } on Object catch (error) {
       if (!_isCurrent(generation)) return;
@@ -238,6 +242,7 @@ final class AgentMemoryController extends ChangeNotifier {
     _operationGeneration++;
     if (_disposed) return;
     candidates = null;
+    hasMoreCandidates = false;
     reviewFailure = null;
     overview = null;
     failure = null;
@@ -313,9 +318,11 @@ final class AgentMemoryController extends ChangeNotifier {
       final loadedReview = await _readReview();
       if (!_isCurrent(generation)) return;
       candidates = loadedReview.candidates;
+      hasMoreCandidates = loadedReview.hasMore;
     } on Object catch (error) {
       if (!_isCurrent(generation)) return;
       candidates = null;
+      hasMoreCandidates = false;
       reviewFailure = _failure(error);
       _reportFatal(error, generation);
       if (!_isCurrent(generation)) return;

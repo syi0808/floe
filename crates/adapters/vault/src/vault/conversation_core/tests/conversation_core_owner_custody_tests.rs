@@ -11310,3 +11310,167 @@ async fn learner_discovery_limit_counts_manager_sessions_not_newer_experts() {
         assert_eq!(snapshots[0].evidence.session_id, run.session_id);
     }
 }
+
+#[tokio::test]
+async fn memory_review_backlog_drains_in_bounded_pages_without_losing_candidates() {
+    use chrono::Utc;
+    use floe_execution::budget::{BudgetConfig, BudgetLedger};
+    use floe_execution::{Cancellation, ExecutionScope};
+    use floe_kernel::{OwnerActor, TraceContext};
+    use floe_knowledge::{
+        EpistemicStatus, KnowledgeActor, KnowledgeDecisionKind, MemoryDecisionRequest,
+        MemoryStageOrigin, MemoryStageRequest, PersonalMemoryKind, PersonalMemoryValue,
+        StageMemoryCandidate,
+    };
+
+    let mut scenario = Scenario::new().await;
+    let run = complete_manager_turn_with_output(
+        &mut scenario,
+        "Please remember that I prefer tea.",
+        "You prefer tea.".into(),
+    )
+    .await;
+    let actor = OwnerActor {
+        person_id: scenario.person_id,
+        device_id: run.device_id.clone(),
+        runtime_epoch: 1,
+    };
+    let ledger = BudgetLedger::new(BudgetConfig::new(64, 64), Default::default());
+    let scope = ExecutionScope::root(
+        Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        ledger.root_lease(),
+        TraceContext::new(Uuid::new_v4()),
+    );
+    let now = Utc::now();
+    let snapshots = scenario
+        .vault()
+        .learner_discovery_sessions(&actor, 64, &scope)
+        .await
+        .unwrap();
+    let old_input = floe_knowledge::explicit_review_input(&snapshots[0], &[], now)
+        .unwrap()
+        .unwrap();
+    let stage = MemoryStageRequest {
+        actor: actor.clone(),
+        now,
+        origin: MemoryStageOrigin::User,
+        request: StageMemoryCandidate {
+            session_id: scenario.session_id,
+            expected_session_revision: run.session_revision,
+            turn_ids: vec![run.run_id.as_uuid()],
+            observation_kind: floe_knowledge::LearningObservationKind::ExplicitRemember,
+            digest: old_input.digest.clone(),
+            value: PersonalMemoryValue {
+                kind: PersonalMemoryKind::Preference,
+                statement: "Prefers tea".into(),
+                epistemic_status: EpistemicStatus::Fact,
+                confidence_millis: 1000,
+                valid_from: None,
+                valid_until: None,
+                observed_at: now,
+            },
+            target_id: None,
+            base_revision: None,
+            extractor_version: "test".into(),
+            prompt_version: "test".into(),
+            actor: KnowledgeActor::User,
+            created_at: now,
+        },
+    };
+
+    let mut ids = Vec::new();
+    for ordinal in 0..101 {
+        let mut next = stage.clone();
+        next.request.extractor_version = format!("review-page-{ordinal}");
+        next.request.value.statement = format!("Pending preference {ordinal}");
+        ids.push(
+            scenario
+                .vault()
+                .knowledge_stage(next, &scope)
+                .await
+                .unwrap()
+                .id,
+        );
+    }
+    ids.sort();
+    let page = scenario
+        .vault()
+        .knowledge_review(&actor, &scope)
+        .await
+        .expect("oldest bounded review page");
+    assert_eq!(page.candidates.len(), 100);
+    assert_eq!(
+        page.candidates
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>(),
+        ids[..100]
+    );
+    assert!(page.has_more);
+    assert!(
+        floe_knowledge::project_memory_review(&page)
+            .unwrap()
+            .has_more
+    );
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .knowledge_review(&actor, &scope)
+            .await
+            .unwrap(),
+        page
+    );
+    scenario
+        .vault()
+        .knowledge_decide(
+            &actor,
+            MemoryDecisionRequest {
+                command_id: CommandId::new(),
+                candidate_id: ids[0],
+                kind: KnowledgeDecisionKind::Reject,
+                decided_at: now,
+            },
+            &scope,
+        )
+        .await
+        .unwrap();
+    let next = scenario
+        .vault()
+        .knowledge_review(&actor, &scope)
+        .await
+        .unwrap();
+    assert!(!next.has_more);
+    assert_eq!(
+        next.candidates
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>(),
+        ids[1..]
+    );
+    for id in &ids[1..] {
+        scenario
+            .vault()
+            .knowledge_decide(
+                &actor,
+                MemoryDecisionRequest {
+                    command_id: CommandId::new(),
+                    candidate_id: *id,
+                    kind: KnowledgeDecisionKind::Reject,
+                    decided_at: now,
+                },
+                &scope,
+            )
+            .await
+            .unwrap();
+    }
+    scenario.reopen().await;
+    let empty = scenario
+        .vault()
+        .knowledge_review(&actor, &scope)
+        .await
+        .unwrap();
+    assert!(empty.candidates.is_empty());
+    assert!(!empty.has_more);
+}

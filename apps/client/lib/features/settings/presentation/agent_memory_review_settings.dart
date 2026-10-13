@@ -49,6 +49,14 @@ final class AgentMemoryReviewSettings extends StatelessWidget {
                 if (candidate != candidates.last)
                   const SizedBox(height: FloeSpace.sm),
               ],
+            if (controller.reviewFailure == null && controller.hasMoreCandidates) ...[
+              const SizedBox(height: FloeSpace.sm),
+              Text(
+                'Showing the oldest 100 proposals. More are waiting; reviewing a proposal brings the next one into this list.',
+                key: const ValueKey('memory-review-more-waiting'),
+                style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+              ),
+            ],
             if (controller.acknowledgement case final acknowledgement?) ...[
               const SizedBox(height: FloeSpace.sm),
               Text(

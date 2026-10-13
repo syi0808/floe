@@ -15,6 +15,78 @@ import 'package:floe_client/features/knowledge/infrastructure/app_wire_memory_ga
 import 'package:floe_client/features/settings/presentation/agent_memory_review_settings.dart';
 
 void main() {
+  test('review page requires explicit bounded continuation metadata', () {
+    final page = (_reviewResponse()['review'] as Map<String, dynamic>);
+    final candidates = List<Map<String, dynamic>>.generate(
+      100,
+      (index) => _candidate(
+        '00000000-0000-4000-8000-${index.toRadixString(16).padLeft(12, '0')}',
+        'Pending preference $index',
+        ['approve', 'reject'],
+      ),
+    );
+    page['candidates'] = candidates;
+    page['has_more'] = true;
+    expect(AgentMemoryReviewOverview.fromJson(page).hasMore, isTrue);
+    expect(
+      () => AgentMemoryReviewOverview.fromJson({...page}..remove('has_more')),
+      throwsFormatException,
+    );
+    expect(
+      () => AgentMemoryReviewOverview.fromJson({...page, 'has_more': 'true'}),
+      throwsFormatException,
+    );
+    expect(
+      () => AgentMemoryReviewOverview.fromJson({
+        ...page,
+        'candidates': candidates.take(99).toList(),
+      }),
+      throwsFormatException,
+    );
+  });
+
+  test('review decision reload advances the bounded page and clear removes its marker', () async {
+    var decided = false;
+    final all = List<Map<String, dynamic>>.generate(
+      101,
+      (index) => _candidate(
+        '00000000-0000-4000-8000-${index.toRadixString(16).padLeft(12, '0')}',
+        'Pending preference $index',
+        ['approve', 'reject'],
+      ),
+    );
+    final transport = _ScriptedMemoryTransport(
+      onQuery: (request, call) async {
+        if ((request['query'] as Map)['kind'] != 'memory.review')
+          return _overviewResponse();
+        return {
+          'kind': 'memory.review',
+          'review': {
+            'person_id': _personId,
+            'has_more': !decided,
+            'candidates': all.skip(decided ? 1 : 0).take(100).toList(),
+          },
+        };
+      },
+      onCommand: (request, call) async {
+        decided = true;
+        return _acknowledgementResponse(request);
+      },
+    );
+    final harness = _MemoryHarness(transport);
+    await harness.controller.loadReview();
+    expect(harness.controller.hasMoreCandidates, isTrue);
+    await harness.controller.decide(
+      all.first['candidate_id'] as String,
+      AgentMemoryDecision.reject,
+    );
+    expect(harness.controller.hasMoreCandidates, isFalse);
+    expect(harness.controller.candidates!.first.id, all[1]['candidate_id']);
+    expect(harness.controller.candidates!.last.id, all.last['candidate_id']);
+    harness.controller.clear();
+    expect(harness.controller.hasMoreCandidates, isFalse);
+    harness.controller.dispose();
+  });
   group('Immediate memory forgetting', () {
     testWidgets('Forget acts immediately without creating another review', (
       tester,
@@ -746,6 +818,7 @@ Map<String, dynamic> _reviewResponse() => {
   'kind': 'memory.review',
   'review': {
     'person_id': _personId,
+    'has_more': false,
     'candidates': [
       _candidate(_approveCandidateId, 'Mina prefers morning walks.', [
         'approve',

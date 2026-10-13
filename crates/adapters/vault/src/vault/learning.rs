@@ -180,17 +180,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 (self.person_id.to_string(), i64::try_from(MAX_MEMORY_REVIEW_ITEMS + 1).map_err(|_| AgentFailure::InvalidInput)?),
             ).await.map_err(database_failure)?;
             let mut candidates = Vec::new();
+            let mut has_more = false;
             while let Some(row) = rows.next().await.map_err(database_failure)? {
-                if candidates.len() == MAX_MEMORY_REVIEW_ITEMS {
-                    return Err(AgentFailure::BudgetExceeded);
-                }
                 let candidate = decode_candidate_row(&row, self.person_id)?;
                 validate_memory_review_candidate(&candidate, self.person_id)?;
+                if candidates.len() == MAX_MEMORY_REVIEW_ITEMS {
+                    has_more = true;
+                    break;
+                }
                 candidates.push(candidate);
             }
             drop(rows);
             self.check_learning_scope(scope)?;
-            Ok(MemoryReviewSnapshot { person_id: self.person_id, candidates })
+            Ok(MemoryReviewSnapshot { person_id: self.person_id, candidates, has_more })
         }.await;
         finish_transaction(self, transaction, result).await
     }
