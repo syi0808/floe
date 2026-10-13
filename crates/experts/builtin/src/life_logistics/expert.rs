@@ -78,22 +78,23 @@ impl ExpertProgram for LifeLogisticsProgram {
         }
 
         let requirement_key = BuiltinContextSource::Logistics.source_id();
-        let view =
-            match crate::program_support::read_one::<LogisticsView>(observations, requirement_key)?
-            {
-                Some(view) => view,
-                None if crate::program_support::was_unavailable(observations, requirement_key) => {
-                    return crate::program_support::unavailable(
-                        request,
-                        observations,
-                        requirement_key,
-                        crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
-                        super::RESULT_MEDIA_TYPE,
-                        "Logistics are temporarily unavailable, so there is no logistics plan.",
-                    );
-                }
-                None => return Err(AgentFailure::InvalidModelOutput),
-            };
+        let view = match crate::program_support::read_snapshot::<LogisticsView>(
+            observations,
+            requirement_key,
+        )? {
+            Some(view) => view,
+            None if crate::program_support::was_unavailable(observations, requirement_key) => {
+                return crate::program_support::unavailable(
+                    request,
+                    observations,
+                    requirement_key,
+                    crate::BuiltinExpertKind::LifeLogistics.result_artifact_name(),
+                    super::RESULT_MEDIA_TYPE,
+                    "Logistics are temporarily unavailable, so there is no logistics plan.",
+                );
+            }
+            None => return Err(AgentFailure::InvalidModelOutput),
+        };
         validate_logistics_view(&view, request.now_unix_ms)?;
         if text.len()
             > request

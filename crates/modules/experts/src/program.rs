@@ -34,6 +34,9 @@ pub struct ExpertProgramSpec {
     pub tools: Vec<ExpertToolSpec>,
 }
 
+/// Maximum actual source observations retained during one Expert Task.
+pub const MAX_EXPERT_SOURCE_OBSERVATIONS: usize = 32;
+
 #[derive(Clone, Debug)]
 pub struct ExpertToolObservation {
     pub call: ToolCall,

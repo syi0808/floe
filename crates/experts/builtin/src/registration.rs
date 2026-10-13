@@ -60,7 +60,11 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
             domain_tags: domain_tags.into_iter().map(str::to_owned).collect(),
             skills: vec![skill.into()],
         },
-        definition_revision: 2,
+        definition_revision: if kind == BuiltinExpertKind::Schedule {
+            2
+        } else {
+            3
+        },
     };
     ExpertManifest {
         schema_version: EXPERT_MANIFEST_SCHEMA_VERSION,
@@ -74,7 +78,11 @@ fn manifest(kind: BuiltinExpertKind) -> ExpertManifest {
         },
         result_contracts: vec![ContractRef {
             id: format!("{}.result", kind.package_id()),
-            revision: 1,
+            revision: if kind == BuiltinExpertKind::Communication {
+                2
+            } else {
+                1
+            },
         }],
         source_requirements: kind
             .required_sources()

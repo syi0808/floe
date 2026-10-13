@@ -1,9 +1,7 @@
 //! Wellbeing judgment and its schedule impact.
 
 use floe_agent_contract::{AGENT_VERSION, AgentFailure, Artifact};
-use floe_context_contract::{
-    CalendarContextView, WellbeingView, validate_calendar_context_view, validate_wellbeing_view,
-};
+use floe_context_contract::{WellbeingView, validate_wellbeing_view};
 use floe_experts::{ExpertProgram, ExpertProgramRequest, ExpertProgramSpec, ExpertToolObservation};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -88,21 +86,23 @@ impl ExpertProgram for WellbeingProgram {
         }
 
         let wellbeing_key = crate::BuiltinContextSource::Wellbeing.source_id();
-        let wellbeing =
-            match crate::program_support::read_one::<WellbeingView>(observations, wellbeing_key)? {
-                Some(view) => view,
-                None if crate::program_support::was_unavailable(observations, wellbeing_key) => {
-                    return crate::program_support::unavailable(
-                        request,
-                        observations,
-                        wellbeing_key,
-                        crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
-                        super::RESULT_MEDIA_TYPE,
-                        UNAVAILABLE_SUMMARY,
-                    );
-                }
-                None => return Err(AgentFailure::InvalidModelOutput),
-            };
+        let wellbeing = match crate::program_support::read_snapshot::<WellbeingView>(
+            observations,
+            wellbeing_key,
+        )? {
+            Some(view) => view,
+            None if crate::program_support::was_unavailable(observations, wellbeing_key) => {
+                return crate::program_support::unavailable(
+                    request,
+                    observations,
+                    wellbeing_key,
+                    crate::BuiltinExpertKind::Wellbeing.result_artifact_name(),
+                    super::RESULT_MEDIA_TYPE,
+                    UNAVAILABLE_SUMMARY,
+                );
+            }
+            None => return Err(AgentFailure::InvalidModelOutput),
+        };
 
         validate_wellbeing_view(&wellbeing, request.now_unix_ms)?;
         let mut available = wellbeing.evidence_handles.clone();
@@ -110,17 +110,17 @@ impl ExpertProgram for WellbeingProgram {
         let mut expires_at_unix_ms = wellbeing.expires_at_unix_ms;
 
         let calendar_key = crate::BuiltinContextSource::Calendar.source_id();
-        if let Some(calendars) = crate::program_support::read_one::<Vec<CalendarContextView>>(
+        if let Some(calendars) = crate::observed_evidence::read_calendar(
             observations,
             calendar_key,
+            request.now_unix_ms,
         )? {
-            add_calendar_views(
-                &calendars,
-                request.now_unix_ms,
-                &mut available,
-                &mut source_handles,
-                &mut expires_at_unix_ms,
-            )?;
+            for source in &calendars.source_handles {
+                ensure_unique_source(&source_handles, source)?;
+            }
+            extend_unique_handles(&mut available, calendars.items.keys())?;
+            source_handles.extend(calendars.source_handles);
+            expires_at_unix_ms = expires_at_unix_ms.min(calendars.expires_at_unix_ms);
         }
 
         if text.len() > request.request.execution_context.max_output_bytes.min(8192) {
@@ -168,26 +168,6 @@ fn append_evidence_instruction(
         .ok_or(AgentFailure::InvalidInput)?;
     role.content.push_str(REQUIRED_EVIDENCE_INSTRUCTION);
     prompt.validate()
-}
-
-fn add_calendar_views(
-    calendars: &[CalendarContextView],
-    now_unix_ms: i64,
-    available: &mut Vec<String>,
-    source_handles: &mut Vec<String>,
-    expires_at_unix_ms: &mut i64,
-) -> Result<(), AgentFailure> {
-    for view in calendars {
-        validate_calendar_context_view(view, now_unix_ms)?;
-        ensure_unique_source(source_handles, &view.source_handle)?;
-        extend_unique_handles(
-            available,
-            view.items.iter().map(|item| &item.evidence_handle),
-        )?;
-        source_handles.push(view.source_handle.clone());
-        *expires_at_unix_ms = (*expires_at_unix_ms).min(view.expires_at_unix_ms);
-    }
-    Ok(())
 }
 
 fn ensure_unique_source(source_handles: &[String], source: &str) -> Result<(), AgentFailure> {

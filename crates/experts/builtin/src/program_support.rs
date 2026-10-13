@@ -52,25 +52,74 @@ pub fn specification(
     })
 }
 
-pub fn read_one<Value: DeserializeOwned>(
+/// Full-snapshot tools have no page/query dimension. Their last actual outcome
+/// supersedes the preceding snapshot, including a later unavailable outcome.
+pub fn read_snapshot<Value: DeserializeOwned>(
     observations: &[ExpertToolObservation],
     key: &str,
 ) -> Result<Option<Value>, AgentFailure> {
-    let values = observations
+    check_observation_bound(observations)?;
+    observations
         .iter()
-        .filter(|read| read.requirement_key == key)
-        .filter_map(|read| match &read.outcome {
+        .rev()
+        .find(|read| read.requirement_key == key)
+        .and_then(|read| match &read.outcome {
             ExpertSourceObservation::Ready { payload, .. } => Some(payload),
             ExpertSourceObservation::Unavailable { .. } => None,
         })
-        .collect::<Vec<_>>();
-    match values.as_slice() {
-        [] => Ok(None),
-        [value] => serde_json::from_value((*value).clone())
-            .map(Some)
-            .map_err(|_| AgentFailure::InvalidModelOutput),
-        _ => Err(AgentFailure::InvalidModelOutput),
+        .map(decode_payload)
+        .transpose()
+}
+
+fn decode_payload<Value: DeserializeOwned>(
+    payload: &serde_json::Value,
+) -> Result<Value, AgentFailure> {
+    if serde_json::to_vec(payload)
+        .map_err(|_| AgentFailure::InvalidInput)?
+        .len()
+        > floe_agent_contract::MAX_OUTPUT_BYTES
+    {
+        return Err(AgentFailure::BudgetExceeded);
     }
+    serde_json::from_value(payload.clone()).map_err(|_| AgentFailure::InvalidModelOutput)
+}
+
+fn check_observation_bound(observations: &[ExpertToolObservation]) -> Result<(), AgentFailure> {
+    if observations.len() > floe_experts::MAX_EXPERT_SOURCE_OBSERVATIONS {
+        return Err(AgentFailure::BudgetExceeded);
+    }
+    Ok(())
+}
+
+/// Page/query identity is the validated tool input, not its transient call ID.
+/// Re-reading exactly that query supersedes its result but no other page. Keep
+/// unavailable outcomes in the selection so they cannot resurrect old payloads.
+pub fn read_pages<Value: DeserializeOwned>(
+    observations: &[ExpertToolObservation],
+    key: &str,
+) -> Result<Vec<Value>, AgentFailure> {
+    check_observation_bound(observations)?;
+    let mut current = Vec::<(serde_json::Value, &ExpertToolObservation)>::new();
+    for read in observations
+        .iter()
+        .filter(|read| read.requirement_key == key)
+    {
+        floe_agent_contract::validate_tool_input(&read.call.input)?;
+        let input = serde_json::from_str::<serde_json::Value>(&read.call.input)
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if let Some(index) = current.iter().position(|(prior, _)| *prior == input) {
+            current.remove(index);
+        }
+        current.push((input, read));
+    }
+    current
+        .into_iter()
+        .filter_map(|(_, read)| match &read.outcome {
+            ExpertSourceObservation::Ready { payload, .. } => Some(payload),
+            ExpertSourceObservation::Unavailable { .. } => None,
+        })
+        .map(decode_payload)
+        .collect()
 }
 
 pub fn was_unavailable(observations: &[ExpertToolObservation], key: &str) -> bool {

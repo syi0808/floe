@@ -59,7 +59,7 @@ pub use ports::source::{
 };
 pub use program::{
     ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
-    ExpertSourceObservation, ExpertToolObservation, ExpertToolSpec,
+    ExpertSourceObservation, ExpertToolObservation, ExpertToolSpec, MAX_EXPERT_SOURCE_OBSERVATIONS,
 };
 
 pub use directory::{

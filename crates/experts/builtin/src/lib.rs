@@ -16,6 +16,7 @@ pub mod schedule;
 pub mod wellbeing;
 pub mod work_context;
 
+mod observed_evidence;
 mod program_support;
 mod shared;
 
@@ -24,3 +25,6 @@ pub use catalog::{
     BuiltinContextSource, BuiltinExpertKind,
 };
 pub use registration::{manifests, registrations};
+
+#[cfg(test)]
+mod observation_tests;

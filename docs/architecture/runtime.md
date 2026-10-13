@@ -197,6 +197,21 @@ and fail closed if mutable input JSON no longer matches it. The admitted input
 is recorded as Host provenance with the commitment linked into Core. No Expert
 learning loop is added and A2A remains a mapping boundary.
 
+Builtin Expert finalizers select the latest actual outcome of a full-snapshot
+source tool. Mail and Calendar instead retain distinct normalized tool inputs
+(query/range/cursor/limit); rereading the same input supersedes only that page,
+including an unavailable result. Every retained view is validated independently.
+Overlapping item handles are deduplicated by observation time; contradictory
+items with equal timestamps fail closed. Results retain exact observed source
+handles and the earliest retained expiry, never a fabricated aggregate source or
+an upgraded completeness claim. Coverage still accounts for all observations
+seen by the model, including superseded pages. The existing 32-observation Task
+bound, individual payload/view limits and final output budget remain enforced.
+Communication results carry plural `source_handles`; its result contract and the
+changed package definition revisions advance together. There is no singleton
+compatibility decoder. Existing Task/history pins retain their exact admitted
+definition and are not silently rebound to the new definition.
+
 `floe-a2a` is a separate transport-neutral module over the Agent and Conversation
 contracts. It owns versioned exchange values, peer-scoped IDs, explicit mapping
 and ports to the host Task owner and peer binding, including a bounded remote

@@ -238,7 +238,7 @@ impl ToolPort for ExpertTools<'_> {
                         .reads
                         .lock()
                         .map_err(|_| AgentFailure::StorageUnavailable)?;
-                    if reads.len() >= 32
+                    if reads.len() >= crate::MAX_EXPERT_SOURCE_OBSERVATIONS
                         || reads
                             .iter()
                             .any(|prior| prior.observation.call.call_id == observation.call.call_id)
@@ -261,7 +261,7 @@ impl ToolPort for ExpertTools<'_> {
                         .reads
                         .lock()
                         .map_err(|_| AgentFailure::StorageUnavailable)?;
-                    if reads.len() >= 32
+                    if reads.len() >= crate::MAX_EXPERT_SOURCE_OBSERVATIONS
                         || reads
                             .iter()
                             .any(|prior| prior.observation.call.call_id == call.call_id)

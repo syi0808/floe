@@ -73,7 +73,7 @@ impl ExpertProgram for WorkContextProgram {
         }
 
         let requirement_key = BuiltinContextSource::WorkContext.source_id();
-        let view = match crate::program_support::read_one::<WorkContextView>(
+        let view = match crate::program_support::read_snapshot::<WorkContextView>(
             observations,
             requirement_key,
         )? {

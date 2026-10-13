@@ -6,11 +6,8 @@ use uuid::Uuid;
 use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind};
 use floe_agent_contract::{AGENT_VERSION, AgentContext, AgentFailure};
 use floe_context_contract::{
-    CalendarContextView, ContextIssueReason, ContextMemory, ContextSource, FLOE_TASK_VIEW_ID,
-    MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS, NativeContextItem, NativeContextView,
-    calendar_context_evidence, communication_context_evidence, native_context_evidence,
-    record_source_issue, validate_calendar_context_view, validate_communication_view,
-    validate_native_context_view,
+    ContextIssueReason, ContextMemory, ContextSource, FLOE_TASK_VIEW_ID, NativeContextItem,
+    NativeContextView, native_context_evidence, record_source_issue, validate_native_context_view,
 };
 use floe_experts::{
     ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
@@ -124,7 +121,11 @@ impl ExpertProgram for CommitmentsProgram {
             return Err(AgentFailure::BudgetExceeded);
         }
 
-        let mail_view = match crate::program_support::read_one(observations, MAIL_REQUIREMENT)? {
+        let mail_view = match crate::observed_evidence::read_mail(
+            observations,
+            MAIL_REQUIREMENT,
+            request.now_unix_ms,
+        )? {
             Some(view) => view,
             None if crate::program_support::was_unavailable(observations, MAIL_REQUIREMENT) => {
                 return crate::program_support::unavailable(
@@ -209,56 +210,35 @@ fn append_required_evidence_instruction(
 fn commitment_evidence(
     request: &ExpertProgramRequest,
     observations: &[ExpertToolObservation],
-    mail_view: &floe_context_contract::CommunicationView,
+    mail_view: &crate::observed_evidence::MailEvidence,
 ) -> Result<CommitmentEvidence, AgentFailure> {
     let now = request.now_unix_ms;
-    validate_communication_view(
-        mail_view,
-        now,
-        MAX_COMMUNICATION_ITEMS,
-        MAX_COMMUNICATION_BYTES,
-    )?;
-    let _ = communication_context_evidence(mail_view)?;
-
     let mut context: AgentContext = request.context.clone();
     let mut handles = mail_view
         .items
-        .iter()
-        .map(|item| {
+        .values()
+        .map(|entry| {
             (
-                item.evidence_handle.clone(),
+                entry.item.evidence_handle.clone(),
                 CommitmentEvidenceSource::Mail,
-                mail_view.source_handle.clone(),
+                entry.source_handle.clone(),
             )
         })
         .collect::<Vec<_>>();
-    let mut source_handles = vec![];
-    let mut expires_at_unix_ms = i64::MAX;
-    if !mail_view.items.is_empty() {
-        source_handles.push(mail_view.source_handle.clone());
-        expires_at_unix_ms = mail_view.expires_at_unix_ms;
-    }
+    let mut source_handles = mail_view.source_handles.clone();
+    let mut expires_at_unix_ms = mail_view.expires_at_unix_ms;
 
-    match crate::program_support::read_one::<Vec<CalendarContextView>>(
-        observations,
-        CALENDAR_REQUIREMENT,
-    )? {
+    match crate::observed_evidence::read_calendar(observations, CALENDAR_REQUIREMENT, now)? {
         Some(calendars) => {
-            for view in &calendars {
-                validate_calendar_context_view(view, now)?;
-                let _ = calendar_context_evidence(view)?;
-                handles.extend(view.items.iter().map(|item| {
-                    (
-                        item.evidence_handle.clone(),
-                        CommitmentEvidenceSource::Calendar,
-                        view.source_handle.clone(),
-                    )
-                }));
-                if !view.items.is_empty() {
-                    source_handles.push(view.source_handle.clone());
-                    expires_at_unix_ms = expires_at_unix_ms.min(view.expires_at_unix_ms);
-                }
-            }
+            handles.extend(calendars.items.values().map(|entry| {
+                (
+                    entry.item.evidence_handle.clone(),
+                    CommitmentEvidenceSource::Calendar,
+                    entry.source_handle.clone(),
+                )
+            }));
+            source_handles.extend(calendars.source_handles);
+            expires_at_unix_ms = expires_at_unix_ms.min(calendars.expires_at_unix_ms);
             record_source_issue(
                 &mut context.optional_context_issues,
                 ContextSource::Calendar,
@@ -275,7 +255,10 @@ fn commitment_evidence(
         None => {}
     }
 
-    match crate::program_support::read_one::<NativeContextView>(observations, TASK_REQUIREMENT)? {
+    match crate::program_support::read_snapshot::<NativeContextView>(
+        observations,
+        TASK_REQUIREMENT,
+    )? {
         Some(view) => {
             if view.view_id != FLOE_TASK_VIEW_ID {
                 return Err(AgentFailure::InvalidInput);
@@ -318,7 +301,7 @@ fn commitment_evidence(
         None => {}
     }
 
-    match crate::program_support::read_one::<ConfirmedMemoryInput>(
+    match crate::program_support::read_snapshot::<ConfirmedMemoryInput>(
         observations,
         MEMORY_REQUIREMENT,
     )? {
@@ -364,10 +347,6 @@ fn commitment_evidence(
     }
     source_handles.sort();
     source_handles.dedup();
-    if source_handles.is_empty() {
-        source_handles.push(mail_view.source_handle.clone());
-        expires_at_unix_ms = mail_view.expires_at_unix_ms;
-    }
     Ok(CommitmentEvidence {
         handles,
         source_handles,

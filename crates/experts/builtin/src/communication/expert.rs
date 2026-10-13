@@ -4,11 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use floe_agent_contract::prompts::{PromptAssembly, PromptComponentKind};
-use floe_agent_contract::{AGENT_VERSION, AgentContext, AgentFailure};
-use floe_context_contract::{
-    CommunicationView, MAX_COMMUNICATION_BYTES, MAX_COMMUNICATION_ITEMS,
-    communication_context_evidence, validate_communication_view,
-};
+use floe_agent_contract::{AGENT_VERSION, AgentFailure};
 use floe_experts::{
     ExpertFinalOutput, ExpertProgram, ExpertProgramRequest, ExpertProgramSpec,
     ExpertToolObservation,
@@ -59,7 +55,7 @@ pub struct CommunicationAssessment {
 pub struct CommunicationExpertResult {
     pub schema_version: u32,
     pub invocation_id: Uuid,
-    pub source_handle: String,
+    pub source_handles: Vec<String>,
     pub expires_at_unix_ms: i64,
     pub summary: String,
     pub assessments: Vec<CommunicationAssessment>,
@@ -95,9 +91,10 @@ impl ExpertProgram for CommunicationProgram {
             return Err(AgentFailure::BudgetExceeded);
         }
 
-        let view = match crate::program_support::read_one::<CommunicationView>(
+        let view = match crate::observed_evidence::read_mail(
             observations,
             MAIL_REQUIREMENT,
+            request.now_unix_ms,
         )? {
             Some(view) => view,
             None if crate::program_support::was_unavailable(observations, MAIL_REQUIREMENT) => {
@@ -113,18 +110,7 @@ impl ExpertProgram for CommunicationProgram {
             None => return Err(AgentFailure::InvalidModelOutput),
         };
 
-        validate_communication_view(
-            &view,
-            request.now_unix_ms,
-            MAX_COMMUNICATION_ITEMS,
-            MAX_COMMUNICATION_BYTES,
-        )?;
-        let mut context: AgentContext = request.context.clone();
-        context
-            .evidence
-            .push(communication_context_evidence(&view)?);
-        context.validate()?;
-
+        request.context.validate()?;
         let mut output: CommunicationModelOutput =
             serde_json::from_str(text).map_err(|_| AgentFailure::InvalidModelOutput)?;
         crate::shared::validate_summary(&output.summary)?;
@@ -133,10 +119,7 @@ impl ExpertProgram for CommunicationProgram {
         }
         let mut assessment_handles = std::collections::HashSet::new();
         for assessment in &mut output.assessments {
-            if !view
-                .items
-                .iter()
-                .any(|item| item.evidence_handle == assessment.evidence_handle)
+            if !view.items.contains_key(&assessment.evidence_handle)
                 || assessment.rationale.trim().is_empty()
                 || assessment.rationale.len() > 512
                 || assessment.tone.trim().is_empty()
@@ -158,7 +141,7 @@ impl ExpertProgram for CommunicationProgram {
         let result = CommunicationExpertResult {
             schema_version: AGENT_VERSION,
             invocation_id: request.request.invocation_key.as_uuid(),
-            source_handle: view.source_handle,
+            source_handles: view.source_handles,
             expires_at_unix_ms: view.expires_at_unix_ms,
             summary: output.summary,
             assessments: output.assessments,

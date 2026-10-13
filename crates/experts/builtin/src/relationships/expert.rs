@@ -105,25 +105,27 @@ impl ExpertProgram for RelationshipsProgram {
         }
 
         let contacts_key = crate::BuiltinContextSource::Contacts.source_id();
-        let people =
-            match crate::program_support::read_one::<PeopleView>(observations, contacts_key)? {
-                Some(view) => view,
-                None if crate::program_support::was_unavailable(observations, contacts_key) => {
-                    return crate::program_support::unavailable(
-                        request,
-                        observations,
-                        contacts_key,
-                        crate::BuiltinExpertKind::Relationships.result_artifact_name(),
-                        super::RESULT_MEDIA_TYPE,
-                        UNAVAILABLE_SUMMARY,
-                    );
-                }
-                None => return Err(AgentFailure::InvalidModelOutput),
-            };
+        let people = match crate::program_support::read_snapshot::<PeopleView>(
+            observations,
+            contacts_key,
+        )? {
+            Some(view) => view,
+            None if crate::program_support::was_unavailable(observations, contacts_key) => {
+                return crate::program_support::unavailable(
+                    request,
+                    observations,
+                    contacts_key,
+                    crate::BuiltinExpertKind::Relationships.result_artifact_name(),
+                    super::RESULT_MEDIA_TYPE,
+                    UNAVAILABLE_SUMMARY,
+                );
+            }
+            None => return Err(AgentFailure::InvalidModelOutput),
+        };
         validate_people_view(&people, request.now_unix_ms)?;
 
         let interactions_key = crate::BuiltinContextSource::ConfirmedInteractions.source_id();
-        let interactions = crate::program_support::read_one::<Vec<ConfirmedInteractionView>>(
+        let interactions = crate::program_support::read_snapshot::<Vec<ConfirmedInteractionView>>(
             observations,
             interactions_key,
         )?
