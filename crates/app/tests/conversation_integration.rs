@@ -3305,3 +3305,84 @@ fn conversational_forget_rejects_an_unprojected_target_and_preserves_transcript(
         )
     );
 }
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn model_capacity_preflight_rejects_before_intent_and_never_redispatches() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer)
+        .with_preflight_failure(AgentFailure::ModelInputCapacityExceeded);
+    let recorder = model.recorder();
+    let (profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, USER_TEXT);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(
+        receipt.issue,
+        Some(AgentFailure::ModelInputCapacityExceeded)
+    );
+    assert!(receipt.attempt_refs.is_empty());
+    assert!(receipt.unresolved_attempts.is_empty());
+    assert!(assert_script_clean(&recorder).generated.is_empty());
+    assert!(
+        !journal_events(&host, command.run_id)
+            .iter()
+            .any(|event| matches!(
+                event,
+                floe_agent_contract::JournalEvent::ModelIntent { .. }
+                    | floe_agent_contract::JournalEvent::ModelResult { .. }
+            )),
+        "a pure capacity rejection must not create a model-attempt journal"
+    );
+    drop(host);
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    let replay = wait_terminal_run(&reopened, command.run_id);
+    assert_eq!(replay.issue, receipt.issue);
+    assert!(assert_script_clean(&recorder).generated.is_empty());
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn capacity_failure_after_handoff_keeps_intent_and_unknown_accounting() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::FailAfterDispatch(AgentFailure::ModelInputCapacityExceeded),
+    );
+    let recorder = model.recorder();
+    let (profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let command = start_turn(&host, session_id, USER_TEXT);
+    let receipt = wait_terminal_run(&host, command.run_id);
+    assert_eq!(receipt.state, RunState::Failed);
+    assert_eq!(
+        receipt.issue,
+        Some(AgentFailure::ModelInputCapacityExceeded)
+    );
+    assert_eq!(receipt.attempt_refs.len(), 1);
+    assert_eq!(assert_script_clean(&recorder).generated.len(), 1);
+    let events = journal_events(&host, command.run_id);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, floe_agent_contract::JournalEvent::ModelIntent { .. }))
+            .count(),
+        1
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            floe_agent_contract::JournalEvent::ModelResult { accounting, .. }
+            if accounting.unknown_tokens && accounting.unknown_cost
+        )),
+        "a post-handoff error code is not evidence of zero usage"
+    );
+    drop(host);
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    assert_eq!(
+        wait_terminal_run(&reopened, command.run_id).issue,
+        receipt.issue
+    );
+    assert_eq!(assert_script_clean(&recorder).generated.len(), 1);
+}

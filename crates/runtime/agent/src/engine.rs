@@ -554,6 +554,7 @@ impl ActiveDrive<'_> {
                 replay: self.model_replay.clone(),
             };
             model_request.validate()?;
+            prepared.validate_request(&model_request, &model_scope)?;
             let intent = self
                 .request
                 .scope
@@ -1799,6 +1800,14 @@ mod model_selection_tests {
     impl floe_agent_contract::PreparedModelCall for CountingPreparedModel {
         fn plan(&self) -> &PreparedModelPlan {
             &self.plan
+        }
+
+        fn validate_request(
+            &self,
+            request: &ModelRequest,
+            _scope: &ExecutionScope,
+        ) -> Result<(), AgentFailure> {
+            request.validate()
         }
 
         fn generate<'a>(

@@ -166,6 +166,29 @@ where
         &self.plan
     }
 
+    fn validate_request(
+        &self,
+        request: &ModelRequest,
+        scope: &ExecutionScope,
+    ) -> Result<(), AgentFailure> {
+        self.validate_binding(request)?;
+        let canonical = self.canonical_request(
+            request,
+            scope,
+            request
+                .reservation_ceiling
+                .tokens
+                .min(scope.budget().max_tokens())
+                .min(MAX_ATTEMPT_TOKENS),
+            request
+                .reservation_ceiling
+                .cost_micros
+                .min(scope.budget().max_cost_micros())
+                .min(MAX_ATTEMPT_COST_MICROS),
+        )?;
+        self.transport.validate_request(&canonical)
+    }
+
     fn generate<'a>(
         &'a self,
         request: ModelRequest,
@@ -189,11 +212,7 @@ where
     Resolver: DependencyResolver,
     Authority: GatewayAdmission,
 {
-    async fn dispatch_selected(
-        &self,
-        request: ModelRequest,
-        scope: &ExecutionScope,
-    ) -> Result<ModelResponse, AgentFailure> {
+    fn validate_binding(&self, request: &ModelRequest) -> Result<(), AgentFailure> {
         request.validate()?;
         if !self
             .plan
@@ -215,6 +234,47 @@ where
         {
             return Err(AgentFailure::PolicyDenied);
         }
+        Ok(())
+    }
+
+    fn canonical_request(
+        &self,
+        request: &ModelRequest,
+        scope: &ExecutionScope,
+        tokens: u64,
+        cost: u64,
+    ) -> Result<CanonicalModelRequest, AgentFailure> {
+        let canonical = CanonicalModelRequest {
+            attempt_id: request.attempt_id,
+            envelope: request.projection.envelope.clone(),
+            catalog: request.catalog.clone(),
+            budget_profile: self
+                .plan
+                .budget_profile
+                .clone()
+                .ok_or(AgentFailure::PolicyDenied)?,
+            input_data_classes: request.projection.input_data_classes.clone(),
+            remaining_tokens: tokens,
+            remaining_cost_micros: cost,
+            max_output_bytes: request
+                .projection
+                .envelope
+                .attempt
+                .max_output_bytes
+                .min(floe_agent_contract::MAX_OUTPUT_BYTES),
+            deadline: scope.deadline(),
+            cancellation: scope.cancellation().clone(),
+        };
+        canonical.validate()?;
+        Ok(canonical)
+    }
+
+    async fn dispatch_selected(
+        &self,
+        request: ModelRequest,
+        scope: &ExecutionScope,
+    ) -> Result<ModelResponse, AgentFailure> {
+        self.validate_binding(&request)?;
         let person =
             Uuid::parse_str(&self.plan.principal).map_err(|_| AgentFailure::InvalidInput)?;
         let dispatch = ModelDispatchRequest {
@@ -265,28 +325,7 @@ where
             scope
                 .budget()
                 .begin_model_attempt(request.attempt_id, &mut tokens, &mut cost)?;
-        let canonical = CanonicalModelRequest {
-            attempt_id: request.attempt_id,
-            envelope: request.projection.envelope.clone(),
-            catalog: request.catalog.clone(),
-            budget_profile: self
-                .plan
-                .budget_profile
-                .clone()
-                .ok_or(AgentFailure::PolicyDenied)?,
-            input_data_classes: request.projection.input_data_classes.clone(),
-            remaining_tokens: tokens,
-            remaining_cost_micros: cost,
-            max_output_bytes: request
-                .projection
-                .envelope
-                .attempt
-                .max_output_bytes
-                .min(floe_agent_contract::MAX_OUTPUT_BYTES),
-            deadline: scope.deadline(),
-            cancellation: scope.cancellation().clone(),
-        };
-        canonical.validate()?;
+        let canonical = self.canonical_request(&request, scope, tokens, cost)?;
         self.transport.validate_request(&canonical)?;
         let max_output_bytes = canonical.max_output_bytes;
         let fence = consume_model_dispatch(permit).await?;

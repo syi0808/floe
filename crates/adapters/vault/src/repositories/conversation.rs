@@ -74,12 +74,17 @@ impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
         &'a self,
         request: SessionReadRequest,
         expected_revision: u64,
+        byte_limit: usize,
     ) -> BoxFuture<'a, Result<Option<floe_conversation::CompactionSource>, AgentFailure>> {
         Box::pin(async move {
             request.validate()?;
             self.verify_principal(&request.principal)?;
             self.vault
-                .prepare_manager_compaction_source(request.session_id, expected_revision)
+                .prepare_manager_compaction_source(
+                    request.session_id,
+                    expected_revision,
+                    byte_limit,
+                )
                 .await
         })
     }

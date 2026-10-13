@@ -174,6 +174,23 @@ cleanup and its doctest linked the preceding library artifact; the full frozen
 snapshot was rebuilt and rerun successfully. No Flutter/Apple or live-model
 qualification is claimed.
 
+Input-capacity prerequisite for step 3: repository inspection confirmed that the
+Gateway's current codec/input framing cap is 32 KiB, independently of the larger
+transcript/archive guards. Source preparation therefore accepts a smaller bounded
+byte allowance and never clips an oversized turn to fit it. The shared Engine
+now invokes pure selected-transport preflight before durable model intent;
+Inference reuses its dispatch codec and canonical request builder, with all live
+Access/budget/dispatch fences preserved for actual generation. The real App/Vault
+fixture reproduced a premature model-attempt journal on a pure capacity failure,
+then passed with no intent, no dispatch and no redispatch after reopen. A separate
+post-handoff capacity failure retains its intent and unknown usage, also without
+redispatch. A compaction driver must prove the former outcome before reducing a
+source allowance; it cannot infer safe retry from the error code alone.
+This frozen prerequisite candidate passed 295 default workspace tests including
+doctests and 58 App QA tests (one subprocess entry ignored), plus the production
+FFI build, architecture boundaries and diff checks. These synthetic tests do not
+qualify live model behavior or implement automatic summarization.
+
 Ordered cutover and acceptance:
 
 1. Verify existing archive eligibility against canonical Run semantics. A valid

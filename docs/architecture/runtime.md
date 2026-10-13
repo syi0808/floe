@@ -145,7 +145,9 @@ prefix digest. Selection checks whole owner-turn boundaries, includes the prior
 summary when present, and returns complete messages with recorded provenance coverage. The snapshot is
 not authority; Context must revalidate current processing permission before any
 model release.
-The structural high-water marks are 96 entries or 96 KiB, below the existing
+The structural ceilings are 96 entries and 96 KiB. The owner may request a
+smaller byte allowance, which also lowers the byte-pressure trigger; a whole turn
+that cannot fit is rejected rather than clipped. These are below the existing
 128-entry/128-KiB framing ceilings; they are not a substitute for Inference's
 model-specific token budget. Selection normally retains at least 16 recent
 entries. Byte pressure may use a shorter tail, never fewer than two entries and
@@ -227,6 +229,18 @@ Existing limits remain in force: effective Agent-input JSON bytes are `min(confi
 The Agent pins a complete `ModelExecutionSelection` for each logical execution from its first acknowledged `ModelIntent`. It includes the provider-owned opaque target/revision commitment, caller, purpose, consumer, capabilities, processing boundary, Access binding digest and exact budget profile. Every later preparation must match before Context projection or Access dispatch admission. Run journals pin Manager selections; Expert Task journals pin Expert selections independently. The Run and Task append owners validate each new `ModelIntent` against the durable prefix before committing it; the Vault Run owner performs this check in the same immediate transaction as the append. A pending Continue restores the parent's selection through the validated resume lineage, while a Continue with no pending batch and an explicit linked Resume start a fresh execution. Finalization inherits the work selection. A missing historical commitment or profile projects as `Unproven`: its already validated pending batch may replay, but a later model attempt is denied before preparation. New incomplete plans are rejected by the Engine and both journal owners. Selection digests correlate the chosen plan; they never authorize dispatch or replace live Access/source/credential checks. Existing capability revision, source fencing and no-fallback behavior remain authoritative.
 
 This slice does not add context compaction, transcript storage, a new provider account, or large-context support. Unknown token metadata continues to use the existing framing guards until measured operator configuration exists.
+
+The generic Engine runs the selected `PreparedModelCall`'s pure request preflight
+before writing `ModelIntent`. Inference validates the request/plan binding and
+uses the same canonical-request builder and transport codec/limits check as
+actual dispatch. This preflight neither admits source processing nor creates a
+model attempt. Dispatch still performs live Access admission, budget reservation,
+codec validation, permit consumption and post-response revalidation. Thus an
+input-capacity rejection before intent leaves no model-attempt journal; the same
+error after handoff retains its intent and conservative unknown accounting. The
+error code alone is never proof that a retry is uncharged. Compaction can use this
+boundary with progressively smaller whole-prefix source allowances; its durable
+execution/recovery driver remains a separate pending cutover.
 
 `AgentFailure::ModelInputCapacityExceeded` is reserved for model-input capacity at the provider boundary: the serialized device request cap, Gateway rendered-instruction and request-body preflight limits, Gateway `413 body_too_large`, and FoundationModels context-window exhaustion (carried across the neutral DeviceModel contract as `InputCapacityExceeded`). A preflight failure does not become a dispatched attempt. After handoff, unknown provider usage remains charged at the reserved estimate. This terminal failure does not alter Gateway Primary/local fallback policy, trigger correction/finalization/retry, enable continuation, or truncate context or provenance. `BudgetExceeded` still covers Floe-owned history, iteration and token-budget limits, as well as response/output-size limits such as an oversized device response and Gateway model output.
 

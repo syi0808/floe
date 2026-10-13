@@ -228,6 +228,15 @@ pub trait ModelPort: Send + Sync {
 pub trait PreparedModelCall: Send + Sync {
     fn plan(&self) -> &crate::PreparedModelPlan;
 
+    /// Pure codec and selected-transport capacity validation. This neither
+    /// grants authority nor reserves, journals or dispatches a model attempt.
+    /// Dispatch must still recheck live authority and these same bounds.
+    fn validate_request(
+        &self,
+        request: &ModelRequest,
+        scope: &floe_execution::ExecutionScope,
+    ) -> Result<(), AgentFailure>;
+
     fn generate<'a>(
         &'a self,
         request: ModelRequest,

@@ -17,8 +17,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         &self,
         session_id: Uuid,
         expected_revision: u64,
+        byte_limit: usize,
     ) -> Result<Option<CompactionSource>, AgentFailure> {
-        if session_id.is_nil() || expected_revision == 0 {
+        if session_id.is_nil()
+            || expected_revision == 0
+            || byte_limit < 2
+            || byte_limit > COMPACTION_TRIGGER_BYTES
+        {
             return Err(AgentFailure::InvalidInput);
         }
         let mut connection = self.connection()?;
@@ -57,7 +62,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 source_bytes = source_bytes
                     .checked_add(serde_json::to_vec(&summary).map_err(|_| AgentFailure::StorageUnavailable)?.len())
                     .and_then(|bytes| bytes.checked_add(coverage_header.accounted_bytes().ok()?))
-                    .filter(|bytes| *bytes <= COMPACTION_TRIGGER_BYTES)
+                    .filter(|bytes| *bytes <= byte_limit)
                     .ok_or(AgentFailure::BudgetExceeded)?;
                 let coverage = hydrate_context_dependency_coverage_on(
                     &transaction, self.person_id, session_id, previous.through_turn_id, coverage_header,
@@ -78,7 +83,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let Some(next_bytes) = source_bytes.checked_add(preflight.encoded_bytes()) else {
                     return Err(AgentFailure::BudgetExceeded);
                 };
-                if next_bytes > COMPACTION_TRIGGER_BYTES { pressure = true; byte_pressure = true; break; }
+                if next_bytes > byte_limit { pressure = true; byte_pressure = true; break; }
                 let through = entry.reference;
                 let prefix_digest = entry.prefix_digest;
                 let resolved = self.resolve_manager_transcript_entry_preflighted_on(&transaction, session_id, entry, preflight)
@@ -86,11 +91,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let turn_id = resolved.message.turn_id();
                 let message = floe_conversation::contract_message(&resolved.message, resolved.alias_id, resolved.coverage)?;
                 messages.push(message);
-                if serde_json::to_vec(&messages).map_err(|_| AgentFailure::StorageUnavailable)?.len() > COMPACTION_TRIGGER_BYTES {
+                if serde_json::to_vec(&messages).map_err(|_| AgentFailure::StorageUnavailable)?.len() > byte_limit {
                     pressure = true; byte_pressure = true; break;
                 }
                 source_bytes = next_bytes;
-                byte_pressure |= source_bytes >= COMPACTION_TRIGGER_BYTES;
+                byte_pressure |= source_bytes >= byte_limit;
                 pressure |= byte_pressure;
                 // A cutoff must include the final normalized contribution of its
                 // owner turn. An arbitrary page boundary may split that turn.

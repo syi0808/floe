@@ -59,6 +59,7 @@ pub enum PrimaryBehavior {
 #[derive(Clone)]
 pub enum ModelOutput {
     Answer,
+    FailAfterDispatch(AgentFailure),
     RepeatedAnswers(usize),
     UnsupportedManagerToolCall,
     ForgetUnprojectedMemory,
@@ -340,6 +341,7 @@ impl ScriptRecorder {
 }
 
 pub struct ScriptedModel {
+    preflight_failure: Option<AgentFailure>,
     primary: PrimaryBehavior,
     expected_input: String,
     output: ModelOutput,
@@ -397,11 +399,17 @@ impl ScriptedModel {
             _ => vec![CONVERSATION_CONSUMER.into()],
         };
         Self {
+            preflight_failure: None,
             primary,
             expected_input: expected_input.into(),
             output,
             recorder: ScriptRecorder::new(expected_consumers),
         }
+    }
+
+    pub fn with_preflight_failure(mut self, failure: AgentFailure) -> Self {
+        self.preflight_failure = Some(failure);
+        self
     }
 
     pub fn recorder(&self) -> ScriptRecorder {
@@ -708,6 +716,7 @@ impl ScriptedModel {
 impl Clone for ScriptedModel {
     fn clone(&self) -> Self {
         Self {
+            preflight_failure: self.preflight_failure,
             primary: self.primary,
             expected_input: self.expected_input.clone(),
             output: self.output.clone(),
@@ -830,7 +839,11 @@ struct ScriptedTransport {
 impl PreparedModelTransport for ScriptedTransport {
     fn validate_request(&self, request: &InferenceRequest) -> Result<(), AgentFailure> {
         self.model
-            .validate_canonical(request, &self.plan, self.run_id, self.task_id)
+            .validate_canonical(request, &self.plan, self.run_id, self.task_id)?;
+        if let Some(failure) = self.model.preflight_failure {
+            return Err(failure);
+        }
+        Ok(())
     }
 
     fn dispatch_target(&self) -> floe_access::ModelDispatchTarget {
@@ -862,6 +875,7 @@ impl PreparedModelTransport for ScriptedTransport {
                 self.task_id,
             )?;
             match &self.model.output {
+                ModelOutput::FailAfterDispatch(failure) => Err(*failure),
                 ModelOutput::Answer => Ok(response(vec![ModelStep::Answer {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],

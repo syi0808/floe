@@ -11519,7 +11519,8 @@ async fn compaction_defers_a_valid_continue_origin_without_corrupting_it() {
                     .vault()
                     .prepare_manager_compaction_source(
                         scenario.session_id,
-                        terminal.session_revision
+                        terminal.session_revision,
+                        floe_conversation::COMPACTION_TRIGGER_BYTES
                     )
                     .await,
                 Err(AgentFailure::Conflict),
@@ -11582,7 +11583,8 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
                     .vault()
                     .prepare_manager_compaction_source(
                         scenario.session_id,
-                        scenario.session_revision
+                        scenario.session_revision,
+                        floe_conversation::COMPACTION_TRIGGER_BYTES
                     )
                     .await
                     .unwrap(),
@@ -11592,7 +11594,11 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     }
     let source = scenario
         .vault()
-        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .prepare_manager_compaction_source(
+            scenario.session_id,
+            scenario.session_revision,
+            floe_conversation::COMPACTION_TRIGGER_BYTES,
+        )
         .await
         .expect("select eligible committed history")
         .expect("entry pressure triggers compaction");
@@ -11624,7 +11630,11 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     scenario.reopen().await;
     let replay = scenario
         .vault()
-        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .prepare_manager_compaction_source(
+            scenario.session_id,
+            scenario.session_revision,
+            floe_conversation::COMPACTION_TRIGGER_BYTES,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -11649,7 +11659,11 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     assert_eq!(
         scenario
             .vault()
-            .prepare_manager_compaction_source(scenario.session_id, source.session_revision)
+            .prepare_manager_compaction_source(
+                scenario.session_id,
+                source.session_revision,
+                floe_conversation::COMPACTION_TRIGGER_BYTES
+            )
             .await,
         Err(AgentFailure::Conflict),
         "a stale candidate cannot select against a newer checkpoint"
@@ -11657,7 +11671,11 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     assert_eq!(
         scenario
             .vault()
-            .prepare_manager_compaction_source(scenario.session_id, committed.session.revision)
+            .prepare_manager_compaction_source(
+                scenario.session_id,
+                committed.session.revision,
+                floe_conversation::COMPACTION_TRIGGER_BYTES
+            )
             .await
             .unwrap(),
         None
@@ -11677,7 +11695,11 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     }
     let successor = scenario
         .vault()
-        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .prepare_manager_compaction_source(
+            scenario.session_id,
+            scenario.session_revision,
+            floe_conversation::COMPACTION_TRIGGER_BYTES,
+        )
         .await
         .unwrap()
         .expect("subsequent source incorporates the prior summary");
@@ -11709,7 +11731,11 @@ async fn compaction_source_detects_byte_pressure_in_few_large_turns() {
     }
     let source = scenario
         .vault()
-        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .prepare_manager_compaction_source(
+            scenario.session_id,
+            scenario.session_revision,
+            floe_conversation::COMPACTION_TRIGGER_BYTES,
+        )
         .await
         .unwrap()
         .expect("bytes trigger even below the entry high-water mark");
@@ -11723,6 +11749,9 @@ async fn compaction_source_detects_byte_pressure_in_few_large_turns() {
     for message in &source.messages {
         assert!(message.text.len() > 20 * 1024, "no prefix clipping");
     }
+    assert_eq!(scenario.vault().prepare_manager_compaction_source(
+        scenario.session_id, scenario.session_revision, 1024,
+    ).await, Err(AgentFailure::BudgetExceeded), "an individual oversized turn is never clipped to fit");
 }
 
 #[tokio::test]
@@ -11736,11 +11765,30 @@ async fn compaction_source_prefers_sixteen_recent_entries_without_byte_pressure(
     }
     let source = scenario
         .vault()
-        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .prepare_manager_compaction_source(
+            scenario.session_id,
+            scenario.session_revision,
+            floe_conversation::COMPACTION_TRIGGER_BYTES,
+        )
         .await
         .unwrap()
         .unwrap();
     assert_eq!(source.head.head_revision, 96);
     assert_eq!(source.through.sequence, 80);
     assert_eq!(source.messages.len(), 80);
+    let smaller = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision, 4096)
+        .await
+        .unwrap()
+        .expect("a smaller transport allowance selects a smaller prefix");
+    assert!(smaller.through.sequence < source.through.sequence);
+    assert!(serde_json::to_vec(&smaller.messages).unwrap().len() <= 4096);
+    assert_eq!(
+        scenario
+            .vault()
+            .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision, 0,)
+            .await,
+        Err(AgentFailure::InvalidInput)
+    );
 }

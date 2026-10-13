@@ -7,6 +7,7 @@ pub trait SessionArchiveRepository: Send + Sync {
         &'a self,
         request: crate::SessionReadRequest,
         expected_revision: u64,
+        byte_limit: usize,
     ) -> BoxFuture<'a, Result<Option<crate::CompactionSource>, AgentFailure>>;
 
     fn compact_session<'a>(
