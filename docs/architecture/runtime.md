@@ -653,3 +653,13 @@ Day Calendar display labels preserve the owner's existing 1,024-byte UTF-8
 capacity through protocol and client decoding, including grouped account and
 calendar names. This is presentation text only; resource identity, authority and
 write-destination constraints remain separately validated.
+
+Conversation compaction execution uses a source-pinned journal head over the
+same role-neutral execution parser. Its allowed batch is one artifact-free
+Answer; tools, delegation and foreground finalization are rejected. A persisted
+answer can be replayed through current authorization and the archive CAS, while
+an unresolved or uncertain attempt cannot be started again. An empty journal is
+not itself dispatch authority: executor-generation custody, current source
+eligibility and live Context/Inference checks are still required. The pure
+journal contract is implemented; durable job admission and automatic lifecycle
+wiring remain an active cutover in the architecture plan.

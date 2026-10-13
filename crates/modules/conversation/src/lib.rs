@@ -117,3 +117,8 @@ pub use domain::{
 };
 
 pub use application::memory_forget_tool_result;
+
+pub use application::{
+    COMPACTION_CONSUMER, CompactionJournalHead, CompactionRecovery, advance_compaction_journal,
+    recover_compaction_journal, validate_compaction_journal, validate_compaction_summary,
+};

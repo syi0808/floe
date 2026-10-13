@@ -1,3 +1,8 @@
+mod compaction_journal;
+pub use compaction_journal::{
+    COMPACTION_CONSUMER, CompactionJournalHead, CompactionRecovery, advance_compaction_journal,
+    recover_compaction_journal, validate_compaction_journal, validate_compaction_summary,
+};
 mod admission;
 mod archive;
 mod cancellation;

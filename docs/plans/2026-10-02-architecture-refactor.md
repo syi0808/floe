@@ -191,6 +191,42 @@ doctests and 58 App QA tests (one subprocess entry ignored), plus the production
 FFI build, architecture boundaries and diff checks. These synthetic tests do not
 qualify live model behavior or implement automatic summarization.
 
+Summarization-journal prerequisite: Conversation now defines a source-pinned,
+role-restricted journal head and recovery decision over the shared generic
+execution parser. The execution identity includes the Person and exact source
+snapshot; a changed source cannot reuse the journal. Only a single text Answer
+per validated batch is allowed, with no tools, delegations, artifacts or
+foreground finalization. The summary must be nonempty, bounded and smaller than
+its source text without silent trimming. Durable intent or unknown usage never
+becomes permission to repeat a model call; only an empty journal is NotStarted,
+and a fully recorded answer is replayed exactly. The source selector now also
+has a transaction-composable implementation for atomic job admission. Six pure
+journal regressions and three encrypted source-selector regressions pass. The
+frozen checkpoint also passed all 301 default workspace tests including doctests,
+the production FFI build, architecture boundaries and diff checks. App QA was
+not rerun for this pure-contract/transaction-extraction checkpoint. This
+checkpoint does not yet persist jobs, dispatch summaries or install checkpoints
+automatically; the next dependency-closed slice wires these owner rules into
+Vault custody and the Conversation lifecycle.
+
+The compaction storage extension will follow the existing optional-family
+pattern: absent state is initialized only by explicit owner admission, never by
+open/read or repair of partial objects. A job and its sole execution journal are
+bound to the active Conversation executor generation. Recovery either adopts an
+empty execution or commits a recorded answer after current source/coverage/CAS
+checks; an uncertain attempted execution is retired without redispatch. No
+existing Run or Task meaning is reinterpreted and no stored profile is reset.
+The automatic cutover must use the recorded Answer's projection coverage when
+installing its summary, separately from original archive-entry coverage. The
+current manual archive helper conservatively merges the entire prefix; that is
+not sufficient for an automatically filtered source after revocation. Retired
+or forgotten derived content must not re-enter the summary, and stale dependency
+coverage must not make an otherwise authorized new summary immediately unusable.
+The durable completion transaction will validate the source pin and answer
+journal proof, keep original entry coverage unchanged, and install the exact
+summary coverage. The unused caller-supplied-summary production route is removed
+at this cutover rather than retained as an alternate authority path.
+
 Ordered cutover and acceptance:
 
 1. Verify existing archive eligibility against canonical Run semantics. A valid
