@@ -60,8 +60,12 @@ pub fn validate_communication_view(
         || view.observed_at_unix_ms > now_unix_ms
         || view.expires_at_unix_ms <= now_unix_ms
         || view.expires_at_unix_ms <= view.observed_at_unix_ms
-        || u64::try_from(view.expires_at_unix_ms - view.observed_at_unix_ms)
-            .map_err(|_| AgentFailure::InvalidInput)?
+        || u64::try_from(
+            view.expires_at_unix_ms
+                .checked_sub(view.observed_at_unix_ms)
+                .ok_or(AgentFailure::InvalidInput)?,
+        )
+        .map_err(|_| AgentFailure::InvalidInput)?
             > MAX_COMMUNICATION_FRESHNESS_MS
         || (view.coverage_complete && view.next_cursor.is_some())
         || view.next_cursor.is_some_and(|cursor| cursor > 10_000)

@@ -44,7 +44,10 @@ pub fn validate_confirmed_interaction_view(
         || view.observed_at_unix_ms > now_unix_ms
         || view.expires_at_unix_ms <= now_unix_ms
         || view.expires_at_unix_ms <= view.observed_at_unix_ms
-        || view.expires_at_unix_ms - view.observed_at_unix_ms > 300_000
+        || view
+            .expires_at_unix_ms
+            .checked_sub(view.observed_at_unix_ms)
+            .is_none_or(|lifetime| lifetime > 300_000)
         || view.interactions.len() > 64
         || serde_json::to_vec(view)
             .map_err(|_| AgentFailure::InvalidInput)?

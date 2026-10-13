@@ -113,7 +113,10 @@ pub fn validate_calendar_context_view(
         || view.observed_at_unix_ms > now_unix_ms
         || view.expires_at_unix_ms <= now_unix_ms
         || view.expires_at_unix_ms <= view.observed_at_unix_ms
-        || view.expires_at_unix_ms - view.observed_at_unix_ms > MAX_CALENDAR_CONTEXT_FRESHNESS_MS
+        || view
+            .expires_at_unix_ms
+            .checked_sub(view.observed_at_unix_ms)
+            .is_none_or(|lifetime| lifetime > MAX_CALENDAR_CONTEXT_FRESHNESS_MS)
         || view.range_start_unix_ms < 0
         || view.range_end_unix_ms <= view.range_start_unix_ms
         || view.range_end_unix_ms - view.range_start_unix_ms > MAX_CALENDAR_CONTEXT_RANGE_MS

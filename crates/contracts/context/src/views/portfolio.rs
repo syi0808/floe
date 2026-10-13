@@ -225,7 +225,9 @@ fn validate_envelope(
         || observed_at_unix_ms > now_unix_ms
         || expires_at_unix_ms <= now_unix_ms
         || expires_at_unix_ms <= observed_at_unix_ms
-        || expires_at_unix_ms - observed_at_unix_ms > 300_000
+        || expires_at_unix_ms
+            .checked_sub(observed_at_unix_ms)
+            .is_none_or(|lifetime| lifetime > 300_000)
     {
         Err(AgentFailure::InvalidInput)
     } else {

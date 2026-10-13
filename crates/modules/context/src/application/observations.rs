@@ -390,8 +390,12 @@ impl ObservationRegistry {
             }
         }
         let monotonic_ttl = Duration::from_millis(
-            u64::try_from(expires_at_unix_ms - observed_at_unix_ms)
-                .map_err(|_| AgentFailure::InvalidInput)?,
+            u64::try_from(
+                expires_at_unix_ms
+                    .checked_sub(observed_at_unix_ms)
+                    .ok_or(AgentFailure::InvalidInput)?,
+            )
+            .map_err(|_| AgentFailure::InvalidInput)?,
         );
         let observation = TrustedPersonalObservation {
             person_id,
@@ -673,5 +677,33 @@ mod attention_history_tests {
             .unwrap();
         assert_eq!(retained, view(1_000));
         assert_eq!(subject, "a".repeat(64));
+    }
+}
+
+#[cfg(test)]
+mod personal_lifetime_tests {
+    use super::*;
+
+    #[test]
+    fn overflowed_personal_lifetime_is_rejected_before_retention() {
+        let registry = ObservationRegistry::new();
+        for (observed, expires) in [(i64::MIN, 1), (-1, i64::MAX), (i64::MIN, i64::MAX)] {
+            assert_eq!(
+                registry.commit_trusted_personal_observation(
+                    PersonId::new(),
+                    "device-1",
+                    "host-1".into(),
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    &"a".repeat(64),
+                    observed,
+                    expires,
+                    vec![],
+                    None,
+                ),
+                Err(AgentFailure::InvalidInput)
+            );
+            assert!(registry.trusted_personal.lock().unwrap().is_empty());
+        }
     }
 }

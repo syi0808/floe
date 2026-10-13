@@ -230,7 +230,10 @@ fn validate_envelope(
         || view.observed_at_unix_ms() > now_unix_ms
         || view.expires_at_unix_ms() <= now_unix_ms
         || view.expires_at_unix_ms() <= view.observed_at_unix_ms()
-        || view.expires_at_unix_ms() - view.observed_at_unix_ms() > max_lifetime_ms
+        || view
+            .expires_at_unix_ms()
+            .checked_sub(view.observed_at_unix_ms())
+            .is_none_or(|lifetime| lifetime > max_lifetime_ms)
     {
         Err(AgentFailure::InvalidInput)
     } else {
