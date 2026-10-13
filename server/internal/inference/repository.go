@@ -46,11 +46,13 @@ const (
 	ConfigRepositoryUnavailable
 )
 
-// ConfigRepository persists complete Inference-owned snapshots. Implementors
-// own filenames, strict encoding and encrypted atomic replacement; Inference
-// owns validation, state transitions and live engine adoption.
+// ConfigRepository persists live snapshots and immutable receipt pages.
+// Implementors own filenames, strict encoding and encrypted atomic replacement;
+// Inference owns page links, validation, transitions and live engine adoption.
 type ConfigRepository interface {
 	LoadConfig() ConfigReadOutcome
 	SaveConfig(ConfigState) ConfigWriteOutcome
+	LoadReceiptPage(string) ConfigReceiptPageRead
+	SaveReceiptPage(string, ConfigReceiptPage) ConfigWriteOutcome
 	Health() ConfigRepositoryHealth
 }

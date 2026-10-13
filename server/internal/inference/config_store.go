@@ -22,18 +22,19 @@ type ProviderProfile struct {
 	Purposes  map[string]PurposeModel `json:"purposes"`
 }
 
-// ConfigState is the complete Inference persistence unit. A repository commit
-// replaces it atomically; Inference validates and adopts it only after commit.
+// ConfigState is the live Inference persistence unit plus the immutable receipt
+// archive head. A commit publishes both atomically; adoption follows commit.
 type ConfigState struct {
-	SchemaVersion int                        `json:"schema_version"`
-	Revision      uint64                     `json:"revision"`
-	Targets       map[string]ProviderTarget  `json:"targets"`
-	Routes        map[Purpose]PurposeRoute   `json:"routes"`
-	Providers     map[string]ProviderProfile `json:"providers"`
-	Pending       *CredentialTransition      `json:"pending,omitempty"`
-	OwnedSlots    []string                   `json:"owned_slots"`
-	Cleanup       []CredentialCleanup        `json:"cleanup"`
-	Receipts      []ConfigurationReceipt     `json:"receipts"`
+	SchemaVersion  int                        `json:"schema_version"`
+	Revision       uint64                     `json:"revision"`
+	Targets        map[string]ProviderTarget  `json:"targets"`
+	Routes         map[Purpose]PurposeRoute   `json:"routes"`
+	Providers      map[string]ProviderProfile `json:"providers"`
+	Pending        *CredentialTransition      `json:"pending,omitempty"`
+	OwnedSlots     []string                   `json:"owned_slots"`
+	Cleanup        []CredentialCleanup        `json:"cleanup"`
+	Receipts       []ConfigurationReceipt     `json:"receipts"`
+	ReceiptArchive ConfigReceiptArchive       `json:"receipt_archive"`
 }
 
 // UnmarshalJSON delegates to the strict current-schema decoder.
@@ -53,13 +54,17 @@ func DecodeConfigState(data []byte) (ConfigState, error) {
 		return ConfigState{}, errors.New("invalid inference configuration")
 	}
 	var marker struct {
-		SchemaVersion int `json:"schema_version"`
+		SchemaVersion  int             `json:"schema_version"`
+		ReceiptArchive json.RawMessage `json:"receipt_archive"`
 	}
 	if json.Unmarshal(data, &marker) != nil {
 		return ConfigState{}, errors.New("invalid inference configuration")
 	}
 	if marker.SchemaVersion != 3 {
 		return ConfigState{}, unsupportedConfigVersion(marker.SchemaVersion)
+	}
+	if len(marker.ReceiptArchive) == 0 || string(marker.ReceiptArchive) == "null" {
+		return ConfigState{}, errors.New("missing inference receipt archive identity")
 	}
 	type currentConfigState ConfigState
 	var current currentConfigState
@@ -97,7 +102,13 @@ type ConfigurationReceipt struct {
 	Code        string `json:"code"`
 }
 
+func validConfigurationReceipt(receipt ConfigurationReceipt) bool {
+	return trust.ValidID(receipt.OperationID) && validDigest(receipt.Fingerprint) &&
+		(receipt.Category == "ready" && receipt.Code == "ok" || receipt.Category == "unavailable" && receipt.Code == "credential_store_unavailable")
+}
+
 const (
+	// Only the live snapshot working set is bounded, never lifetime command IDs.
 	maxConfigurationReceipts = 64
 	maxCredentialCleanup     = 64
 	maxOwnedCredentialSlots  = 64
@@ -125,6 +136,9 @@ func validateConfigurationState(state ConfigState, factory ProviderFactory) erro
 	}
 	if len(state.Receipts) > maxConfigurationReceipts || len(state.Cleanup) > maxCredentialCleanup || len(state.OwnedSlots) > maxOwnedCredentialSlots || state.Pending != nil && !validTransition(*state.Pending) {
 		return errors.New("invalid inference lifecycle state")
+	}
+	if !state.ReceiptArchive.valid() {
+		return errors.New("invalid inference receipt archive")
 	}
 	if state.Pending != nil {
 		candidate := cloneConfigurationState(ConfigState{SchemaVersion: 3, Targets: state.Pending.Candidate.Targets, Routes: state.Pending.Candidate.Routes, Providers: state.Pending.Candidate.Providers, OwnedSlots: []string{}, Cleanup: []CredentialCleanup{}, Receipts: []ConfigurationReceipt{}})
@@ -173,9 +187,7 @@ func validateConfigurationState(state ConfigState, factory ProviderFactory) erro
 	}
 	receiptIDs := make(map[string]bool, len(state.Receipts))
 	for _, receipt := range state.Receipts {
-		if !trust.ValidID(receipt.OperationID) || !validDigest(receipt.Fingerprint) ||
-			(receipt.Category != "ready" && receipt.Category != "unavailable") ||
-			(receipt.Category == "ready" && receipt.Code != "ok") || (receipt.Category == "unavailable" && receipt.Code != "credential_store_unavailable") {
+		if !validConfigurationReceipt(receipt) {
 			return errors.New("invalid inference operation receipt")
 		}
 		if receiptIDs[receipt.OperationID] {
@@ -206,14 +218,15 @@ func validateConfigurationState(state ConfigState, factory ProviderFactory) erro
 
 func cloneConfigurationState(state ConfigState) ConfigState {
 	out := ConfigState{
-		SchemaVersion: state.SchemaVersion,
-		Revision:      state.Revision,
-		Targets:       make(map[string]ProviderTarget, len(state.Targets)),
-		Routes:        make(map[Purpose]PurposeRoute, len(state.Routes)),
-		Providers:     make(map[string]ProviderProfile, len(state.Providers)),
-		OwnedSlots:    append([]string{}, state.OwnedSlots...),
-		Cleanup:       append([]CredentialCleanup{}, state.Cleanup...),
-		Receipts:      append([]ConfigurationReceipt{}, state.Receipts...),
+		SchemaVersion:  state.SchemaVersion,
+		Revision:       state.Revision,
+		Targets:        make(map[string]ProviderTarget, len(state.Targets)),
+		Routes:         make(map[Purpose]PurposeRoute, len(state.Routes)),
+		Providers:      make(map[string]ProviderProfile, len(state.Providers)),
+		OwnedSlots:     append([]string{}, state.OwnedSlots...),
+		Cleanup:        append([]CredentialCleanup{}, state.Cleanup...),
+		Receipts:       append([]ConfigurationReceipt{}, state.Receipts...),
+		ReceiptArchive: state.ReceiptArchive,
 	}
 	if state.Pending != nil {
 		pending := *state.Pending

@@ -39,10 +39,14 @@ func (c *Configuration) freshCredentialSlot(ctx context.Context) (string, error)
 }
 
 func (c *Configuration) operationStatus(ctx context.Context, operationID, fingerprint string) (error, bool) {
-	for _, receipt := range c.state.Receipts {
-		if receipt.OperationID != operationID {
-			continue
+	receipt, readErr := c.findReceipt(ctx, operationID)
+	if readErr != nil {
+		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+			return operation.Fail(operation.Unavailable, "operation_unavailable"), true
 		}
+		return c.denyUnavailable(), true
+	}
+	if receipt != nil {
 		if receipt.Fingerprint != fingerprint {
 			return operation.Fail(operation.Conflict, "operation_id_reused"), true
 		}
@@ -89,13 +93,13 @@ func (c *Configuration) commitOperation(ctx context.Context, operationID, finger
 	if c.configUnavailable {
 		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
-	if len(c.state.Receipts) >= maxConfigurationReceipts {
-		return operation.Fail(operation.Limited, "configuration_receipt_capacity")
-	}
 	if c.state.Revision == ^uint64(0) {
 		return operation.Fail(operation.Limited, "configuration_revision_capacity")
 	}
 	next := cloneConfigurationState(c.state)
+	if err := c.archiveReceipts(ctx, &next); err != nil {
+		return operation.Fail(operation.Unavailable, "receipt_archive_unavailable")
+	}
 	next = withConfigurationContent(next, cloneConfigContent(content))
 	next.Revision++
 	next.Receipts = append(next.Receipts, ConfigurationReceipt{OperationID: operationID, Fingerprint: fingerprint, Category: string(operation.Ready), Code: "ok"})
@@ -142,9 +146,6 @@ func (c *Configuration) beginCredentialTransition(ctx context.Context, operation
 	if c.configUnavailable {
 		return operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
-	if len(c.state.Receipts) >= maxConfigurationReceipts {
-		return operation.Fail(operation.Limited, "configuration_receipt_capacity")
-	}
 	if len(c.state.OwnedSlots) >= maxOwnedCredentialSlots {
 		return operation.Fail(operation.Limited, "credential_slot_capacity")
 	}
@@ -170,6 +171,9 @@ func (c *Configuration) beginCredentialTransition(ctx context.Context, operation
 		return operation.Fail(operation.Limited, "configuration_revision_capacity")
 	}
 	pendingState := cloneConfigurationState(c.state)
+	if err := c.archiveReceipts(ctx, &pendingState); err != nil {
+		return operation.Fail(operation.Unavailable, "receipt_archive_unavailable")
+	}
 	pendingState.Revision++
 	pendingState.Pending = &CredentialTransition{OperationID: operationID, Fingerprint: fingerprint, Slot: slot, Digest: trust.Digest(key), Candidate: cloneConfigContent(content)}
 	if !configurationStateFitsBound(pendingState) {
@@ -381,7 +385,7 @@ func (c *Configuration) recoverOperation(ctx context.Context, operationID string
 	if read.Disposition != ConfigReadPresent && read.Disposition != ConfigReadAbsent {
 		return RecoveryResult{}, c.denyUnavailable()
 	}
-	if read.Disposition == ConfigReadAbsent && (c.state.Revision != 0 || len(c.state.Targets) != 0 || len(c.state.Routes) != 0 || len(c.state.Providers) != 0 || len(c.state.OwnedSlots) != 0 || len(c.state.Cleanup) != 0 || len(c.state.Receipts) != 0 || c.state.Pending != nil) {
+	if read.Disposition == ConfigReadAbsent && (c.state.Revision != 0 || len(c.state.Targets) != 0 || len(c.state.Routes) != 0 || len(c.state.Providers) != 0 || len(c.state.OwnedSlots) != 0 || len(c.state.Cleanup) != 0 || len(c.state.Receipts) != 0 || c.state.ReceiptArchive.Pages != 0 || c.state.Pending != nil) {
 		c.configUnavailable = true
 		c.engine.DenyConfiguration()
 		return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
@@ -417,14 +421,19 @@ func (c *Configuration) recoverOperation(ctx context.Context, operationID string
 	if err := c.cleanupDurable(ctx, false); err != nil {
 		return RecoveryResult{}, operation.Fail(operation.Unavailable, "configuration_unavailable")
 	}
-	for _, receipt := range c.state.Receipts {
-		if receipt.OperationID == operationID {
-			result := RecoveryResult{OperationID: operationID, Recovered: true}
-			if receipt.Category != string(operation.Ready) {
-				result.Category, result.Code = receipt.Category, receipt.Code
-			}
-			return result, nil
+	receipt, readErr := c.findReceipt(ctx, operationID)
+	if readErr != nil {
+		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+			return RecoveryResult{}, operation.Fail(operation.Unavailable, "operation_unavailable")
 		}
+		return RecoveryResult{}, c.denyUnavailable()
+	}
+	if receipt != nil {
+		result := RecoveryResult{OperationID: operationID, Recovered: true}
+		if receipt.Category != string(operation.Ready) {
+			result.Category, result.Code = receipt.Category, receipt.Code
+		}
+		return result, nil
 	}
 	return RecoveryResult{OperationID: operationID, Recovered: true, Status: "no_record"}, nil
 }

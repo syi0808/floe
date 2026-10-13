@@ -515,6 +515,34 @@ The probe regression includes eight altered-invocation rejection subtests.
 This slice does not qualify real OAuth, provider inference, Apple or GUI behavior.
 Rust source remains the previously qualified Day snapshot.
 
+## Inference lifetime configuration receipt correction — 2026-10-13
+
+Root reproduced R-032 through the actual Configuration owner: change 65 failed
+with `configuration_receipt_capacity`. The solution separates immutable history
+from the live snapshot rather than raising the lifetime limit or evicting IDs.
+Live receipts retain a 64-record working set; full pages are encrypted, hash-linked
+and sequenced, and only a committed configuration snapshot publishes the new
+archive head. Credential intents reserve their final receipt slot before effects.
+History lookup is bounded-memory and linear-IO; failed/missing referenced pages
+never become command absence. Unreferenced pages after rejected writes are safe,
+idempotently reusable evidence, not independently published command outcomes.
+
+Owner regressions cover 130 changes, exact replay after reopen, changed-ID conflict,
+credential update after the old threshold, all archive-write failure dispositions,
+rejected snapshot publication, both committed/noncommitted acknowledgement loss,
+missing/unavailable/corrupt/sequence-mismatched history, and observer cancellation.
+Actual encrypted storage plus the Configuration owner and provider factory also
+perform 130 changes, recreate the owner, recover old receipts and delete the target
+without an old replay resurrecting it. Storage tests cover exact immutable retries,
+hash mismatch, path/size bounds, encrypted bytes and obsolete snapshot preservation.
+No real credentials, model calls or connected-account changes are involved.
+
+Focused owner/storage race tests and the final `go test -race ./...` passed
+(all 14 packages with tests). `go vet ./...`, the import graph including 16 negative
+fixtures and diff checks passed. Stored layout changes require an explicitly
+selected fresh development profile; no existing profile is reset. Rust remains
+unchanged, so its prior frozen gates are retained rather than rerun.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

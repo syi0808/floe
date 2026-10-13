@@ -15,16 +15,46 @@ import (
 )
 
 type configurationTestRepository struct {
-	mu                  sync.Mutex
-	state               ConfigState
-	present             bool
-	health              ConfigRepositoryHealth
-	loadDisposition     ConfigReadDisposition
-	nextWrite           *ConfigWriteOutcome
-	writeSequence       []ConfigWriteOutcome
-	onSave              func(ConfigState)
-	commitIndeterminate bool
-	writes              int
+	mu                   sync.Mutex
+	state                ConfigState
+	present              bool
+	health               ConfigRepositoryHealth
+	loadDisposition      ConfigReadDisposition
+	nextWrite            *ConfigWriteOutcome
+	writeSequence        []ConfigWriteOutcome
+	onSave               func(ConfigState)
+	commitIndeterminate  bool
+	writes               int
+	pages                map[string]ConfigReceiptPage
+	pageReadDisposition  ConfigReadDisposition
+	pageWriteDisposition ConfigWriteDisposition
+}
+
+func (repository *configurationTestRepository) LoadReceiptPage(digest string) ConfigReceiptPageRead {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.pageReadDisposition != 0 {
+		return ConfigReceiptPageRead{Disposition: repository.pageReadDisposition}
+	}
+	page, ok := repository.pages[digest]
+	if !ok {
+		return ConfigReceiptPageRead{Disposition: ConfigReadAbsent}
+	}
+	page.Receipts = append([]ConfigurationReceipt(nil), page.Receipts...)
+	return ConfigReceiptPageRead{Disposition: ConfigReadPresent, Page: page}
+}
+func (repository *configurationTestRepository) SaveReceiptPage(digest string, page ConfigReceiptPage) ConfigWriteOutcome {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.pageWriteDisposition != 0 {
+		return ConfigWriteOutcome{Disposition: repository.pageWriteDisposition}
+	}
+	if repository.pages == nil {
+		repository.pages = map[string]ConfigReceiptPage{}
+	}
+	page.Receipts = append([]ConfigurationReceipt(nil), page.Receipts...)
+	repository.pages[digest] = page
+	return ConfigWriteOutcome{Disposition: ConfigWriteCommitted}
 }
 
 func matchesOperationError(err error, category operation.Category, code string) bool {
@@ -752,8 +782,55 @@ func TestConfigurationReceiptCapacityDoesNotEvict(t *testing.T) {
 	credentials := &configurationTestCredentialAccess{}
 	owner, _ := openConfigurationTestOwner(t, repository, credentials)
 	result := owner.UpdateTarget(context.Background(), trust.OperatorPrincipal{}, providerTargetUpdate(trust.NewID(), "model-b", "synthetic-secret"))
-	if !matchesOperationError(result, operation.Limited, "configuration_receipt_capacity") || credentials.writeCount() != 0 || repository.writes != 0 {
-		t.Fatalf("receipt capacity evicted or mutated state: %#v writes=%d saves=%d", result, credentials.writeCount(), repository.writes)
+	if result != nil || credentials.writeCount() != 1 {
+		t.Fatalf("lifetime history blocked credential transition: %#v writes=%d", result, credentials.writeCount())
+	}
+	for _, receipt := range state.Receipts {
+		owner.mu.Lock()
+		retained, err := owner.findReceipt(context.Background(), receipt.OperationID)
+		owner.mu.Unlock()
+		if err != nil || retained == nil || *retained != receipt {
+			t.Fatal("archived receipt was lost")
+		}
+	}
+}
+
+func TestConfigurationLifetimeChangesRemainAvailable(t *testing.T) {
+	repository := &configurationTestRepository{state: configurationTestState("target-a", "model-a"), present: true}
+	owner, _ := openConfigurationTestOwner(t, repository, &configurationTestCredentialAccess{})
+	var first RouteUpdate
+	for i := 0; i < 130; i++ {
+		input := RouteUpdate{OperationID: trust.NewID(), Purpose: string(QuickResponse), Target: "target-a", Enabled: i%2 == 0}
+		if i == 0 {
+			first = input
+		}
+		if err := owner.UpdateRoute(context.Background(), trust.OperatorPrincipal{}, input); err != nil {
+			t.Fatalf("configuration change %d rejected: %v", i+1, err)
+		}
+	}
+	before := configurationSnapshot(owner)
+	if err := owner.UpdateRoute(context.Background(), trust.OperatorPrincipal{}, first); err != nil {
+		t.Fatal(err)
+	}
+	if after := configurationSnapshot(owner); operationFingerprint(before) != operationFingerprint(after) {
+		t.Fatal("old receipt replay reexecuted configuration")
+	}
+	if before.ReceiptArchive.Pages != 2 || len(before.Receipts) != 2 {
+		t.Fatal("receipt working set not bounded")
+	}
+	owner.Close()
+	reopened, _ := openConfigurationTestOwner(t, repository, &configurationTestCredentialAccess{})
+	if err := reopened.UpdateRoute(context.Background(), trust.OperatorPrincipal{}, first); err != nil {
+		t.Fatal(err)
+	}
+	changed := first
+	changed.Enabled = !changed.Enabled
+	if err := reopened.UpdateRoute(context.Background(), trust.OperatorPrincipal{}, changed); !matchesOperationError(err, operation.Conflict, "operation_id_reused") {
+		t.Fatal("archived command identity was reused")
+	}
+	result, err := reopened.RecoverOperation(context.Background(), trust.OperatorPrincipal{}, first.OperationID)
+	if err != nil || !result.Recovered || result.Status == "no_record" {
+		t.Fatalf("archived recovery lost: %#v %v", result, err)
 	}
 }
 

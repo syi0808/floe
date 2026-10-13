@@ -105,7 +105,8 @@ evidence and reports creation_incomplete, never regenerating identity or keys.
 `server/internal/adapters/storage` implements the Trust, Integrations, and Inference repository
 ports over scoped authenticated file capabilities. Its `privatefiles` subpackage
 owns the bounded encrypted private-file implementation. The repositories own `trust.json`,
-`producer-identity.json`, `admin-token`, `integrations.json`, and `inference.json` file selection,
+`producer-identity.json`, `admin-token`, `integrations.json`, `inference.json` and
+content-addressed encrypted Inference receipt-page file selection,
 strict JSON encoding/decoding, and encrypted atomic replacement. The Trust port
 reports presence and write disposition for its complete state, producer identity,
 and operator credential; Trust decides fresh initialization, rejects partial or
