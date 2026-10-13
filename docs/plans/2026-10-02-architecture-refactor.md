@@ -325,18 +325,62 @@ component; its preceding 58-test result is not new driver qualification. The
 component is not yet automatically called by the Conversation lifecycle. No
 Flutter, Apple, Go loopback or live-provider qualification is inferred.
 
-Automatic activation still needs a capacity/lifecycle decision before wiring.
-A post-completion count-only trigger is insufficient for a few large turns: a
-transport can reject before the 96-KiB structural trigger, and a resulting
-BudgetExceeded Continue origin is deliberately protected from maintenance.
-The selected transport's real preflight must drive the capacity decision. Review
-whether the clean pre-dispatch active Run can authorize compaction of only its
-settled historical prefix while retaining the current User input and empty Run
-journal, or whether admission must prepare that capacity before opening the Run.
-Do not weaken Continue/uncertain-effect protection, silently retry a paid attempt,
-or enable an arbitrary byte threshold as if it guaranteed model fit. The next
-projection/driver checkpoint must establish this behavior before automatic
-lifecycle activation and retain the normal foreground budget/error semantics.
+The capacity/lifecycle cutover is now implemented in the working candidate.
+Conversation owns the trigger, a serialized maintenance driver and bounded
+recovery. Vault retains the single source/installation gate, extended with a
+required source-pinned `CompactionAuthority`: Idle or the exact fresh
+BeforeFirstModel Run. The latter requires the matching active recorder/device,
+Working state, empty durable Run journal, no continuation/resume/retry ancestry,
+and unchanged Session/Core/checkpoint. Any foreground intent closes that window
+before both summary dispatch and checkpoint commit. Current User input, recorder
+and Run remain intact; no second user command or replacement Run is admitted.
+
+The selected transport's typed ModelInputCapacityExceeded can trigger maintenance
+only with the independent durable empty-journal proof. The same post-handoff
+error does not authorize a summary or a retry. Count/byte framing ceilings report
+the same input-capacity category rather than generic spending exhaustion. A
+bounded model-history page now carries its uncheckpointed-earlier-prefix flag
+through AdmittedTurn; the owner cannot silently present a suffix as complete
+history. It compacts before inference, reloads canonical model history and
+requires complete coverage after the checkpoint, or fails explicitly.
+
+At most one summary execution, with the generic Engine's bounded correction, may
+reach a provider per recovery attempt. Prefix byte proposals halve only after a
+pure capacity refusal with zero durable model intents; proposals selecting the
+same exact source replay the same job without another preparation or dispatch.
+Maintenance is a separate durable execution budget, like Learner work, not an
+unrecorded foreground attempt: token ceiling min(manager / 4, 16,384), cost
+ceiling min(manager / 5, 10,000 micros), output ceiling 2,048 bytes, and at most
+30 seconds within the foreground deadline. It is not included in the foreground
+Run's attempt/usage projection. After its one committed summary, the foreground
+request is validated again against the actual selected transport. If still too
+large, it fails explicitly; no unbounded paid compression loop, truncation or
+Continue/Resume relaxation is introduced.
+
+The generation recovery pass includes bounded compaction-job pages and never
+starts a new model call. It leaves a live serialized driver alone, installs
+still-valid recorded output, and retires orphaned empty/uncertain or stale jobs.
+Terminal receipt reads replay across executor movement while pending reads keep
+the active generation fence. The new required authority field deliberately
+changes local compaction payload meaning: incompatible older development jobs
+fail closed; profiles are not reset, migrated or repaired automatically.
+
+Focused real encrypted-store checks cover the fresh active-prefix window,
+current-input/recorder preservation, wrong device/cancellation, and foreground
+intent races before summary dispatch and commit. Actual synthetic App tests
+cover capacity → summary → same foreground Run, exact product history and reopen,
+pure summary refusal, both post-handoff failure boundaries and shutdown during
+the summary without redispatch. The 129-turn App regression performs exactly two
+model checkpoints while preserving all 258 original product messages and cursor
+pages, and reopens without another provider call. Final qualification passes
+331 default workspace tests including doctests, 61 App QA tests (one intentionally
+ignored subprocess driver, exercised by the passing process-kill scenarios),
+production FFI build, architecture boundaries (26 nodes, 139 edges, no errors or
+warnings), and diff hygiene. All model/provider behavior here is synthetic, not
+a paid or live-provider qualification. Flutter dependencies remain network-policy
+blocked, Go loopback was not rerun for these Rust changes, and Mac QA remains
+paused. This closes this bounded capacity-compaction cutover, not the entire
+codebase audit or native/UI qualification.
 
 Ordered cutover and acceptance:
 

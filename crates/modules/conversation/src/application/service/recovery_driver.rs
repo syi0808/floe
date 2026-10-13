@@ -18,7 +18,11 @@ impl Drop for WakeOnDrop<'_> {
 
 impl<R, S, T> ServiceState<R, S, T>
 where
-    R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
+    R: ConversationRepository
+        + InteractionRepository
+        + SessionRepository
+        + CompactionRepository
+        + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
@@ -75,11 +79,13 @@ where
             let mut run_after = None;
             let mut interaction_after = None;
             let mut resume_after = None;
+            let mut compaction_after = None;
             let mut runs_done = false;
             let mut interactions_done = false;
             let mut resumes_done = false;
+            let mut compactions_done = false;
             let mut reobserve = false;
-            while !(runs_done && interactions_done && resumes_done) {
+            while !(runs_done && interactions_done && resumes_done && compactions_done) {
                 if self.closing.load(Ordering::Acquire) || self.shutdown.is_cancelled() {
                     return;
                 }
@@ -179,6 +185,39 @@ where
                         }
                         Err(failure) => {
                             resumes_done = true;
+                            reobserve = true;
+                            report(failure);
+                        }
+                    }
+                }
+                if !compactions_done {
+                    let scope = self.recovery_scope();
+                    match scope
+                        .run(self.dependencies.repository.pending_compactions(
+                            &actor,
+                            compaction_after,
+                            PAGE_SIZE,
+                        ))
+                        .await
+                    {
+                        Ok(page) => {
+                            compaction_after = page.next_cursor;
+                            compactions_done = compaction_after.is_none();
+                            for id in page.items {
+                                match scope
+                                    .run(self.coordinator.recover_compaction_job(&actor, id))
+                                    .await
+                                {
+                                    Ok(pending) => reobserve |= pending,
+                                    Err(failure) => {
+                                        reobserve = true;
+                                        report(failure);
+                                    }
+                                }
+                            }
+                        }
+                        Err(failure) => {
+                            compactions_done = true;
                             reobserve = true;
                             report(failure);
                         }

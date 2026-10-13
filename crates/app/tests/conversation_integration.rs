@@ -205,14 +205,9 @@ fn text_turn_completes_and_persists_transcript_receipt_and_events() {
 #[test]
 fn manager_normalized_history_pages_exactly_across_reopen() {
     const TURN_COUNT: usize = 129;
-    let model = ScriptedModel::new(
-        PrimaryBehavior::NoGateway,
-        USER_TEXT,
-        ModelOutput::RepeatedAnswers(TURN_COUNT),
-    );
-    let recorder = model.recorder();
+    let model = support::compaction::CapacityModel::history_model(REPLY);
     let profile = IsolatedProfile::new();
-    let host = profile.open(&model);
+    let host = model.open(&profile);
     assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
     let session_id = start_session(&host);
     let mut run_ids = std::collections::HashSet::new();
@@ -290,14 +285,14 @@ fn manager_normalized_history_pages_exactly_across_reopen() {
     });
     assert_eq!(missing_cursor, Err(AgentFailure::NotFound));
 
-    let scripted = assert_script_clean(&recorder);
-    assert_eq!(scripted.generated.len(), TURN_COUNT);
-    assert_eq!(scripted.plan_bindings.len(), TURN_COUNT * 2);
+    // The two bounded model checkpoints do not replace any product entry.
+    // No uncheckpointed prefix is silently dropped at the 128-entry model page.
+    assert_eq!(model.counts(), (TURN_COUNT, 2, (TURN_COUNT + 2) * 2));
     host.shutdown()
         .expect("close Manager generation before reopen");
     drop(host);
 
-    let reopened = profile.open(&model);
+    let reopened = model.open(&profile);
     assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
     let reopened_latest = read_session(&reopened, session_id);
     let reopened_earlier = support::read_session_before(&reopened, session_id, oldest_visible_id);
@@ -311,7 +306,7 @@ fn manager_normalized_history_pages_exactly_across_reopen() {
         reopened_earlier.has_earlier_messages,
         earlier.has_earlier_messages
     );
-    assert_eq!(assert_script_clean(&recorder).generated.len(), TURN_COUNT);
+    assert_eq!(model.counts(), (TURN_COUNT, 2, (TURN_COUNT + 2) * 2));
     reopened
         .shutdown()
         .expect("close reopened Manager generation");
@@ -3385,4 +3380,22 @@ fn capacity_failure_after_handoff_keeps_intent_and_unknown_accounting() {
         receipt.issue
     );
     assert_eq!(assert_script_clean(&recorder).generated.len(), 1);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn model_capacity_compacts_before_first_dispatch_without_changing_product_history() {
+    support::compaction::run_capacity_compaction_case();
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn model_capacity_recovery_preserves_no_redispatch_and_failure_boundaries() {
+    support::compaction::run_capacity_failure_boundaries();
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn model_capacity_summary_shutdown_does_not_redispatch_on_reopen() {
+    support::compaction::run_compaction_shutdown_case();
 }

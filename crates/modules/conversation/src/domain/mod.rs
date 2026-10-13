@@ -1,7 +1,7 @@
 mod compaction;
 pub use compaction::{
     COMPACTION_MIN_RETAIN_ENTRIES, COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES,
-    COMPACTION_TRIGGER_MESSAGES, CompactionSource,
+    COMPACTION_TRIGGER_MESSAGES, CompactionSource, CompactionAuthority,
 };
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, ModelConversation, ReplayReceipt,
@@ -267,6 +267,9 @@ impl TurnAdmissionRequest {
 
 #[derive(Clone, Debug)]
 pub struct AdmittedTurn {
+    /// The bounded model read omitted an uncheckpointed prefix. Never silently
+    /// treat the retained suffix as the full historical context.
+    pub has_earlier_model_history: bool,
     pub receipt: RunReceipt,
     pub transcript: Vec<AgentMessage>,
 }

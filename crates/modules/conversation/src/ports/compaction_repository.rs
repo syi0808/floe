@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct CompactionAdmission {
+    pub authority: crate::CompactionAuthority,
     pub session_id: Uuid,
     pub expected_session_revision: u64,
     pub source_byte_limit: usize,
@@ -15,6 +16,7 @@ pub struct CompactionAdmission {
 }
 impl CompactionAdmission {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.authority.validate()?;
         if self.session_id.is_nil()
             || self.expected_session_revision == 0
             || !(2..=crate::COMPACTION_TRIGGER_BYTES).contains(&self.source_byte_limit)

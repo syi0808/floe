@@ -255,7 +255,11 @@ struct ServiceState<R, S, T> {
 
 impl<R, S, T> ConversationService<R, S, T>
 where
-    R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
+    R: ConversationRepository
+        + InteractionRepository
+        + SessionRepository
+        + CompactionRepository
+        + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
@@ -271,6 +275,11 @@ where
             dependencies.connections.clone(),
             dependencies.calendar_operations.clone(),
             dependencies.experts_owner.clone(),
+            super::coordinator::compaction::CompactionResources {
+                model: dependencies.model.clone(),
+                evidence: dependencies.evidence.clone(),
+                resolver: dependencies.resolver.clone(),
+            },
         )?;
         let events = ConversationEventBuffer::new(dependencies.runtime_epoch)?;
         Ok(Self {
@@ -302,7 +311,11 @@ where
 
 impl<R, S, T> ServiceState<R, S, T>
 where
-    R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
+    R: ConversationRepository
+        + InteractionRepository
+        + SessionRepository
+        + CompactionRepository
+        + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
@@ -565,7 +578,11 @@ where
 
 impl<R, S, T> ConversationOwner for ConversationService<R, S, T>
 where
-    R: ConversationRepository + InteractionRepository + SessionRepository + 'static,
+    R: ConversationRepository
+        + InteractionRepository
+        + SessionRepository
+        + CompactionRepository
+        + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {

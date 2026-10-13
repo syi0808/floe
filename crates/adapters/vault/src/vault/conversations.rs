@@ -2749,6 +2749,7 @@ mod model_selection_owner_tests {
                 .expect("read normalized admitted turn history");
             let continuation_snapshot = floe_conversation::project_continuation(
                 &floe_conversation::AdmittedTurn {
+                    has_earlier_model_history: parent_history.has_earlier_messages,
                     receipt: parent_receipt.clone(),
                     transcript: floe_conversation::project_transcript(
                         &parent_history

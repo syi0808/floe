@@ -152,6 +152,7 @@ fn fixture() -> (
         head_revision: 6,
     };
     let source = CompactionSource {
+            authority: crate::CompactionAuthority::Idle,
         session_id: Uuid::new_v4(),
         session_revision: 3,
         data_classes: vec![DataClass::Personal],

@@ -315,6 +315,7 @@ mod tests {
             head_revision: 4,
         };
         let source = CompactionSource {
+            authority: crate::CompactionAuthority::Idle,
             session_id: Uuid::new_v4(),
             session_revision: 5,
             data_classes: vec![floe_agent_contract::DataClass::Synthetic],

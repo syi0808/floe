@@ -131,7 +131,7 @@ and terminal execution receipt in one write transaction. The public Session
 revision and original transcript entries remain unchanged. Summary coverage uses
 its distinct stable summary alias; it never merges into the final original
 answer. Archive reads reconstruct the exact typed prefix from normalized Core
-entries. This milestone does not physically prune transcript payloads. Active turns, pending batches, open
+entries. This milestone does not physically prune transcript payloads. Except for the exact clean BeforeFirstModel window described below, active turns, pending batches, open
 interactions, Continue origins, pending Resume slots, uncertain effects and
 archive references remain protected. Unknown coverage stays Unknown, and
 source revocation continues to apply to summaries. Continue eligibility is read
@@ -640,7 +640,7 @@ negation is part of the evidence. An oversized pair is explicitly deferred with
 BudgetExceeded rather than admitted as a false complete observation. Discovery
 continues checking later bounded candidates and reports the deferral afterward;
 existing queued work is still claimed before discovery. Original conversation
-records remain intact. Owner-controlled semantic compaction is a separate open
+records remain intact. Conversation-owned semantic compaction is a separate
 path; storage compression does not establish that capability.
 
 ### Bounded memory review queue
@@ -683,8 +683,8 @@ based. The old caller-supplied-summary command and source-revision replay lookup
 are removed. A storage-only test fixture uses the same installation path.
 The local archive schema deliberately no longer requires unique source revision;
 incompatible old development stores fail closed and are never reset automatically.
-The bounded Engine driver is implemented; automatic lifecycle and
-capacity-trigger wiring remain an active cutover in the plan.
+The bounded Engine driver, capacity-trigger path and no-dispatch recovery
+are implemented as described below.
 
 
 ### Compaction model projection
@@ -721,3 +721,36 @@ Large compaction input is encoded as ordered, inert UTF-8 JSON fragments, each
 within the existing typed-message limit. Concatenating their payloads reproduces
 the entire retained transcript exactly. The total model-conversation and actual
 transport limits still apply; fragmentation never bypasses them or clips data.
+
+### Capacity-driven compaction lifecycle
+
+A fresh Manager Run may request compaction after a typed input-capacity refusal
+only while its durable journal is empty. A bounded history read that omitted an
+uncheckpointed prefix triggers the same path before inference; omission is never
+silently interpreted as complete model context. The source pins Idle or the exact
+BeforeFirstModel Run window. The latter verifies the matching active recorder,
+Person/device, executor, current User binding, Working state and absent
+continuation/resume/retry lineage. Any first foreground intent closes the window.
+Only settled historical whole turns can enter the summary; current input and its
+recorder remain untouched. Canonical model history is reloaded after installation
+before the same Run continues.
+
+One foreground capacity recovery permits at most one provider-reaching summary
+execution (including the Engine's one correction). A pure zero-intent refusal
+may select a smaller whole-turn prefix, halving the source byte proposal within
+the structural ceiling. Repeated proposals selecting the same exact prefix reuse
+the immutable job. Maintenance has its own journal and budget, separate from the
+foreground Run's usage projection: at most min(manager tokens / 4, 16,384) tokens,
+min(manager cost / 5, 10,000) cost micros, 2,048 output bytes and 30 seconds within
+the foreground deadline. The owner rechecks real transport capacity afterward;
+remaining excess fails explicitly instead of silently clipping history or
+starting an unbounded paid loop. Post-dispatch errors, generic spending
+exhaustion, Continue and Resume never enter this fresh-Run recovery path.
+
+Recovery scans bounded pending-job pages. A live serialized summary driver is
+not taken over. Orphaned empty/uncertain work is retired without inference;
+recorded output is installed only if its source window still holds, otherwise
+retired. Terminal receipt reads work across executor movement, while pending
+claim reads stay generation-fenced. The required source authority is a deliberate
+prestable stored-meaning change; incompatible old development payloads fail
+closed and are never automatically reset or migrated.

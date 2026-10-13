@@ -21,6 +21,8 @@ use super::recovery::{
     project_transcript_history, reconcile_resume_lineage,
 };
 
+pub(super) mod compaction;
+
 const PRE_DISPATCH_STORAGE_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// StorageBusy before the first model/tool call is safe to retry: no external
@@ -73,15 +75,21 @@ pub(super) struct RunCoordinator<Repository> {
     connections: Arc<floe_connections::ConnectionsService>,
     operations: Arc<floe_calendar_operations::CalendarOperationsService>,
     experts: Arc<dyn floe_experts::ExpertsOwner>,
+    compaction: compaction::CompactionResources,
+    compaction_lock: tokio::sync::Mutex<()>,
 }
 
-impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<Repository> {
+impl<
+    Repository: ConversationRepository + InteractionRepository + crate::CompactionRepository + 'static,
+> RunCoordinator<Repository>
+{
     pub(super) fn new(
         repository: Arc<Repository>,
         config: ManagerConfig,
         connections: Arc<floe_connections::ConnectionsService>,
         operations: Arc<floe_calendar_operations::CalendarOperationsService>,
         experts: Arc<dyn floe_experts::ExpertsOwner>,
+        compaction: compaction::CompactionResources,
     ) -> Result<Self, AgentFailure> {
         config.validate()?;
         Ok(Self {
@@ -91,6 +99,8 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             connections,
             operations,
             experts,
+            compaction,
+            compaction_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -555,7 +565,7 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
             run_id.as_uuid(),
             |resume: &floe_agent_contract::EngineResumeState| resume.validated_batch.execution_id,
         );
-        let engine_request = EngineRequest {
+        let mut engine_request = EngineRequest {
             execution_id,
             principal: request.principal.clone(),
             device_id: request.device_id.clone(),
@@ -597,20 +607,76 @@ impl<Repository: ConversationRepository + InteractionRepository> RunCoordinator<
                     .await;
             }
         }
-        let result = self
-            .engine
-            .drive(
-                engine_request.clone(),
-                EnginePorts {
-                    projection: ports.projection,
-                    model: ports.model,
-                    tools: ports.tools,
-                    delegation: ports.delegation,
-                    journal: journal.as_ref(),
-                    validator: ports.validator,
-                },
-            )
-            .await;
+        let mut result = if admitted.has_earlier_model_history {
+            Err(AgentFailure::ModelInputCapacityExceeded)
+        } else {
+            self.engine
+                .drive(
+                    engine_request.clone(),
+                    EnginePorts {
+                        projection: ports.projection,
+                        model: ports.model,
+                        tools: ports.tools,
+                        delegation: ports.delegation,
+                        journal: journal.as_ref(),
+                        validator: ports.validator,
+                    },
+                )
+                .await
+        };
+        if matches!(result, Err(AgentFailure::ModelInputCapacityExceeded))
+            && matches!(turn_context.mode, TurnMode::New)
+            && turn_context.retry_of.is_none()
+            && engine_request.resume.is_none()
+            && engine_request.replay.is_empty()
+        {
+            // A provider can return the same error after handoff. The durable
+            // empty-journal check and fresh-Run custody, not its error code,
+            // establish that a capacity recovery can still precede execution.
+            match self
+                .compact_before_first_model(actor, &admitted.receipt, &engine_request.scope)
+                .await
+            {
+                Ok(Some(fresh)) => {
+                    let current = fresh.transcript.iter().find(|entry| {
+                        entry.message_id == admitted.receipt.user_message_id
+                            && entry.role == MessageRole::User
+                    });
+                    if fresh.has_earlier_model_history {
+                        result = Err(AgentFailure::ModelInputCapacityExceeded);
+                    } else if fresh.receipt != admitted.receipt
+                        || current.is_none_or(|entry| entry.text != turn_context.prompt)
+                    {
+                        result = Err(AgentFailure::Conflict);
+                    } else {
+                        engine_request.conversation.history =
+                            project_transcript_history(&fresh.transcript)?
+                                .into_iter()
+                                .filter(|entry| {
+                                    !matches!(entry, ModelConversationEntry::User { message_id, .. }
+                                if *message_id == admitted.receipt.user_message_id)
+                                })
+                                .collect();
+                        result = self
+                            .engine
+                            .drive(
+                                engine_request.clone(),
+                                EnginePorts {
+                                    projection: ports.projection,
+                                    model: ports.model,
+                                    tools: ports.tools,
+                                    delegation: ports.delegation,
+                                    journal: journal.as_ref(),
+                                    validator: ports.validator,
+                                },
+                            )
+                            .await;
+                    }
+                }
+                Ok(None) => {}
+                Err(failure) => result = Err(failure),
+            }
+        }
         let terminal = match result {
             Ok(EngineOutcome::Completed(report)) => {
                 let EngineReport {

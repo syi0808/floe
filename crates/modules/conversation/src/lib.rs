@@ -28,7 +28,7 @@ pub use application::{
 pub use domain::{
     AdmittedExecution, AdmittedTurn, BlockedInteractionLink, COMPACTION_MIN_RETAIN_ENTRIES,
     COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES, COMPACTION_TRIGGER_MESSAGES,
-    CommandQuery, CompactionReceipt, CompactionSource, ContinuationRef, ContinuationSnapshot,
+    CommandQuery, CompactionReceipt, CompactionSource, CompactionAuthority, ContinuationRef, ContinuationSnapshot,
     ContinuationToken, ConversationInteraction, DecisionAdmission, ExpireInteraction,
     ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
     InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionResolution,

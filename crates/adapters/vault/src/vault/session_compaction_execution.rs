@@ -202,16 +202,25 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let (mut guard, transaction) = self.journal_transaction(&mut connection).await?;
         let result = async {
             let generation = self.active_conversation_executor_generation(&transaction).await?;
+            if let floe_conversation::CompactionAuthority::BeforeFirstModel { run_id } = request.authority {
+                let run = self.conversation_run_on(&transaction, run_id).await?.ok_or(AgentFailure::NotFound)?;
+                if run.person_id != actor.person_id || run.device_id != actor.device_id {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+            }
             let Some(source) = self.prepare_manager_compaction_source_on(&transaction,
-                request.session_id, request.expected_session_revision, request.source_byte_limit).await? else {
+                request.session_id, request.expected_session_revision, request.source_byte_limit, request.authority).await? else {
                 return Ok(None);
             };
             let head = CompactionJournalHead::new(actor, &source, request.max_tokens,
                 request.max_cost_micros, request.max_output_bytes)?;
             if let Some(existing) = read_on(&transaction, self.person_id, head.execution_id).await? {
                 existing.authorize_actor(actor)?;
+                // Byte allowance selects a prefix; it is not a second job
+                // identity. A smaller allowance selecting this exact same
+                // source replays the immutable job, including pure refusal.
                 if existing.claim.executor_generation != generation
-                    || existing.source != source || existing.source_byte_limit != request.source_byte_limit
+                    || existing.source != source
                     || existing.head.max_tokens != head.max_tokens
                     || existing.head.max_cost_micros != head.max_cost_micros
                     || existing.head.max_output_bytes != head.max_output_bytes {
@@ -257,19 +266,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(database_failure)?;
         let result = async {
-            if self
-                .active_conversation_executor_generation(&transaction)
-                .await?
-                != claim.executor_generation
-            {
-                return Err(AgentFailure::Conflict);
-            }
             let job = read_on(&transaction, self.person_id, claim.execution_id)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
             job.authorize_actor(actor)?;
             verify_committed_archive_on(&transaction, &job).await?;
-            if job.claim != claim {
+            if job.claim != claim
+                || (job.disposition == CompactionDisposition::Pending
+                    && self
+                        .active_conversation_executor_generation(&transaction)
+                        .await?
+                        != claim.executor_generation)
+            {
                 return Err(AgentFailure::Conflict);
             }
             Ok(job)
@@ -464,6 +472,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     previous.source.session_id,
                     previous.source.session_revision,
                     previous.source_byte_limit,
+                    previous.source.authority,
                 )
                 .await?
                 .ok_or(AgentFailure::Conflict)?;
@@ -486,6 +495,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     &transaction,
                     current.session_id,
                     current.session_revision,
+                    current.authority,
                     current.through_turn_id,
                     summary.clone(),
                     super::session_archive::SummaryCoverage::Recorded(coverage.clone()),
@@ -571,6 +581,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         previous.source.session_id,
                         previous.source.session_revision,
                         previous.source_byte_limit,
+                        previous.source.authority,
                     )
                     .await?;
                 if current.as_ref() != Some(&previous.source) {

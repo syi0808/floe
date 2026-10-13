@@ -40,7 +40,7 @@ impl ModelConversation {
 
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.len() > MAX_AGENT_MESSAGES {
-            return Err(AgentFailure::BudgetExceeded);
+            return Err(AgentFailure::ModelInputCapacityExceeded);
         }
         if !self
             .current_turn
@@ -57,7 +57,7 @@ impl ModelConversation {
             .map(|encoded| encoded.len() > MAX_MODEL_CONVERSATION_BYTES)
             .unwrap_or(true)
         {
-            return Err(AgentFailure::BudgetExceeded);
+            return Err(AgentFailure::ModelInputCapacityExceeded);
         }
         Ok(())
     }
@@ -144,4 +144,42 @@ fn validate_delegation_exchange(
         return Err(AgentFailure::InvalidInput);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    #[test]
+    fn typed_history_reports_input_capacity_without_mislabeling_malformed_input() {
+        let entry = || ModelConversationEntry::User {
+            message_id: Uuid::new_v4(),
+            text: "x".into(),
+        };
+        let over_count = ModelConversation {
+            history: (0..MAX_AGENT_MESSAGES).map(|_| entry()).collect(),
+            current_turn: vec![entry()],
+        };
+        assert_eq!(
+            over_count.validate(),
+            Err(AgentFailure::ModelInputCapacityExceeded)
+        );
+        let over_bytes = ModelConversation {
+            history: (0..3)
+                .map(|_| ModelConversationEntry::Assistant {
+                    message_id: Uuid::new_v4(),
+                    text: "x".repeat(48 * 1024),
+                })
+                .collect(),
+            current_turn: vec![entry()],
+        };
+        assert_eq!(
+            over_bytes.validate(),
+            Err(AgentFailure::ModelInputCapacityExceeded)
+        );
+        let missing_user = ModelConversation {
+            history: vec![entry()],
+            current_turn: vec![],
+        };
+        assert_eq!(missing_user.validate(), Err(AgentFailure::InvalidInput));
+    }
 }

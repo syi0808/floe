@@ -20,6 +20,7 @@ use super::owner_custody::{
     manager_session_message_alias, owner_input_binding_on, table_present_on,
 };
 use super::*;
+use floe_conversation::CompactionAuthority;
 use floe_kernel::RunId;
 
 const MAX_COMPACTION_SUMMARY_BYTES: usize = 16 * 1024;
@@ -279,6 +280,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &transaction,
                 session_id,
                 expected_revision,
+                CompactionAuthority::Idle,
                 through_turn_id,
                 summary,
                 SummaryCoverage::FixturePrefix(None),
@@ -299,6 +301,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         session_id: Uuid,
         expected_revision: u64,
+        authority: CompactionAuthority,
         through_turn_id: Uuid,
         summary: String,
         mut summary_coverage: SummaryCoverage,
@@ -322,7 +325,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(AgentFailure::UnsupportedVersion)?;
 
         let (head, prior_checkpoint, previous_manifest) = self
-            .manager_compaction_eligibility_on(transaction, &session, &binding, expected_revision)
+            .manager_compaction_eligibility_on(
+                transaction,
+                &session,
+                &binding,
+                expected_revision,
+                authority,
+            )
             .await?;
         let scope = Scope::from_identity(
             self.person_id,
@@ -625,6 +634,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         session: &AgentSession,
         binding: &super::owner_custody::ManagerSessionBinding,
         expected_revision: u64,
+        authority: CompactionAuthority,
     ) -> Result<
         (
             super::conversation_core::LoadedHead,
@@ -634,12 +644,46 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         AgentFailure,
     > {
         let session_id = session.id;
-        if session.revision != expected_revision
-            || session.active_turn.is_some()
-            || session.pending_output.is_some()
-        {
+        authority.validate()?;
+        if session.revision != expected_revision || session.pending_output.is_some() {
             return Err(AgentFailure::Conflict);
         }
+
+        let fresh_run = match authority {
+            CompactionAuthority::Idle => {
+                if session.active_turn.is_some() {
+                    return Err(AgentFailure::Conflict);
+                }
+                None
+            }
+            CompactionAuthority::BeforeFirstModel { run_id } => {
+                let run = self
+                    .conversation_run_on(transaction, run_id)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                if run.person_id != self.person_id
+                    || run.session_id != session_id
+                    || session.active_turn != Some(run_id.as_uuid())
+                    || run.session_revision != session.revision
+                    || run.state != floe_conversation::RunState::Working
+                    || run.pending_terminal.is_some()
+                    || run.continuation_of.is_some()
+                    || run.resume_of.is_some()
+                    || run.retry_of.is_some()
+                    || run.executor_generation
+                        != self
+                            .active_conversation_executor_generation(transaction)
+                            .await?
+                    || !self
+                        .conversation_journal_on(transaction, &run)
+                        .await?
+                        .is_empty()
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                Some(run)
+            }
+        };
 
         if let Some(marker) = session.continuation {
             let current_run =
@@ -735,12 +779,29 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(super::conversation_core::owner_store_failure)?
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if super::conversation_core::active_recorder_on(transaction, scope)
+        let recorder = super::conversation_core::active_recorder_on(transaction, scope)
             .await
-            .map_err(super::conversation_core::owner_store_failure)?
-            .is_some()
-        {
-            return Err(AgentFailure::Conflict);
+            .map_err(super::conversation_core::owner_store_failure)?;
+        match (&fresh_run, &recorder) {
+            (None, None) => {}
+            (Some(run), Some(recorder)) => {
+                let input = owner_input_binding_on(transaction, self.person_id, run.run_id)
+                    .await
+                    .map_err(super::conversation_core::owner_store_failure)?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if recorder.run_id != run.run_id
+                    || recorder.executor_generation != run.executor_generation
+                    || recorder.input != input.input
+                    || recorder.identity != binding.identity
+                    || input.owner_user_message_id != run.user_message_id
+                    || input.session_id != session_id
+                    || input.conversation_id != binding.conversation_id
+                    || input.branch_id != binding.branch_id
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+            }
+            _ => return Err(AgentFailure::Conflict),
         }
         let prior_checkpoint = checkpoint_on(transaction, scope)
             .await

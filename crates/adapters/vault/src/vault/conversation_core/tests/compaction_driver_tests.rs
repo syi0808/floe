@@ -161,6 +161,7 @@ async fn compaction_driver_executes_once_and_replays_committed_receipt() {
     let receipt = driver.drive(job.claim, Cancellation::new()).await.unwrap();
     assert_eq!(receipt.summary.text, "Earlier test inputs.");
     assert_eq!(receipt.session_revision, job.source.session_revision);
+    vault.activate_conversation_executor().await.unwrap();
     assert_eq!(
         driver.drive(job.claim, Cancellation::new()).await.unwrap(),
         receipt

@@ -13,9 +13,27 @@ pub const COMPACTION_TRIGGER_BYTES: usize = 96 * 1024;
 pub const COMPACTION_MIN_RETAIN_ENTRIES: u64 = 2;
 pub const COMPACTION_PREFERRED_RETAIN_ENTRIES: u64 = 16;
 
+/// The exact lifecycle window authorizing a model-only checkpoint.
+/// BeforeFirstModel never grants permission to compact an ongoing exchange.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CompactionAuthority {
+    Idle,
+    BeforeFirstModel { run_id: floe_kernel::RunId },
+}
+impl CompactionAuthority {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if matches!(self, Self::BeforeFirstModel { run_id } if !run_id.is_valid()) {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompactionSource {
+    pub authority: CompactionAuthority,
     pub session_id: Uuid,
     pub session_revision: u64,
     pub data_classes: Vec<floe_agent_contract::DataClass>,
@@ -29,6 +47,9 @@ pub struct CompactionSource {
 
 impl CompactionSource {
     pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.authority
+            .validate()
+            .map_err(|_| AgentFailure::StorageUnavailable)?;
         self.head
             .validate()
             .map_err(|_| AgentFailure::StorageUnavailable)?;

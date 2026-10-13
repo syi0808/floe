@@ -60,7 +60,6 @@ pub enum PrimaryBehavior {
 pub enum ModelOutput {
     Answer,
     FailAfterDispatch(AgentFailure),
-    RepeatedAnswers(usize),
     UnsupportedManagerToolCall,
     ForgetUnprojectedMemory,
     WaitForCancellation(Arc<GenerateBarrier>),
@@ -356,9 +355,6 @@ impl ScriptedModel {
     ) -> Self {
         let expected_consumers = match &output {
             ModelOutput::ForgetUnprojectedMemory => vec![CONVERSATION_CONSUMER.into(); 2],
-            ModelOutput::RepeatedAnswers(count) => {
-                vec![CONVERSATION_CONSUMER.into(); *count]
-            }
             ModelOutput::ScheduleExpertFlow => vec![
                 CONVERSATION_CONSUMER.into(),
                 floe_experts::DELEGATED_EXPERT_INFERENCE_CONSUMER.into(),
@@ -877,10 +873,6 @@ impl PreparedModelTransport for ScriptedTransport {
             match &self.model.output {
                 ModelOutput::FailAfterDispatch(failure) => Err(*failure),
                 ModelOutput::Answer => Ok(response(vec![ModelStep::Answer {
-                    text: SCRIPTED_REPLY.into(),
-                    artifacts: vec![],
-                }])),
-                ModelOutput::RepeatedAnswers(_) => Ok(response(vec![ModelStep::Answer {
                     text: SCRIPTED_REPLY.into(),
                     artifacts: vec![],
                 }])),
@@ -1860,3 +1852,5 @@ pub fn assert_script_clean(recorder: &ScriptRecorder) -> ScriptSnapshot {
     );
     snapshot
 }
+
+pub(crate) mod compaction;

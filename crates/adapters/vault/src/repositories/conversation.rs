@@ -129,7 +129,7 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
         &self,
         session_id: Uuid,
         required_user_id: Option<Uuid>,
-    ) -> Result<Vec<ContractMessage>, AgentFailure> {
+    ) -> Result<(Vec<ContractMessage>, bool), AgentFailure> {
         let page = self
             .vault
             .read_manager_session_history_page(
@@ -146,12 +146,15 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
         if page.messages.iter().any(|item| !seen.insert(item.alias_id)) {
             return Err(AgentFailure::StorageUnavailable);
         }
-        page.messages
+        let has_earlier = page.has_earlier_messages;
+        let messages = page
+            .messages
             .into_iter()
             .map(|item| {
                 floe_conversation::contract_message(&item.message, item.alias_id, item.coverage)
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((messages, has_earlier))
     }
 }
 
@@ -298,11 +301,12 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 VaultManagerConversationAdmission::Created(record) => {
                     let receipt = floe_conversation::project_run_receipt(record)
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
-                    let transcript = self
+                    let (transcript, has_earlier_model_history) = self
                         .manager_history_for_session(session_id, required_user_id)
                         .await
                         .map_err(floe_kernel::CommandFailure::Admitted)?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
+                        has_earlier_model_history,
                         receipt,
                         transcript,
                     }))
@@ -447,10 +451,11 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             if session.revision != receipt.session_revision {
                 return Err(AgentFailure::Conflict);
             }
-            let transcript = self
+            let (transcript, has_earlier_model_history) = self
                 .manager_history_for_session(receipt.session_id, Some(receipt.user_message_id))
                 .await?;
             Ok(Some(AdmittedTurn {
+                has_earlier_model_history,
                 receipt,
                 transcript,
             }))
@@ -671,10 +676,11 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
                             Some(*message_id)
                         }
                     };
-                    let transcript = self
+                    let (transcript, has_earlier_model_history) = self
                         .manager_history_for_session(prepared_request.session_id, required_user_id)
                         .await?;
                     Ok(TurnAdmission::Created(AdmittedTurn {
+                        has_earlier_model_history,
                         receipt,
                         transcript,
                     }))

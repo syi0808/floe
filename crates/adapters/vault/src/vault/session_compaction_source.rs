@@ -7,7 +7,7 @@ use super::owner_custody::manager_session_binding_for_session_on;
 use super::*;
 use floe_conversation::{
     COMPACTION_MIN_RETAIN_ENTRIES, COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES,
-    COMPACTION_TRIGGER_MESSAGES, CompactionSource,
+    COMPACTION_TRIGGER_MESSAGES, CompactionAuthority, CompactionSource,
 };
 use floe_conversation_core::ConversationReadTarget;
 use turso::transaction::TransactionBehavior;
@@ -37,6 +37,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 session_id,
                 expected_revision,
                 byte_limit,
+                CompactionAuthority::Idle,
             )
             .await;
         match result {
@@ -61,6 +62,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         session_id: Uuid,
         expected_revision: u64,
         byte_limit: usize,
+        authority: CompactionAuthority,
     ) -> Result<Option<CompactionSource>, AgentFailure> {
         if session_id.is_nil()
             || expected_revision == 0
@@ -80,7 +82,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .map_err(owner_store_failure)?
                 .ok_or(AgentFailure::NotFound)?;
         let (head, checkpoint, previous) = self
-            .manager_compaction_eligibility_on(transaction, &session, &binding, expected_revision)
+            .manager_compaction_eligibility_on(
+                transaction,
+                &session,
+                &binding,
+                expected_revision,
+                authority,
+            )
             .await?;
         let start = checkpoint
             .as_ref()
@@ -89,8 +97,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if available <= COMPACTION_MIN_RETAIN_ENTRIES {
             return Ok(None);
         }
-        let mut pressure = available.saturating_add(u64::from(previous.is_some()))
-            >= COMPACTION_TRIGGER_MESSAGES as u64;
+        let mut pressure = authority != CompactionAuthority::Idle
+            || available.saturating_add(u64::from(previous.is_some()))
+                >= COMPACTION_TRIGGER_MESSAGES as u64;
         let limit = head
             .state
             .settled_prefix
@@ -237,6 +246,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 continue;
             }
             let selected = CompactionSource {
+                authority,
                 session_id,
                 session_revision: expected_revision,
                 data_classes: session.data_classes.clone(),

@@ -11840,6 +11840,7 @@ async fn compaction_custody_fixture() -> (
         runtime_epoch: 1,
     };
     let request = floe_conversation::CompactionAdmission {
+        authority: floe_conversation::CompactionAuthority::Idle,
         session_id: scenario.session_id,
         expected_session_revision: scenario.session_revision,
         source_byte_limit: floe_conversation::COMPACTION_TRIGGER_BYTES,
@@ -12967,6 +12968,7 @@ async fn compaction_completion_installs_recorded_filtered_coverage_not_prefix_un
         runtime_epoch: 1,
     };
     let request = floe_conversation::CompactionAdmission {
+        authority: floe_conversation::CompactionAuthority::Idle,
         session_id: scenario.session_id,
         expected_session_revision: scenario.session_revision,
         source_byte_limit: floe_conversation::COMPACTION_TRIGGER_BYTES,
@@ -13046,3 +13048,6 @@ async fn compaction_completion_installs_recorded_filtered_coverage_not_prefix_un
 
 #[path = "compaction_driver_tests.rs"]
 mod compaction_driver_tests;
+
+#[path = "compaction_active_tests.rs"]
+mod compaction_active_tests;
