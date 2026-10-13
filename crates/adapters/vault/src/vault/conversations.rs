@@ -2033,16 +2033,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 if kind == K::SessionStart { return Err(AgentFailure::VaultUnavailable); }
                 return Ok(A::NotApplied(R::ForeignCommand(kind)));
             }
-            let mut rows = transaction.query("SELECT count(*) FROM agent_conversation_session_commands", ()).await.map_err(database_failure)?;
-            let count = rows.next().await.map_err(database_failure)?.ok_or(AgentFailure::StorageUnavailable)?.get::<i64>(0).map_err(storage)?;
-            if count < 0 { return Err(AgentFailure::VaultUnavailable); }
+            let count = session_selection_count_on(&transaction).await?;
             if count >= MAX_COMMAND_ROWS { return Ok(A::NotApplied(R::Capacity)); }
-            drop(rows);
+            let selection_sequence = count + 1;
             let session = AgentSession::new(self.person_id);
             let receipt = floe_conversation::project_session_receipt(session.clone())?;
             transaction.execute("INSERT INTO agent_sessions (id, revision, payload) VALUES (?, 0, ?)", (session.id.to_string(), self.payload(&session)?)).await.map_err(database_failure)?;
-            transaction.execute("INSERT INTO agent_conversation_session_commands (command_id, person_id, session_id, initial_revision) VALUES (?, ?, ?, 0)",
-                (request.command_id.as_uuid().to_string(), self.person_id.to_string(), session.id.to_string())).await.map_err(database_failure)?;
+            transaction.execute("INSERT INTO agent_conversation_session_commands (command_id, person_id, session_id, initial_revision, selection_sequence) VALUES (?, ?, ?, 0, ?)",
+                (request.command_id.as_uuid().to_string(), self.person_id.to_string(), session.id.to_string(), selection_sequence)).await.map_err(database_failure)?;
             self.check_access()?;
             Ok(A::Started(receipt))
         }.await;
@@ -2054,9 +2052,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         writer.settled();
         finished.map_err(F::Indeterminate)
     }
-    /// Resume only a pristine or exactly pinned Manager Session for the
-    /// selected prompt revision. A Session bound to another policy remains
-    /// readable by ID but is never retargeted for new Manager execution.
+    /// Resume the latest explicit New-session selection compatible with this
+    /// Manager. Revision growth, background settlement and old Start replay do
+    /// not change selection; no read may retarget a pinned Manager identity.
     pub async fn resume_manager_conversation_session(
         &self,
         identity: &floe_conversation_contract::AgentIdentity,
@@ -2067,85 +2065,85 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if identity.person_id != self.person_id {
             return Err(AgentFailure::CapabilityDenied);
         }
-        let connection = self.connection()?;
-        let family_present =
-            crate::schema::conversation_owner_custody_family_v2_present(&connection)
-                .await
-                .map_err(crate::schema::SchemaFailure::into_agent)?;
-        let current = if family_present {
-            let identity_json = serde_json::to_string(identity).map_err(storage)?;
-            let mut rows = connection
-                .query(
-                    "SELECT s.id FROM agent_conversation_manager_session_bindings_v2 b JOIN agent_sessions s ON s.id = b.session_id WHERE b.person_id = ? AND b.identity_json = ? ORDER BY s.revision DESC, s.id DESC LIMIT 1",
-                    (self.person_id.to_string(), identity_json),
-                )
-                .await
-                .map_err(database_failure)?;
-            if let Some(row) = rows.next().await.map_err(database_failure)? {
-                Some(
-                    Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-                        .map_err(unavailable)?,
-                )
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .await
+            .map_err(database_failure)?;
+        let result = async {
+            validate_schema(&transaction).await?;
+            session_selection_count_on(&transaction).await?;
+            let family_present = crate::schema::conversation_owner_custody_family_v2_present(&transaction)
+                .await.map_err(crate::schema::SchemaFailure::into_agent)?;
+            let mut rows = if family_present {
+                let identity_json = serde_json::to_string(identity).map_err(storage)?;
+                transaction.query(
+                    "SELECT s.id FROM agent_conversation_session_commands c JOIN agent_sessions s ON s.id = c.session_id LEFT JOIN agent_conversation_manager_session_bindings_v2 b ON b.session_id = s.id WHERE c.person_id = ? AND (b.session_id IS NULL OR (b.person_id = ? AND b.identity_json = ?)) ORDER BY c.selection_sequence DESC LIMIT 1",
+                    (self.person_id.to_string(), self.person_id.to_string(), identity_json),
+                ).await.map_err(database_failure)?
             } else {
-                drop(rows);
-                let mut rows = connection
-                    .query(
-                        "SELECT s.id FROM agent_sessions s WHERE json_extract(s.payload, '$.scope') IS NULL AND json_extract(s.payload, '$.data_classes[0]') = 'personal' AND NOT EXISTS (SELECT 1 FROM agent_conversation_manager_session_bindings_v2 b WHERE b.person_id = ? AND b.session_id = s.id) ORDER BY s.rowid DESC LIMIT 1",
-                        [self.person_id.to_string()],
-                    )
-                    .await
-                    .map_err(database_failure)?;
-                rows.next()
-                    .await
-                    .map_err(database_failure)?
-                    .map(|row| {
-                        Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-                            .map_err(unavailable)
-                    })
-                    .transpose()?
+                transaction.query(
+                    "SELECT s.id FROM agent_conversation_session_commands c JOIN agent_sessions s ON s.id = c.session_id WHERE c.person_id = ? ORDER BY c.selection_sequence DESC LIMIT 1",
+                    [self.person_id.to_string()],
+                ).await.map_err(database_failure)?
+            };
+            let Some(row) = rows.next().await.map_err(database_failure)? else { return Ok(None); };
+            let session_id = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)?;
+            drop(rows);
+            // Bound and validate the selected payload before any pristine SQL
+            // JSON inspection; an invalid latest selection must fail closed.
+            let session = self.session_on(&transaction, session_id).await?;
+            let binding = if family_present {
+                manager_session_binding_for_session_on(&transaction, self.person_id, session_id)
+                    .await.map_err(owner_store_failure)?
+            } else { None };
+            if let Some(binding) = binding {
+                if binding.identity != *identity { return Err(AgentFailure::PolicyDenied); }
+            } else {
+                super::owner_custody::validate_manager_pristine_session_on(&transaction, self.person_id, session_id)
+                    .await.map_err(owner_store_failure)?;
             }
-        } else {
-            let mut rows = connection
-                .query(
-                    "SELECT id FROM agent_sessions WHERE json_extract(payload, '$.scope') IS NULL AND json_extract(payload, '$.data_classes[0]') = 'personal' ORDER BY rowid DESC LIMIT 1",
-                    (),
-                )
-                .await
-                .map_err(database_failure)?;
-            rows.next()
-                .await
-                .map_err(database_failure)?
-                .map(|row| {
-                    Uuid::parse_str(&row.get::<String>(0).map_err(storage)?).map_err(unavailable)
-                })
-                .transpose()?
-        };
-        let Some(session_id) = current else {
-            self.check_access()?;
-            return Ok(None);
-        };
-        let session = self.session_on(&connection, session_id).await?;
-        if session.person_id != self.person_id
-            || session.scope.is_some()
-            || session.data_classes != [DataClass::Personal]
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        self.check_access()?;
-        Ok(Some(session))
+            if session.person_id != self.person_id || session.scope.is_some()
+                || session.data_classes != [DataClass::Personal] {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            Ok(Some(session))
+        }.await;
+        self.finish_registry_transaction_checked(transaction, result)
+            .await
     }
 }
+/// Start receipts are immutable and never evicted. Positive, unique ordinals
+/// with max == count prove their dense order without relying on hidden rowids.
+async fn session_selection_count_on(connection: &turso::Connection) -> Result<i64, AgentFailure> {
+    let mut rows = connection.query(
+        "SELECT count(*), coalesce(max(selection_sequence), 0) FROM agent_conversation_session_commands", (),
+    ).await.map_err(database_failure)?;
+    let row = rows
+        .next()
+        .await
+        .map_err(database_failure)?
+        .ok_or(AgentFailure::VaultUnavailable)?;
+    let count = row.get::<i64>(0).map_err(storage)?;
+    let maximum = row.get::<i64>(1).map_err(storage)?;
+    if !(0..=MAX_COMMAND_ROWS).contains(&count) || maximum != count {
+        return Err(AgentFailure::VaultUnavailable);
+    }
+    Ok(count)
+}
+
 async fn session_command_on(
     connection: &turso::Connection,
     person_id: PersonId,
     command_id: CommandId,
 ) -> Result<Option<floe_conversation::SessionReceipt>, AgentFailure> {
-    let mut rows = connection.query("SELECT person_id, session_id, initial_revision FROM agent_conversation_session_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
+    let mut rows = connection.query("SELECT person_id, session_id, initial_revision, selection_sequence FROM agent_conversation_session_commands WHERE command_id = ?", [command_id.as_uuid().to_string()]).await.map_err(database_failure)?;
     let Some(row) = rows.next().await.map_err(database_failure)? else {
         return Ok(None);
     };
     if row.get::<String>(0).map_err(storage)? != person_id.to_string()
         || row.get::<i64>(2).map_err(storage)? != 0
+        || !(1..=MAX_COMMAND_ROWS).contains(&row.get::<i64>(3).map_err(storage)?)
     {
         return Err(AgentFailure::VaultUnavailable);
     }

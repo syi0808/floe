@@ -13051,3 +13051,6 @@ mod compaction_driver_tests;
 
 #[path = "compaction_active_tests.rs"]
 mod compaction_active_tests;
+
+#[path = "session_resume_tests.rs"]
+mod session_resume_tests;

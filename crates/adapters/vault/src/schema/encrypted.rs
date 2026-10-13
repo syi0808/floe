@@ -235,7 +235,7 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
     SchemaObject::table(
         "agent_conversation_session_commands",
-        "CREATE TABLE agent_conversation_session_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES agent_sessions(id), initial_revision INTEGER NOT NULL CHECK(initial_revision = 0))",
+        "CREATE TABLE agent_conversation_session_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL UNIQUE REFERENCES agent_sessions(id), initial_revision INTEGER NOT NULL CHECK(initial_revision = 0), selection_sequence INTEGER NOT NULL UNIQUE CHECK(selection_sequence > 0))",
     ),
     SchemaObject::table(
         "agent_conversation_terminal_receipts",

@@ -96,6 +96,8 @@ armed until transaction completion;
 interruption retires the store's availability. This is not a claim that every
 Conversation write uses it.
 
+Manager Session resume follows the latest explicit product New-session selection compatible with the pinned Manager identity. Session Start persists a positive unique monotonic selection sequence in its existing immutable creation receipt, in the same transaction as the pristine Session. Aggregate transcript revision, wall-clock timestamps, UUID order, background settlement and replay of an older Start receipt do not change selection. Resume is one read-only snapshot: it validates the retained selection order, then the exact Manager binding or genuinely pristine unbound state. A newer pristine Session is eligible before its first message; a Session bound to another definition remains readable by ID but is never rebound. A Session without a product Start receipt is not implicitly adopted as the selected product conversation.
+
 External Product and Runtime control command envelopes require UUID-v4 nonces so
 they cannot collide with internally derived command identities. NativeHost command
 envelopes and other query references retain their existing contracts; Runtime
