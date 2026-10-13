@@ -408,8 +408,8 @@ impl DayRefreshRepository for UnusedDay {
     fn interrupt_refreshes<'a>(
         &'a self,
         _replacement: RefreshExecutorReplacement,
-    ) -> BoxFuture<'a, Result<Vec<RefreshRecord>, DayError>> {
-        Box::pin(async { Ok(Vec::new()) })
+    ) -> BoxFuture<'a, Result<(), DayError>> {
+        Box::pin(async { Ok(()) })
     }
     fn retire_refresh_executor<'a>(
         &'a self,

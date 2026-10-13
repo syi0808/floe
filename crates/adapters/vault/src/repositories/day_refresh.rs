@@ -15,8 +15,7 @@ use sha2::{Digest, Sha256};
 use turso::{Connection, Row};
 
 const MAX_SOURCE_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
-const REFRESH_COLUMNS: &str =
-    "operation_id, person_id, device_id, command_id, executor_generation, revision, payload";
+const REFRESH_COLUMNS: &str = "operation_id, person_id, device_id, command_id, executor_generation, revision, payload, is_terminal";
 
 fn calendar_source_query(person_id: PersonId) -> (String, Vec<turso::Value>) {
     let bindings = floe_access::supported_product_calendar_bindings();
@@ -118,7 +117,18 @@ async fn refresh_by_id(
     Ok(Some(current))
 }
 
+#[cfg(all(test, feature = "development-storage"))]
+std::thread_local! {
+    static REFRESH_DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(all(test, feature = "development-storage"))]
+pub(super) fn refresh_decode_count() -> usize {
+    REFRESH_DECODES.with(std::cell::Cell::get)
+}
+
 fn decode_refresh_row(row: &Row) -> Result<(RefreshRecord, String), DayError> {
+    #[cfg(all(test, feature = "development-storage"))]
+    REFRESH_DECODES.with(|count| count.set(count.get() + 1));
     let payload: String = row.get(6).map_err(storage_error)?;
     if payload.len() > floe_day::MAX_DAY_SNAPSHOT_BYTES + 16_384 {
         return Err(storage_error("Day refresh byte budget"));
@@ -133,7 +143,10 @@ fn decode_refresh_row(row: &Row) -> Result<(RefreshRecord, String), DayError> {
     let command_id: String = row.get(3).map_err(storage_error)?;
     let executor_generation: String = row.get(4).map_err(storage_error)?;
     let revision: i64 = row.get(5).map_err(storage_error)?;
-    if revision <= 0
+    let is_terminal: i64 = row.get(7).map_err(storage_error)?;
+    if !matches!(is_terminal, 0 | 1)
+        || (is_terminal == 1) != record.state.terminal()
+        || revision <= 0
         || record.operation_id.to_string() != operation_id
         || record.person_id.to_string() != person_id
         || record.device_id != device_id
@@ -414,10 +427,11 @@ async fn update_refresh_on(
     let payload = serde_json::to_string(next).map_err(storage_error)?;
     let changed = connection
         .execute(
-            "UPDATE day_refreshes SET revision = ?, payload = ? WHERE operation_id = ? AND person_id = ? AND device_id = ? AND command_id = ? AND executor_generation = ? AND revision = ? AND payload = ?",
+            "UPDATE day_refreshes SET revision = ?, payload = ?, is_terminal = ? WHERE operation_id = ? AND person_id = ? AND device_id = ? AND command_id = ? AND executor_generation = ? AND revision = ? AND payload = ? AND is_terminal = ?",
             (
                 next.revision.0 as i64,
                 payload,
+                i64::from(next.state.terminal()),
                 previous.operation_id.to_string(),
                 previous.person_id.to_string(),
                 previous.device_id.clone(),
@@ -425,6 +439,7 @@ async fn update_refresh_on(
                 previous.executor_generation.to_string(),
                 previous.revision.0 as i64,
                 stored_payload.to_owned(),
+                i64::from(previous.state.terminal()),
             ),
         )
         .await
@@ -433,6 +448,40 @@ async fn update_refresh_on(
         Ok(())
     } else {
         Err(conflict("Day refresh changed; reload and retry"))
+    }
+}
+
+// Bounded working set, independent of the lifetime count of immutable receipts.
+const REFRESH_RECOVERY_PAGE: usize = 64;
+
+async fn interrupt_active_refreshes_on(
+    connection: &Connection,
+    executor: &RefreshExecutorReplacement,
+    replace: bool,
+) -> Result<(), DayError> {
+    let generation_operator = if replace { "<>" } else { "=" };
+    loop {
+        let mut rows = connection.query(
+            &format!("SELECT {REFRESH_COLUMNS} FROM day_refreshes WHERE person_id=? AND is_terminal=0 AND device_id=? AND executor_generation {generation_operator} ? ORDER BY operation_id LIMIT {REFRESH_RECOVERY_PAGE}"),
+            (executor.person_id.to_string(), executor.device_id.clone(), executor.executor_generation.to_string()),
+        ).await.map_err(storage_error)?;
+        let mut records = Vec::with_capacity(REFRESH_RECOVERY_PAGE);
+        while let Some(row) = rows.next().await.map_err(storage_error)? {
+            records.push(decode_refresh_row(&row)?);
+        }
+        drop(rows);
+        if records.is_empty() {
+            return Ok(());
+        }
+        for (previous, payload) in records {
+            let next = previous.transition(
+                DayRefreshState::Interrupted {
+                    failure: DayRefreshFailure::HostInterrupted,
+                },
+                executor.now,
+            )?;
+            update_refresh_on(connection, &previous, &next, &payload).await?;
+        }
     }
 }
 
@@ -511,10 +560,10 @@ impl floe_day::DayRefreshRepository for TursoStore {
                     &admission.device_id,
                     admission.command_id,
                 )?;
-                let mut counts = connection.query("SELECT (SELECT COUNT(*) FROM day_mutation_receipts WHERE person_id=?1)+(SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1)", (admission.person_id.to_string(),)).await.map_err(storage_error)?;
+                let mut counts = connection.query("SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1 AND is_terminal=0", (admission.person_id.to_string(),)).await.map_err(storage_error)?;
                 let count: i64 = counts.next().await.map_err(storage_error)?.ok_or_else(|| storage_error("missing Day command count"))?.get(0).map_err(storage_error)?;
                 if count < 0 { return Err(storage_error("invalid Day command count")); }
-                if count as usize >= floe_day::MAX_DAY_COMMAND_RECEIPTS { return Err(DayError::budget("Day command receipt capacity reached")); }
+                if count as usize >= floe_day::MAX_ACTIVE_DAY_REFRESHES { return Err(DayError::budget("Day active refresh capacity reached")); }
                 drop(counts);
                 let _ = admission.record(intent_digest, MirrorExpectation::Absent)?;
                 require_executor(&connection, admission.person_id, &admission.device_id, admission.executor_generation).await?;
@@ -532,7 +581,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 let payload = serde_json::to_string(&record).map_err(storage_error)?;
                 let changed = connection
                     .execute(
-                        "INSERT OR IGNORE INTO day_refreshes(operation_id, person_id, device_id, command_id, executor_generation, revision, payload) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO day_refreshes(operation_id, person_id, device_id, command_id, executor_generation, revision, payload, is_terminal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             record.operation_id.to_string(),
                             record.person_id.to_string(),
@@ -541,6 +590,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
                             record.executor_generation.to_string(),
                             record.revision.0 as i64,
                             payload,
+                            i64::from(record.state.terminal()),
                         ),
                     )
                     .await
@@ -728,7 +778,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
     fn interrupt_refreshes<'a>(
         &'a self,
         replacement: RefreshExecutorReplacement,
-    ) -> BoxFuture<'a, Result<Vec<RefreshRecord>, DayError>> {
+    ) -> BoxFuture<'a, Result<(), DayError>> {
         Box::pin(async move {
             if !replacement.person_id.is_valid()
                 || replacement.device_id.is_empty()
@@ -746,44 +796,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
                 .map_err(storage_error)?;
             let result = async {
                 connection.execute("INSERT INTO day_executors(person_id,device_id,executor_generation,active) VALUES (?,?,?,1) ON CONFLICT(person_id,device_id) DO UPDATE SET executor_generation=excluded.executor_generation,active=1", (replacement.person_id.to_string(),replacement.device_id.clone(),replacement.executor_generation.to_string())).await.map_err(storage_error)?;
-                let mut rows = connection
-                    .query(
-                        &format!(
-                            "SELECT {REFRESH_COLUMNS} FROM day_refreshes WHERE person_id = ? AND device_id = ? ORDER BY operation_id"
-                        ),
-                        (
-                            replacement.person_id.to_string(),
-                            replacement.device_id.clone(),
-                        ),
-                    )
-                    .await
-                    .map_err(storage_error)?;
-                let mut records = Vec::new();
-                while let Some(row) = rows.next().await.map_err(storage_error)? {
-                    records.push(decode_refresh_row(&row)?);
-                }
-                drop(rows);
-
-                let mut interrupted = Vec::new();
-                for (previous, payload) in records {
-                    if previous.executor_generation == replacement.executor_generation
-                        || !matches!(
-                            &previous.state,
-                            DayRefreshState::Pending | DayRefreshState::Running
-                        )
-                    {
-                        continue;
-                    }
-                    let next = previous.transition(
-                        DayRefreshState::Interrupted {
-                            failure: DayRefreshFailure::HostInterrupted,
-                        },
-                        replacement.now,
-                    )?;
-                    update_refresh_on(&connection, &previous, &next, &payload).await?;
-                    interrupted.push(next);
-                }
-                Ok(interrupted)
+                interrupt_active_refreshes_on(&connection, &replacement, true).await
             }
             .await;
             finish_transaction(&connection, result).await
@@ -808,10 +821,7 @@ impl floe_day::DayRefreshRepository for TursoStore {
             let result = async {
                 let changed = connection.execute("UPDATE day_executors SET active=0 WHERE person_id=? AND device_id=? AND executor_generation=? AND active=1", (expected.person_id.to_string(),expected.device_id.clone(),expected.executor_generation.to_string())).await.map_err(storage_error)?;
                 if changed == 0 { return Ok(()); }
-                let mut rows = connection.query(&format!("SELECT {REFRESH_COLUMNS} FROM day_refreshes WHERE person_id=? AND device_id=? AND executor_generation=?"), (expected.person_id.to_string(),expected.device_id.clone(),expected.executor_generation.to_string())).await.map_err(storage_error)?;
-                let mut records = Vec::new(); while let Some(row) = rows.next().await.map_err(storage_error)? { records.push(decode_refresh_row(&row)?); } drop(rows);
-                for (previous, payload) in records { if !previous.state.terminal() { let next = previous.transition(DayRefreshState::Interrupted { failure: DayRefreshFailure::HostInterrupted }, expected.now)?; update_refresh_on(&connection, &previous, &next, &payload).await?; } }
-                Ok(())
+                interrupt_active_refreshes_on(&connection, &expected, false).await
             }.await;
             finish_transaction(&connection, result).await
         })

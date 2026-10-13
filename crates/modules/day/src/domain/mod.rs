@@ -38,8 +38,8 @@ pub use manual_calendar_operation::{
 };
 pub use mutation::{
     Classification, DayMutation, DayMutationApplied, DayMutationCommand, DayMutationPrior,
-    DayMutationRequest, DayMutationResult, DayMutationTarget, MAX_DAY_COMMAND_RECEIPTS,
-    MAX_DAY_MUTATION_BYTES, MAX_DAY_MUTATION_RECEIPT_BYTES,
+    DayMutationRequest, DayMutationResult, DayMutationTarget, MAX_DAY_MUTATION_BYTES,
+    MAX_DAY_MUTATION_RECEIPT_BYTES,
 };
 
 mod cache_status;

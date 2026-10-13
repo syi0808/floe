@@ -416,11 +416,29 @@ A failure or cancellation cannot finish a parent with missing delegated evidence
 
 Linked resume admits a fresh Run with the recorded interaction lineage. Budget continuation instead replays the exact validated batch and cursor without model recall. Conversation reauthorizes its stored projection coverage before executing pending work and before releasing output. Task acknowledgements are recovered from the actual Task repository and re-journaled as immutable receipt references; a Task projected into the Session transcript appears once. Unknown coverage, an unresolved model attempt or altered evidence cannot be converted into successful empty work or a fresh external retry.
 
+## Day receipt retention and recovery working sets
+
+Lifetime replay evidence and active work have separate budgets. The encrypted
+product store records a checked `is_terminal` index field with each refresh's
+canonical payload, updating both in the same revision/payload CAS transaction.
+Point reads validate their agreement. Activation and retirement select only
+nonterminal rows for the exact Person/device and applicable executor generation,
+processing at most 64 records at a time inside the owner transaction. They never
+hydrate completed Day snapshots or return an unbounded collection of retired
+records. A later-page failure rolls back the generation change and every earlier
+interruption. Old-owner retirement cannot disturb a newer executor.
+
+This is a prestable stored-layout change: a freshly selected development profile
+is required for the new table/index meaning. Existing incompatible stores fail
+schema admission; no profile reset, key replacement, migration fallback or receipt
+deletion is performed. Existing immutable command identities and exact replies are
+preserved for every store created under this layout.
+
 ## Day and product Calendar reads
 
 `DayService` owns manual records, bounded Day projection, durable refresh and Calendar cache reconciliation. It is a host-lifetime owner over `DayRepository`, `CalendarAcquisitionPort` and its clock. Context implements the acquisition and metadata-inspection port over current Connections metadata and real native/Gateway transport handles. Native product display is independent of the opened agent Vault generation; Gateway reads require the encrypted signer/pin and a current private credential lease.
 
-Manual mutation and refresh share one Person/command UUID namespace. Intent includes the normalized requested date/offsets; manual intent also includes the complete mutation, including occurred_at and expected_revision. Display-only day.now and executor generation are excluded. A duplicate command rejoins its exact stored result, including the original safe snapshot, before new effects. A changed device, kind or intent conflicts. Manual mutation applies the Day-owned transition, local row changes, selected snapshot and immutable receipt in one transaction. The 4,096-command capacity rejects new admission without evicting replay evidence; manual input and stored receipt bytes are separately bounded.
+Manual mutation and refresh share one Person/command UUID namespace. Intent includes the normalized requested date/offsets; manual intent also includes the complete mutation, including occurred_at and expected_revision. Display-only day.now and executor generation are excluded. A duplicate command rejoins its exact stored result, including the original safe snapshot, before new effects. A changed device, kind or intent conflicts. Manual mutation applies the Day-owned transition, local row changes, selected snapshot and immutable receipt in one transaction. Completed command receipts do not consume future admission capacity. At most 4,096 unsettled refreshes per Person may be admitted; manual mutations do not consume those slots. Exact receipts remain point-readable without eviction, and manual input/stored receipt bytes remain separately bounded.
 
 `day.refresh` durably admits a Pending operation with the real operation ID and exact `MirrorExpectation::Absent` or `Present(revision)`, then starts bounded owned work. `day.refresh.get` only reads its closed state. Recovery interrupts unfinished work rather than issuing another provider read. Context resolves the complete configured source inventory; the product supplies a display date/offset range, never source selection or grant authority. Refresh accepts a nonnegative UTC span of at most 48 hours, 64 sources, 256 selected calendars, 10,000 records and 4 MiB normalized payload; remote pages are at most 128 records/1 MiB within the 60-second operation deadline. Overflow or unknown consumption fails explicitly.
 

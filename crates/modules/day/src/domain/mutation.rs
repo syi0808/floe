@@ -9,7 +9,6 @@ use floe_kernel::{CaptureId, EventId, NoteId, PersonId, Revision, TaskId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const MAX_DAY_COMMAND_RECEIPTS: usize = 4096;
 pub const MAX_DAY_MUTATION_BYTES: usize = 1024 * 1024;
 pub const MAX_DAY_MUTATION_RECEIPT_BYTES: usize =
     crate::MAX_DAY_SNAPSHOT_BYTES + 2 * MAX_DAY_MUTATION_BYTES + 65_536;

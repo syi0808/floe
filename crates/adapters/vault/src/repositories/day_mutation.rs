@@ -67,11 +67,6 @@ pub(super) async fn mutate(
         let intent_digest = command.intent_digest()?;
         fence.check(command.person_id, &command.device_id, command.executor_generation)?;
         require_executor(&connection, command.person_id, &command.device_id, command.executor_generation).await?;
-        let mut counts = connection.query("SELECT (SELECT COUNT(*) FROM day_mutation_receipts WHERE person_id=?1)+(SELECT COUNT(*) FROM day_refreshes WHERE person_id=?1)", (person.clone(),)).await.map_err(storage)?;
-        let count: i64 = counts.next().await.map_err(storage)?.ok_or_else(|| storage("missing Day receipt count"))?.get(0).map_err(storage)?;
-        if count < 0 { return Err(storage("invalid Day receipt count")); }
-        if count as usize >= floe_day::MAX_DAY_COMMAND_RECEIPTS { return Err(DayError::budget("Day command receipt capacity reached")); }
-        drop(counts);
         let (prior, old_capture, old_item) = match command.target() {
             DayMutationTarget::None => (DayMutationPrior::Absent, None, None),
             DayMutationTarget::Capture(id) => {

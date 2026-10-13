@@ -42,3 +42,6 @@ pub use knowledge::VaultKnowledgeRepository;
 
 mod lifecycle_receipts;
 pub use lifecycle_receipts::StoredVaultLifecycleReceipt;
+
+#[cfg(all(test, unix, feature = "development-storage"))]
+mod day_capacity_tests;

@@ -34,7 +34,7 @@ pub(super) const OBJECTS: &[SchemaObject] = &[
     ),
     SchemaObject::table(
         "day_refreshes",
-        "CREATE TABLE day_refreshes (operation_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_id TEXT NOT NULL, executor_generation TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), payload TEXT NOT NULL, UNIQUE(person_id, command_id))",
+        "CREATE TABLE day_refreshes (operation_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, device_id TEXT NOT NULL, command_id TEXT NOT NULL, executor_generation TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision > 0), payload TEXT NOT NULL, is_terminal INTEGER NOT NULL CHECK(is_terminal IN (0,1)), UNIQUE(person_id, command_id))",
     ),
     SchemaObject::table(
         "day_executors",
@@ -90,7 +90,7 @@ pub(super) const OBJECTS: &[SchemaObject] = &[
     ),
     SchemaObject::index(
         "day_refreshes_person_device_generation",
-        "CREATE INDEX day_refreshes_person_device_generation ON day_refreshes(person_id, device_id, executor_generation)",
+        "CREATE INDEX day_refreshes_person_device_generation ON day_refreshes(person_id, is_terminal, device_id, executor_generation, operation_id)",
     ),
     SchemaObject::index(
         "calendar_actions_person",

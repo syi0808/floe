@@ -457,6 +457,38 @@ architecture boundaries and diff checks. The full 39-case Conversation suite,
 including 129-turn history and reopen, passed in 355.93 seconds. No Flutter, Apple
 or live-provider qualification is added; the broader root-owned audit continues.
 
+## Day lifetime capacity and recovery correction — 2026-10-13
+
+Root-owned encrypted product-store regressions reproduced R-017 and R-018. With
+one real manual receipt plus 4,095 valid retained refresh receipts, both a new
+manual command and refresh were rejected while old exact replay still worked.
+A separate fixture retained 128 completed snapshots with 64 full notes each;
+shutdown and activation each decoded all 128 historical payloads.
+
+The final ownership remains Day for command/state meaning and Vault for atomic
+custody. Lifetime immutable receipts no longer consume new-work capacity; the
+existing 4,096 count bounds only active nonterminal refreshes. An indexed terminal
+field is written and cross-validated against the canonical payload. Executor
+replacement/retirement selects only applicable nonterminal rows in 64-record
+working sets and returns no unused unbounded record vector. Whole-transaction
+rollback and old/new-generation fences remain. Remove the obsolete lifetime
+constant/queries and migrate every repository-port implementation in this slice.
+The fixed local product layout requires a fresh explicitly selected development
+profile; there is no compatibility decoder, automatic reset or key replacement.
+
+Five actual encrypted development-profile tests pass: lifetime threshold and
+reopen/exact replay, zero terminal snapshot hydration, active quota release with
+manual edits still available, 130-record multi-page recovery/generation fencing,
+and later-page corruption rollback plus indexed/payload mismatch rejection.
+These tests run with `cargo test -p floe-vault --no-default-features --features
+development-storage --lib day_capacity`; default-profile tests alone do not cover
+them. Frozen final qualification passed all 179 development Vault tests, 341
+default workspace tests (including doctests), 61 App QA tests (one intentionally
+ignored subprocess driver), the production FFI build, architecture boundaries
+and diff checks. The App Conversation suite completed in 362.99 seconds.
+No Apple/live-provider claim is made; Flutter dependencies remain blocked by the
+previously reported environment policy and no client source changed.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

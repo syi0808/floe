@@ -29,11 +29,12 @@ pub trait DayRefreshRepository: Send + Sync {
         &'a self,
         commit: RefreshCommit,
     ) -> BoxFuture<'a, Result<RefreshRecord, DayError>>;
-    /// Mark old nonterminal work Interrupted; never reacquire or replay it.
+    /// Mark old nonterminal work Interrupted with a bounded working set.
+    /// Terminal replay receipts are not hydrated; never reacquire or replay work.
     fn interrupt_refreshes<'a>(
         &'a self,
         replacement: RefreshExecutorReplacement,
-    ) -> BoxFuture<'a, Result<Vec<RefreshRecord>, DayError>>;
+    ) -> BoxFuture<'a, Result<(), DayError>>;
     /// Retire only this exact generation; a newer active owner is untouched.
     fn retire_refresh_executor<'a>(
         &'a self,

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+/// Concurrent unsettled work only; completed command identities remain replayable.
+pub const MAX_ACTIVE_DAY_REFRESHES: usize = 4096;
 pub const MAX_REFRESH_SOURCES: usize = 64;
 pub const MAX_REFRESH_CALENDARS: usize = 256;
 pub const MAX_REFRESH_RECORDS: usize = 10_000;
