@@ -489,6 +489,32 @@ and diff checks. The App Conversation suite completed in 362.99 seconds.
 No Apple/live-provider claim is made; Flutter dependencies remain blocked by the
 previously reported environment policy and no client source changed.
 
+## Server rotation custody and operator probe correction — 2026-10-13
+
+Root-owned synthetic tests reproduced R-031: the token endpoint rotates after
+observer cancellation, but saving with the canceled observer context loses the
+replacement. Rotation and storage now share the existing bounded owner context;
+pre-canceled callers cannot start new work. Tests cover recreation from the saved
+replacement and failure-closed custody. No actual credentials or external model
+services were read or called.
+
+R-033 reproduced through the real provider factory, Inference service and
+loopback HTTP adapter: the operator diagnostic failed with `request_rejected`
+before provider IO because an intentionally non-product target lacked capability
+metadata. The Inference owner now seals the exact fixed synthetic invocation in
+the private resolved target. Provider registry admission checks either that exact
+seal or ordinary positive product capability evidence, without inventing support
+metadata. All callers use this one admission path. Product unknown remains
+unknown, modified probe inputs/tools/format/identity/limits fail before HTTP,
+unauthorized operators fail, and a registered target needs no purpose route.
+
+Focused race checks passed for Codex, providers and Inference. The final
+`go test -race ./...` passed all 14 packages with tests; `go vet ./...`, the
+Go import-graph gate (including 16 negative fixtures) and diff checks passed.
+The probe regression includes eight altered-invocation rejection subtests.
+This slice does not qualify real OAuth, provider inference, Apple or GUI behavior.
+Rust source remains the previously qualified Day snapshot.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

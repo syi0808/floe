@@ -56,6 +56,7 @@ type ResolvedModelTarget struct {
 	capabilityStates                  CapabilityStates
 	modelIdentity                     ModelIdentity
 	budgetProfile                     ModelBudgetProfile
+	operatorProbeDigest               [32]byte
 }
 
 func (t ResolvedModelTarget) TargetID() string        { return t.targetID }
@@ -64,7 +65,15 @@ func (t ResolvedModelTarget) AccountIdentity() string { return t.accountIdentity
 func (t ResolvedModelTarget) CapabilityStates() CapabilityStates {
 	return cloneCapabilityStates(t.capabilityStates)
 }
-func (t ResolvedModelTarget) SupportsAgent(in AgentInvocation) bool {
+
+// AllowsAgentInvocation checks either observed product capabilities or the
+// exact fixed synthetic request admitted by ProbeTarget. A probe is not evidence
+// of model capability and cannot authorize different input or tools.
+func (t ResolvedModelTarget) AllowsAgentInvocation(in AgentInvocation) bool {
+	if t.operatorProbeDigest != ([32]byte{}) {
+		digest, err := probeInvocationDigest(in)
+		return err == nil && digest == t.operatorProbeDigest
+	}
 	return supportsAgent(t.capabilityStates, in)
 }
 func (t ResolvedModelTarget) SupportsStructuredOutput() bool {

@@ -2,6 +2,8 @@ package inference
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"floe/server/internal/trust"
 	"strings"
 	"time"
@@ -11,6 +13,14 @@ type ProbeResult struct {
 	TraceID   string
 	ElapsedMS int64
 	Usage     UsageObservation
+}
+
+func probeInvocationDigest(request AgentInvocation) ([32]byte, error) {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(encoded), nil
 }
 
 // ProbeTarget is an explicit operator diagnostic for any registered target,
@@ -79,7 +89,11 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 	}
 	text := "Confirm that this synthetic Agent connectivity check succeeded."
 	request := AgentInvocation{Purpose: QuickResponse, AttemptID: trust.NewID(), DataClasses: []string{"synthetic"}, Instructions: "Reply with one brief plain-text confirmation. This is a Gateway operator diagnostic with no personal data or tools.", Input: AgentInput{Messages: []Message{{Role: "user", Content: &text}}, Tools: []Tool{}}, OutputFormat: OutputFormat{Kind: "text"}, MaxOutputBytes: 1024}
-	target := ResolvedModelTarget{targetID: targetID, accountIdentity: identity, generation: generation}
+	digest, err := probeInvocationDigest(request)
+	if err != nil {
+		return ProbeResult{}, Failure{Code: Validation}
+	}
+	target := ResolvedModelTarget{targetID: targetID, accountIdentity: identity, generation: generation, operatorProbeDigest: digest}
 	trace := newTraceID()
 	started := time.Now()
 	out, err := executor.InvokeAgent(ctx, target, request)

@@ -55,7 +55,7 @@ func TestOllamaEnforcesSelectedOutputReservationForAgentAndStructuredCalls(t *te
 		inference.StructuredOutputCapability: {Status: inference.CapabilitySupported},
 		inference.ToolProposalsCapability:    {Status: inference.CapabilitySupported},
 	}
-	agent, err := p.agent(context.Background(), states, inference.AgentInvocation{
+	agent, err := p.agent(context.Background(), inference.AgentInvocation{
 		Purpose: inference.QuickResponse, CapabilityRevision: "revision", AttemptID: trust.NewID(),
 		DataClasses: []string{"synthetic"}, Instructions: "Answer briefly.",
 		Input:        inference.AgentInput{Messages: []inference.Message{{Role: "user", Content: &content}}, Tools: []inference.Tool{}},

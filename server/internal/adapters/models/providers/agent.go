@@ -9,10 +9,8 @@ import (
 	"strings"
 )
 
-func (p *provider) agent(ctx context.Context, states inference.CapabilityStates, in inference.AgentInvocation, effort string, outputTokenLimit *uint32) (out inference.AgentResult, err error) {
-	if !inference.SupportsAgent(states, in) {
-		return out, inference.Failure{Code: inference.RequestRejected}
-	}
+// Only the registry invokes this wire adapter after owner-target admission.
+func (p *provider) agent(ctx context.Context, in inference.AgentInvocation, effort string, outputTokenLimit *uint32) (out inference.AgentResult, err error) {
 	if p.target.Provider == "codex_oauth" && outputTokenLimit != nil {
 		return out, inference.Failure{Code: inference.Validation}
 	}

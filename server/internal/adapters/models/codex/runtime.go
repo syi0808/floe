@@ -415,6 +415,9 @@ func tokenIdentity(value string) (string, string) {
 func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
+	if ctx.Err() != nil {
+		return nil, unavailable
+	}
 	current := runtime.load(ctx)
 	if err := runtime.credentialReadFailure(); err != nil {
 		return nil, err
@@ -428,7 +431,9 @@ func (runtime *Runtime) access(ctx context.Context) (*tokenBundle, error) {
 	refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	next, err := runtime.refresh(refreshCtx, current)
-	if err != nil || runtime.save(ctx, next) != nil {
+	// Rotation and durable custody are one bounded owner operation. The
+	// requesting observer may disappear after the provider retires the old token.
+	if err != nil || runtime.save(refreshCtx, next) != nil {
 		return nil, unavailable
 	}
 	return next, nil

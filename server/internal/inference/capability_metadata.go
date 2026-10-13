@@ -255,10 +255,6 @@ func supportsStructured(states CapabilityStates) bool {
 
 func SupportsStructuredOutput(states CapabilityStates) bool { return supportsStructured(states) }
 
-func SupportsAgent(states CapabilityStates, in AgentInvocation) bool {
-	return supportsAgent(states, in)
-}
-
 func supportsAgent(states CapabilityStates, in AgentInvocation) bool {
 	if !validOutputFormat(in.OutputFormat) || in.OutputFormat.Kind == "json" && len(in.Input.Tools) != 0 {
 		return false

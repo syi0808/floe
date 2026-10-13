@@ -135,11 +135,14 @@ func (r *registry) InvokeAgent(ctx context.Context, target inference.ResolvedMod
 	if p == nil || p.ReplayIdentity() != target.AccountIdentity() {
 		return inference.AgentResult{}, inference.Failure{Code: inference.CapabilityChanged}
 	}
+	if !target.AllowsAgentInvocation(in) {
+		return inference.AgentResult{}, inference.Failure{Code: inference.RequestRejected}
+	}
 	var outputTokenLimit *uint32
 	if tokens, ok := target.SelectedOutputReservationTokens(); ok {
 		outputTokenLimit = &tokens
 	}
-	return p.agent(ctx, target.CapabilityStates(), in, target.ReasoningEffort(), outputTokenLimit)
+	return p.agent(ctx, in, target.ReasoningEffort(), outputTokenLimit)
 }
 
 func (r *registry) InvokeStructured(ctx context.Context, target inference.ResolvedModelTarget, in inference.StructuredInvocation) (inference.StructuredResult, error) {
