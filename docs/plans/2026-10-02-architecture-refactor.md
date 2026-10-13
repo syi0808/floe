@@ -248,19 +248,44 @@ accepted forget contract preserves transcripts and excludes the old evidence
 from relearning, rather than maintaining a semantic blacklist.
 The durable completion transaction will validate the source pin and answer
 journal proof, keep original entry coverage unchanged, and install the exact
-summary coverage. The unused caller-supplied-summary production route is removed
-at this cutover rather than retained as an alternate authority path.
+summary coverage.
+Direct reader/writer review also found that the manual helper currently stores
+summary coverage under the last original turn identity, although the summary
+already has a distinct stable alias. Completion must key summary coverage by
+that summary alias, and all checkpoint/source/archive readers must use the
+same identity. It must not overwrite or merge into the original answer's
+coverage. Add a regression with distinct original and summary dependencies,
+including a successor checkpoint and reopen. The unused caller-supplied-summary
+production route is removed at this cutover rather than retained as an alternate
+authority path.
 
-Automatic-activation gates found during direct caller review: the existing
-Vault history reader serves both product paging and compacted model history.
-These projections must be separated at the owner/adapter contract before the
-scheduler is enabled, so a model checkpoint cannot hide original chat entries
-or invalidate their product cursors. The existing archive commit also advances
-Session revision. The lifecycle/client contract must explicitly reconcile that
-revision change; it must not silently rebase a retained immutable command or
-pretend that publishing an old Run receipt announces a new Session revision.
-Qualification must cover a next user command racing with compaction and paging
-old messages after checkpoint installation.
+The product/model history activation gate is implemented with an explicit
+ManagerHistoryView on the single normalized Vault reader. Product repository
+reads choose Transcript; model admission chooses ModelContext. Original messages
+and pre-checkpoint cursors remain exact, while only model history substitutes
+the summary. A real encrypted-store regression covers all original entries,
+earlier-page cursors, the bounded model view, reopen, and the public repository.
+Restoring checkpoint substitution in the product view makes that regression fail
+(red/green). Qualification passes 159 Vault tests, 309 default workspace tests
+including doctests, 58 App QA tests (one ignored subprocess driver), the
+production FFI build, architecture boundaries and diff hygiene. Flutter and
+Apple checks remain unavailable under the previously recorded environment
+constraints; this is not a UI/device qualification.
+The completion cutover will keep semantic compaction out of the public Session
+revision: it changes model context, not the retained product conversation. The
+transaction still requires the exact Session revision, Core head and prior
+checkpoint from the source pin, then advances the checkpoint and compaction-job
+revision atomically. Foreground admission and maintenance cannot both commit
+against a moved source. This avoids a hidden maintenance write making a user's
+next command stale, without rebasing immutable commands or publishing an old Run
+receipt as a new Session event. Remove the unused manual compaction command and
+its source-revision-only replay lookup at this cutover. Archive identity remains
+exact-prefix based; remove the unique source-revision restriction so multiple
+bounded checkpoints can complete at the same unchanged product revision. This
+is a deliberate local stored-meaning change, with no automatic profile reset
+or compatibility fallback. Qualification must cover both race orderings,
+multiple same-revision checkpoints, exact completion replay, lost acknowledgement,
+and original-message paging after checkpoint installation.
 
 Ordered cutover and acceptance:
 

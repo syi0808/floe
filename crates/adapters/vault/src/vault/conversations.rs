@@ -2739,7 +2739,9 @@ mod model_selection_owner_tests {
                 .read_manager_session_history_page(
                     parent.session_id,
                     None,
-                    Some(parent.user_message_id),
+                    crate::vault::ManagerHistoryView::ModelContext {
+                        required_user_id: Some(parent.user_message_id),
+                    },
                     16,
                     floe_conversation::MAX_SESSION_BYTES,
                 )

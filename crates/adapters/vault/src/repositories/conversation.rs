@@ -190,7 +190,9 @@ impl<Keys: VaultKeyProvider> VaultConversationRepository<Keys> {
             .read_manager_session_history_page(
                 session_id,
                 None,
-                required_user_id,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: required_user_id,
+                },
                 floe_agent_contract::MAX_AGENT_MESSAGES,
                 floe_conversation::MAX_SESSION_BYTES,
             )
@@ -223,7 +225,7 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
                 .read_manager_session_history_page(
                     session_id,
                     before_message_id,
-                    None,
+                    crate::vault::ManagerHistoryView::Transcript,
                     limit,
                     byte_limit,
                 )

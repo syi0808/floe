@@ -485,6 +485,8 @@ Runtime readiness is a pure query and never occupies a command-receipt observer 
 
 ### Conversation history windows
 
+Product history and model context are explicit views of the same normalized owner transcript reader. Product pages retain original messages and immutable cursor aliases across model checkpoint installation; they do not inject a compaction summary. Model context alone replaces the checkpoint prefix with its summary and can pin the current required User entry. Both views retain the same bounded preflight, owner-evidence validation, live coverage hydration and read-only snapshot transaction.
+
 The existing session-read query accepts an optional `before_message_id` cursor. Conversation authorizes the Person/session first and locates that stable message identity inside the same stored session; a missing cursor is Conflict, never a different latest page. Both the default latest window and earlier windows retain the 256-message and existing payload bounds. History reads are pure: they do not start a continuation, rerun a model or recover a pending product command. Flutter keeps earlier text separate from current session authority, deduplicates by message identity, and discards stale page responses on session replacement or Vault sealing.
 
 Connections catalog descriptors preserve one owner-level IntegrationState through

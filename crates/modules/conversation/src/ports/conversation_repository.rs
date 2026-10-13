@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub trait ConversationRepository: Send + Sync {
     /// Read a bounded reverse page from normalized Manager custody. Product
     /// cursor aliases resolve to exact transcript references in the adapter.
+    /// Model compaction never substitutes summaries for original product entries
+    /// or invalidates an existing cursor into the retained transcript.
     fn read_session_history_page<'a>(
         &'a self,
         session_id: uuid::Uuid,

@@ -6134,10 +6134,15 @@ mod tests {
         }
 
         async fn prepare_completed_terminal(&self, run: &RunRecord) -> RunTerminal {
-            self.prepare_completed_terminal_with_recording(run, false).await
+            self.prepare_completed_terminal_with_recording(run, false)
+                .await
         }
 
-        async fn prepare_completed_terminal_with_recording(&self, run: &RunRecord, record_typed_output: bool) -> RunTerminal {
+        async fn prepare_completed_terminal_with_recording(
+            &self,
+            run: &RunRecord,
+            record_typed_output: bool,
+        ) -> RunTerminal {
             use floe_agent_contract::{
                 BatchCursor, EngineStep, JournalEvent, ModelBindingDigest, ModelBudgetProfile,
                 ModelCapabilities, ModelSelectionCommitment, ModelStep, ModelUsage,
@@ -6220,11 +6225,14 @@ mod tests {
             )
             .await;
             let output = JournalEvent::Output {
-                text: text.clone(), artifacts: Vec::new(),
+                text: text.clone(),
+                artifacts: Vec::new(),
             };
             if record_typed_output {
-                self.vault().record_manager_conversation_journal(run.run_id, "output", output)
-                    .await.expect("record the real typed owner contribution");
+                self.vault()
+                    .record_manager_conversation_journal(run.run_id, "output", output)
+                    .await
+                    .expect("record the real typed owner contribution");
             } else {
                 self.append_owner_event(run.run_id, output).await;
             }
@@ -7054,7 +7062,9 @@ mod tests {
             .read_manager_session_history_page(
                 scenario.session_id,
                 None,
-                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
                 64,
                 floe_conversation::MAX_SESSION_BYTES,
             )
@@ -7332,7 +7342,9 @@ mod tests {
             .read_manager_session_history_page(
                 scenario.session_id,
                 None,
-                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
                 64,
                 floe_conversation::MAX_SESSION_BYTES,
             )
@@ -8621,7 +8633,15 @@ mod tests {
 
         let history = scenario
             .vault()
-            .read_manager_session_history_page(scenario.session_id, None, None, 8, 32 * 1024)
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
+                8,
+                32 * 1024,
+            )
             .await
             .expect("read normalized Manager Task history");
         let delegations = history

@@ -1908,7 +1908,9 @@ async fn first_late_task_result_releases_writer_and_preserves_unresolved_model_a
         .read_manager_session_history_page(
             scenario.session_id,
             None,
-            None,
+            crate::vault::ManagerHistoryView::ModelContext {
+                required_user_id: None,
+            },
             16,
             floe_conversation::MAX_SESSION_BYTES,
         )
@@ -1964,7 +1966,9 @@ async fn first_late_task_result_releases_writer_and_preserves_unresolved_model_a
             .read_manager_session_history_page(
                 scenario.session_id,
                 None,
-                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None
+                },
                 16,
                 floe_conversation::MAX_SESSION_BYTES,
             )
@@ -2140,7 +2144,9 @@ async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
         .read_manager_session_history_page(
             scenario.session_id,
             None,
-            None,
+            crate::vault::ManagerHistoryView::ModelContext {
+                required_user_id: None,
+            },
             8,
             floe_conversation::MAX_SESSION_BYTES,
         )
@@ -2169,7 +2175,15 @@ async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
     assert_eq!(
         scenario
             .vault()
-            .read_manager_session_history_page(scenario.session_id, None, None, 8, 1,)
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None
+                },
+                8,
+                1,
+            )
             .await,
         Err(AgentFailure::BudgetExceeded),
         "an oversized first live item fails from its preflight"
@@ -2194,7 +2208,9 @@ async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
             .read_manager_session_history_page(
                 scenario.session_id,
                 None,
-                Some(user_message_id),
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: Some(user_message_id)
+                },
                 8,
                 1,
             )
@@ -2255,7 +2271,15 @@ async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
     assert_eq!(
         scenario
             .vault()
-            .read_manager_session_history_page(scenario.session_id, None, None, 8, 1)
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None
+                },
+                8,
+                1
+            )
             .await,
         Err(AgentFailure::BudgetExceeded),
         "oversized compaction summary coverage fails before hydration"
@@ -2361,7 +2385,9 @@ async fn manager_compaction_preflights_the_aggregate_archive_budget() {
         .read_manager_session_history_page(
             scenario.session_id,
             None,
-            None,
+            crate::vault::ManagerHistoryView::ModelContext {
+                required_user_id: None,
+            },
             8,
             floe_agent_contract::MAX_ARCHIVE_PROJECTION_BYTES * 4,
         )
@@ -2397,7 +2423,15 @@ async fn manager_compaction_preflights_the_aggregate_archive_budget() {
     loop {
         let page = scenario
             .vault()
-            .read_manager_session_history_page(scenario.session_id, before, None, 8, page_budget)
+            .read_manager_session_history_page(
+                scenario.session_id,
+                before,
+                crate::vault::ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
+                8,
+                page_budget,
+            )
             .await
             .expect("cursor page fits the byte limit");
         assert!(!page.messages.is_empty());
@@ -9959,7 +9993,9 @@ async fn memory_forget_is_immediate_replay_safe_and_excludes_old_learning_eviden
         .read_manager_session_history_page(
             scenario.session_id,
             None,
-            None,
+            crate::vault::ManagerHistoryView::ModelContext {
+                required_user_id: None,
+            },
             16,
             floe_conversation::MAX_SESSION_BYTES,
         )
@@ -12298,4 +12334,154 @@ async fn compaction_custody_empty_index_key_is_not_hidden_by_first_page_cursor()
             .await,
         Err(AgentFailure::StorageUnavailable)
     ));
+}
+
+#[tokio::test]
+async fn product_history_preserves_original_pages_across_model_compaction_and_reopen() {
+    use crate::vault::ManagerHistoryView;
+    use floe_conversation::ConversationRepository;
+    let mut scenario = Scenario::new().await;
+    let mut turns = Vec::new();
+    for ordinal in 0..3 {
+        turns.push(
+            complete_manager_turn_with_output(
+                &mut scenario,
+                &format!("Original user text {ordinal}"),
+                format!("Original answer {ordinal}"),
+            )
+            .await,
+        );
+    }
+    let original = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            ManagerHistoryView::Transcript,
+            16,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.messages.len(), 6);
+    let cursor = original.messages[4].alias_id;
+    let earlier = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            Some(cursor),
+            ManagerHistoryView::Transcript,
+            2,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    assert_eq!(earlier.messages, original.messages[2..4]);
+    assert!(earlier.has_earlier_messages);
+    scenario
+        .vault()
+        .compact_manager_session(
+            scenario.session_id,
+            turns[2].session_revision,
+            turns[1].run_id.as_uuid(),
+            "Two earlier turns.".into(),
+        )
+        .await
+        .unwrap();
+    for reopened in [false, true] {
+        if reopened {
+            scenario.reopen().await;
+        }
+        let product = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                ManagerHistoryView::Transcript,
+                16,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            product, original,
+            "checkpoint does not replace product history"
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .read_manager_session_history_page(
+                    scenario.session_id,
+                    Some(cursor),
+                    ManagerHistoryView::Transcript,
+                    2,
+                    floe_conversation::MAX_SESSION_BYTES,
+                )
+                .await
+                .unwrap(),
+            earlier,
+            "a pre-checkpoint product cursor remains exact"
+        );
+        let oldest = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                Some(earlier.messages[0].alias_id),
+                ManagerHistoryView::Transcript,
+                2,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .unwrap();
+        assert_eq!(oldest.messages, original.messages[..2]);
+        assert!(!oldest.has_earlier_messages);
+        let context = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
+                16,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .unwrap();
+        assert_eq!(context.messages.len(), 3);
+        assert!(
+            matches!(&context.messages[0].message, floe_conversation::AgentMessage::Compaction { summary, .. } if summary == "Two earlier turns.")
+        );
+        assert_eq!(context.messages[1..], original.messages[4..]);
+        assert!(!context.has_earlier_messages);
+    }
+    let repository = crate::repositories::VaultConversationRepository::new(
+        std::sync::Arc::new(scenario.vault.take().unwrap()),
+        scenario.identity.clone(),
+    );
+    assert_eq!(
+        repository
+            .read_session_history_page(
+                scenario.session_id,
+                None,
+                16,
+                floe_conversation::MAX_SESSION_BYTES
+            )
+            .await
+            .unwrap(),
+        original,
+        "the public repository selects original transcript semantics"
+    );
+    assert_eq!(
+        repository
+            .read_session_history_page(
+                scenario.session_id,
+                Some(cursor),
+                2,
+                floe_conversation::MAX_SESSION_BYTES
+            )
+            .await
+            .unwrap(),
+        earlier
+    );
 }

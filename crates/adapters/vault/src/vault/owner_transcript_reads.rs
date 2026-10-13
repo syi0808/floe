@@ -109,6 +109,14 @@ pub(super) enum OwnerEntryPreflight {
     },
 }
 
+/// Product transcripts retain immutable entries and cursors across compaction.
+/// Model context replaces the archived prefix with its checkpoint summary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManagerHistoryView {
+    Transcript,
+    ModelContext { required_user_id: Option<Uuid> },
+}
+
 struct ManagerSummaryPreflight {
     alias_id: Uuid,
     transcript_sequence: u64,
@@ -231,17 +239,21 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(Some(session))
     }
 
-    /// Bounded product history read over normalized Manager custody. Cursor
+    /// Bounded transcript or model-context read over normalized Manager custody. Cursor
     /// aliases resolve to exact immutable Core references, then owner evidence
     /// and live coverage are preflighted and hydrated under the same snapshot.
     pub(crate) async fn read_manager_session_history_page(
         &self,
         session_id: Uuid,
         before_message_id: Option<Uuid>,
-        required_user_id: Option<Uuid>,
+        view: ManagerHistoryView,
         limit: usize,
         byte_limit: usize,
     ) -> Result<SessionHistoryPage, AgentFailure> {
+        let required_user_id = match view {
+            ManagerHistoryView::Transcript => None,
+            ManagerHistoryView::ModelContext { required_user_id } => required_user_id,
+        };
         if session_id.is_nil() || limit == 0 || byte_limit == 0 {
             return Err(AgentFailure::InvalidInput);
         }
@@ -295,7 +307,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 head_revision: head.state.head_revision,
                 through,
             };
-            let checkpoint = checkpoint_on(&transaction, scope).await?;
+            let checkpoint = match view {
+                ManagerHistoryView::Transcript => None,
+                ManagerHistoryView::ModelContext { .. } => {
+                    checkpoint_on(&transaction, scope).await?
+                }
+            };
             let checkpoint_sequence = checkpoint
                 .as_ref()
                 .map_or(0, |checkpoint| checkpoint.through.sequence);

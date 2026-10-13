@@ -39,6 +39,7 @@ pub(crate) mod expert_binding_reviews;
 mod expert_proposals;
 mod owner_custody;
 mod owner_transcript_reads;
+pub(crate) use owner_transcript_reads::ManagerHistoryView;
 mod storage_payload;
 mod typed_history;
 pub use expert_proposals::VaultExpertProposalReader;
