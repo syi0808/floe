@@ -98,7 +98,7 @@ func (o *Operations) Pending(ctx context.Context) (*OperatorPending, error) {
 		return nil, err
 	}
 	for i := len(index.Entries) - 1; i >= 0; i-- {
-		p, err := o.load(ctx, index.Entries[i])
+		p, err := o.load(ctx, index, index.Entries[i])
 		if err != nil {
 			return nil, err
 		}

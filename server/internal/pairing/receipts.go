@@ -11,8 +11,8 @@ import (
 )
 
 // The encrypted credential store retains immutable start identities and private
-// challenge receipts. Index reservation precedes receipt generation; an uncertain
-// write can therefore never turn a retry into a second enrollment challenge.
+// challenge receipts. The index atomically retains the complete initial challenge
+// while its separate attempt slot is being published, so a retry can recover it.
 const maxPairingReceipts = 128
 
 type receiptIndexEntry struct {
@@ -20,8 +20,9 @@ type receiptIndexEntry struct {
 	PairingID   string `json:"pairing_id"`
 }
 type receiptIndex struct {
-	Version int                 `json:"version"`
-	Entries []receiptIndexEntry `json:"entries"`
+	Version     int                 `json:"version"`
+	Entries     []receiptIndexEntry `json:"entries"`
+	Reservation *privateReceipt     `json:"reservation"`
 }
 type privateReceipt struct {
 	Version             int                    `json:"version"`
@@ -64,40 +65,117 @@ func (o *Operations) index(ctx context.Context) (receiptIndex, error) {
 		seen[entry.OperationID] = true
 		pairs[entry.PairingID] = true
 	}
+	if index.Reservation != nil {
+		if len(index.Entries) == 0 {
+			return receiptIndex{}, repair()
+		}
+		entry := index.Entries[len(index.Entries)-1]
+		pending, err := pendingFromRecord(*index.Reservation, entry)
+		if err != nil || pending.status != "pending" || pending.LocalConfirmed || pending.AdminApproved || pending.activationTokenHash != "" || pending.localProof != (trust.Proof{}) {
+			return receiptIndex{}, repair()
+		}
+	}
 	return index, nil
 }
-func (o *Operations) reserve(ctx context.Context, index receiptIndex, op, id string) error {
+func (o *Operations) reserve(ctx context.Context, index receiptIndex, p *Pending) error {
 	if len(index.Entries) >= maxPairingReceipts {
 		return operation.Fail(operation.Limited, "pairing_receipt_capacity")
 	}
-	index.Entries = append(index.Entries, receiptIndexEntry{op, id})
-	encoded, err := json.Marshal(index)
-	if err != nil {
+	if index.Reservation != nil {
 		return repair()
+	}
+	index.Entries = append(index.Entries, receiptIndexEntry{p.operationID, p.ID})
+	record := recordFromPending(p)
+	if _, err := pendingFromRecord(record, index.Entries[len(index.Entries)-1]); err != nil {
+		return err
+	}
+	index.Reservation = &record
+	if err := o.storeIndex(ctx, index); err != nil {
+		return err
+	}
+	_, err := o.publishReservation(ctx, index)
+	return err
+}
+func (o *Operations) storeIndex(ctx context.Context, index receiptIndex) error {
+	encoded, err := json.Marshal(index)
+	if err != nil || len(encoded) > 32768 {
+		return operation.Fail(operation.Limited, "pairing_receipt_capacity")
 	}
 	if o.credentials.StoreReceiptIndex(ctx, string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
 }
-func (o *Operations) save(ctx context.Context, p *Pending) error {
-	record := privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision, ActivationTokenHash: p.activationTokenHash}
+
+// Only explicit mutation paths publish a reservation. Queries can inspect its
+// immutable index payload without writing or creating another challenge.
+func (o *Operations) publishReservation(ctx context.Context, index receiptIndex) (receiptIndex, error) {
+	if index.Reservation == nil {
+		return index, nil
+	}
+	record := *index.Reservation
 	encoded, err := json.Marshal(record)
+	if err != nil || len(encoded) > 32768 {
+		return receiptIndex{}, repair()
+	}
+	raw, err := o.credentials.ReadPairingAttempt(ctx, OperationID(record.OperationID))
+	if err != nil {
+		return receiptIndex{}, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
+	}
+	if raw != "" {
+		var existing privateReceipt
+		if decodeReceipt([]byte(raw), &existing) != nil {
+			return receiptIndex{}, repair()
+		}
+		canonical, err := json.Marshal(existing)
+		if err != nil || !bytes.Equal(canonical, encoded) {
+			return receiptIndex{}, repair()
+		}
+	} else if o.credentials.StorePairingAttempt(ctx, OperationID(record.OperationID), string(encoded)) != nil {
+		return receiptIndex{}, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
+	}
+	index.Reservation = nil
+	if err := o.storeIndex(ctx, index); err != nil {
+		return receiptIndex{}, err
+	}
+	return index, nil
+}
+func recordFromPending(p *Pending) privateReceipt {
+	return privateReceipt{Version: 1, OperationID: p.operationID, Pending: *p, Status: p.status, ChallengeID: p.challengeID, ChallengeBytes: p.challengeBytes, ChallengeB64: p.challengeB64, ProducerSignature: p.producerSignature, Proof: p.proof, LocalProof: p.localProof, Producer: p.producer, ExpectedRevision: p.expectedRevision, ActivationTokenHash: p.activationTokenHash}
+}
+func (o *Operations) save(ctx context.Context, p *Pending) error {
+	index, err := o.index(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err = o.publishReservation(ctx, index); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(recordFromPending(p))
 	if err != nil || len(encoded) > 32768 {
 		return repair()
 	}
-	if o.credentials == nil || o.credentials.StorePairingAttempt(ctx, OperationID(p.operationID), string(encoded)) != nil {
+	if o.credentials.StorePairingAttempt(ctx, OperationID(p.operationID), string(encoded)) != nil {
 		return operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	return nil
 }
-func (o *Operations) load(ctx context.Context, entry receiptIndexEntry) (*Pending, error) {
+func (o *Operations) load(ctx context.Context, index receiptIndex, entry receiptIndexEntry) (*Pending, error) {
+	if index.Reservation != nil && index.Reservation.OperationID == entry.OperationID {
+		return pendingFromRecord(*index.Reservation, entry)
+	}
 	raw, err := o.credentials.ReadPairingAttempt(ctx, OperationID(entry.OperationID))
 	if err != nil {
 		return nil, operation.Fail(operation.Unavailable, "pairing_credential_unavailable")
 	}
 	var record privateReceipt
-	if raw == "" || len(raw) > 32768 || decodeReceipt([]byte(raw), &record) != nil || record.Version != 1 || record.OperationID != entry.OperationID || record.Pending.ID != entry.PairingID || record.Proof == "" || record.ExpectedRevision == 0 {
+	if raw == "" || len(raw) > 32768 || decodeReceipt([]byte(raw), &record) != nil {
+		return nil, repair()
+	}
+	return pendingFromRecord(record, entry)
+}
+func pendingFromRecord(record privateReceipt, entry receiptIndexEntry) (*Pending, error) {
+	if record.Version != 1 || record.OperationID != entry.OperationID || record.Pending.ID != entry.PairingID || record.Proof == "" || record.ExpectedRevision == 0 {
 		return nil, repair()
 	}
 	p := record.Pending
@@ -129,7 +207,7 @@ func (o *Operations) find(ctx context.Context, id string) (*Pending, error) {
 	}
 	for _, entry := range index.Entries {
 		if entry.PairingID == id {
-			return o.load(ctx, entry)
+			return o.load(ctx, index, entry)
 		}
 	}
 	return nil, nil

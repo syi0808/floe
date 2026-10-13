@@ -126,9 +126,13 @@ func (o *Operations) start(ctx context.Context, in Request) (ActionResult, error
 	if err != nil {
 		return actionError(err)
 	}
+	index, err = o.publishReservation(ctx, index)
+	if err != nil {
+		return actionError(err)
+	}
 	for _, entry := range index.Entries {
 		if entry.OperationID == in.OperationID {
-			p, loadErr := o.load(ctx, entry)
+			p, loadErr := o.load(ctx, index, entry)
 			if loadErr != nil {
 				return actionError(loadErr)
 			}
@@ -154,7 +158,7 @@ func (o *Operations) start(ctx context.Context, in Request) (ActionResult, error
 		return actionFailure(operation.Limited, "pairing_in_progress")
 	}
 	for _, entry := range index.Entries {
-		p, loadErr := o.load(ctx, entry)
+		p, loadErr := o.load(ctx, index, entry)
 		if loadErr != nil {
 			return actionError(loadErr)
 		}
@@ -163,9 +167,6 @@ func (o *Operations) start(ctx context.Context, in Request) (ActionResult, error
 		}
 	}
 	id, challengeID := trust.NewID(), trust.NewID()
-	if err := o.reserve(ctx, index, in.OperationID, id); err != nil {
-		return actionError(err)
-	}
 	nonce := make([]byte, 32)
 	if _, err = rand.Read(nonce); err != nil {
 		return actionFailure(operation.Unavailable, "pairing_unavailable")
@@ -195,7 +196,7 @@ func (o *Operations) start(ctx context.Context, in Request) (ActionResult, error
 		return actionError(err)
 	}
 	p := &Pending{operationID: in.OperationID, ID: id, Code: strings.ToUpper(trust.Token()[:8]), Expires: expires, PersonID: in.PersonID, DeviceID: in.DeviceID, IssuerKeyID: in.IssuerKeyID, IssuerPublicKey: in.IssuerPublicKey, IssuerFingerprint: trust.Digest(string(publicKey)), ProducerFingerprint: producer.Fingerprint, ProducerAudience: producer.Audience, challengeID: challengeID, challengeBytes: encoded, challengeB64: base64.RawURLEncoding.EncodeToString(encoded), producerSignature: signature, proof: in.Proof, producer: producer, expectedRevision: revision, status: "pending"}
-	if err := o.save(ctx, p); err != nil {
+	if err := o.reserve(ctx, index, p); err != nil {
 		return actionError(err)
 	}
 	o.pending = p

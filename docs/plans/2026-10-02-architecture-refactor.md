@@ -580,6 +580,30 @@ Focused race tests and final `go test -race ./...` pass (15 packages with
 tests), along with `go vet ./...`, the import graph with 16 negative fixtures
 and diff checks. No persisted-layout change is introduced by this correction.
 
+## Pairing complete reservation custody correction — 2026-10-13
+
+Root reproduced R-034 by failing attempt storage after the receipt-index write:
+recreated operations could neither inspect nor replay the retained reservation.
+The owner now constructs/signs the full immutable challenge before reservation
+and atomically stores that payload with its index entry. Until explicit mutation
+publishes the identical attempt and clears the reservation, the index payload is
+its sole authority. Attempts cannot advance while this handoff is incomplete.
+Queries remain read-only; no second challenge or activation is created by recovery.
+
+Fault regressions cover missing attempt storage, index/attempt/clear acknowledgement
+loss, rejected clear, request cancellation, owner recreation, exact start replay,
+changed-identity conflict, new-ID blocking, explicit Cancel/Reject followed by new
+pairing, unequal attempt rejection and preservation of old missing evidence that
+cannot be reconstructed. Synthetic signing and in-memory credential custody are
+used; no device was paired and no real credentials were handled. The existing
+32-KiB index/record and 128-receipt guards remain; this does not claim unlimited
+pairing-history capacity or actual macOS Keychain process-crash qualification.
+
+Focused Pairing/credential-adapter/HTTP race tests and final `go test -race ./...`
+pass (16 packages with tests), along with `go vet ./...`, the import graph and
+16 negative fixtures, and diff checks. This extends private reservation custody
+without changing the public pairing wire contract or automatically modifying data.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
