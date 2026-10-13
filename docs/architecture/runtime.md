@@ -8,6 +8,15 @@ Manager, delegated Experts and Learner use the same role-neutral Engine and purp
 
 Access owns source-grant DeviceOnly/GatewayAllowed processing permission and live dispatch fences. Health has a separate mandatory local privacy transformation before either reasoning placement; its output retains HighlySensitive classification and transform provenance. Model selection, pairing and transformation confer no source or Action permission.
 
+The Engine's iteration allowance counts completed model batches, including a
+restored pending batch. Conversation deducts completed ancestor batches before
+constructing the request; the shared Engine consumes the pending batch from that
+remaining allowance before preparing another model call. Settling a restored Tool
+batch at the limit preserves its journal/result and returns without another model
+attempt. A restored final Answer can still complete within that last iteration.
+Token/cost accounting, deadline, cancellation and durable effect receipts remain
+independent fences; recovery never resets them to obtain another iteration.
+
 ## Build-selected storage custody
 
 Composition selects one custody profile at build time. Rust's default `os-keyring`

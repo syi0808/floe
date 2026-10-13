@@ -417,6 +417,24 @@ not add a second App timer or a client-side summarizer. Current archive APIs may
 remain as the commit boundary only while their callers all enforce the same
 candidate/execution proof; remove obsolete unchecked routes in that change set.
 
+## Remaining-iteration recovery correction — 2026-10-13
+
+Root inspection of the published `3ea60f12` snapshot reproduced R-005: after
+settling a restored Tool batch with one iteration left, the shared Engine still
+prepared an additional model call. The new regression failed with one preparation
+where zero was allowed; the resumed Tool result had already settled. The host
+correctly deducts completed ancestor batches, so the fix belongs to the Engine's
+single loop condition: count the restored batch against the remaining allowance.
+No new continuation state, widened limit or alternate runtime path is introduced.
+Four focused cases cover last-iteration Tool settlement, one remaining fresh
+attempt, a restored final Answer, and fresh execution at the same limit.
+Fresh qualification passed 9 affected Engine tests, 335 default workspace tests
+including doctests, 61 App QA tests (one subprocess driver intentionally ignored
+and exercised by passing crash tests), the production FFI build, architecture
+boundaries and diff checks. The 129-turn history/reopen regression passed in
+348.80 seconds. This is synthetic owner-path qualification, not live-provider or
+Apple/UI qualification. The broader audit remains open and root-owned.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.

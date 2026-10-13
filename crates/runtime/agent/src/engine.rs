@@ -301,7 +301,11 @@ impl Drive<'_> {
                 })
                 .await?;
         }
-        for _ in 0..drive.request.max_iterations {
+        // A restored pending batch consumes one of this drive's remaining
+        // iterations when it settles, just like a newly generated batch.
+        // The host already deducted completed ancestor batches; do not grant
+        // a fresh full allowance after replaying the pending one.
+        while drive.completed_iterations < drive.request.max_iterations {
             if drive.request.scope.cancellation().is_cancelled() {
                 return Err(floe_execution::tasks::cancellation_failure(
                     drive.request.scope.cancellation(),
@@ -1731,6 +1735,259 @@ mod model_selection_tests {
             self.0.fetch_add(1, Ordering::SeqCst);
             Box::pin(async { Err(AgentFailure::PolicyDenied) })
         }
+    }
+
+    #[derive(Default)]
+    struct ResumeJournal(std::sync::Mutex<Vec<JournalEvent>>);
+
+    impl ResumeJournal {
+        fn append(&self, event: JournalEvent) -> Result<JournalAck, AgentFailure> {
+            let mut events = self.0.lock().unwrap();
+            events.push(event);
+            Ok(JournalAck::Accepted {
+                revision: events.len() as u64,
+            })
+        }
+    }
+
+    impl ExecutionJournal for ResumeJournal {
+        fn record_intent<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async move { self.append(event) })
+        }
+        fn record_result<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async move { self.append(event) })
+        }
+        fn record_output<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async move { self.append(event) })
+        }
+        fn checkpoint<'a>(
+            &'a self,
+            event: JournalEvent,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<JournalAck, AgentFailure>> {
+            Box::pin(async move { self.append(event) })
+        }
+    }
+
+    #[derive(Default)]
+    struct ResumeTools(AtomicUsize);
+
+    impl ToolPort for ResumeTools {
+        fn invoke<'a>(
+            &'a self,
+            call: ToolCall,
+            _scope: &'a ExecutionScope,
+        ) -> floe_agent_contract::BoxFuture<'a, Result<ToolInvocationOutcome, AgentFailure>>
+        {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(ToolInvocationOutcome::Completed(ToolResult {
+                    call_id: call.call_id,
+                    text: "retained observation".into(),
+                    artifacts: vec![],
+                    coverage: DependencyCoverage::Independent,
+                    issue: None,
+                }))
+            })
+        }
+    }
+
+    fn resume_iteration_request(max_iterations: u32) -> EngineRequest {
+        let mut request = finalization_request(ModelSelectionState::Fresh);
+        request.role_spec.role_id = "manager".into();
+        let ledger = BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default());
+        request.scope = ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + Duration::from_secs(30),
+            ledger.work_lease(),
+            TraceContext::new(request.execution_id),
+        );
+        request.allowed_catalog = AllowedCatalog {
+            revision: 1,
+            cards: vec![],
+            tools: vec![floe_agent_contract::ToolDescriptor {
+                id: "test.read".into(),
+                read_only: true,
+                definition_revision: 1,
+                description: "Read a synthetic observation".into(),
+                input_schema: r#"{"type":"object"}"#.into(),
+                output_data_class: "Public".into(),
+            }],
+        };
+        let mut plan = prepared_plan(1);
+        plan.capabilities = ModelCapabilities::for_request(
+            &request.role_spec.output_format,
+            &request.allowed_catalog,
+        )
+        .unwrap();
+        request.model_selection =
+            ModelSelectionState::Pinned(plan.model_execution_selection().unwrap().unwrap());
+        request.max_iterations = max_iterations;
+        let batch_id = Uuid::new_v4();
+        request.resume = Some(floe_agent_contract::EngineResumeState {
+            validated_batch: ValidatedModelBatch {
+                execution_id: request.execution_id,
+                attempt_id: Uuid::new_v4(),
+                projection_ref: floe_agent_contract::ProjectionRef::new(),
+                batch_id,
+                steps: vec![
+                    ModelStep::Preamble {
+                        text: "Reading".into(),
+                    },
+                    ModelStep::CallTool {
+                        tool_id: "test.read".into(),
+                        definition_revision: 1,
+                        input: "{}".into(),
+                    },
+                ],
+                catalog_revision: 1,
+                tool_revisions: vec![PinnedToolRevision {
+                    tool_id: "test.read".into(),
+                    definition_revision: 1,
+                }],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
+            },
+            cursor: BatchCursor {
+                batch_id,
+                next_step_index: 1,
+            },
+        });
+        request
+    }
+
+    #[tokio::test]
+    async fn resumed_last_iteration_settles_tool_without_an_extra_model_attempt() {
+        let request = resume_iteration_request(1);
+        let journal = ResumeJournal::default();
+        let tools = ResumeTools::default();
+        let model = CountingModel(AtomicUsize::new(0));
+        let never = NeverCalledPorts;
+        let result = Engine::default()
+            .drive(
+                request,
+                EnginePorts {
+                    projection: &never,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &never,
+                    journal: &journal,
+                    validator: &ContractValidator,
+                },
+            )
+            .await;
+        assert_eq!(tools.0.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            model.0.load(Ordering::SeqCst),
+            0,
+            "the resumed batch consumes the last remaining iteration"
+        );
+        let EngineOutcome::Completed(report) = result.unwrap() else {
+            panic!("unexpected blockage")
+        };
+        assert_eq!(report.iterations, 1);
+        assert!(report.output.is_none());
+        assert_eq!(report.steps.len(), 1);
+        assert!(matches!(
+            journal.0.lock().unwrap().last(),
+            Some(JournalEvent::Checkpoint { iteration: 1 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn resumed_iteration_leaves_only_the_actual_remaining_model_allowance() {
+        let request = resume_iteration_request(2);
+        let journal = ResumeJournal::default();
+        let tools = ResumeTools::default();
+        let model = CountingModel(AtomicUsize::new(0));
+        let never = NeverCalledPorts;
+        let result = Engine::default()
+            .drive(
+                request,
+                EnginePorts {
+                    projection: &never,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &never,
+                    journal: &journal,
+                    validator: &ContractValidator,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::PolicyDenied)));
+        assert_eq!(tools.0.load(Ordering::SeqCst), 1);
+        assert_eq!(model.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn resumed_answer_uses_the_last_iteration_without_calling_the_model() {
+        let mut request = resume_iteration_request(1);
+        let resume = request.resume.as_mut().unwrap();
+        resume.validated_batch.steps[1] = ModelStep::Answer {
+            text: "retained answer".into(),
+            artifacts: vec![],
+        };
+        resume.validated_batch.tool_revisions.clear();
+        let journal = ResumeJournal::default();
+        let tools = ResumeTools::default();
+        let model = CountingModel(AtomicUsize::new(0));
+        let never = NeverCalledPorts;
+        let result = Engine::default()
+            .drive(
+                request,
+                EnginePorts {
+                    projection: &never,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &never,
+                    journal: &journal,
+                    validator: &ContractValidator,
+                },
+            )
+            .await
+            .unwrap();
+        let EngineOutcome::Completed(report) = result else {
+            panic!("unexpected blockage")
+        };
+        assert_eq!(report.output.as_deref(), Some("retained answer"));
+        assert_eq!(report.iterations, 1);
+        assert_eq!(tools.0.load(Ordering::SeqCst), 0);
+        assert_eq!(model.0.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn fresh_last_iteration_still_allows_model_preparation() {
+        let mut request = resume_iteration_request(1);
+        request.resume = None;
+        let journal = ResumeJournal::default();
+        let tools = ResumeTools::default();
+        let model = CountingModel(AtomicUsize::new(0));
+        let never = NeverCalledPorts;
+        let result = Engine::default()
+            .drive(
+                request,
+                EnginePorts {
+                    projection: &never,
+                    model: &model,
+                    tools: &tools,
+                    delegation: &never,
+                    journal: &journal,
+                    validator: &ContractValidator,
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(AgentFailure::PolicyDenied)));
+        assert_eq!(model.0.load(Ordering::SeqCst), 1);
+        assert_eq!(tools.0.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

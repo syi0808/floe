@@ -137,6 +137,8 @@ pub struct EngineRequest {
     pub allowed_catalog: AllowedCatalog,
     pub purpose: String,
     pub consumer: String,
+    /// Remaining batch completions for this drive, including a restored
+    /// pending batch. The host deducts completed ancestor batches beforehand.
     pub max_iterations: u32,
     pub max_output_bytes: usize,
     pub replay: Vec<crate::ReplayReceipt>,
