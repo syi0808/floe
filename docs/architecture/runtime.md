@@ -831,3 +831,15 @@ retired. Terminal receipt reads work across executor movement, while pending
 claim reads stay generation-fenced. The required source authority is a deliberate
 prestable stored-meaning change; incompatible old development payloads fail
 closed and are never automatically reset or migrated.
+
+### Disposable Keychain diagnostic storage
+
+The macOS `vault_keyring_smoke --exercise` diagnostic writes its synthetic input
+through the current Manager/Core admission composer. It verifies exact admission
+replay and the encrypted Session shell plus Run record before checkpoint and
+after reopen. It does not append inline Manager messages or mutate an unbound
+pristine Session revision. The same storage helper runs in a Unix development-key
+regression against the real encrypted engine; that test does not qualify macOS
+Keychain access, signing, key deletion or GUI behavior. The native diagnostic
+retains its explicit exercise/cleanup modes, exact disposable key identity,
+private-root checks and key-loss access fence. No model or provider is called.

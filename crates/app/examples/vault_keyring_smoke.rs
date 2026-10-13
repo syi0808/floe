@@ -1,4 +1,8 @@
 #[cfg(target_os = "macos")]
+#[path = "vault_keyring_smoke/persistence.rs"]
+mod persistence;
+
+#[cfg(target_os = "macos")]
 mod macos {
     use std::{
         fs,
@@ -8,7 +12,6 @@ mod macos {
 
     use apple_native_keyring_store::keychain::{Cred, MacKeychainDomain};
     use floe_agent_contract::AgentFailure;
-    use floe_conversation::{AgentMessage, SessionStore};
     use floe_kernel::PersonId;
     use floe_vault::{EncryptedAgentVault, KeyringVaultKeys};
     use keyring_core::{Entry, Error};
@@ -119,33 +122,10 @@ mod macos {
 
     async fn exercise(root: &Path, person: PersonId) -> Result<(), AgentFailure> {
         let vault = EncryptedAgentVault::create(root, person, KeyringVaultKeys).await?;
-        use floe_conversation::{SessionStartAdmission as A, SessionStartFailure as F};
-        let receipt = match vault
-            .start_conversation_session(floe_conversation::StartSessionRequest {
-                principal: person.to_string(),
-                command_id: floe_kernel::CommandId::new(),
-            })
-            .await
-        {
-            Ok(A::Started(receipt) | A::Replayed(receipt)) => receipt,
-            Ok(A::NotApplied(reason)) => return Err(reason.reason()),
-            Err(F::NotAdmitted(reason) | F::Indeterminate(reason)) => return Err(reason),
-        };
-        let initial = vault.load(person, receipt.session_id).await?;
-        let mut completed = initial.clone();
-        completed.revision += 1;
-        completed.messages.push(AgentMessage::User {
-            message_id: Uuid::new_v4(),
-            turn_id: uuid::Uuid::new_v4(),
-            text: "Disposable encrypted persistence check".into(),
-        });
-        vault.compare_and_swap(&completed, initial.revision).await?;
-        vault.checkpoint().await?;
+        let completed = super::persistence::persist_session(&vault, person).await?;
         drop(vault);
         let reopened = EncryptedAgentVault::open(root, person, KeyringVaultKeys).await?;
-        if reopened.load(person, initial.id).await? != completed {
-            return Err(AgentFailure::StorageUnavailable);
-        }
+        super::persistence::verify_session(&reopened, &completed).await?;
         let key = owned_entry(root, person)
             .map_err(|_| AgentFailure::VaultUnavailable)?
             .ok_or(AgentFailure::VaultUnavailable)?;
@@ -219,7 +199,7 @@ mod macos {
         result.map_err(|failure| format!("vault_exercise_failed: {failure:?}"))?;
         println!(
             "{}",
-            json!({"schema_version":1,"status":"passed","evidence":"signed_native_core","checks":["real_key_create","encrypted_session_cas","reopen","key_loss_fail_closed","exact_key_cleanup","temporary_file_cleanup"],"personal_data":false})
+            json!({"schema_version":1,"status":"passed","evidence":"signed_native_core","checks":["real_key_create","normalized_manager_input_admission","exact_admission_replay","reopen","key_loss_fail_closed","exact_key_cleanup","temporary_file_cleanup"],"personal_data":false})
         );
         Ok(())
     }
