@@ -11517,6 +11517,17 @@ async fn compaction_defers_a_valid_continue_origin_without_corrupting_it() {
             assert_eq!(
                 scenario
                     .vault()
+                    .prepare_manager_compaction_source(
+                        scenario.session_id,
+                        terminal.session_revision
+                    )
+                    .await,
+                Err(AgentFailure::Conflict),
+                "source selection and checkpoint commit share the same protected-origin gate"
+            );
+            assert_eq!(
+                scenario
+                    .vault()
                     .compact_manager_session(
                         scenario.session_id,
                         terminal.session_revision,
@@ -11535,4 +11546,201 @@ async fn compaction_defers_a_valid_continue_origin_without_corrupting_it() {
         assert_eq!(reused.disposition, AdmissionDisposition::Replayed);
         assert_eq!(reused.receipt.transcript, input.receipt.transcript);
     }
+}
+
+#[tokio::test]
+async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
+    let mut scenario = Scenario::new().await;
+    let mut runs = Vec::new();
+    for index in 0..48 {
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("remember complete turn {index}"))
+            .await;
+        let terminal = scenario
+            .prepare_completed_terminal_with_recording(&run, true)
+            .await;
+        let settled = compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal,
+            },
+        )
+        .await
+        .expect("settle the recorded full turn");
+        let terminal = match settled {
+            CoreComposedSettlementResult::Settled { record, .. }
+            | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+            | CoreComposedSettlementResult::CustodyPending { record } => record,
+        };
+        scenario.session_revision = terminal.session_revision;
+        runs.push(terminal);
+        if index == 3 {
+            assert_eq!(
+                scenario
+                    .vault()
+                    .prepare_manager_compaction_source(
+                        scenario.session_id,
+                        scenario.session_revision
+                    )
+                    .await
+                    .unwrap(),
+                None
+            );
+        }
+    }
+    let source = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .await
+        .expect("select eligible committed history")
+        .expect("entry pressure triggers compaction");
+    source.validate().unwrap();
+    let mut corrupt = source.clone();
+    corrupt.messages[1].message_id = corrupt.messages[0].message_id;
+    assert!(corrupt.validate().is_err());
+    let mut corrupt = source.clone();
+    corrupt.through.sequence = corrupt.head.head_revision;
+    assert!(corrupt.validate().is_err());
+    let mut corrupt = source.clone();
+    corrupt.prefix_digest = [0; 32];
+    assert!(corrupt.validate().is_err());
+    assert_eq!(source.head.head_revision, 96);
+    assert!((80..=94).contains(&source.through.sequence));
+    assert_eq!(
+        source.through.sequence % 2,
+        0,
+        "never split a User/Assistant turn"
+    );
+    assert_eq!(source.messages.len() as u64, source.through.sequence);
+    assert_eq!(
+        source.through_turn_id,
+        runs[(source.through.sequence / 2 - 1) as usize]
+            .run_id
+            .as_uuid()
+    );
+    assert!(source.previous_checkpoint.is_none());
+    scenario.reopen().await;
+    let replay = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        source, replay,
+        "read-only selection preserves its exact prefix across reopen"
+    );
+    let committed = scenario
+        .vault()
+        .compact_manager_session(
+            scenario.session_id,
+            source.session_revision,
+            source.through_turn_id,
+            "Earlier full turns are summarized; recent turns remain verbatim.".into(),
+        )
+        .await
+        .expect("selected source ends at a valid archive boundary");
+    assert_eq!(
+        committed.recovery.archived_message_count,
+        source.messages.len()
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .prepare_manager_compaction_source(scenario.session_id, source.session_revision)
+            .await,
+        Err(AgentFailure::Conflict),
+        "a stale candidate cannot select against a newer checkpoint"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .prepare_manager_compaction_source(scenario.session_id, committed.session.revision)
+            .await
+            .unwrap(),
+        None
+    );
+    scenario.session_revision = committed.session.revision;
+    scenario.executor_generation = scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap()
+        .executor_generation;
+    for index in 0..96 {
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("next retained input {index}"))
+            .await;
+        scenario.cancel_owner_run(&run).await;
+    }
+    let successor = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .await
+        .unwrap()
+        .expect("subsequent source incorporates the prior summary");
+    successor.validate().unwrap();
+    assert_eq!(
+        successor.previous_checkpoint.as_ref().unwrap().through,
+        source.through
+    );
+    assert_eq!(
+        successor.messages[0].text,
+        "Earlier full turns are summarized; recent turns remain verbatim."
+    );
+    assert_eq!(
+        successor.messages.len() as u64,
+        successor.through.sequence - source.through.sequence + 1
+    );
+    let mut corrupt = successor.clone();
+    corrupt.messages[0].text = "An unrelated replacement summary".into();
+    assert!(corrupt.validate().is_err());
+}
+
+#[tokio::test]
+async fn compaction_source_detects_byte_pressure_in_few_large_turns() {
+    let mut scenario = Scenario::new().await;
+    for index in 0..8 {
+        let text = format!("{index}:{}", "a".repeat(20 * 1024));
+        let (run, _) = scenario.admit_run_and_append_input(&text).await;
+        scenario.cancel_owner_run(&run).await;
+    }
+    let source = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .await
+        .unwrap()
+        .expect("bytes trigger even below the entry high-water mark");
+    source.validate().unwrap();
+    assert!(source.messages.len() >= 2);
+    assert!(source.head.head_revision - source.through.sequence >= 2);
+    assert!(
+        serde_json::to_vec(&source.messages).unwrap().len()
+            <= floe_conversation::COMPACTION_TRIGGER_BYTES
+    );
+    for message in &source.messages {
+        assert!(message.text.len() > 20 * 1024, "no prefix clipping");
+    }
+}
+
+#[tokio::test]
+async fn compaction_source_prefers_sixteen_recent_entries_without_byte_pressure() {
+    let mut scenario = Scenario::new().await;
+    for index in 0..96 {
+        let (run, _) = scenario
+            .admit_run_and_append_input(&format!("short input {index}"))
+            .await;
+        scenario.cancel_owner_run(&run).await;
+    }
+    let source = scenario
+        .vault()
+        .prepare_manager_compaction_source(scenario.session_id, scenario.session_revision)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source.head.head_revision, 96);
+    assert_eq!(source.through.sequence, 80);
+    assert_eq!(source.messages.len(), 80);
 }

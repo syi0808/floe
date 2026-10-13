@@ -137,6 +137,23 @@ TimedOut Runs can remain valid protected origins. An attempted compaction of suc
 a Session returns a conflict without changing its revision, input or continuation;
 malformed owner/Session/continuation bindings still fail as unavailable storage.
 
+
+Conversation's archive repository also exposes bounded compaction-source
+preparation. Vault uses the same eligibility gate as checkpoint commit and pins
+the Session revision, Core identity/head, previous checkpoint and exact selected
+prefix digest. Selection checks whole owner-turn boundaries, includes the prior
+summary when present, and returns complete messages with recorded provenance coverage. The snapshot is
+not authority; Context must revalidate current processing permission before any
+model release.
+The structural high-water marks are 96 entries or 96 KiB, below the existing
+128-entry/128-KiB framing ceilings; they are not a substitute for Inference's
+model-specific token budget. Selection normally retains at least 16 recent
+entries. Byte pressure may use a shorter tail, never fewer than two entries and
+never cutting through an owner turn. Source and coverage bytes are preflighted
+before hydration. Selection itself is read-only and does not dispatch a model,
+reserve an execution or install a checkpoint; automatic scheduling and durable
+summary execution are not yet connected.
+
 Fresh development profiles are the supported activation scope. There is no
 automatic legacy Session import, migration chain, dual read/write or reset.
 Existing incompatible profiles remain untouched and fail closed at the stored

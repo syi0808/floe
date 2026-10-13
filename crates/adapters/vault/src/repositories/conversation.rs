@@ -70,6 +70,20 @@ impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRe
 impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
     for VaultConversationRepository<Keys>
 {
+    fn prepare_compaction<'a>(
+        &'a self,
+        request: SessionReadRequest,
+        expected_revision: u64,
+    ) -> BoxFuture<'a, Result<Option<floe_conversation::CompactionSource>, AgentFailure>> {
+        Box::pin(async move {
+            request.validate()?;
+            self.verify_principal(&request.principal)?;
+            self.vault
+                .prepare_manager_compaction_source(request.session_id, expected_revision)
+                .await
+        })
+    }
+
     fn compact_session<'a>(
         &'a self,
         request: CompactionRequest,

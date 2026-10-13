@@ -155,6 +155,25 @@ architecture boundaries and diff checks. This is an eligibility correction, not
 completion of automatic summarization. No new Flutter or Apple qualification was
 possible; the existing dependency/platform blockers remain.
 
+Source-selection checkpoint: a Conversation-owned `CompactionSource` and the
+archive repository's `prepare_compaction` now select a bounded whole-turn prefix
+through the shared Vault eligibility gate. The source pins Session/Core identity,
+revision, prefix and previous checkpoint, retains a recent tail, and preserves
+all source text. The normal 16-entry tail can shrink under byte pressure, with a
+two-entry floor and complete turn boundaries. Count-only pressure, few large
+messages, duplicate/invalid source fields, reopen, stale revision, an actual
+archive commit and a successor source incorporating the prior summary are
+covered by encrypted owner/Core tests. The test fixture explicitly records real
+typed Manager outputs for whole-turn boundary checks; journal-only fixtures are
+not treated as full transcript evidence. This source contract is the bounded
+prerequisite for step 3, not a claim that automatic compaction is operational.
+The frozen source checkpoint passed 151 Vault tests as part of 295 default
+workspace tests including doctests, the production FFI build, architecture
+boundaries and diff checks. A prior aggregate attempt overlapped a constant-name
+cleanup and its doctest linked the preceding library artifact; the full frozen
+snapshot was rebuilt and rerun successfully. No Flutter/Apple or live-model
+qualification is claimed.
+
 Ordered cutover and acceptance:
 
 1. Verify existing archive eligibility against canonical Run semantics. A valid

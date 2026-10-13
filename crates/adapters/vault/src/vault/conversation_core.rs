@@ -6134,6 +6134,10 @@ mod tests {
         }
 
         async fn prepare_completed_terminal(&self, run: &RunRecord) -> RunTerminal {
+            self.prepare_completed_terminal_with_recording(run, false).await
+        }
+
+        async fn prepare_completed_terminal_with_recording(&self, run: &RunRecord, record_typed_output: bool) -> RunTerminal {
             use floe_agent_contract::{
                 BatchCursor, EngineStep, JournalEvent, ModelBindingDigest, ModelBudgetProfile,
                 ModelCapabilities, ModelSelectionCommitment, ModelStep, ModelUsage,
@@ -6215,14 +6219,15 @@ mod tests {
                 },
             )
             .await;
-            self.append_owner_event(
-                run.run_id,
-                JournalEvent::Output {
-                    text: text.clone(),
-                    artifacts: Vec::new(),
-                },
-            )
-            .await;
+            let output = JournalEvent::Output {
+                text: text.clone(), artifacts: Vec::new(),
+            };
+            if record_typed_output {
+                self.vault().record_manager_conversation_journal(run.run_id, "output", output)
+                    .await.expect("record the real typed owner contribution");
+            } else {
+                self.append_owner_event(run.run_id, output).await;
+            }
             RunTerminal {
                 state: RunState::Completed,
                 output: Some(text.clone()),

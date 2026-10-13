@@ -1,3 +1,8 @@
+mod compaction;
+pub use compaction::{
+    COMPACTION_MIN_RETAIN_ENTRIES, COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES,
+    COMPACTION_TRIGGER_MESSAGES, CompactionSource,
+};
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, ModelConversation, ReplayReceipt,
     ValidatedModelBatch,

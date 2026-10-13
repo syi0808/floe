@@ -53,6 +53,7 @@ mod registry;
 pub use gateway_authority::{VaultAuthorizationSigner, VaultEnrollmentSigner};
 mod schema_lifecycle;
 mod session_archive;
+mod session_compaction_source;
 mod tasks;
 pub use access_grants::AccessGrantCleanup;
 pub use conversations::{
