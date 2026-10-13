@@ -99,6 +99,40 @@ async fn update_on(
     Ok(())
 }
 
+async fn verify_committed_archive_on(
+    transaction: &turso::transaction::Transaction<'_>,
+    job: &CompactionExecution,
+) -> Result<(), AgentFailure> {
+    let CompactionDisposition::Committed { receipt } = &job.disposition else {
+        return Ok(());
+    };
+    let manifest = super::session_archive::manager_archive_manifest_on(
+        transaction,
+        job.head.person_id,
+        job.source.session_id,
+        super::session_archive::ManagerArchiveLookup::Id(receipt.pointer.archive_id),
+    )
+    .await?
+    .ok_or(AgentFailure::StorageUnavailable)?;
+    if manifest.source_revision != job.source.session_revision
+        || manifest.through_turn_id != job.source.through_turn_id
+        || manifest.message_count != job.source.messages.len()
+        || manifest.summary_alias_id != receipt.summary.message_id
+        || manifest.summary != receipt.summary.text
+        || manifest.start_sequence
+            != job
+                .source
+                .previous_checkpoint
+                .as_ref()
+                .map_or(0, |c| c.through.sequence)
+        || manifest.checkpoint()?.through != job.source.through
+        || manifest.prefix_digest != job.source.prefix_digest
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(())
+}
+
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     /// Validate every retained record with a bounded keyset scan. Opening the
     /// Vault never creates the optional family or rewrites historical state.
@@ -129,7 +163,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 drop(rows);
                 if ids.is_empty() { break; }
                 for id in &ids {
-                    read_on(&transaction, self.person_id, *id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+                    let job = read_on(&transaction, self.person_id, *id).await?.ok_or(AgentFailure::StorageUnavailable)?;
+                    verify_committed_archive_on(&transaction, &job).await?;
                 }
                 after = Some(ids.last().unwrap().to_string());
             }
@@ -233,6 +268,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
             job.authorize_actor(actor)?;
+            verify_committed_archive_on(&transaction, &job).await?;
             if job.claim != claim {
                 return Err(AgentFailure::Conflict);
             }
@@ -312,6 +348,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 .ok_or(AgentFailure::NotFound)?;
             previous.validate()?;
             if previous.disposition != CompactionDisposition::Pending {
+                verify_committed_archive_on(&transaction, &previous).await?;
                 return Ok(previous);
             }
             // Exact replay after a lost recovery acknowledgement.
@@ -372,6 +409,113 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             update_on(&transaction, &previous, &next).await?;
             self.check_access()?;
             Ok(())
+        }
+        .await;
+        let settled = self
+            .finish_registry_transaction_checked(transaction, result)
+            .await;
+        guard.settled();
+        settled
+    }
+
+    pub(crate) async fn complete_manager_compaction(
+        &self,
+        actor: &OwnerActor,
+        claim: CompactionClaim,
+    ) -> Result<floe_conversation::CompactionReceipt, AgentFailure> {
+        self.validate_compaction_actor(actor)?;
+        claim.validate()?;
+        let mut connection = self.connection()?;
+        let (mut guard, transaction) = self.journal_transaction(&mut connection).await?;
+        let result = async {
+            let previous = read_on(&transaction, self.person_id, claim.execution_id)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            previous.authorize_actor(actor)?;
+            if previous.claim != claim {
+                return Err(AgentFailure::Conflict);
+            }
+            // A lost ACK replays the immutable terminal receipt even after a
+            // newer executor or foreground command has moved on. No new write.
+            if let CompactionDisposition::Committed { receipt } = &previous.disposition {
+                verify_committed_archive_on(&transaction, &previous).await?;
+                return Ok(receipt.clone());
+            }
+            if previous.disposition != CompactionDisposition::Pending
+                || self
+                    .active_conversation_executor_generation(&transaction)
+                    .await?
+                    != claim.executor_generation
+            {
+                return Err(AgentFailure::Conflict);
+            }
+            let floe_conversation::CompactionRecovery::Output(summary) =
+                floe_conversation::recover_compaction_journal(
+                    &previous.head,
+                    &previous.source,
+                    &previous.entries,
+                )?
+            else {
+                return Err(AgentFailure::Conflict);
+            };
+            let current = self
+                .prepare_manager_compaction_source_on(
+                    &transaction,
+                    previous.source.session_id,
+                    previous.source.session_revision,
+                    previous.source_byte_limit,
+                )
+                .await?
+                .ok_or(AgentFailure::Conflict)?;
+            if current != previous.source {
+                return Err(AgentFailure::Conflict);
+            }
+            let coverage = previous
+                .entries
+                .iter()
+                .rev()
+                .find_map(|entry| match &entry.event {
+                    JournalEvent::ValidatedBatch { batch } => {
+                        Some(batch.projection_coverage.clone())
+                    }
+                    _ => None,
+                })
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let installed = self
+                .install_manager_compaction_on(
+                    &transaction,
+                    current.session_id,
+                    current.session_revision,
+                    current.through_turn_id,
+                    summary.clone(),
+                    super::session_archive::SummaryCoverage::Recorded(coverage.clone()),
+                )
+                .await?;
+            let pointer = floe_agent_contract::ArchivePointer {
+                archive_id: installed.recovery.archive_id,
+                source_revision: installed.recovery.source_revision,
+                through_turn_id: installed.recovery.through_turn_id,
+                archived_message_count: installed.recovery.archived_message_count,
+            };
+            let receipt = floe_conversation::CompactionReceipt {
+                session_id: installed.session.id,
+                session_revision: installed.session.revision,
+                summary: floe_agent_contract::AgentMessage {
+                    message_id: floe_conversation::compaction_summary_id(pointer.through_turn_id),
+                    role: floe_agent_contract::MessageRole::Assistant,
+                    text: summary,
+                    call_id: None,
+                    coverage,
+                },
+                pointer,
+            };
+            if installed.summary_coverage != receipt.summary.coverage {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            let next = previous.complete(actor, receipt.clone())?;
+            update_on(&transaction, &previous, &next).await?;
+            self.check_access()?;
+            Ok(receipt)
         }
         .await;
         let settled = self

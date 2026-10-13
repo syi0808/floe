@@ -113,7 +113,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 transaction,
                 self.person_id,
                 session_id,
-                previous.through_turn_id,
+                previous.summary_alias_id,
             )
             .await?;
             let summary = floe_conversation::AgentMessage::Compaction {
@@ -134,7 +134,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 transaction,
                 self.person_id,
                 session_id,
-                previous.through_turn_id,
+                previous.summary_alias_id,
                 coverage_header,
                 #[cfg(test)]
                 &self.context_coverage_payload_hydrations,

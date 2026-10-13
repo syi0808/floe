@@ -125,10 +125,13 @@ remain unchanged; release of exclusive writing authority does not settle usage,
 authorize pruning or retry a model call. Recovery discovery includes terminal
 Runs with an authentic retained recorder, not only unresolved delegations.
 
-Compaction commits an exact completed Core prefix, summary, merged current
-coverage, archive manifest and Session CAS together. Archive reads reconstruct
-the exact typed prefix from normalized Core entries. This milestone does not
-physically prune transcript payloads. Active turns, pending batches, open
+Compaction completion verifies the admitted source pin and recorded Answer, then
+commits the Core checkpoint, archive manifest, exact Answer projection coverage
+and terminal execution receipt in one write transaction. The public Session
+revision and original transcript entries remain unchanged. Summary coverage uses
+its distinct stable summary alias; it never merges into the final original
+answer. Archive reads reconstruct the exact typed prefix from normalized Core
+entries. This milestone does not physically prune transcript payloads. Active turns, pending batches, open
 interactions, Continue origins, pending Resume slots, uncertain effects and
 archive references remain protected. Unknown coverage stays Unknown, and
 source revocation continues to apply to summaries. Continue eligibility is read
@@ -138,8 +141,9 @@ a Session returns a conflict without changing its revision, input or continuatio
 malformed owner/Session/continuation bindings still fail as unavailable storage.
 
 
-Conversation's archive repository also exposes bounded compaction-source
-preparation. Vault uses the same eligibility gate as checkpoint commit and pins
+Conversation's compaction admission selects its bounded source inside the same
+transaction that records the execution. Vault uses the same eligibility gate as
+checkpoint commit and pins
 the Session revision, Core identity/head, previous checkpoint and exact selected
 prefix digest. Selection checks whole owner-turn boundaries, includes the prior
 summary when present, and returns complete messages with recorded provenance coverage. The snapshot is
@@ -153,8 +157,9 @@ model-specific token budget. Selection normally retains at least 16 recent
 entries. Byte pressure may use a shorter tail, never fewer than two entries and
 never cutting through an owner turn. Source and coverage bytes are preflighted
 before hydration. Selection itself is read-only and does not dispatch a model,
-reserve an execution or install a checkpoint; automatic scheduling and durable
-summary execution are not yet connected.
+reserve an execution or install a checkpoint. Admission and proof-driven
+completion are wired to durable custody; automatic scheduling and model
+projection are not yet connected.
 
 Fresh development profiles are the supported activation scope. There is no
 automatic legacy Session import, migration chain, dual read/write or reset.
@@ -669,5 +674,15 @@ schema family created only by the owner write. One pending execution is allowed
 per Session. Bounded read-only startup validation covers all retained rows;
 partial schema and malformed records are not repaired. A replacement device
 retires old work, while same-device recovery adopts only safe empty/output
-states under a newer executor fence. Automatic lifecycle wiring, projection and
-proof-driven checkpoint installation remain an active cutover in the plan.
+states under a newer executor fence. Completion rejects a moved source and
+accepts only the recorded output and coverage. Exact completion replay returns
+the original receipt after lost acknowledgement, later foreground work and
+executor movement without another checkpoint. Startup verifies committed jobs
+against their actual archive manifests. Multiple bounded checkpoints may share
+one unchanged product Session revision; archive identity remains exact-prefix
+based. The old caller-supplied-summary command and source-revision replay lookup
+are removed. A storage-only test fixture uses the same installation path.
+The local archive schema deliberately no longer requires unique source revision;
+incompatible old development stores fail closed and are never reset automatically.
+Automatic lifecycle wiring and model projection remain an active cutover in the
+plan.

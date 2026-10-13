@@ -54,6 +54,13 @@ impl<Keys: VaultKeyProvider + 'static> CompactionRepository for VaultConversatio
                 .await
         })
     }
+    fn complete_compaction<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        claim: CompactionClaim,
+    ) -> BoxFuture<'a, Result<floe_conversation::CompactionReceipt, AgentFailure>> {
+        Box::pin(async move { self.vault.complete_manager_compaction(actor, claim).await })
+    }
     fn compaction_journal(
         &self,
         actor: OwnerActor,

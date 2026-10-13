@@ -58,6 +58,13 @@ pub trait CompactionRepository: Send + Sync {
         claim: CompactionClaim,
         failure: AgentFailure,
     ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+    /// Install only the exact recorded answer. Implementations atomically verify
+    /// the source pin, advance the checkpoint, and retain the terminal receipt.
+    fn complete_compaction<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        claim: CompactionClaim,
+    ) -> BoxFuture<'a, Result<crate::CompactionReceipt, AgentFailure>>;
     fn compaction_journal(
         &self,
         actor: OwnerActor,

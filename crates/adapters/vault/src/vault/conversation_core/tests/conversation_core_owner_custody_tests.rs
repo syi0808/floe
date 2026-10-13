@@ -11693,28 +11693,21 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
         source.messages.len()
     );
     assert_eq!(
-        scenario
-            .vault()
-            .prepare_manager_compaction_source(
-                scenario.session_id,
-                source.session_revision,
-                floe_conversation::COMPACTION_TRIGGER_BYTES
-            )
-            .await,
-        Err(AgentFailure::Conflict),
-        "a stale candidate cannot select against a newer checkpoint"
+        committed.session.revision, source.session_revision,
+        "model maintenance does not advance the product Session revision"
     );
     assert_eq!(
         scenario
             .vault()
             .prepare_manager_compaction_source(
                 scenario.session_id,
-                committed.session.revision,
-                floe_conversation::COMPACTION_TRIGGER_BYTES
+                source.session_revision,
+                floe_conversation::COMPACTION_TRIGGER_BYTES,
             )
             .await
             .unwrap(),
-        None
+        None,
+        "a fresh source read observes the new checkpoint"
     );
     scenario.session_revision = committed.session.revision;
     scenario.executor_generation = scenario
@@ -12483,5 +12476,570 @@ async fn product_history_preserves_original_pages_across_model_compaction_and_re
             .await
             .unwrap(),
         earlier
+    );
+}
+
+#[tokio::test]
+async fn compaction_summary_coverage_never_mutates_original_answer_coverage() {
+    use crate::vault::ManagerHistoryView;
+    let mut scenario = Scenario::new().await;
+    let first =
+        complete_manager_turn_with_output(&mut scenario, "first", "first answer".into()).await;
+    let second =
+        complete_manager_turn_with_output(&mut scenario, "second", "second answer".into()).await;
+    // Distinct provenance states make an accidental merge into the final
+    // original answer observable without synthesizing an external authority.
+    let mut connection = scenario.vault().connection().unwrap();
+    let (mut guard, transaction) = scenario
+        .vault()
+        .journal_transaction(&mut connection)
+        .await
+        .unwrap();
+    super::super::super::context_dependencies::merge_context_dependency_coverage(
+        &transaction,
+        scenario.person_id,
+        scenario.session_id,
+        first.run_id.as_uuid(),
+        DependencyCoverage::Unknown,
+    )
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    guard.settled();
+    drop(guard);
+    drop(connection);
+    let before = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            ManagerHistoryView::Transcript,
+            16,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    assert_eq!(before.messages[1].coverage, DependencyCoverage::Unknown);
+    assert_eq!(before.messages[3].coverage, DependencyCoverage::Independent);
+    let committed = scenario
+        .vault()
+        .compact_manager_session(
+            scenario.session_id,
+            second.session_revision,
+            second.run_id.as_uuid(),
+            "Two turns".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(committed.summary_coverage, DependencyCoverage::Unknown);
+    for reopened in [false, true] {
+        if reopened {
+            scenario.reopen().await;
+        }
+        assert_eq!(
+            scenario
+                .vault()
+                .read_manager_session_history_page(
+                    scenario.session_id,
+                    None,
+                    ManagerHistoryView::Transcript,
+                    16,
+                    floe_conversation::MAX_SESSION_BYTES,
+                )
+                .await
+                .unwrap(),
+            before,
+            "summary coverage must not contaminate original evidence"
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .read_turn_coverage(scenario.session_id, second.run_id.as_uuid(),)
+                .await
+                .unwrap(),
+            DependencyCoverage::Independent
+        );
+        assert_eq!(
+            scenario
+                .vault()
+                .read_turn_coverage(
+                    scenario.session_id,
+                    floe_conversation::compaction_summary_id(second.run_id.as_uuid()),
+                )
+                .await
+                .unwrap(),
+            DependencyCoverage::Unknown
+        );
+        let model = scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                ManagerHistoryView::ModelContext {
+                    required_user_id: None,
+                },
+                16,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .unwrap();
+        assert_eq!(model.messages.len(), 1);
+        assert_eq!(model.messages[0].coverage, DependencyCoverage::Unknown);
+        assert_ne!(model.messages[0].alias_id, second.run_id.as_uuid());
+    }
+}
+
+async fn record_compaction_answer(
+    scenario: &Scenario,
+    actor: &floe_kernel::OwnerActor,
+    job: &floe_conversation::CompactionExecution,
+    text: &str,
+) {
+    use floe_agent_contract::{
+        BatchCursor, JournalEvent, ModelStep, ModelUsage, ValidatedModelBatch,
+    };
+    let intent = compaction_custody_intent(actor);
+    let (attempt_id, projection_ref) = match &intent {
+        JournalEvent::ModelIntent {
+            attempt_id,
+            projection_ref,
+            ..
+        } => (*attempt_id, *projection_ref),
+        _ => unreachable!(),
+    };
+    let batch_id = Uuid::new_v4();
+    for event in [
+        intent,
+        JournalEvent::ModelResult {
+            attempt_id,
+            usage: ModelUsage {
+                tokens: 10,
+                cost_micros: 10,
+            },
+            accounting: floe_execution::budget::ModelAccounting {
+                observed_tokens: Some(10),
+                observed_cost_micros: Some(10),
+                unknown_tokens: false,
+                unknown_cost: false,
+            },
+        },
+        JournalEvent::ValidatedBatch {
+            batch: ValidatedModelBatch {
+                execution_id: job.claim.execution_id,
+                attempt_id,
+                projection_ref,
+                batch_id,
+                steps: vec![ModelStep::Answer {
+                    text: text.into(),
+                    artifacts: vec![],
+                }],
+                catalog_revision: 1,
+                tool_revisions: vec![],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
+            },
+        },
+        JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id,
+                next_step_index: 0,
+            },
+        },
+        JournalEvent::Output {
+            text: text.into(),
+            artifacts: vec![],
+        },
+    ] {
+        scenario
+            .vault()
+            .append_manager_compaction(actor, job.claim, event)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn compaction_completion_requires_proof_and_preserves_next_command_revision() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await,
+        Err(AgentFailure::Conflict),
+        "empty journal cannot install caller-invented text"
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .load_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        0
+    );
+    record_compaction_answer(&scenario, &actor, &job, "A concise exact summary.").await;
+    let receipt = scenario
+        .vault()
+        .complete_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    assert_eq!(receipt.session_revision, request.expected_session_revision);
+    assert_eq!(receipt.summary.text, "A concise exact summary.");
+    assert_eq!(
+        receipt.summary.message_id,
+        floe_conversation::compaction_summary_id(job.source.through_turn_id)
+    );
+    assert_eq!(receipt.summary.coverage, DependencyCoverage::Independent);
+    assert_eq!(
+        receipt.pointer.archived_message_count,
+        job.source.messages.len()
+    );
+    let committed = scenario
+        .vault()
+        .load_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    assert_eq!(
+        committed.disposition,
+        floe_conversation::CompactionDisposition::Committed {
+            receipt: receipt.clone()
+        }
+    );
+    assert_eq!(committed.entries.len(), 5);
+    let (next, _) = scenario
+        .admit_run_and_append_input("Next user command keeps its prepared revision")
+        .await;
+    scenario.cancel_owner_run(&next).await;
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap(),
+        receipt,
+        "exact lost-ACK replay is not a second checkpoint after a foreground turn"
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap(),
+        receipt
+    );
+}
+
+#[tokio::test]
+async fn compaction_completion_lost_ack_recovers_atomic_checkpoint_and_receipt() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    record_compaction_answer(&scenario, &actor, &job, "Recovered summary.").await;
+    scenario
+        .vault()
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    );
+    scenario.reopen().await;
+    scenario
+        .vault()
+        .activate_conversation_executor()
+        .await
+        .unwrap();
+    let receipt = scenario
+        .vault()
+        .complete_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    assert_eq!(receipt.summary.text, "Recovered summary.");
+    assert_eq!(receipt.session_revision, job.source.session_revision);
+    let connection = scenario.vault().connection().unwrap();
+    assert_eq!(
+        table_count(&connection, "agent_conversation_manager_archives_v3").await,
+        1
+    );
+    assert_eq!(
+        table_count(&connection, "agent_conversation_compactions_v1").await,
+        1
+    );
+    assert!(
+        scenario
+            .vault()
+            .pending_manager_compactions(&actor, None, 8)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn compaction_completion_rejects_source_moved_after_recorded_answer() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    record_compaction_answer(&scenario, &actor, &job, "Now stale summary.").await;
+    let (next, _) = scenario
+        .admit_run_and_append_input("Foreground wins the race")
+        .await;
+    scenario.cancel_owner_run(&next).await;
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await,
+        Err(AgentFailure::Conflict)
+    );
+    let connection = scenario.vault().connection().unwrap();
+    assert_eq!(
+        table_count(&connection, "agent_conversation_manager_archives_v3").await,
+        0
+    );
+    scenario
+        .vault()
+        .retire_manager_compaction(&actor, job.claim, AgentFailure::StaleContext)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn compaction_completion_supports_multiple_prefixes_at_one_product_revision() {
+    let (mut scenario, actor, mut request) = compaction_custody_fixture().await;
+    request.source_byte_limit = 24 * 1024;
+    let mut previous = None;
+    for ordinal in 0..2 {
+        let job = scenario
+            .vault()
+            .admit_manager_compaction(&actor, request.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        if let Some(through) = previous {
+            assert_eq!(
+                job.source.previous_checkpoint.as_ref().unwrap().through,
+                through
+            );
+        }
+        record_compaction_answer(&scenario, &actor, &job, &format!("Summary {ordinal}.")).await;
+        let receipt = scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await
+            .unwrap();
+        assert_eq!(receipt.session_revision, request.expected_session_revision);
+        previous = Some(job.source.through);
+    }
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_shell(scenario.session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision,
+        request.expected_session_revision
+    );
+    let connection = scenario.vault().connection().unwrap();
+    assert_eq!(
+        table_count(&connection, "agent_conversation_manager_archives_v3").await,
+        2
+    );
+}
+
+#[tokio::test]
+async fn compaction_completion_missing_archive_is_not_a_valid_terminal_receipt() {
+    let (mut scenario, actor, request) = compaction_custody_fixture().await;
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    record_compaction_answer(&scenario, &actor, &job, "A retained proof.").await;
+    let receipt = scenario
+        .vault()
+        .complete_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    let connection = scenario.vault().connection().unwrap();
+    connection
+        .execute(
+            "DELETE FROM agent_conversation_manager_archives_v3 WHERE archive_id = ?",
+            [receipt.pointer.archive_id.to_string()],
+        )
+        .await
+        .unwrap();
+    drop(connection);
+    assert_eq!(
+        scenario
+            .vault()
+            .complete_manager_compaction(&actor, job.claim)
+            .await,
+        Err(AgentFailure::StorageUnavailable)
+    );
+    drop(scenario.vault.take());
+    assert!(
+        EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+            .await
+            .is_err(),
+        "open validates terminal execution against its actual archive, never repairs it"
+    );
+}
+
+#[tokio::test]
+async fn compaction_completion_installs_recorded_filtered_coverage_not_prefix_union() {
+    use crate::vault::ManagerHistoryView;
+    let mut scenario = Scenario::new().await;
+    let mut runs = Vec::new();
+    for ordinal in 0..6 {
+        runs.push(
+            complete_manager_turn_with_output(
+                &mut scenario,
+                &format!("user {ordinal}"),
+                "a".repeat(20 * 1024),
+            )
+            .await,
+        );
+    }
+    {
+        let mut connection = scenario.vault().connection().unwrap();
+        let (mut guard, transaction) = scenario
+            .vault()
+            .journal_transaction(&mut connection)
+            .await
+            .unwrap();
+        super::super::super::context_dependencies::merge_context_dependency_coverage(
+            &transaction,
+            scenario.person_id,
+            scenario.session_id,
+            runs[0].run_id.as_uuid(),
+            DependencyCoverage::Unknown,
+        )
+        .await
+        .unwrap();
+        transaction.commit().await.unwrap();
+        guard.settled();
+    }
+    let before = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            ManagerHistoryView::Transcript,
+            32,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    let actor = floe_kernel::OwnerActor {
+        person_id: scenario.person_id,
+        device_id: "compaction-fixture".into(),
+        runtime_epoch: 1,
+    };
+    let request = floe_conversation::CompactionAdmission {
+        session_id: scenario.session_id,
+        expected_session_revision: scenario.session_revision,
+        source_byte_limit: floe_conversation::COMPACTION_TRIGGER_BYTES,
+        max_tokens: 1000,
+        max_cost_micros: 1000,
+        max_output_bytes: 1024,
+    };
+    let job = scenario
+        .vault()
+        .admit_manager_compaction(&actor, request)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        job.source
+            .messages
+            .iter()
+            .any(|m| m.coverage == DependencyCoverage::Unknown)
+    );
+    // The recorded validated answer represents a projection that omitted that
+    // unauthorized derived entry. Installation must use that exact proof.
+    record_compaction_answer(
+        &scenario,
+        &actor,
+        &job,
+        "Only authorized evidence was summarized.",
+    )
+    .await;
+    let receipt = scenario
+        .vault()
+        .complete_manager_compaction(&actor, job.claim)
+        .await
+        .unwrap();
+    assert_eq!(receipt.summary.coverage, DependencyCoverage::Independent);
+    scenario.reopen().await;
+    assert_eq!(
+        scenario
+            .vault()
+            .read_manager_session_history_page(
+                scenario.session_id,
+                None,
+                ManagerHistoryView::Transcript,
+                32,
+                floe_conversation::MAX_SESSION_BYTES,
+            )
+            .await
+            .unwrap(),
+        before
+    );
+    let context = scenario
+        .vault()
+        .read_manager_session_history_page(
+            scenario.session_id,
+            None,
+            ManagerHistoryView::ModelContext {
+                required_user_id: None,
+            },
+            32,
+            floe_conversation::MAX_SESSION_BYTES,
+        )
+        .await
+        .unwrap();
+    assert_eq!(context.messages[0].alias_id, receipt.summary.message_id);
+    assert_eq!(
+        context.messages[0].coverage,
+        DependencyCoverage::Independent
+    );
+    assert_eq!(
+        scenario
+            .vault()
+            .read_turn_coverage(scenario.session_id, runs[0].run_id.as_uuid())
+            .await
+            .unwrap(),
+        DependencyCoverage::Unknown
     );
 }

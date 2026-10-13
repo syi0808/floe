@@ -194,6 +194,9 @@ fn project(
                 }
             }
             JournalEvent::ValidatedBatch { batch } => {
+                if batch.projection_coverage == floe_agent_contract::DependencyCoverage::Unknown {
+                    return Err(AgentFailure::PolicyDenied);
+                }
                 if !batch.tool_revisions.is_empty()
                     || !batch.agent_revisions.is_empty()
                     || batch.delegation_context.is_some()
@@ -508,28 +511,37 @@ mod tests {
         );
         let batch_id = Uuid::new_v4();
         let execution_id = head.execution_id;
-        append(
-            &mut head,
-            &source,
-            &mut entries,
-            JournalEvent::ValidatedBatch {
-                batch: ValidatedModelBatch {
-                    execution_id,
-                    attempt_id,
-                    projection_ref,
-                    batch_id,
-                    steps: vec![ModelStep::Answer {
-                        text: "Exact summary.".into(),
-                        artifacts: vec![],
-                    }],
-                    catalog_revision: 1,
-                    tool_revisions: vec![],
-                    agent_revisions: vec![],
-                    projection_coverage: DependencyCoverage::Independent,
-                    delegation_context: None,
-                },
+        let validated = JournalEvent::ValidatedBatch {
+            batch: ValidatedModelBatch {
+                execution_id,
+                attempt_id,
+                projection_ref,
+                batch_id,
+                steps: vec![ModelStep::Answer {
+                    text: "Exact summary.".into(),
+                    artifacts: vec![],
+                }],
+                catalog_revision: 1,
+                tool_revisions: vec![],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
             },
+        };
+        let mut unknown = validated.clone();
+        if let JournalEvent::ValidatedBatch { batch } = &mut unknown {
+            batch.projection_coverage = DependencyCoverage::Unknown;
+        }
+        let mut invalid_entries = entries.clone();
+        invalid_entries.push(JournalEntry {
+            revision: entries.len() as u64 + 1,
+            event: unknown,
+        });
+        assert_eq!(
+            advance_compaction_journal(&head, &source, &invalid_entries),
+            Err(AgentFailure::PolicyDenied)
         );
+        append(&mut head, &source, &mut entries, validated);
         append(
             &mut head,
             &source,

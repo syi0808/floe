@@ -35,7 +35,7 @@ pub use storage_projection::{
 };
 
 pub use admission::{PreparedResume, ResumePreparationRequest, prepare_resume};
-pub use archive::{compact_session, read_archive};
+pub use archive::read_archive;
 pub use cancellation::{
     CancelCommandRequest, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CancelRunRequest,
     CancelRunStatus, RunCancellationRegistry, cancel_run_command,

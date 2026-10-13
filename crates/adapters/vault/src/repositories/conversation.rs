@@ -6,15 +6,15 @@ use crate::{
     VaultKeyProvider, VaultManagerConversationAdmission,
 };
 use floe_agent_contract::{
-    AgentFailure, AgentMessage as ContractMessage, ArchivePointer, ArchiveReadRequest,
-    ArchiveSnapshot, BoxFuture, ExecutionJournal, JournalAck, JournalEvent, MessageRole, RunId,
+    AgentFailure, AgentMessage as ContractMessage, ArchiveReadRequest, ArchiveSnapshot, BoxFuture,
+    ExecutionJournal, JournalAck, JournalEvent, RunId,
 };
 use floe_conversation::{
-    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, CompactionReceipt,
-    CompactionRequest, ConversationInteraction, ConversationRepository, DecisionAdmission,
-    ExpireInteraction, ExpireOutcome, InteractionDecision, InteractionRepository, JournalEntry,
-    RunReceipt, RunTerminal, SessionArchiveRepository, SessionReadRequest, SessionReceipt,
-    SessionRepository, SessionRequest, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest,
+    AdmittedTurn, CancelRunAdmission, CancelRunCommand, CancelRunReceipt, ConversationInteraction,
+    ConversationRepository, DecisionAdmission, ExpireInteraction, ExpireOutcome,
+    InteractionDecision, InteractionRepository, JournalEntry, RunReceipt, RunTerminal,
+    SessionArchiveRepository, SessionReadRequest, SessionReceipt, SessionRepository,
+    SessionRequest, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest,
 };
 use uuid::Uuid;
 
@@ -71,61 +71,6 @@ impl<Keys: VaultKeyProvider + 'static> SessionRepository for VaultConversationRe
 impl<Keys: VaultKeyProvider + 'static> SessionArchiveRepository
     for VaultConversationRepository<Keys>
 {
-    fn prepare_compaction<'a>(
-        &'a self,
-        request: SessionReadRequest,
-        expected_revision: u64,
-        byte_limit: usize,
-    ) -> BoxFuture<'a, Result<Option<floe_conversation::CompactionSource>, AgentFailure>> {
-        Box::pin(async move {
-            request.validate()?;
-            self.verify_principal(&request.principal)?;
-            self.vault
-                .prepare_manager_compaction_source(
-                    request.session_id,
-                    expected_revision,
-                    byte_limit,
-                )
-                .await
-        })
-    }
-
-    fn compact_session<'a>(
-        &'a self,
-        request: CompactionRequest,
-    ) -> BoxFuture<'a, Result<CompactionReceipt, AgentFailure>> {
-        Box::pin(async move {
-            request.validate()?;
-            if request.principal != self.vault.person_id().to_string() {
-                return Err(AgentFailure::CapabilityDenied);
-            }
-            let result = self
-                .vault
-                .compact_manager_session(
-                    request.session_id,
-                    request.expected_session_revision,
-                    request.through_turn_id,
-                    request.summary.clone(),
-                )
-                .await?;
-            let pointer = archive_pointer(&result.recovery);
-            let receipt = CompactionReceipt {
-                session_id: result.session.id,
-                session_revision: result.session.revision,
-                pointer: pointer.clone(),
-                summary: ContractMessage {
-                    message_id: pointer.through_turn_id,
-                    role: MessageRole::Assistant,
-                    text: request.summary,
-                    call_id: None,
-                    coverage: result.summary_coverage,
-                },
-            };
-            receipt.validate()?;
-            Ok(receipt)
-        })
-    }
-
     fn read_archive<'a>(
         &'a self,
         request: &'a ArchiveReadRequest,
@@ -855,14 +800,5 @@ impl<Keys: VaultKeyProvider + 'static> ExecutionJournal for VaultConversationJou
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         self.record("checkpoint", event)
-    }
-}
-
-fn archive_pointer(recovery: &floe_conversation::SessionRecoveryPointer) -> ArchivePointer {
-    ArchivePointer {
-        archive_id: recovery.archive_id,
-        source_revision: recovery.source_revision,
-        through_turn_id: recovery.through_turn_id,
-        archived_message_count: recovery.archived_message_count,
     }
 }

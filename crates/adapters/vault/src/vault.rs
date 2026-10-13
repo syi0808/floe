@@ -74,7 +74,6 @@ pub enum VaultKeyReadFailure {
     Malformed,
     Unavailable(AgentFailure),
 }
-pub use session_archive::*;
 
 pub trait VaultKeyProvider: Send + Sync {
     fn load(&self, person_id: PersonId, vault_id: Uuid) -> Result<RootKey, AgentFailure>;

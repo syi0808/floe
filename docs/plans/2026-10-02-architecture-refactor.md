@@ -246,18 +246,27 @@ Compaction must not reload forgotten confirmed memories or create new learning
 evidence from its summary. This does not erase the original conversation: the
 accepted forget contract preserves transcripts and excludes the old evidence
 from relearning, rather than maintaining a semantic blacklist.
-The durable completion transaction will validate the source pin and answer
-journal proof, keep original entry coverage unchanged, and install the exact
-summary coverage.
-Direct reader/writer review also found that the manual helper currently stores
-summary coverage under the last original turn identity, although the summary
-already has a distinct stable alias. Completion must key summary coverage by
-that summary alias, and all checkpoint/source/archive readers must use the
-same identity. It must not overwrite or merge into the original answer's
-coverage. Add a regression with distinct original and summary dependencies,
-including a successor checkpoint and reopen. The unused caller-supplied-summary
-production route is removed at this cutover rather than retained as an alternate
-authority path.
+The durable completion transaction now validates the source pin and answer
+journal proof, keeps original entry coverage unchanged, and installs the exact
+summary coverage. The manual helper had stored summary coverage under the last
+original turn identity, although the summary already had a distinct stable
+alias. All checkpoint/source/archive readers and installation now use that
+summary alias; original answer coverage is unchanged. The unused caller-supplied
+summary command, request DTO, preparation facade and source-revision-only replay
+lookup are removed. Storage-only archive fixtures exercise the same installer
+with a test-only prefix-union coverage mode, not a production authority route.
+Pending/unknown model accounting cannot install an answer, and a batch with
+unknown provenance is rejected. Completion and its receipt are one atomic
+transaction; exact lost-ACK replay remains read-only after later foreground work
+and executor movement. Committed records are checked against actual archive
+manifests on reopen. Focused qualification covers next-command admission,
+source movement after Output, lost completion ACK, missing archive corruption,
+multiple same-revision checkpoints, and exact filtered Answer coverage without
+contaminating original history. Qualification passes 316 default workspace
+tests including doctests, 58 App QA tests (one ignored subprocess driver), the
+production FFI build, architecture boundaries (26 nodes / 139 edges) and diff
+hygiene. The focused completion cases and six pure journal tests pass. Flutter,
+Apple, live-provider and Go qualification were not run for this checkpoint.
 
 The product/model history activation gate is implemented with an explicit
 ManagerHistoryView on the single normalized Vault reader. Product repository
@@ -271,21 +280,33 @@ including doctests, 58 App QA tests (one ignored subprocess driver), the
 production FFI build, architecture boundaries and diff hygiene. Flutter and
 Apple checks remain unavailable under the previously recorded environment
 constraints; this is not a UI/device qualification.
-The completion cutover will keep semantic compaction out of the public Session
+The completion cutover keeps semantic compaction out of the public Session
 revision: it changes model context, not the retained product conversation. The
 transaction still requires the exact Session revision, Core head and prior
 checkpoint from the source pin, then advances the checkpoint and compaction-job
 revision atomically. Foreground admission and maintenance cannot both commit
 against a moved source. This avoids a hidden maintenance write making a user's
 next command stale, without rebasing immutable commands or publishing an old Run
-receipt as a new Session event. Remove the unused manual compaction command and
-its source-revision-only replay lookup at this cutover. Archive identity remains
-exact-prefix based; remove the unique source-revision restriction so multiple
+receipt as a new Session event. Archive identity remains
+exact-prefix based; the unique source-revision restriction is removed so multiple
 bounded checkpoints can complete at the same unchanged product revision. This
 is a deliberate local stored-meaning change, with no automatic profile reset
 or compatibility fallback. Qualification must cover both race orderings,
 multiple same-revision checkpoints, exact completion replay, lost acknowledgement,
 and original-message paging after checkpoint installation.
+
+Automatic activation still needs a capacity/lifecycle decision before wiring.
+A post-completion count-only trigger is insufficient for a few large turns: a
+transport can reject before the 96-KiB structural trigger, and a resulting
+BudgetExceeded Continue origin is deliberately protected from maintenance.
+The selected transport's real preflight must drive the capacity decision. Review
+whether the clean pre-dispatch active Run can authorize compaction of only its
+settled historical prefix while retaining the current User input and empty Run
+journal, or whether admission must prepare that capacity before opening the Run.
+Do not weaken Continue/uncertain-effect protection, silently retry a paid attempt,
+or enable an arbitrary byte threshold as if it guaranteed model fit. The next
+projection/driver checkpoint must establish this behavior before automatic
+lifecycle activation and retain the normal foreground budget/error semantics.
 
 Ordered cutover and acceptance:
 

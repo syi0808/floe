@@ -619,7 +619,9 @@ pub(super) fn manager_session_message_alias(message: &AgentMessage) -> Uuid {
         AgentMessage::Preamble { turn_id, text } => {
             Uuid::new_v5(turn_id, format!("preamble:0:{text}").as_bytes())
         }
-        AgentMessage::Compaction { turn_id, .. } => Uuid::new_v5(turn_id, b"compaction:0"),
+        AgentMessage::Compaction { turn_id, .. } => {
+            floe_conversation::compaction_summary_id(*turn_id)
+        }
         AgentMessage::Capability { call_id, .. } => *call_id,
         AgentMessage::Delegation { task, .. } => task.task_id.as_uuid(),
         AgentMessage::Interaction { interaction_id, .. } => *interaction_id,

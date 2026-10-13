@@ -61,7 +61,7 @@ impl CompactionExecution {
         if let CompactionDisposition::Committed { receipt } = &self.disposition {
             receipt.validate()?;
             if receipt.session_id != self.source.session_id
-                || self.source.session_revision.checked_add(1) != Some(receipt.session_revision)
+                || self.source.session_revision != receipt.session_revision
                 || receipt.pointer.source_revision != self.source.session_revision
                 || receipt.pointer.through_turn_id != self.source.through_turn_id
                 || receipt.pointer.archived_message_count != self.source.messages.len()
@@ -92,6 +92,22 @@ impl CompactionExecution {
             return Err(AgentFailure::PolicyDenied);
         }
         Ok(())
+    }
+
+    pub fn complete(
+        &self,
+        actor: &OwnerActor,
+        receipt: CompactionReceipt,
+    ) -> Result<Self, AgentFailure> {
+        self.authorize_actor(actor)?;
+        if self.disposition != CompactionDisposition::Pending {
+            return Err(AgentFailure::Conflict);
+        }
+        let mut next = self.clone();
+        next.revision = next.revision.checked_add(1).ok_or(AgentFailure::Conflict)?;
+        next.disposition = CompactionDisposition::Committed { receipt };
+        next.validate()?;
+        Ok(next)
     }
 
     pub fn retire(&self, actor: &OwnerActor, failure: AgentFailure) -> Result<Self, AgentFailure> {

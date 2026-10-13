@@ -120,7 +120,7 @@ pub(crate) enum ManagerHistoryView {
 struct ManagerSummaryPreflight {
     alias_id: Uuid,
     transcript_sequence: u64,
-    turn_id: Uuid,
+    coverage_id: Uuid,
     message: AgentMessage,
     coverage_header: ContextDependencyCoverageHeader,
     encoded_bytes: usize,
@@ -338,7 +338,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     &transaction,
                     self.person_id,
                     session_id,
-                    manifest.through_turn_id,
+                    manifest.summary_alias_id,
                 )
                 .await
                 .map_err(owner_error)?;
@@ -364,7 +364,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 Some(ManagerSummaryPreflight {
                     alias_id: manifest.summary_alias_id,
                     transcript_sequence: checkpoint.through.sequence,
-                    turn_id: manifest.through_turn_id,
+                    coverage_id: manifest.summary_alias_id,
                     message,
                     coverage_header,
                     encoded_bytes,
@@ -622,7 +622,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         &transaction,
                         self.person_id,
                         session_id,
-                        summary.turn_id,
+                        summary.coverage_id,
                         summary.coverage_header,
                         #[cfg(test)]
                         &self.context_coverage_payload_hydrations,
