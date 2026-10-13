@@ -130,3 +130,5 @@ pub use ports::{CompactionAdmission, CompactionRepository};
 pub use application::{
     COMPACTION_ROLE_ID, CompactionModelProjection, compaction_role_spec, compaction_seed,
 };
+
+pub use application::CompactionDriver;

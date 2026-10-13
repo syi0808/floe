@@ -1,3 +1,5 @@
+mod compaction_driver;
+pub use compaction_driver::CompactionDriver;
 mod compaction_projection;
 pub use compaction_projection::{
     COMPACTION_ROLE_ID, CompactionModelProjection, compaction_role_spec, compaction_seed,

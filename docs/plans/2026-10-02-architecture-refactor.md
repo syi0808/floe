@@ -308,6 +308,23 @@ the preceding completion checkpoint's 58-test result; this new projection is not
 yet activated by a runtime caller. Flutter/Apple/live-provider checks remain
 unverified under the existing environment limits.
 
+The next root-owned slice adds a bounded CompactionDriver using the same Engine,
+live Context projector and Inference port. Actual encrypted-store fixtures cover
+one execution plus committed replay, pure preflight rejection versus an
+uncertain dispatched error, bounded invalid-output correction, output recovery
+without even preparing a model, and retirement after source movement. The driver
+creates no product Run/Expert Task and does not equate runtime_epoch with the
+durable executor generation. A new large UTF-8 regression exposed the projector
+packing more than the typed single-message ceiling into one frame; ordered inert
+JSON fragments now preserve all bytes within the existing per-message and total
+bounds. Focused checks pass six projection tests and four driver/store tests.
+Final qualification passes 326 default workspace tests including doctests, the
+production FFI build, architecture boundaries (26 nodes, 139 edges, no errors or
+warnings), and diff hygiene. App QA is not rerun for this still-unactivated
+component; its preceding 58-test result is not new driver qualification. The
+component is not yet automatically called by the Conversation lifecycle. No
+Flutter, Apple, Go loopback or live-provider qualification is inferred.
+
 Automatic activation still needs a capacity/lifecycle decision before wiring.
 A post-completion count-only trigger is insufficient for a few large turns: a
 transport can reject before the 96-KiB structural trigger, and a resulting

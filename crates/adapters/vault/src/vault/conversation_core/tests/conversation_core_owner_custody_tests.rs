@@ -13043,3 +13043,6 @@ async fn compaction_completion_installs_recorded_filtered_coverage_not_prefix_un
         DependencyCoverage::Unknown
     );
 }
+
+#[path = "compaction_driver_tests.rs"]
+mod compaction_driver_tests;

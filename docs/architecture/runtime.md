@@ -683,8 +683,8 @@ based. The old caller-supplied-summary command and source-revision replay lookup
 are removed. A storage-only test fixture uses the same installation path.
 The local archive schema deliberately no longer requires unique source revision;
 incompatible old development stores fail closed and are never reset automatically.
-Automatic lifecycle wiring and Engine drive integration remain an active
-cutover in the plan.
+The bounded Engine driver is implemented; automatic lifecycle and
+capacity-trigger wiring remain an active cutover in the plan.
 
 
 ### Compaction model projection
@@ -703,3 +703,21 @@ new learning evidence, tools, delegation and artifacts. The Engine seed is bound
 to the execution identity; caller-supplied replacement instructions or history
 are rejected. Actual transport capacity is still decided by Inference's pure
 pre-dispatch validator, not by the archive's structural byte ceiling.
+
+The Conversation-owned `CompactionDriver` executes only admitted claims, with a
+bounded deadline and the recorded job's token/cost/output budgets. It uses the
+same Engine and Inference port, an empty capability catalog, and a strict
+shorter-summary validator. It does not create a product Run or an Expert Task.
+The lifecycle must own a single serialized driver; durable executor fencing
+still guards all writes. Recorded output is installed without model preparation;
+uncertain or incomplete attempted work is retired rather than dispatched again.
+Known source movement retires an obsolete output, while failed storage reads or
+completion acknowledgements remain recoverable. Pure preflight refusal leaves
+no model intent and does not become an uncertain provider call. The generic
+Engine may make its one bounded correction attempt for invalid output; crash
+recovery does not repeat either attempt.
+
+Large compaction input is encoded as ordered, inert UTF-8 JSON fragments, each
+within the existing typed-message limit. Concatenating their payloads reproduces
+the entire retained transcript exactly. The total model-conversation and actual
+transport limits still apply; fragmentation never bypasses them or clips data.

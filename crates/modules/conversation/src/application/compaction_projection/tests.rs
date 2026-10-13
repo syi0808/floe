@@ -430,3 +430,44 @@ async fn compaction_projection_carries_dependencies_and_requires_source_processi
         "compaction cannot turn local-only evidence into Gateway permission"
     );
 }
+
+#[tokio::test]
+async fn compaction_projection_fragments_large_utf8_source_without_losing_bytes() {
+    let (actor, mut job, mut request, scope) = fixture();
+    for message in &mut job.source.messages {
+        message.text = "가나다🙂".repeat(1500);
+    }
+    job.head = CompactionJournalHead::new(&actor, &job.source, 1000, 1000, 1024).unwrap();
+    job.claim.execution_id = job.head.execution_id;
+    request.conversation = compaction_seed(job.claim.execution_id);
+    let coverage = job
+        .source
+        .messages
+        .iter()
+        .map(|m| (m.message_id, DependencyCoverage::Independent))
+        .collect();
+    let expected = job.source.messages.clone();
+    let ModelProjectionOutcome::Ready(projection) = projector(actor, job, coverage, false)
+        .project(request, &scope)
+        .await
+        .unwrap()
+    else {
+        panic!("ready")
+    };
+    projection.validate().unwrap();
+    assert!(projection.envelope.conversation.current_turn.len() > 1);
+    let mut payload = String::new();
+    let mut ids = std::collections::HashSet::new();
+    for entry in &projection.envelope.conversation.current_turn {
+        let ModelConversationEntry::User { message_id, text } = entry else {
+            panic!("inert fragment")
+        };
+        assert!(ids.insert(*message_id));
+        assert!(text.len() <= floe_agent_contract::MAX_OUTPUT_BYTES);
+        payload.push_str(text.split_once('\n').unwrap().1);
+    }
+    let values: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    for (value, original) in values.as_array().unwrap().iter().zip(expected) {
+        assert_eq!(value["text"], original.text);
+    }
+}
