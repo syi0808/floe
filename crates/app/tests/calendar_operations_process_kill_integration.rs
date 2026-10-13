@@ -625,15 +625,18 @@ fn reconcile(
     operation_id: Uuid,
     expected_revision: u64,
 ) -> floe_day::ManualCalendarOperationReceipt {
-    let result = host
-        .request(Uuid::new_v4())
-        .expect("admit explicit Calendar reconciliation")
-        .product_command(ProductCommandRequest {
-            command_id: floe_kernel::CommandId::from_uuid(command_id).expect("reconcile ID"),
-            command: ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation {
-                operation_ref: operation_id,
-                expected_revision,
-            }),
+    let request = ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(command_id).expect("reconcile ID"),
+        command: ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation {
+            operation_ref: operation_id,
+            expected_revision,
+        }),
+    };
+    let result =
+        observe_exact_reconciliation(&request, Instant::now() + RECOVERY_TIMEOUT, |request| {
+            host.request(Uuid::new_v4())
+                .expect("admit explicit Calendar reconciliation")
+                .product_command(request)
         })
         .expect("admit or replay the exact reconciliation command");
     let ProductCommandOutcome::Day(DayCommandOutcome::ReconciledExternalCalendarOperation(receipt)) =
@@ -852,4 +855,81 @@ fn retained_logs_dir(name: &str) -> PathBuf {
         .join(format!("{}-{name}-{}", std::process::id(), Uuid::new_v4()));
     fs::create_dir_all(&path).expect("create retained test log directory");
     path
+}
+
+// An indeterminate observation is not a negative command receipt. Exercise
+// exactly the same command again, without rebasing source state or authorizing
+// a second provider dispatch. The deadline bounds retries, not owner execution.
+fn observe_exact_reconciliation<T>(
+    request: &ProductCommandRequest,
+    deadline: Instant,
+    mut observe: impl FnMut(ProductCommandRequest) -> Result<T, floe_app::ProductCommandFailure>,
+) -> Result<T, floe_app::ProductCommandFailure> {
+    let mut retries = 0;
+    loop {
+        match observe(request.clone()) {
+            Err(failure)
+                if failure.disposition == floe_app::ProductCommandDisposition::Indeterminate
+                    && Instant::now() + Duration::from_millis(20) < deadline =>
+            {
+                if retries == 0 {
+                    eprintln!(
+                        "uncertain reconciliation observation; retaining exact request: {failure:?}"
+                    );
+                }
+                retries += 1;
+                thread::sleep(Duration::from_millis(20));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[test]
+fn reconciliation_observation_retries_only_uncertainty_with_identical_command() {
+    use floe_app::{ProductCommandDisposition as D, ProductCommandFailure, ProductFailure};
+    let request = ProductCommandRequest {
+        command_id: floe_kernel::CommandId::new(),
+        command: ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation {
+            operation_ref: Uuid::new_v4(),
+            expected_revision: 7,
+        }),
+    };
+    let failure = |disposition| ProductCommandFailure {
+        disposition,
+        failure: ProductFailure::Day(floe_app::CoreError::new(
+            floe_app::ErrorCode::Storage,
+            "synthetic indeterminate storage observation",
+        )),
+    };
+    let mut observed = vec![];
+    let value =
+        observe_exact_reconciliation(&request, Instant::now() + Duration::from_secs(1), |next| {
+            observed.push(next);
+            if observed.len() == 1 {
+                Err(failure(D::Indeterminate))
+            } else {
+                Ok(17)
+            }
+        })
+        .expect("retry acknowledged exact operation");
+    assert_eq!(value, 17);
+    assert_eq!(observed, vec![request.clone(), request.clone()]);
+    for disposition in [D::NotApplied, D::NotAdmitted, D::Admitted] {
+        let mut attempts = 0;
+        let result: Result<(), _> =
+            observe_exact_reconciliation(&request, Instant::now() + Duration::from_secs(1), |_| {
+                attempts += 1;
+                Err(failure(disposition))
+            });
+        assert_eq!(result.unwrap_err().disposition, disposition);
+        assert_eq!(attempts, 1, "do not reinterpret a non-indeterminate result");
+    }
+    let mut attempts = 0;
+    let result: Result<(), _> = observe_exact_reconciliation(&request, Instant::now(), |_| {
+        attempts += 1;
+        Err(failure(D::Indeterminate))
+    });
+    assert_eq!(result.unwrap_err().disposition, D::Indeterminate);
+    assert_eq!(attempts, 1, "expired observer window must not retry");
 }
