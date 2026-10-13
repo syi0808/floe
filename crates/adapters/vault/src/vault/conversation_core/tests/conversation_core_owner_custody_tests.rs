@@ -11474,3 +11474,65 @@ async fn memory_review_backlog_drains_in_bounded_pages_without_losing_candidates
     assert!(empty.candidates.is_empty());
     assert!(!empty.has_more);
 }
+
+#[tokio::test]
+async fn compaction_defers_a_valid_continue_origin_without_corrupting_it() {
+    for failure in [AgentFailure::BudgetExceeded, AgentFailure::DeadlineExceeded] {
+        let mut scenario = Scenario::new().await;
+        let (run, input) = scenario
+            .admit_run_and_append_input("Preserve my pending work")
+            .await;
+        let settlement = compose_owner_core_settlement(
+            scenario.vault(),
+            CoreComposedSettlementRequest::Finish {
+                run_id: run.run_id,
+                expected_aggregate_revision: run.aggregate_revision,
+                terminal: RunTerminal::from_failure(failure),
+            },
+        )
+        .await
+        .expect("settle exhausted work through the canonical owner");
+        let terminal = match settlement {
+            CoreComposedSettlementResult::Settled { record, .. }
+            | CoreComposedSettlementResult::OwnerOutcomeDeferred { record }
+            | CoreComposedSettlementResult::CustodyPending { record } => record,
+        };
+        scenario.session_revision = terminal.session_revision;
+        assert!(
+            floe_conversation::project_run_receipt(terminal.clone())
+                .unwrap()
+                .continuation()
+                .is_some()
+        );
+        for reopened in [false, true] {
+            if reopened {
+                scenario.reopen().await;
+                scenario.executor_generation = scenario
+                    .vault()
+                    .activate_conversation_executor()
+                    .await
+                    .expect("activate the reopened runtime")
+                    .executor_generation;
+            }
+            assert_eq!(
+                scenario
+                    .vault()
+                    .compact_manager_session(
+                        scenario.session_id,
+                        terminal.session_revision,
+                        run.run_id.as_uuid(),
+                        "The user's work is still pending.".into(),
+                    )
+                    .await,
+                Err(AgentFailure::Conflict),
+                "a legitimate Continue root is protected work, not corrupt storage"
+            );
+        }
+        let (continued, reused) = scenario
+            .admit_owner_run_reusing_input(&terminal, "Continue retained work")
+            .await;
+        assert_ne!(continued.run_id, terminal.run_id);
+        assert_eq!(reused.disposition, AdmissionDisposition::Replayed);
+        assert_eq!(reused.receipt.transcript, input.receipt.transcript);
+    }
+}

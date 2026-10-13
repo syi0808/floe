@@ -131,7 +131,11 @@ the exact typed prefix from normalized Core entries. This milestone does not
 physically prune transcript payloads. Active turns, pending batches, open
 interactions, Continue origins, pending Resume slots, uncertain effects and
 archive references remain protected. Unknown coverage stays Unknown, and
-source revocation continues to apply to summaries.
+source revocation continues to apply to summaries. Continue eligibility is read
+from the canonical Run receipt: budget-exhausted Failed and deadline-exhausted
+TimedOut Runs can remain valid protected origins. An attempted compaction of such
+a Session returns a conflict without changing its revision, input or continuation;
+malformed owner/Session/continuation bindings still fail as unavailable storage.
 
 Fresh development profiles are the supported activation scope. There is no
 automatic legacy Session import, migration chain, dual read/write or reset.

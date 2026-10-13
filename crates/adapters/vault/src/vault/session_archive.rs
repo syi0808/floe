@@ -309,7 +309,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || run.session_id != session_id
                     || run.session_revision != session.revision
                     || run.continuation_level != marker.level
-                    || !matches!(run.state, floe_conversation::RunState::Completed | floe_conversation::RunState::Blocked)
                     || floe_conversation::project_run_receipt(run)?.continuation().is_none()
                 {
                     return Err(AgentFailure::StorageUnavailable);

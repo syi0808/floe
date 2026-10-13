@@ -128,6 +128,68 @@ continuation marker. The fixture verifies exact ordering, reopen, page advance
 and complete drain; original candidate/decision records remain intact.
 Protocol rejects missing or contradictory page metadata. Fresh validation passed 291 default Rust workspace tests including doctests, 34 Conversation integrations, 9 Calendar/Day/process-kill integrations (one opt-in case ignored), the production FFI build, architecture boundaries and diff checks. Five standalone cases executed the actual Dart memory-page decoder. Flutter dependency restoration timed out in initial diagnostics and the supported escalation returned a policy block for https://pub.dev:443; Flutter analyze, widget tests and Apple builds remain unverified. The new client tests are present but are not claimed as passed. Automatic semantic compaction remains open.
 
+## Automatic semantic compaction — direct implementation sequence
+
+This remains an open implementation milestone, distinct from lossless storage
+compression. Conversation owns eligibility, scheduling and durable compaction
+execution; Context owns live projection/coverage; the existing Agent Runtime and
+Inference own model execution and selection; Vault atomically commits the exact
+Core checkpoint, archive manifest and Session CAS. App only composes the service.
+No Expert learning loop, new product command or external provider dispatch is
+introduced by this plan.
+
+The current archive commit accepts a caller-provided summary and has no automatic
+production caller. It cannot be made automatic merely by calling a model after a
+Run finishes: the model attempt must have durable intent, bounded accounting and
+restart semantics before the checkpoint can be committed.
+
+The first eligibility defect was reproduced and repaired directly: the archive
+guard incorrectly required Completed/Blocked before consulting Continue, while
+canonical Continue is Failed/BudgetExceeded or TimedOut/DeadlineExceeded. The
+redundant contradictory check was removed; the canonical receipt validator and
+all owner/session/prefix protections remain. An encrypted owner/Core regression
+covers both exhaustion causes, rejection before and after reopen, executor
+reactivation and exact input reuse by Continue. Qualification passed 148 Vault
+tests, 292 default workspace tests including doctests, production FFI build,
+architecture boundaries and diff checks. This is an eligibility correction, not
+completion of automatic summarization. No new Flutter or Apple qualification was
+possible; the existing dependency/platform blockers remain.
+
+Ordered cutover and acceptance:
+
+1. Verify existing archive eligibility against canonical Run semantics. A valid
+   Continue origin is a protected, retryable conflict, not corrupt storage. Keep
+   protection for pending batches, open interactions, Resume slots, unresolved
+   effects and active recorders. Reproduce budget/deadline exhaustion across
+   reopen, then prove the original input can still be continued.
+2. Add bounded candidate selection before a prefix reaches the model/archive
+   ceiling. Select complete settled turns, retain a recent tail, and bind the
+   candidate to Person, Session revision, Core branch, exact prefix digest and
+   previous checkpoint. A prefix that cannot fit is not silently truncated.
+3. Admit one durable Conversation-owned compaction execution per exact candidate.
+   Use the existing generic Engine journal protocol, no tool/delegation catalog,
+   and the same Inference primary/valid-absence fallback policy. This journal
+   belongs only to the summarization execution; existing Run/Task journals remain
+   the sole authority for their effects. Revalidate source processing through
+   Context immediately before release. Never label unknown coverage Independent.
+4. Commit only a validated, bounded summary from that execution under the pinned
+   Session/Core proof. A competing new turn makes the candidate stale; discard
+   that candidate's result without rewriting the new turn or retrying a paid
+   attempt blindly. Retain every original transcript entry and archive pointer.
+   Lost commit ACK replays the immutable receipt. A recorded unresolved model
+   attempt does not cause another dispatch on restart.
+5. Connect eligibility and execution to the Conversation owner's lifecycle and
+   recovery. Test automatic triggering, below-threshold no-op, concurrent new
+   turns, coverage revocation, cancellation, restart at intent/result/commit,
+   exact receipt replay and full original-history access with scripted model
+   seams. Run the Rust/App/FFI and architecture gates. No live paid-model call is
+   part of qualification.
+
+The production cutover must replace the caller-supplied-summary scheduling gap,
+not add a second App timer or a client-side summarizer. Current archive APIs may
+remain as the commit boundary only while their callers all enforce the same
+candidate/execution proof; remove obsolete unchecked routes in that change set.
+
 ## Post-audit correctness work — 2026-10-12
 
 The static audit is a set of hypotheses, not runtime qualification. Reproduce each affected owner path before claiming a defect fixed. This work is performed directly in the root checkout; implementation, review and verification are not delegated.
