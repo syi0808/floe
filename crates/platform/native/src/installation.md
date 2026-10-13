@@ -1,129 +1,127 @@
 # Internal installation startup
 
 `floe_app::open_default(support_directory)` is the product startup entry point.
-It returns an admitted host whose caller supplies the authoritative Person and
-device identity. There is no product profile selection or setup wizard.
-`floe_app::open(database_path)` is an existing-only diagnostic entry point.
+It admits one internal installation and returns a host whose `CallerContext`
+carries the verified Person/device identity and host epoch. Ordinary startup
+has no product profile-selection wizard. `floe_app::open(database_path)` is an
+explicit existing-only diagnostic entry point; it uses the same identity,
+storage-profile and installation-lock checks.
+
+This document describes the current code, not the removed debug move-aside
+implementation. Debug assertions never authorize resetting or archiving data.
 
 ## Identity and physical ownership
 
 The native installation boundary owns these nonsecret physical records:
 
-- `local_installation.json`: a closed schema-1 object containing `schema_version`,
-  `person_id` (canonical nonnil UUID string), `device_id` (exact nonempty bounded
-  string without whitespace/control characters), and `phase` (`initializing` or
-  `ready`). New identities are random UUIDs, persisted once.
+- `local_installation.json`: a closed schema-1 object with `schema_version`,
+  canonical nonnil `person_id`, exact bounded `device_id`, and `phase`
+  (`initializing` or `ready`). Fresh identities are random and persisted once.
 - `local_device_id`: the same exact device string, without a newline or trimming.
-- `people/<person_id>/floe.db`: the plain Day/Connections store.
-- `local_installation.create-attempt`: an immutable closed schema-1 object with
-  `schema_version`, `person_id`, and `device_id`, durably written before the sole
-  database creation attempt for that identity.
+- `local_installation.create-attempt`: a closed immutable schema-1 object with
+  `schema_version`, `person_id`, and `device_id`, written durably before the
+  sole admitted database creation attempt for that identity.
 - `local_installation.lock`: the process-safe exclusive installation lease.
+- `local_installation.ready`: the synced temporary record used to publish the
+  validated installation's ready phase.
+
+`people/<person_id>/floe.db` is the encrypted product store, not a plaintext Day
+store. It owns host-lifetime product state, including Day and source lifecycle
+records. Its purpose-separated root key is independent of the Agent Vault key,
+provider credentials and ready owner generation. The storage adapter creates a
+root key only during admitted fresh product-store creation. Existing opens load
+that exact key; missing, malformed or unavailable custody never generates a
+replacement. A previous plaintext SQLite header is unsupported and is preserved.
 
 An existing valid `selected_profile.json` is a read-only reference to existing
-data; it is not rewritten. Without an installation record or selection, exactly
-one existing Person database plus a valid device identity can be reused. Multiple
-databases are never resolved by ordering or by choosing the first directory.
-Malformed, missing, unreadable, ambiguous and unsupported states remain distinct
-from proven fresh absence. Fresh root admission permits the diagnostics and
-recovery directories, an empty people directory, and a regular `.DS_Store` OS
-metadata file; it never deletes them. Unknown root entries are not silently
-classified as harmless installation state.
+data and is not rewritten. Without an installation record or selection, only
+an unambiguous existing Person database and valid device identity can be reused.
+Multiple databases are never resolved by directory order. Invalid, unreadable,
+ambiguous, incomplete and unsupported states are distinct from proven fresh
+absence. Known diagnostics/recovery directories and OS metadata do not authorize
+adopting or deleting their contents; unknown root entries are not silently
+classified as a fresh installation.
 
-Identity files, lock files and data directories reject symlink leaves. The
-platform-provided support path is canonicalized before recording child paths;
-normal OS ancestor aliases do not become a second installation identity.
+Identity files, lock files and data-directory leaves reject symlinks. The
+platform-provided support path is canonicalized before recording child paths.
+App canonicalizes an explicit database path before profile validation, identity
+loading and installation locking, so aliases cannot select another lease.
 
-The exclusive lease spans preparation, store validation, and ready publication.
-App then consumes its actual locked File into TursoStore before publishing any
-owner. The database is declared before this retained lock, so the lock drops last;
-every retained repository/store Arc keeps the installation excluded. Diagnostic
-open acquires the same lease. Busy admission fails without resetting. The normal
-AppHost retirement path closes/drains owners; a retained background store keeps
-the lock even after a caller's close timeout. No reset moves a live admitted store.
+## Build-selected storage profiles
+
+Production `os-keyring` custody and isolated `development-storage` custody are
+selected at build time. An OS key-store failure never falls back to file keys.
+A debug build does not itself select development custody; the explicit
+`development-storage` feature is restricted to debug-assertion builds.
+
+A development-storage build selects the dedicated
+`<support_directory>/development-storage/client` installation. Its parent holds
+the exact `floe-development-profile` marker. Only the dedicated child and its
+validated marker are created; the normal installation at the supplied base is
+not imported, reset or used as a fallback. Production opens reject the marked
+development profile. Existing-only diagnostic opens must satisfy the same
+build-selected profile checks.
+
+Both profiles use encrypted product and Agent Vault databases. Development file
+keys are private fixture custody, not a plaintext database mode or a way to
+unlock a production profile. Use an explicitly selected fresh development root
+when a pre-stable stored format is incompatible; retain the original root and
+its keys for inspection.
 
 ## Creation and crash order
 
-1. Acquire the installation lease and inspect bounded identity/data records.
-2. For a genuinely fresh installation, create and sync the `initializing` record
-   before creating the Person directory or device file. Retry uses those same IDs.
-3. Create missing directories/device data only as the exact recorded initialization
-   permits. Sync each new file and its parent directory.
-4. Create and sync the immutable create-attempt marker, then call the plain
-   storage adapter's `create_new`. It never truncates or initializes an existing
-   file. Marker plus missing database is incomplete, never a fresh create retry.
-5. Checkpoint newly initialized schema pages into the main file, require a
-   nonbusy checkpoint result, and sync the main file and its parent. Existing
-   databases, including an interrupted initialization's database, must
-   pass existing-store schema validation. A partial file is never initialized.
-6. Debug startup inspects any existing encrypted Vault read-only before owner
-   activation, using the existing exact key slot and the Vault's own host lock.
-7. Re-read physical Person/device identity after validation. Publish `ready` by
-   syncing `local_installation.ready` and renaming it over the identical identity's
-   initializing record. An existing database being adopted receives its first
-   installation record only after successful validation. No identity is rewritten.
-8. Transfer the installation lease to the store, then construct/activate owners.
+1. Select the build's permitted support root, acquire its installation lease,
+   and inspect bounded identity/data records. A legacy
+   `local_installation.reset` marker makes default startup incomplete; startup
+   does not resume an old archive/reset manifest.
+2. For proven fresh state, sync the `initializing` record before creating the
+   Person directory or device file. An interrupted retry retains the same IDs.
+3. Create only the directories/device data permitted by that recorded identity,
+   syncing new files and parent directories.
+4. Sync the immutable creation-attempt marker before the storage adapter's
+   `create_new`. It exclusively creates a new main file and purpose-separated
+   key, then creates and verifies the encrypted schema/identity. It never
+   truncates or initializes an existing database.
+5. Checkpoint new schema pages into the main file, require a nonbusy result,
+   and sync the file and parent. An already present initializing database is
+   inspected through `open_existing`; an empty, partial, incompatible or
+   unreadable file is not initialized or repaired.
+6. Existing opens load the existing product key, retain the selected physical
+   main file, validate encrypted schema and identity read-only, then open and
+   revalidate the same pinned file for ordinary use. Failed validation preserves
+   the files, creation marker and key.
+7. Re-read Person/device identity after store validation. Publish the same
+   identity's ready record with durable replacement of the initializing record.
+   Existing data being adopted receives an installation record only after
+   successful validation; identities are never guessed or rewritten.
+8. Transfer the actual installation-lock File into `TursoStore` and construct
+   the host resources. Runtime preparation separately owns Agent Vault
+   creation/unlock and ready-generation activation; installation completion
+   does not unlock that generation or preflight/reset its key.
 
-A crash before a durable identity can leave an invalid bounded record; it is not
-permission to guess its identity. A crash after the create-attempt marker but
-before database creation leaves an incomplete installation. Stable builds fail
-explicitly in either case. The development-only policy below can preserve and
-replace this installation as a distinct fresh identity.
+The retained lock is declared after the product database and drops last. Every
+retained repository/store `Arc` keeps the installation excluded. Diagnostics
+participate in that exclusion. Host shutdown closes admissions and drains
+owners; a timeout does not prove a retained background store has released its
+lease. Busy admission fails without moving or replacing live state.
 
-## Development-only move-aside policy
+## Failure and recovery boundary
 
-Only `cfg(debug_assertions)` enables development recovery. Stable builds never
-archive automatically. Trigger evidence is limited to typed invalid/ambiguous/
-incomplete installation state, successfully observed incompatible plain-store
-header/schema, typed Turso `Corrupt`/`NotAdb`, or the encrypted Vault preflight's
-typed missing/malformed key, incompatible schema, identity mismatch or stored-data
-corruption. Error text is never parsed for permission to reset. Generic database
-errors, failed I/O, permission denial, busy/locked state and unavailable Keychain
-access remain failures. A cryptographic cause erased into a generic engine error
-cannot be claimed as a verified wrong key or corruption.
+Every build fails closed on invalid, incomplete or incompatible local state,
+missing/unavailable keys and uncertain storage outcomes. A crash after the
+creation-attempt marker but before database creation remains incomplete. A
+partial existing creation stays preserved. Neither generic error text nor a
+known corruption classification grants permission to replace data or keys.
 
-Before an encrypted reset, the preflight's opaque `VaultResetEvidence` retains
-the existing Vault host-lock File through the complete move. App drops its plain
-store before moving anything and never exposes a client-supplied reset command.
-The new store cannot repeatedly reset in one open attempt.
+There is no current automatic archive/reset implementation, client reset route,
+`VaultResetEvidence` recovery path or debug-only plaintext-store fallback.
+Historical recovery directories and unfinished reset markers are retained for
+explicit operator inspection, not replayed as startup instructions. No startup
+failure automatically replays uncertain external operations.
 
-Every archive, including an invalid-installation archive before Vault preflight,
-also acquires all existing encrypted `host.lock` files in the bounded known Vault
-layouts covered by the move. It inspects both original and recovery trees when
-resuming. Only the exact device/inode of a supplied retained preflight lock is
-excluded from reacquisition; every other lock is retained until all moves finish.
-Missing/malformed lock files, busy locks and failed enumeration stop recovery.
-Symlink directories are never traversed. An older binary does not participate in
-the installation lease: close all older app/diagnostic instances before running
-development recovery. This code cannot claim exclusion against an older process
-that holds only a plain database without the new installation lock.
-
-Recovery creates `recovery/<unix_milliseconds>-<random_uuid>/manifest.json`. Its
-closed schema-1 fields are `schema_version`, `recovery_id`, `started_at_millis`,
-`reason`, and `entries`. The entries are limited to the present members of:
-
-`local_installation.json`, `local_installation.create-attempt`,
-`local_installation.ready`, `local_device_id`, `selected_profile.json`,
-`selected_profile.json.tmp`, `people`, `floe.db`, `floe.db-wal`, `floe.db-shm`, and
-`floe.db.agent-vaults`.
-
-The complete manifest is synced before writing identical immutable bytes to
-`local_installation.reset`. Each directory entry is then renamed on the same
-filesystem into that recovery directory, with directory syncs after each move.
-Existing destinations are never overwritten. A source absent with its exact
-destination present is a completed step; both present or both missing fail.
-Startup resumes a pending manifest under the same exclusive installation lease
-before admitting any other state. After all moves, the root reset marker is moved
-to `completed.json` inside the recovery directory. A malformed pending reset
-manifest fails instead of starting another recovery around it.
-
-This preserves the complete old data tree, including journals and uncertain
-operation evidence. Root diagnostics, prior recovery directories and every old
-Keychain entry remain intact. Symlink entries themselves may be archived; their
-targets and all external provider data remain untouched. No files or credentials
-are deleted and no historical external operation is replayed.
-
-Encrypted Vault creation/unlock retains the existing product lifecycle after App
-startup. This bootstrap neither creates a Vault key nor unlocks a ready generation.
-Source implementation is separate from authorization to run a development reset
-against an actual user's installation.
+Current implementation references: `crates/app/src/composition.rs`,
+`crates/app/src/storage_profile.rs`, `crates/platform/native/src/installation.rs`,
+`crates/adapters/vault/src/engine.rs`, `crates/adapters/vault/src/product_keys.rs`,
+and the Runtime preparation owner. Native identity/lease tests and App's missing
+key/incomplete creation regressions enforce the preservation boundary; Linux
+fixtures do not qualify Apple Keychain behavior.
