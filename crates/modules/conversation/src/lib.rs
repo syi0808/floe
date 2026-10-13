@@ -126,3 +126,7 @@ pub use application::{
 pub use application::{CompactionClaim, CompactionDisposition, CompactionExecution};
 
 pub use ports::{CompactionAdmission, CompactionRepository};
+
+pub use application::{
+    COMPACTION_ROLE_ID, CompactionModelProjection, compaction_role_spec, compaction_seed,
+};

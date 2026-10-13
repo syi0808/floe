@@ -1,3 +1,7 @@
+mod compaction_projection;
+pub use compaction_projection::{
+    COMPACTION_ROLE_ID, CompactionModelProjection, compaction_role_spec, compaction_seed,
+};
 mod compaction_execution;
 pub use compaction_execution::{CompactionClaim, CompactionDisposition, CompactionExecution};
 mod compaction_journal;

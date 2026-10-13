@@ -295,6 +295,19 @@ or compatibility fallback. Qualification must cover both race orderings,
 multiple same-revision checkpoints, exact completion replay, lost acknowledgement,
 and original-message paging after checkpoint installation.
 
+The Conversation-owned compaction model projector is implemented. It re-reads
+the admitted claim around Context history authorization, preserves original User
+text and complete authorized Tool/Delegation outcomes, carries retained
+provenance and data classes, and loads no current memories/persona/evidence.
+Five focused tests pass for role/text retention, live Unknown filtering, claim
+movement/request retargeting, raw-data denial/cancellation and local-only source
+processing review. This component does not yet schedule or dispatch a model.
+Qualification passes 321 default workspace tests including doctests, the
+production FFI build, architecture boundaries and diff hygiene. App QA remains
+the preceding completion checkpoint's 58-test result; this new projection is not
+yet activated by a runtime caller. Flutter/Apple/live-provider checks remain
+unverified under the existing environment limits.
+
 Automatic activation still needs a capacity/lifecycle decision before wiring.
 A post-completion count-only trigger is insufficient for a few large turns: a
 transport can reject before the 96-KiB structural trigger, and a resulting

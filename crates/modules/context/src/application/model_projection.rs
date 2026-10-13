@@ -28,6 +28,8 @@ const MAX_PROJECTED_OUTPUT_BYTES: usize = 16384;
 pub enum ContextProjectionRole {
     Manager,
     Finalization,
+    /// Historical-prefix summarization carries no live persona, memories or evidence.
+    Compaction,
     /// A delegated Expert's own reasoning input: the full authorized context
     /// the Expert was given, like the Manager, but never the Manager role.
     Expert,
@@ -288,6 +290,13 @@ fn live_context(role: ContextProjectionRole, context: &AgentContext) -> AgentCon
         ContextProjectionRole::Manager
         | ContextProjectionRole::Expert
         | ContextProjectionRole::Learner => context.clone(),
+        ContextProjectionRole::Compaction => AgentContext {
+            projection_version: context.projection_version,
+            persona: None,
+            memories: vec![],
+            optional_context_issues: vec![],
+            evidence: vec![],
+        },
         ContextProjectionRole::Finalization => AgentContext {
             projection_version: context.projection_version,
             persona: None,

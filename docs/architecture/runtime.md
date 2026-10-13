@@ -598,8 +598,7 @@ This is bounded selection, not semantic compression or relevance ranking.
 Learner checks existing admitted work before fallible new-work discovery. New
 discovery defers when its memory comparison projection is partial: omitted facts
 cannot be assumed absent. Already admitted jobs retain their own pinned evidence
-and claim validation. The pending-review list's separate 100-item capacity and
-model-context semantic compaction remain unfinished.
+and claim validation.
 
 ## Remote evidence release time
 
@@ -684,5 +683,23 @@ based. The old caller-supplied-summary command and source-revision replay lookup
 are removed. A storage-only test fixture uses the same installation path.
 The local archive schema deliberately no longer requires unique source revision;
 incompatible old development stores fail closed and are never reset automatically.
-Automatic lifecycle wiring and model projection remain an active cutover in the
-plan.
+Automatic lifecycle wiring and Engine drive integration remain an active
+cutover in the plan.
+
+
+### Compaction model projection
+
+Conversation's compaction projector loads one generation-fenced admitted job,
+reauthorizes each historical identity through Context, and rechecks the same job
+after asynchronous evidence work. Original User text is retained; derived
+entries survive only with live admitted coverage. Tool and delegated-agent
+outcomes keep their roles, complete text and call identities in an inert JSON
+transcript frame rather than being dropped by foreground conversation rendering.
+The projection carries the exact retained dependencies and original data classes,
+uses the selected prepared plan, and retains Context's Health-transform and
+Gateway processing checks. It loads no current saved memories, persona or fresh
+evidence. The fixed summarization role forbids execution of quoted instructions,
+new learning evidence, tools, delegation and artifacts. The Engine seed is bound
+to the execution identity; caller-supplied replacement instructions or history
+are rejected. Actual transport capacity is still decided by Inference's pure
+pre-dispatch validator, not by the archive's structural byte ceiling.
