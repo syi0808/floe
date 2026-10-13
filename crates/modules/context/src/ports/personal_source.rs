@@ -107,11 +107,13 @@ pub trait PersonalSourceDriver: Sync {
     ) -> BoxFuture<'a, Result<AcquiredSource, AgentFailure>>;
 
     /// Record the observation a personal read depends on, so a later turn can
-    /// ask whether it still holds.
+    /// ask whether it still holds. The epoch is the one pinned before acquisition,
+    /// never a newly observed host identity at commit time.
     #[allow(clippy::too_many_arguments)]
     fn commit_personal_observation(
         &self,
         person_id: PersonId,
+        host_epoch: &str,
         device_id: &str,
         observation_id: Uuid,
         process_incarnation_id: Uuid,

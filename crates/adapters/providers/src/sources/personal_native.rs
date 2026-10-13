@@ -211,6 +211,7 @@ impl PersonalSourceDriver for NativePersonalDriver {
     fn commit_personal_observation(
         &self,
         person_id: PersonId,
+        host_epoch: &str,
         device_id: &str,
         observation_id: Uuid,
         process_incarnation_id: Uuid,
@@ -221,11 +222,13 @@ impl PersonalSourceDriver for NativePersonalDriver {
         health_transform: Option<floe_context_contract::HealthTransformEvidence>,
     ) -> Result<(), AgentFailure> {
         // The observation only counts under the host epoch that produced it.
-        let host_epoch = self.personal.host_epoch(person_id)?;
+        if self.personal.host_epoch(person_id)? != host_epoch {
+            return Err(AgentFailure::StaleContext);
+        }
         self.observations.commit_trusted_personal_observation(
             person_id,
             device_id,
-            host_epoch,
+            host_epoch.to_owned(),
             observation_id,
             process_incarnation_id,
             native_subject_fingerprint,
@@ -465,6 +468,137 @@ mod attention_history_tests {
         assert_eq!(
             driver.trusted_attention_observation(person, "device-1", id, incarnation),
             Err(AgentFailure::StaleContext)
+        );
+    }
+}
+
+#[cfg(test)]
+mod personal_epoch_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn completed_personal_projection_cannot_be_relabelled_after_host_takeover() {
+        let driver = NativePersonalDriver {
+            attention: Arc::new(AttentionBroker::new()),
+            personal: Arc::new(PersonalBroker::new()),
+            observations: Arc::new(ObservationRegistry::new()),
+        };
+        let person = PersonId::new();
+        driver
+            .personal
+            .register_host(person, "old-host".into())
+            .unwrap();
+        let acquired_epoch = driver.personal_host_epoch(person).unwrap();
+        driver
+            .personal
+            .register_host(person, "new-host".into())
+            .unwrap();
+        let observed = now_unix_ms();
+        let result = driver.commit_personal_observation(
+            person,
+            &acquired_epoch,
+            "device-1",
+            Uuid::new_v4(),
+            driver.process_incarnation(),
+            &"a".repeat(64),
+            observed,
+            observed + 60_000,
+            vec![1],
+            None,
+        );
+        assert_eq!(acquired_epoch, "old-host");
+        assert_eq!(result, Err(AgentFailure::StaleContext));
+    }
+    #[test]
+    fn personal_observation_keeps_its_acquisition_epoch_after_replacement() {
+        let driver = NativePersonalDriver {
+            attention: Arc::new(AttentionBroker::new()),
+            personal: Arc::new(PersonalBroker::new()),
+            observations: Arc::new(ObservationRegistry::new()),
+        };
+        let person = PersonId::new();
+        let id = Uuid::new_v4();
+        let incarnation = driver.process_incarnation();
+        let observed = now_unix_ms();
+        driver
+            .personal
+            .register_host(person, "host-1".into())
+            .unwrap();
+        driver
+            .commit_personal_observation(
+                person,
+                "host-1",
+                "device-1",
+                id,
+                incarnation,
+                &"a".repeat(64),
+                observed,
+                observed + 60_000,
+                vec![1],
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            driver
+                .trusted_personal_observation(person, "device-1", id, incarnation)
+                .unwrap()
+                .query_fingerprint,
+            vec![1]
+        );
+        driver
+            .personal
+            .register_host(person, "host-2".into())
+            .unwrap();
+        assert!(matches!(
+            driver.trusted_personal_observation(person, "device-1", id, incarnation),
+            Err(AgentFailure::StaleContext)
+        ));
+        assert_eq!(
+            driver.commit_personal_observation(
+                person,
+                "host-1",
+                "device-1",
+                id,
+                incarnation,
+                &"a".repeat(64),
+                observed,
+                observed + 60_000,
+                vec![2],
+                None
+            ),
+            Err(AgentFailure::StaleContext)
+        );
+        let retained = driver
+            .observations
+            .trusted_personal_observation(person, "device-1", "host-1", id, incarnation, observed)
+            .unwrap();
+        assert_eq!(
+            retained.query_fingerprint,
+            vec![1],
+            "rejected old-host completion must not mutate the retained proof"
+        );
+        let fresh_id = Uuid::new_v4();
+        driver
+            .commit_personal_observation(
+                person,
+                "host-2",
+                "device-1",
+                fresh_id,
+                incarnation,
+                &"a".repeat(64),
+                observed,
+                observed + 60_000,
+                vec![3],
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            driver
+                .trusted_personal_observation(person, "device-1", fresh_id, incarnation)
+                .unwrap()
+                .query_fingerprint,
+            vec![3]
         );
     }
 }

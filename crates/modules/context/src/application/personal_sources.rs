@@ -374,12 +374,13 @@ pub async fn read_selected_people_outcome(
         .native_subject_fingerprint()
         .ok_or(AgentFailure::StaleContext)?
         .to_owned();
+    let host_epoch = driver.personal_host_epoch(person_id)?;
     let acquired = driver
         .acquire(
             PersonalAcquisition {
                 person_id,
                 device_id,
-                host_epoch: driver.personal_host_epoch(person_id)?,
+                host_epoch: host_epoch.clone(),
                 domain: PersonalDomain::People,
                 selected_handles: handles.clone(),
                 expected_subject: subject.clone(),
@@ -446,6 +447,7 @@ pub async fn read_selected_people_outcome(
     .map_err(|_| AgentFailure::InvalidInput)?;
     driver.commit_personal_observation(
         person_id,
+        &host_epoch,
         device_id,
         observation_id,
         process,
@@ -560,12 +562,13 @@ pub async fn read_selected_wellbeing_outcome(
         .native_subject_fingerprint()
         .ok_or(AgentFailure::StaleContext)?
         .to_owned();
+    let host_epoch = driver.personal_host_epoch(person_id)?;
     let acquired = driver
         .acquire(
             PersonalAcquisition {
                 person_id,
                 device_id,
-                host_epoch: driver.personal_host_epoch(person_id)?,
+                host_epoch: host_epoch.clone(),
                 domain: PersonalDomain::Wellbeing,
                 selected_handles: Vec::new(),
                 expected_subject: subject.clone(),
@@ -633,6 +636,7 @@ pub async fn read_selected_wellbeing_outcome(
     .map_err(|_| AgentFailure::PolicyDenied)?;
     driver.commit_personal_observation(
         person_id,
+        &host_epoch,
         device_id,
         observation_id,
         process,
