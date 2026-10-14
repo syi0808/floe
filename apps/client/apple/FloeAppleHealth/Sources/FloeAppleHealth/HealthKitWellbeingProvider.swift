@@ -132,40 +132,37 @@ public actor HealthKitWellbeingProvider {
 
     private func querySleepHours(start: Date, end: Date) async throws -> Double? {
         guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
-        let samples: [HKCategorySample] = try await querySamples(type: type, start: start, end: end)
-        let asleepIntervals = samples.compactMap { sample -> DateInterval? in
-            let asleepValues: Set<Int>
-            if #available(iOS 16.0, *) {
-                asleepValues = [
-                    HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepCore.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
-                    HKCategoryValueSleepAnalysis.asleepREM.rawValue,
-                ]
-            } else {
-                asleepValues = [HKCategoryValueSleepAnalysis.asleep.rawValue]
-            }
-            return asleepValues.contains(sample.value) ? DateInterval(start: sample.startDate, end: sample.endDate) : nil
+        let samples = try await querySleepSamples(type: type, start: start, end: end)
+        let asleepValues: Set<Int>
+        if #available(iOS 16.0, *) {
+            asleepValues = [
+                HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
+                HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                HKCategoryValueSleepAnalysis.asleepDeep.rawValue,
+                HKCategoryValueSleepAnalysis.asleepREM.rawValue,
+            ]
+        } else {
+            asleepValues = [HKCategoryValueSleepAnalysis.asleep.rawValue]
         }
-        guard !asleepIntervals.isEmpty else { return nil }
-        let merged = asleepIntervals.sorted { $0.start < $1.start }.reduce(into: [DateInterval]()) { result, interval in
-            guard let previous = result.last, interval.start <= previous.end else {
-                result.append(interval)
-                return
-            }
-            result[result.count - 1] = DateInterval(start: previous.start, end: max(previous.end, interval.end))
-        }
-        return merged.reduce(0) { $0 + $1.duration } / 3_600
+        return try SleepWindowAggregation.hours(samples: samples.map {
+            SleepWindowSample(start: $0.startDate, end: $0.endDate, asleep: asleepValues.contains($0.value))
+        }, start: start, end: end)
     }
 
-    private func querySamples<Sample: HKSample>(type: HKSampleType, start: Date, end: Date) async throws -> [Sample] {
+    private func querySleepSamples(type: HKSampleType, start: Date, end: Date) async throws -> [HKCategorySample] {
         try await withCheckedThrowingContinuation { continuation in
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictEndDate)
-            let query = HKSampleQuery(sampleType: type, predicate: predicate, limit: 100, sortDescriptors: nil) { _, samples, error in
+            // No strict endpoint option: include every sample overlapping the
+            // window, then clip locally. The extra row proves truncation.
+            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+            let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                      limit: SleepWindowAggregation.queryLimit, sortDescriptors: nil) { _, samples, error in
                 if let error {
                     continuation.resume(throwing: error)
+                } else if let values = samples as? [HKCategorySample],
+                          values.count <= SleepWindowAggregation.maximumSampleCount {
+                    continuation.resume(returning: values)
                 } else {
-                    continuation.resume(returning: (samples as? [Sample]) ?? [])
+                    continuation.resume(throwing: HealthKitWellbeingFailure.unavailable)
                 }
             }
             healthStore.execute(query)

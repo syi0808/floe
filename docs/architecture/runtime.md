@@ -603,6 +603,8 @@ FoundationModels implements DeviceModel as the first peer backend. It owns SDK a
 
 The shared Transform protocol has associated input/output types. HealthTransform owns its Health prompt, small numeric input and closed capacity/recovery output, consuming DeviceModel without an Agent context or remote fallback. Apple acquisition, input mapping and source envelope construction are separate responsibilities. The Health host retains independent operation state and single-use source receipts in the same dynamic image as the generic device host. Model success cannot mint source authority. Only stateless contracts and transport clients are linked into Runner.
 
+HealthKit sleep acquisition preserves its existing 36-hour observation window. It requests overlapping category samples with a 4,096-record budget plus one overflow sentinel; overflow and malformed result shapes fail as unavailable rather than returning a partial aggregate. The acquisition-owned helper clips asleep intervals to the window and unions overlaps/duplicates before calculating hours. Awake-only/empty observations remain absent, not fabricated zero sleep. Raw samples remain local and ephemeral; the existing required local Health transform and HighlySensitive classification remain unchanged. A bounded complete query does not establish that HealthKit read authorization exposed all underlying records.
+
 
 Feature requests that encounter an intrinsic `VaultUnavailable`/`VaultLocked` failure retain the Runtime owner's readiness/recovery projection through AppWire. Generic provider and turn errors are not relabeled as readiness failures. This lets the shared client observer retire its displayed readiness and expose only the owner-approved Runtime recovery action after a sealed generation.
 
