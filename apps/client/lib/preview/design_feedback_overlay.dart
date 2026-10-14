@@ -36,7 +36,8 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
   bool _selecting = false;
   _DesignTarget? _hoveredTarget;
   _DesignTarget? _draftTarget;
-  int? _editingIndex;
+  int? _editingId;
+  int _nextAnnotationId = 0;
   String? _status;
 
   @override
@@ -94,7 +95,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
       _selecting = false;
       _hoveredTarget = null;
       _draftTarget = null;
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
   }
@@ -105,7 +106,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
       _selecting = true;
       _hoveredTarget = null;
       _draftTarget = null;
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
   }
@@ -116,7 +117,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
       _selecting = false;
       _hoveredTarget = null;
       _draftTarget = null;
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
   }
@@ -137,7 +138,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
       _selecting = false;
       _hoveredTarget = null;
       _draftTarget = target.withAnchor(details.globalPosition);
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
   }
@@ -435,22 +436,29 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     final target = _draftTarget;
     final comment = _commentController.text.trim();
     if (target == null || comment.isEmpty) return;
+    final index = _editingId == null
+        ? -1
+        : _annotations.indexWhere((value) => value.id == _editingId);
+    if (_editingId != null && index < 0) {
+      _cancelCurrentAction();
+      return;
+    }
+    final previous = index < 0 ? null : _annotations[index];
     late _DesignAnnotation annotation;
     setState(() {
       annotation = _DesignAnnotation(
+        id: previous?.id ?? _nextAnnotationId++,
         target: target,
         comment: comment,
-        createdAt: _editingIndex == null
-            ? DateTime.now()
-            : _annotations[_editingIndex!].createdAt,
+        createdAt: previous?.createdAt ?? DateTime.now(),
       );
-      if (_editingIndex case final index?) {
+      if (index >= 0) {
         _annotations[index] = annotation;
       } else {
         _annotations.add(annotation);
       }
       _draftTarget = null;
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
     late final Future<void> capture;
@@ -463,11 +471,12 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     final capturedTarget = await _captureTarget(annotation.target);
     if (!mounted || capturedTarget.screenshotPath == null) return;
     final index = _annotations.indexWhere(
-      (candidate) => candidate.createdAt == annotation.createdAt,
+      (candidate) => identical(candidate, annotation),
     );
     if (index < 0) return;
     setState(() {
       _annotations[index] = _DesignAnnotation(
+        id: annotation.id,
         target: capturedTarget,
         comment: _annotations[index].comment,
         createdAt: _annotations[index].createdAt,
@@ -530,23 +539,25 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     }
   }
 
-  void _editAnnotation(int index) {
+  void _editAnnotation(int id) {
+    final index = _annotations.indexWhere((value) => value.id == id);
+    if (index < 0) return;
     final annotation = _annotations[index];
     setState(() {
       _enabled = true;
       _selecting = false;
       _draftTarget = annotation.target;
-      _editingIndex = index;
+      _editingId = annotation.id;
       _commentController.text = annotation.comment;
     });
   }
 
   void _deleteDraft() {
-    final index = _editingIndex;
+    final id = _editingId;
     setState(() {
-      if (index != null) _annotations.removeAt(index);
+      if (id != null) _annotations.removeWhere((value) => value.id == id);
       _draftTarget = null;
-      _editingIndex = null;
+      _editingId = null;
       _commentController.clear();
     });
   }
@@ -555,7 +566,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     await Future.wait(_pendingCaptures.toList());
     if (!mounted) return;
     await Clipboard.setData(ClipboardData(text: _markdownExport()));
-    _showStatus('Markdown copied');
+    if (mounted) _showStatus('Markdown copied');
   }
 
   Future<void> _copyJson() async {
@@ -571,7 +582,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     await Clipboard.setData(
       ClipboardData(text: const JsonEncoder.withIndent('  ').convert(payload)),
     );
-    _showStatus('JSON copied');
+    if (mounted) _showStatus('JSON copied');
   }
 
   String _markdownExport() {
@@ -686,11 +697,11 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
     children: [
       RepaintBoundary(key: _surfaceKey, child: widget.child),
       if (_enabled)
-        for (var index = 0; index < _annotations.length; index++)
+        for (final (index, annotation) in _annotations.indexed)
           _FeedbackPin(
             index: index,
-            annotation: _annotations[index],
-            onPressed: () => _editAnnotation(index),
+            annotation: annotation,
+            onPressed: () => _editAnnotation(annotation.id),
           ),
       if (_enabled && _hoveredTarget != null)
         _TargetHighlight(target: _hoveredTarget!),
@@ -749,7 +760,14 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
             tooltip: 'Clear feedback',
             onPressed: _annotations.isEmpty
                 ? null
-                : () => setState(_annotations.clear),
+                : () => setState(() {
+                    _annotations.clear();
+                    _selecting = false;
+                    _hoveredTarget = null;
+                    _draftTarget = null;
+                    _editingId = null;
+                    _commentController.clear();
+                  }),
             icon: const Icon(Icons.delete_sweep_outlined),
           ),
           IconButton(
@@ -780,7 +798,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              _editingIndex == null ? 'Add feedback' : 'Edit feedback',
+              _editingId == null ? 'Add feedback' : 'Edit feedback',
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 4),
@@ -816,7 +834,7 @@ class _DesignFeedbackOverlayState extends State<DesignFeedbackOverlay> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                if (_editingIndex != null)
+                if (_editingId != null)
                   TextButton(
                     onPressed: _deleteDraft,
                     child: const Text('Delete'),
@@ -899,11 +917,13 @@ class _TargetHighlight extends StatelessWidget {
 
 class _DesignAnnotation {
   const _DesignAnnotation({
+    required this.id,
     required this.target,
     required this.comment,
     required this.createdAt,
   });
 
+  final int id;
   final _DesignTarget target;
   final String comment;
   final DateTime createdAt;
