@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_request_id.dart';
 
@@ -114,335 +112,301 @@ abstract interface class NativeContextHostTransport {
   });
 }
 
+// The Rust broker owns one in-flight request for each of these lanes.
+// These callback commands are not product commands with durable replay receipts.
+enum _NativeHostKind { calendar, attention, personal }
+
 final class AppWireNativeContextHostTransport
     implements NativeContextHostTransport {
   AppWireNativeContextHostTransport(this._transport);
   final NativeHostWireTransport _transport;
-  final Map<String, String> _pendingCommands = {};
-  final Map<String, _NativeRequestBinding> _requests = {};
+  final _hosts = {
+    for (final kind in _NativeHostKind.values) kind: _NativeHostState(),
+  };
 
   @override
-  Future<NativeHostRegistration> registerAcquisitionHost() async {
-    final value = await _call(
-      'native_host.calendar.register',
-      {},
-      query: false,
-    );
-    if (value['kind'] != 'registered' || value.length != 2)
-      throw const FormatException('Invalid native registration reply.');
-    return NativeHostRegistration.fromJson(value['registration']);
-  }
+  Future<NativeHostRegistration> registerAcquisitionHost() =>
+      _register(_NativeHostKind.calendar);
 
   @override
   Future<List<Map<String, dynamic>>> pollAcquisitions({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.calendar.poll', {
-      'registration': registration.toJson(),
-    }, query: true);
-    if (value['kind'] != 'calendar_acquisitions' ||
-        value.length != 2 ||
-        value['acquisitions'] is! List)
-      throw const FormatException('Invalid native poll reply.');
-    return (value['acquisitions'] as List)
-        .map((entry) {
-          final request = _object(entry);
-          _remember(registration, request);
-          return request;
-        })
-        .toList(growable: false);
-  }
+  }) => _poll(_NativeHostKind.calendar, registration);
 
   @override
   Future<void> completeAcquisition({
     required NativeHostRegistration registration,
     required Map<String, dynamic> result,
-  }) async {
-    final value = await _call('native_host.calendar.complete', {
-      'registration': registration.toJson(),
-      'result': _completion(registration, result),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(result['request_id']);
-  }
+  }) => _complete(_NativeHostKind.calendar, registration, result);
 
   @override
   Future<void> failAcquisition({
     required NativeHostRegistration registration,
     required String requestId,
     required String failure,
-  }) async {
-    final value = await _call('native_host.calendar.fail', {
-      'registration': registration.toJson(),
-      'request_id': requestId,
-      'failure': failure,
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(requestId);
-  }
+  }) => _fail(_NativeHostKind.calendar, registration, requestId, failure);
 
   @override
   Future<void> disposeAcquisitionHost({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.calendar.dispose', {
-      'registration': registration.toJson(),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.removeWhere(
-      (_, value) => value.registrationId == registration.registrationId,
-    );
-  }
+  }) => _dispose(_NativeHostKind.calendar, registration);
 
   @override
-  Future<NativeHostRegistration> registerAttentionHost() async {
-    final value = await _call(
-      'native_host.attention.register',
-      {},
-      query: false,
-    );
-    if (value['kind'] != 'registered' || value.length != 2)
-      throw const FormatException('Invalid native registration reply.');
-    return NativeHostRegistration.fromJson(value['registration']);
-  }
+  Future<NativeHostRegistration> registerAttentionHost() =>
+      _register(_NativeHostKind.attention);
 
   @override
   Future<List<Map<String, dynamic>>> pollAttentionAcquisitions({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.attention.poll', {
-      'registration': registration.toJson(),
-    }, query: true);
-    if (value['kind'] != 'attention_acquisitions' ||
-        value.length != 2 ||
-        value['acquisitions'] is! List)
-      throw const FormatException('Invalid native poll reply.');
-    return (value['acquisitions'] as List)
-        .map((entry) {
-          final request = _object(entry);
-          _remember(registration, request);
-          return request;
-        })
-        .toList(growable: false);
-  }
+  }) => _poll(_NativeHostKind.attention, registration);
 
   @override
   Future<void> completeAttentionAcquisition({
     required NativeHostRegistration registration,
     required Map<String, dynamic> result,
-  }) async {
-    final value = await _call('native_host.attention.complete', {
-      'registration': registration.toJson(),
-      'result': _completion(registration, result),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(result['request_id']);
-  }
+  }) => _complete(_NativeHostKind.attention, registration, result);
 
   @override
   Future<void> failAttentionAcquisition({
     required NativeHostRegistration registration,
     required String requestId,
     required String failure,
-  }) async {
-    final value = await _call('native_host.attention.fail', {
-      'registration': registration.toJson(),
-      'request_id': requestId,
-      'failure': failure,
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(requestId);
-  }
+  }) => _fail(_NativeHostKind.attention, registration, requestId, failure);
 
   @override
   Future<void> disposeAttentionHost({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.attention.dispose', {
-      'registration': registration.toJson(),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.removeWhere(
-      (_, value) => value.registrationId == registration.registrationId,
-    );
-  }
+  }) => _dispose(_NativeHostKind.attention, registration);
 
   @override
-  Future<NativeHostRegistration> registerPersonalHost() async {
-    final value = await _call(
-      'native_host.personal.register',
-      {},
-      query: false,
-    );
-    if (value['kind'] != 'registered' || value.length != 2)
-      throw const FormatException('Invalid native registration reply.');
-    return NativeHostRegistration.fromJson(value['registration']);
-  }
+  Future<NativeHostRegistration> registerPersonalHost() =>
+      _register(_NativeHostKind.personal);
 
   @override
   Future<List<Map<String, dynamic>>> pollPersonalAcquisitions({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.personal.poll', {
-      'registration': registration.toJson(),
-    }, query: true);
-    if (value['kind'] != 'personal_acquisitions' ||
-        value.length != 2 ||
-        value['acquisitions'] is! List)
-      throw const FormatException('Invalid native poll reply.');
-    return (value['acquisitions'] as List)
-        .map((entry) {
-          final request = _object(entry);
-          _remember(registration, request);
-          return request;
-        })
-        .toList(growable: false);
-  }
+  }) => _poll(_NativeHostKind.personal, registration);
 
   @override
   Future<void> completePersonalAcquisition({
     required NativeHostRegistration registration,
     required Map<String, dynamic> result,
-  }) async {
-    final value = await _call('native_host.personal.complete', {
-      'registration': registration.toJson(),
-      'result': _completion(registration, result),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(result['request_id']);
-  }
+  }) => _complete(_NativeHostKind.personal, registration, result);
 
   @override
   Future<void> failPersonalAcquisition({
     required NativeHostRegistration registration,
     required String requestId,
     required String failure,
-  }) async {
-    final value = await _call('native_host.personal.fail', {
-      'registration': registration.toJson(),
-      'request_id': requestId,
-      'failure': failure,
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.remove(requestId);
-  }
+  }) => _fail(_NativeHostKind.personal, registration, requestId, failure);
 
   @override
   Future<void> disposePersonalHost({
     required NativeHostRegistration registration,
-  }) async {
-    final value = await _call('native_host.personal.dispose', {
-      'registration': registration.toJson(),
-    }, query: false);
-    if (value['kind'] != 'acknowledged' || value.length != 1)
-      throw const FormatException('Invalid native acknowledgement.');
-    _requests.removeWhere(
-      (_, value) => value.registrationId == registration.registrationId,
-    );
+  }) => _dispose(_NativeHostKind.personal, registration);
+
+  Future<NativeHostRegistration> _register(_NativeHostKind kind) {
+    final state = _hosts[kind]!;
+    // Concurrent starts share one host replacement instead of racing epochs.
+    return state.registering ??= _registerOnce(kind, state);
   }
 
-  void _remember(
+  Future<NativeHostRegistration> _registerOnce(
+    _NativeHostKind kind,
+    _NativeHostState state,
+  ) async {
+    try {
+      final value = await _call(kind, 'register', {});
+      final registration = NativeHostRegistration.fromJson(
+        value['registration'],
+      );
+      state.registration = registration;
+      state.request = null;
+      return registration;
+    } finally {
+      state.registering = null;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _poll(
+    _NativeHostKind kind,
+    NativeHostRegistration registration,
+  ) async {
+    final state = _requireRegistration(kind, registration);
+    final value = await _call(kind, 'poll', {
+      'registration': registration.toJson(),
+    }, query: true);
+    _requireRegistration(kind, registration);
+    final entries = value['acquisitions'];
+    if (value['kind'] != '${kind.name}_acquisitions' ||
+        value.length != 2 ||
+        entries is! List ||
+        entries.length > 1) {
+      throw const FormatException('Invalid native poll reply.');
+    }
+    // Empty means either idle OR an existing in-flight request; it cannot
+    // resolve a lost completion acknowledgement.
+    if (entries.isEmpty) return const [];
+    final request = _object(entries.single);
+    final binding = _NativeRequestBinding.fromRequest(registration, request);
+    final old = state.request;
+    if (old != null &&
+        old.requestId == binding.requestId &&
+        (old.personId != binding.personId ||
+            old.deviceId != binding.deviceId)) {
+      throw const FormatException('Native request identity changed.');
+    }
+    // A different owner-issued job proves the previous single in-flight slot
+    // has retired. Keep only identity, never an acquisition/result payload.
+    state.request = binding;
+    return [request];
+  }
+
+  Future<void> _complete(
+    _NativeHostKind kind,
+    NativeHostRegistration registration,
+    Map<String, dynamic> result,
+  ) async {
+    final state = _requireRegistration(kind, registration);
+    final binding = state.request;
+    if (binding == null ||
+        result['request_id'] != binding.requestId ||
+        result['person_id'] != binding.personId ||
+        result['device_id'] != binding.deviceId ||
+        result['host_epoch'] != registration.hostEpoch) {
+      throw const FormatException('Foreign native completion.');
+    }
+    await _call(kind, 'complete', {
+      'registration': registration.toJson(),
+      'result': Map<String, dynamic>.from(result)
+        ..remove('person_id')
+        ..remove('device_id'),
+    });
+    if (identical(state.request, binding)) state.request = null;
+  }
+
+  Future<void> _fail(
+    _NativeHostKind kind,
+    NativeHostRegistration registration,
+    String requestId,
+    String failure,
+  ) async {
+    final state = _requireRegistration(kind, registration);
+    final binding = state.request;
+    if (binding == null || binding.requestId != requestId) {
+      throw const FormatException('Foreign native failure.');
+    }
+    await _call(kind, 'fail', {
+      'registration': registration.toJson(),
+      'request_id': requestId,
+      'failure': failure,
+    });
+    if (identical(state.request, binding)) state.request = null;
+  }
+
+  Future<void> _dispose(
+    _NativeHostKind kind,
+    NativeHostRegistration registration,
+  ) async {
+    final state = _requireRegistration(kind, registration);
+    await _call(kind, 'dispose', {'registration': registration.toJson()});
+    // A delayed old acknowledgement cannot retire a replacement registration.
+    if (_sameRegistration(state.registration, registration)) {
+      state.registration = null;
+      state.request = null;
+    }
+  }
+
+  _NativeHostState _requireRegistration(
+    _NativeHostKind kind,
+    NativeHostRegistration registration,
+  ) {
+    final state = _hosts[kind]!;
+    if (!_sameRegistration(state.registration, registration)) {
+      throw StateError('Native callback registration is not current.');
+    }
+    return state;
+  }
+
+  static bool _sameRegistration(
+    NativeHostRegistration? current,
+    NativeHostRegistration supplied,
+  ) =>
+      current != null &&
+      current.registrationId == supplied.registrationId &&
+      current.hostEpoch == supplied.hostEpoch &&
+      current.runtimeEpoch == supplied.runtimeEpoch;
+
+  Future<Map<String, dynamic>> _call(
+    _NativeHostKind kind,
+    String operation,
+    Map<String, Object?> fields, {
+    bool query = false,
+  }) async {
+    final request = <String, dynamic>{
+      'schema_version': appWireProtocolVersion,
+      'request_id': newAgentRequestId(),
+      // The native lane does not consume command_id as a replay key. Its
+      // authority is the exact registration and outstanding broker request ID.
+      // Never retain raw native data in a product-style command identity map.
+      if (!query) 'command_id': newAgentRequestId(),
+      query ? 'query' : 'command': {
+        'kind': 'native_host.${kind.name}.$operation',
+        ...fields,
+      },
+    };
+    final result = query
+        ? await _transport.queryV2(request)
+        : await _transport.commandV2(request);
+    if (!query) {
+      if (operation == 'register') {
+        if (result['kind'] != 'registered' || result.length != 2) {
+          throw const FormatException(
+            'Invalid native registration acknowledgement.',
+          );
+        }
+        NativeHostRegistration.fromJson(result['registration']);
+      } else if (result['kind'] != 'acknowledged' || result.length != 1) {
+        throw const FormatException('Invalid native command acknowledgement.');
+      }
+    }
+    return result;
+  }
+}
+
+final class _NativeHostState {
+  NativeHostRegistration? registration;
+  Future<NativeHostRegistration>? registering;
+  _NativeRequestBinding? request;
+}
+
+final class _NativeRequestBinding {
+  const _NativeRequestBinding(this.requestId, this.personId, this.deviceId);
+
+  factory _NativeRequestBinding.fromRequest(
     NativeHostRegistration registration,
     Map<String, dynamic> request,
   ) {
     final id = request['request_id'];
     final person = request['person_id'];
     final device = request['device_id'];
+    final uuid = RegExp(
+      r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+    );
     if (id is! String ||
+        !uuid.hasMatch(id) ||
         person is! String ||
+        !uuid.hasMatch(person) ||
         device is! String ||
         device.isEmpty ||
         device.length > 128 ||
-        request['host_epoch'] != registration.hostEpoch ||
-        !RegExp(
-          r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-        ).hasMatch(person)) {
+        request['host_epoch'] != registration.hostEpoch) {
       throw const FormatException('Invalid admitted native request identity.');
     }
-    final old = _requests[id];
-    if (old != null &&
-        (old.registrationId != registration.registrationId ||
-            old.personId != person ||
-            old.deviceId != device)) {
-      throw const FormatException('Native request identity changed.');
-    }
-    _requests[id] = _NativeRequestBinding(
-      registration.registrationId,
-      registration.hostEpoch,
-      person,
-      device,
-    );
+    return _NativeRequestBinding(id, person, device);
   }
 
-  Map<String, dynamic> _completion(
-    NativeHostRegistration registration,
-    Map<String, dynamic> value,
-  ) {
-    final expected = _requests[value['request_id']];
-    if (expected == null ||
-        expected.registrationId != registration.registrationId ||
-        value['person_id'] != expected.personId ||
-        value['device_id'] != expected.deviceId ||
-        value['host_epoch'] != expected.hostEpoch) {
-      throw const FormatException('Foreign native completion.');
-    }
-    return Map<String, dynamic>.from(value)
-      ..remove('person_id')
-      ..remove('device_id');
-  }
-
-  Future<Map<String, dynamic>> _call(
-    String kind,
-    Map<String, Object?> fields, {
-    required bool query,
-  }) async {
-    final input = <String, Object?>{'kind': kind, ...fields};
-    final identity = jsonEncode(input);
-    final commandId = query
-        ? null
-        : _pendingCommands.putIfAbsent(identity, newAgentRequestId);
-    final request = <String, dynamic>{
-      'schema_version': appWireProtocolVersion,
-      'request_id': newAgentRequestId(),
-      if (commandId != null) 'command_id': commandId,
-      query ? 'query' : 'command': input,
-    };
-    final result = query
-        ? await _transport.queryV2(request)
-        : await _transport.commandV2(request);
-    if (!query) {
-      if (kind.endsWith('.register')) {
-        if (result['kind'] != 'registered' || result.length != 2)
-          throw const FormatException(
-            'Invalid native registration acknowledgement.',
-          );
-        NativeHostRegistration.fromJson(result['registration']);
-      } else if (result['kind'] != 'acknowledged' || result.length != 1) {
-        throw const FormatException('Invalid native command acknowledgement.');
-      }
-      _pendingCommands.remove(identity);
-    }
-    return result;
-  }
-}
-
-final class _NativeRequestBinding {
-  const _NativeRequestBinding(
-    this.registrationId,
-    this.hostEpoch,
-    this.personId,
-    this.deviceId,
-  );
-  final String registrationId;
-  final String hostEpoch;
+  final String requestId;
   final String personId;
   final String deviceId;
 }
