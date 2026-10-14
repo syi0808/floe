@@ -149,7 +149,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
               label: AppLocalizations.of(context).due,
               value: widget.task.deadline == null
                   ? AppLocalizations.of(context).noDueDate
-                  : AppLocalizations.of(context).today,
+                  : _deadline(context, widget.task.deadline!),
               color: FloePalette.primary600,
             ),
             SizedBox(height: FloeSpace.base),

@@ -30,7 +30,7 @@ class _DayRow extends StatelessWidget {
       TaskItem(:final deadline) =>
         deadline == null
             ? AppLocalizations.of(context).timeNotSet
-            : AppLocalizations.of(context).dueAt(_time(context, deadline)),
+            : AppLocalizations.of(context).dueAt(_deadline(context, deadline)),
       NoteItem() => AppLocalizations.of(context).todaySThought,
     };
     final label = switch (item) {

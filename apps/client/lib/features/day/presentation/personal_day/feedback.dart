@@ -70,9 +70,18 @@ void _showComingSoon(BuildContext context) {
 
 String _time(BuildContext context, DateTime value) =>
     MaterialLocalizations.of(context).formatTimeOfDay(
-      TimeOfDay.fromDateTime(value),
+      TimeOfDay.fromDateTime(value.toLocal()),
       alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
     );
+
+// Deadlines are instants from the owner, unlike the selected civil day. Render
+// their local date and time together so a midnight/year crossing stays visible.
+String _deadline(BuildContext context, DateTime instant) {
+  final local = instant.toLocal();
+  final date = DateFormat.yMMMEd(AppLocalizations.of(context).localeName)
+      .format(local);
+  return '$date · ${_time(context, local)}';
+}
 
 String _date(BuildContext context, DateTime value) =>
     DateFormat.MMMEd(AppLocalizations.of(context).localeName).format(value);

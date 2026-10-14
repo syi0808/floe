@@ -727,6 +727,40 @@ class _EmptyDayStatus extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final strings = AppLocalizations.of(context);
+    final message = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          hasSources
+              ? 'Calendar coverage is incomplete for this date'
+              : 'No Calendar coverage was returned for this date',
+          style: FloeType.controlLabel,
+        ),
+        const SizedBox(height: FloeSpace.xxs),
+        Text(
+          hasSources
+              ? 'Refresh this date to observe the sources again.'
+              : strings.emptyDayConnectHint,
+          style: FloeType.bodySmall.copyWith(
+            fontSize: 12,
+            color: FloePalette.neutral600,
+          ),
+        ),
+      ],
+    );
+    final actions = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (onRefresh != null)
+          FloeTextLink(label: 'Refresh date', onPressed: onRefresh),
+        FloeTextLink(
+          label: strings.viewConnectedCalendars,
+          onPressed: onConnections,
+        ),
+      ],
+    );
     return Semantics(
       container: true,
       liveRegion: true,
@@ -736,43 +770,30 @@ class _EmptyDayStatus extends StatelessWidget {
         fill: FloePalette.primary50,
         borderColor: FloePalette.primary200,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // The timeline gutter makes this card narrower than the screen.
+            // Bound both groups, including the links at large text scales.
+            if (constraints.maxWidth < 480) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    hasSources
-                        ? 'Calendar coverage is incomplete for this date'
-                        : 'No Calendar coverage was returned for this date',
-                    style: FloeType.controlLabel,
-                  ),
-                  const SizedBox(height: FloeSpace.xxs),
-                  Text(
-                    hasSources
-                        ? 'Refresh this date to observe the sources again.'
-                        : strings.emptyDayConnectHint,
-                    style: FloeType.bodySmall.copyWith(
-                      fontSize: 12,
-                      color: FloePalette.neutral600,
-                    ),
-                  ),
+                  message,
+                  const SizedBox(height: FloeSpace.sm),
+                  actions,
                 ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (onRefresh != null)
-                  FloeTextLink(label: 'Refresh date', onPressed: onRefresh),
-                FloeTextLink(
-                  label: strings.viewConnectedCalendars,
-                  onPressed: onConnections,
-                ),
+                Expanded(flex: 2, child: message),
+                const SizedBox(width: FloeSpace.base),
+                Expanded(child: actions),
               ],
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
