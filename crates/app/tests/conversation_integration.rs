@@ -387,12 +387,12 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
         services.execute_owner(async move {
             owners
                 .conversation
-                .list_interactions(&actor, session_id, &scope)
+                .list_interactions(&actor, session_id, None, &scope)
                 .await
         })
     })
     .expect("read exact blocked Manager interactions");
-    let [interaction] = interactions.as_slice() else {
+    let [interaction] = interactions.interactions.as_slice() else {
         panic!("expected one blocked Expert binding interaction, found {interactions:?}");
     };
     assert_eq!(
@@ -1609,7 +1609,10 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
         .request(Uuid::new_v4())
         .expect("admit interaction list query")
         .product_query(ProductQuery::Conversation(
-            ConversationQuery::ListInteractions { session_id },
+            ConversationQuery::ListInteractions {
+                session_id,
+                after: None,
+            },
         ))
         .expect("read committed Conversation review rows");
     let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Interactions(
@@ -1618,9 +1621,9 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
     else {
         panic!("Conversation returned a different interaction-list result")
     };
-    assert_eq!(admitted_interactions.len(), 1);
+    assert_eq!(admitted_interactions.interactions.len(), 1);
     assert_eq!(
-        admitted_interactions[0].interaction_id,
+        admitted_interactions.interactions[0].interaction_id,
         interaction.interaction_id
     );
     let changed_publication_command = match proposal_command.clone() {

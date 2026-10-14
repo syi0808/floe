@@ -1160,3 +1160,21 @@ mod tests {
         );
     }
 }
+
+/// Maximum interaction snapshots in one live Session page, not a lifetime cap.
+pub const MAX_INTERACTIONS_PER_PAGE: usize = 64;
+
+/// Keyset position: active reviews first, newest first within each group.
+/// Retain the observed group even if that interaction later becomes terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractionListCursor {
+    pub terminal: bool,
+    pub created_at_unix_ms: i64,
+    pub interaction_id: Uuid,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractionPage<T> {
+    pub interactions: Vec<T>,
+    pub next_cursor: Option<InteractionListCursor>,
+}

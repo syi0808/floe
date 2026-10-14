@@ -6,9 +6,10 @@ import 'package:floe_client/features/conversation/domain/agent_interaction.dart'
 abstract interface class AgentInteractionGateway {
   Future<AgentInteractionSnapshot?> loadInteraction(String interactionId);
 
-  Future<List<AgentInteractionSnapshot>> loadSessionInteractions(
-    String sessionId,
-  );
+  Future<AgentInteractionPage> loadSessionInteractions(
+    String sessionId, {
+    AgentInteractionCursor? after,
+  });
 
   Future<AgentInteractionResolveResult> decideInteraction(
     AgentInteractionSnapshot snapshot,
@@ -32,9 +33,10 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
       _client.getInteraction(interactionId);
 
   @override
-  Future<List<AgentInteractionSnapshot>> loadSessionInteractions(
-    String sessionId,
-  ) => _client.listInteractions(sessionId);
+  Future<AgentInteractionPage> loadSessionInteractions(
+    String sessionId, {
+    AgentInteractionCursor? after,
+  }) => _client.listInteractions(sessionId, after: after);
 
   @override
   Future<AgentInteractionResolveResult> decideInteraction(

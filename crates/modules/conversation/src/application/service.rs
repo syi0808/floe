@@ -176,8 +176,9 @@ pub trait ConversationOwner: Send + Sync {
         &'a self,
         actor: &'a OwnerActor,
         session_id: Uuid,
+        after: Option<InteractionListCursor>,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Vec<InteractionSnapshot>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<InteractionPage<InteractionSnapshot>, AgentFailure>>;
     fn resolve_interaction<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -1047,8 +1048,9 @@ where
         &'a self,
         actor: &'a OwnerActor,
         session_id: Uuid,
+        after: Option<InteractionListCursor>,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<Vec<InteractionSnapshot>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<InteractionPage<InteractionSnapshot>, AgentFailure>> {
         Box::pin(async move {
             self.inner.check(actor)?;
             // Validate the exact product Session through a single normalized
@@ -1062,17 +1064,21 @@ where
                         .read_session_history_page(session_id, None, 1, crate::MAX_SESSION_BYTES),
                 )
                 .await?;
-            let mut records = scope
+            let page = scope
                 .run(
                     self.inner
                         .dependencies
                         .repository
-                        .list_session_interactions(actor.person_id, session_id, &actor.device_id),
+                        .list_session_interactions(
+                            actor.person_id,
+                            session_id,
+                            &actor.device_id,
+                            after,
+                        ),
                 )
                 .await?;
-            records.sort_by_key(|record| (record.created_at_unix_ms, record.id));
             let mut snapshots = Vec::new();
-            for record in records {
+            for record in page.interactions {
                 snapshots.push(
                     super::interaction_projection::project_interaction(
                         self.inner.dependencies.connections.as_ref(),
@@ -1086,7 +1092,10 @@ where
                     .await?,
                 );
             }
-            Ok(snapshots)
+            Ok(InteractionPage {
+                interactions: snapshots,
+                next_cursor: page.next_cursor,
+            })
         })
     }
     fn resolve_interaction<'a>(

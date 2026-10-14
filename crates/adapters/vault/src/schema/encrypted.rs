@@ -422,6 +422,10 @@ pub(super) const INTERACTIONS: &[SchemaObject] = &[
         "agent_conversation_interactions_session",
         "CREATE INDEX agent_conversation_interactions_session ON agent_conversation_interactions (person_id, session_id, created_at, interaction_id)",
     ),
+    SchemaObject::index(
+        "agent_conversation_interactions_inbox",
+        "CREATE INDEX agent_conversation_interactions_inbox ON agent_conversation_interactions (person_id, session_id, (CASE WHEN state IN ('pending', 'resolving') THEN 0 ELSE 1 END), created_at DESC, interaction_id DESC)",
+    ),
 ];
 
 pub(super) const TASKS: &[SchemaObject] = &[

@@ -669,3 +669,55 @@ String _validateInteractionIdentifier(Object? value, String field) {
   }
   return value;
 }
+
+/// A live keyset boundary, not authority to read another Session or Person.
+final class AgentInteractionCursor {
+  const AgentInteractionCursor({
+    required this.terminal,
+    required this.createdAtUnixMs,
+    required this.interactionId,
+  });
+  final bool terminal;
+  final int createdAtUnixMs;
+  final String interactionId;
+
+  factory AgentInteractionCursor.parse(Object? value) {
+    if (value is! Map ||
+        value.length != 3 ||
+        value['terminal'] is! bool ||
+        value['created_at_unix_ms'] is! int ||
+        value['interaction_id'] is! String ||
+        value['interaction_id'] == '00000000-0000-0000-0000-000000000000' ||
+        !RegExp(
+          r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        ).hasMatch(value['interaction_id'] as String)) {
+      throw const FormatException('Invalid interaction page cursor.');
+    }
+    return AgentInteractionCursor(
+      terminal: value['terminal'] as bool,
+      createdAtUnixMs: value['created_at_unix_ms'] as int,
+      interactionId: value['interaction_id'] as String,
+    );
+  }
+
+  Map<String, Object> toJson() => {
+    'terminal': terminal,
+    'created_at_unix_ms': createdAtUnixMs,
+    'interaction_id': interactionId,
+  };
+
+  bool follows(AgentInteractionCursor previous) => terminal != previous.terminal
+      ? terminal
+      : createdAtUnixMs < previous.createdAtUnixMs ||
+            (createdAtUnixMs == previous.createdAtUnixMs &&
+                interactionId.compareTo(previous.interactionId) < 0);
+}
+
+final class AgentInteractionPage {
+  const AgentInteractionPage({
+    required this.interactions,
+    required this.nextCursor,
+  });
+  final List<AgentInteractionSnapshot> interactions;
+  final AgentInteractionCursor? nextCursor;
+}

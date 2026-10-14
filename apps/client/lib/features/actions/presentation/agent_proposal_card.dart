@@ -148,7 +148,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       }
       setState(() {
         destinations = loaded;
-        destinationRef = loaded.length == 1 ? loaded.single.destinationRef : null;
+        destinationRef = loaded.length == 1
+            ? loaded.single.destinationRef
+            : null;
         loadingDestinations = false;
         destinationsLoaded = true;
       });
@@ -242,19 +244,38 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       error = null;
     });
     try {
-      await widget.controller.refreshInteractions();
-      final observed = widget.controller.interactionSnapshots
-          .map((snapshot) => snapshot.target)
-          .whereType<AgentOperationApprovalTarget>()
-          .map((target) => target.operation)
-          .where((operation) => operation.actionRef == action.actionRef)
-          .firstOrNull;
+      final known = widget.controller.interactionSnapshots.where((snapshot) {
+        final target = snapshot.target;
+        return target is AgentOperationApprovalTarget &&
+            target.operation.actionRef == action.actionRef;
+      }).firstOrNull;
+      CalendarAction? observed;
+      if (known != null) {
+        final refreshed = await widget.controller.ensureInteraction(
+          known.id,
+          reload: true,
+        );
+        final target = refreshed?.target;
+        if (target is AgentOperationApprovalTarget &&
+            target.operation.actionRef == action.actionRef) {
+          observed = target.operation;
+        }
+      } else {
+        await widget.controller.refreshInteractions();
+        observed = widget.controller.interactionSnapshots
+            .map((snapshot) => snapshot.target)
+            .whereType<AgentOperationApprovalTarget>()
+            .map((target) => target.operation)
+            .where((operation) => operation.actionRef == action.actionRef)
+            .firstOrNull;
+      }
       if (observed == null) {
         throw StateError('Calendar operation status is not available yet.');
       }
       if (!mounted || epoch != _messageEpoch) return;
+      final currentObservation = observed;
       setState(() {
-        _acceptAction(key, observed);
+        _acceptAction(key, currentObservation);
         submitting = false;
       });
     } on Object catch (failure) {
@@ -370,10 +391,12 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       ? artifactId
                       : null,
                   options: artifacts
-                      .map((artifact) => FloeSelectOption(
-                            value: artifact.id,
-                            label: artifact.name,
-                          ))
+                      .map(
+                        (artifact) => FloeSelectOption(
+                          value: artifact.id,
+                          label: artifact.name,
+                        ),
+                      )
                       .toList(growable: false),
                   enabled: !submitting,
                   onChanged: (value) {
@@ -391,23 +414,30 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 ),
               if (currentAction == null) ...[
                 if (destinations.length == 1)
-                  Text('${strings.actionDestination}: ${destinations.single.label}')
+                  Text(
+                    '${strings.actionDestination}: ${destinations.single.label}',
+                  )
                 else
                   FloeSelect<String>(
                     label: strings.actionDestination,
-                    value: destinations.any(
-                      (destination) => destination.destinationRef == destinationRef,
-                    )
+                    value:
+                        destinations.any(
+                          (destination) =>
+                              destination.destinationRef == destinationRef,
+                        )
                         ? destinationRef
                         : null,
                     options: destinations
-                        .map((destination) => FloeSelectOption(
-                              value: destination.destinationRef,
-                              label: destination.label,
-                            ))
+                        .map(
+                          (destination) => FloeSelectOption(
+                            value: destination.destinationRef,
+                            label: destination.label,
+                          ),
+                        )
                         .toList(growable: false),
                     enabled: !loadingDestinations && !submitting,
-                    onChanged: (value) => setState(() => destinationRef = value),
+                    onChanged: (value) =>
+                        setState(() => destinationRef = value),
                     validator: (value) =>
                         value == null ? strings.actionFormInvalid : null,
                   ),
@@ -416,7 +446,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                     !loadingDestinations &&
                     error == null) ...[
                   const SizedBox(height: 8),
-                  const Text('No Calendar destinations are currently available.'),
+                  const Text(
+                    'No Calendar destinations are currently available.',
+                  ),
                 ],
                 if (error case final failure?) ...[
                   const SizedBox(height: 8),
@@ -429,7 +461,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   ),
                 ],
                 FloeButton.filled(
-                  onPressed: selectedArtifact == null ||
+                  onPressed:
+                      selectedArtifact == null ||
                           !calendarChangesAvailable ||
                           submitting ||
                           destinationRef == null
@@ -440,12 +473,16 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 ),
               ] else ...[
                 Text(currentAction.title),
-                Text(DateFormat.yMMMd(
-                  Localizations.localeOf(context).toLanguageTag(),
-                ).add_jm().format(currentAction.schedule.startsAt.toLocal())),
+                Text(
+                  DateFormat.yMMMd(
+                    Localizations.localeOf(context).toLanguageTag(),
+                  ).add_jm().format(currentAction.schedule.startsAt.toLocal()),
+                ),
                 if (error case final failure?) Text(failure),
                 FloeButton.text(
-                  onPressed: submitting ? null : () => _refreshAction(currentAction),
+                  onPressed: submitting
+                      ? null
+                      : () => _refreshAction(currentAction),
                   child: const Text('Refresh approval status'),
                 ),
               ],

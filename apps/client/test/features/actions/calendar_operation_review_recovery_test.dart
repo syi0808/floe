@@ -444,6 +444,7 @@ final class _ReviewTransport implements AppWireTransport {
       case 'conversation.interaction.list':
         return {
           'kind': 'interaction_list',
+          'next_cursor': null,
           'session_id': query['session_id'],
           'interactions': [?currentInteraction],
         };

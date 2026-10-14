@@ -304,44 +304,53 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(records)
     }
 
-    /// Query Session interactions through the session index and the owning
-    /// Run primary key. The bounded window preserves the product's existing
-    /// 64-item cap without hydrating every Run or issuing a Run lookup per
-    /// interaction group.
+    /// Live keyset page, active reviews before retained terminal history.
+    /// Session lifetime history never consumes a per-Run publication budget.
     pub async fn session_conversation_interactions(
         &self,
         session_id: Uuid,
         device_id: &str,
-    ) -> Result<Vec<ConversationInteraction>, AgentFailure> {
+        after: Option<floe_conversation::InteractionListCursor>,
+    ) -> Result<floe_conversation::InteractionPage<ConversationInteraction>, AgentFailure> {
+        use floe_conversation::{
+            InteractionListCursor, InteractionPage, MAX_INTERACTIONS_PER_PAGE,
+        };
         if session_id.is_nil()
             || device_id.trim() != device_id
             || device_id.is_empty()
             || device_id.len() > 256
             || device_id.chars().any(char::is_control)
+            || after.is_some_and(|cursor| cursor.interaction_id.is_nil())
         {
             return Err(AgentFailure::InvalidInput);
         }
+        let rank = after.map_or(-1i64, |cursor| i64::from(cursor.terminal));
+        let created = after.map_or(i64::MAX, |cursor| cursor.created_at_unix_ms);
+        let id = after.map_or_else(String::new, |cursor| cursor.interaction_id.to_string());
         let connection = self.connection()?;
-        let mut rows = connection
-            .query(
-                "SELECT i.interaction_id, i.session_id, i.person_id, i.origin_run_id, i.requirement_digest, i.target_digest, i.state, i.revision, i.created_at, i.expires_at, i.payload FROM agent_conversation_interactions i INDEXED BY agent_conversation_interactions_session JOIN agent_conversation_runs r ON r.run_id = i.origin_run_id AND r.person_id = i.person_id AND r.session_id = i.session_id WHERE i.person_id = ? AND i.session_id = ? AND json_extract(r.payload, '$.device_id') = ? ORDER BY i.created_at ASC, i.interaction_id ASC LIMIT 65",
-                (
-                    self.person_id.to_string(),
-                    session_id.to_string(),
-                    device_id,
-                ),
-            )
-            .await
-            .map_err(database_failure)?;
-        let mut records = Vec::new();
+        let mut rows = connection.query(
+            "SELECT i.interaction_id, i.session_id, i.person_id, i.origin_run_id, i.requirement_digest, i.target_digest, i.state, i.revision, i.created_at, i.expires_at, i.payload FROM agent_conversation_interactions i INDEXED BY agent_conversation_interactions_inbox JOIN agent_conversation_runs r ON r.run_id = i.origin_run_id AND r.person_id = i.person_id AND r.session_id = i.session_id WHERE i.person_id = ? AND i.session_id = ? AND json_extract(r.payload, '$.device_id') = ? AND ((CASE WHEN i.state IN ('pending', 'resolving') THEN 0 ELSE 1 END) > ? OR ((CASE WHEN i.state IN ('pending', 'resolving') THEN 0 ELSE 1 END) = ? AND (i.created_at < ? OR (i.created_at = ? AND i.interaction_id < ?)))) ORDER BY (CASE WHEN i.state IN ('pending', 'resolving') THEN 0 ELSE 1 END), i.created_at DESC, i.interaction_id DESC LIMIT ?",
+            (self.person_id.to_string(), session_id.to_string(), device_id, rank, rank, created, created, id, (MAX_INTERACTIONS_PER_PAGE + 1) as i64),
+        ).await.map_err(database_failure)?;
+        let mut interactions = Vec::new();
         while let Some(row) = rows.next().await.map_err(database_failure)? {
-            records.push(parse_row(self.person_id, &row).await?);
+            interactions.push(parse_row(self.person_id, &row).await?);
         }
-        if records.len() > MAX_STORED_INTERACTIONS_PER_RUN {
-            return Err(AgentFailure::BudgetExceeded);
-        }
+        let next_cursor = if interactions.len() > MAX_INTERACTIONS_PER_PAGE {
+            interactions.pop();
+            interactions.last().map(|record| InteractionListCursor {
+                terminal: record.state.is_terminal(),
+                created_at_unix_ms: record.created_at_unix_ms,
+                interaction_id: record.id,
+            })
+        } else {
+            None
+        };
         self.check_access()?;
-        Ok(records)
+        Ok(InteractionPage {
+            interactions,
+            next_cursor,
+        })
     }
 
     pub async fn record_conversation_interaction_decision(

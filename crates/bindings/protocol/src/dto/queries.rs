@@ -124,7 +124,10 @@ pub enum AppProductQueryDto {
     #[serde(rename = "conversation.interaction.get")]
     ConversationInteractionGet { interaction_id: InteractionRefDto },
     #[serde(rename = "conversation.interaction.list")]
-    ConversationInteractionList { session_id: SessionRefDto },
+    ConversationInteractionList {
+        session_id: SessionRefDto,
+        after: Option<super::AppInteractionListCursorDto>,
+    },
 }
 
 impl AppProductQueryDto {

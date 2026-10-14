@@ -1,5 +1,9 @@
 import 'dart:async';
 
+import '../../support/interaction_page_fixture.dart';
+
+import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -15,6 +19,200 @@ import 'package:floe_client/features/conversation/presentation/agent_panel.dart'
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  test('known interaction refresh uses its exact reference without restarting list discovery', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    var reads = 0;
+    h.transport.interactionGet = (_) async => {
+      'kind': 'interaction',
+      ...interactionFixture(id: _m3, sessionId: _sessionId, revision: ++reads),
+    };
+    await h.controller.ensureInteraction(_m3);
+    await h.controller.ensureInteraction(_m3);
+    expect(reads, 1);
+    final refreshed = await h.controller.ensureInteraction(_m3, reload: true);
+    expect(refreshed!.revision, 2);
+    expect(h.transport.interactionQueries, isEmpty);
+    expect(h.transport.commands, isEmpty);
+  });
+
+  testWidgets(
+    'visible exact-reference card reloads outside the current interaction page',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var gets = 0;
+      h.transport.interactionGet = (_) async {
+        gets++;
+        return {
+          'kind': 'interaction',
+          ...interactionFixture(id: _m3, sessionId: _sessionId),
+        };
+      };
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: AgentInteractionCard(
+              controller: h.controller,
+              interactionId: _m3,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(gets, 1);
+      await h.controller.refreshInteractions();
+      await tester.pumpAndSettle();
+      expect(gets, 2);
+      expect(h.controller.interactionFor(_m3), isNotNull);
+      expect(h.controller.hasMoreInteractions, isFalse);
+    },
+  );
+
+  testWidgets(
+    'failed first interaction page has a retry without blocking Conversation',
+    (tester) async {
+      _usePanelViewport(tester);
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var calls = 0;
+      h.transport.interactionPage = (_) async {
+        if (++calls == 1) throw StateError('page temporarily unavailable');
+        return interactionPageFixture(_sessionId, []);
+      };
+      await tester.pumpWidget(_panelApp(h.controller));
+      await tester.pumpAndSettle();
+      expect(find.text('Retry interaction history'), findsOneWidget);
+      expect(h.controller.needsReload, isFalse);
+      await tester.tap(find.text('Retry interaction history'));
+      await tester.pumpAndSettle();
+      expect(calls, 2);
+      expect(find.text('Retry interaction history'), findsNothing);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  test('interaction pages load explicitly and retain newer revisions across live-page overlap', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    var calls = 0;
+    h.transport.interactionPage = (query) async {
+      calls++;
+      if (calls == 1) {
+        return interactionPageFixture(_sessionId, [
+          interactionFixture(id: _m4, sessionId: _sessionId, revision: 3),
+          interactionFixture(id: _m3, sessionId: _sessionId),
+        ], more: true);
+      }
+      expect(query['after'], isNotNull);
+      return interactionPageFixture(_sessionId, [
+        interactionFixture(
+          id: _m4,
+          sessionId: _sessionId,
+          revision: 2,
+          state: 'expired',
+        ),
+        interactionFixture(id: _m2, sessionId: _sessionId, state: 'expired'),
+      ]);
+    };
+    await h.controller.refreshInteractions();
+    expect(calls, 1);
+    expect(h.controller.hasMoreInteractions, isTrue);
+    expect(h.controller.interactionSnapshots, hasLength(2));
+    await h.controller.loadMoreInteractions();
+    expect(h.controller.hasMoreInteractions, isFalse);
+    expect(h.controller.interactionSnapshots, hasLength(3));
+    expect(h.controller.interactionFor(_m4)!.revision, 3);
+    await h.controller.loadMoreInteractions();
+    expect(calls, 2);
+    expect(h.transport.commands, isEmpty);
+  });
+
+  test(
+    'failed later interaction page retains the window and cursor for retry',
+    () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var calls = 0;
+      h.transport.interactionPage = (_) async {
+        calls++;
+        if (calls == 1) {
+          return interactionPageFixture(_sessionId, [
+            interactionFixture(id: _m3, sessionId: _sessionId),
+          ], more: true);
+        }
+        if (calls == 2) throw StateError('page unavailable');
+        return interactionPageFixture(_sessionId, [
+          interactionFixture(id: _m2, sessionId: _sessionId),
+        ]);
+      };
+      await h.controller.refreshInteractions();
+      await h.controller.loadMoreInteractions();
+      expect(h.controller.hasMoreInteractions, isTrue);
+      expect(h.controller.interactionSnapshots.single.id, _m3);
+      await h.controller.loadMoreInteractions();
+      expect(h.controller.interactionSnapshots, hasLength(2));
+      expect(h.controller.hasMoreInteractions, isFalse);
+    },
+  );
+
+  test('duplicate interaction page requests join no extra work and Session replacement fences the reply', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    final response = Completer<Map<String, dynamic>>();
+    final started = Completer<void>();
+    h.transport.interactionPage = (_) {
+      started.complete();
+      return response.future;
+    };
+    final loading = h.controller.refreshInteractions();
+    await started.future;
+    await h.controller.refreshInteractions();
+    expect(h.transport.interactionQueries, hasLength(1));
+    h.transport.replacementSession = _session(
+      id: _replacementSessionId,
+      messages: [_message(_replacementMessageId)],
+    );
+    await h.controller.load(newSession: true);
+    response.complete(
+      interactionPageFixture(_sessionId, [
+        interactionFixture(id: _m3, sessionId: _sessionId),
+      ], more: true),
+    );
+    await loading;
+    expect(h.controller.interactionSnapshots, isEmpty);
+    expect(h.controller.hasMoreInteractions, isFalse);
+  });
+
+  testWidgets(
+    'panel offers explicit load-more for remaining interaction history',
+    (tester) async {
+      _usePanelViewport(tester);
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var calls = 0;
+      h.transport.interactionPage = (_) async {
+        calls++;
+        return interactionPageFixture(_sessionId, [
+          interactionFixture(id: calls == 1 ? _m3 : _m2, sessionId: _sessionId),
+        ], more: calls == 1);
+      };
+      await tester.pumpWidget(_panelApp(h.controller));
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+      final button = find.text('Load more interactions');
+      expect(button, findsOneWidget);
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(calls, 2);
+      expect(button, findsNothing);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
   test(
     'earlier pages prepend in order and advance the exclusive cursor',
     () async {
@@ -583,6 +781,9 @@ final class _ConversationTransport implements AppWireTransport {
   final Map<String, Object?> initialSession;
   Map<String, Object?>? replacementSession;
   final List<Map<String, dynamic>> historyQueries = [];
+  final List<Map<String, dynamic>> interactionQueries = [];
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? interactionPage;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? interactionGet;
   final List<Map<String, dynamic>> commands = [];
   final Completer<void> startTurnRequested = Completer<void>();
   final Completer<Map<String, dynamic>> pendingStartTurn =
@@ -633,9 +834,15 @@ final class _ConversationTransport implements AppWireTransport {
           return _failedRunEnvelope(query['run_id'] as String);
         }
         throw StateError('Unexpected Conversation Run query: $query');
+      case 'conversation.interaction.get':
+        return interactionGet!(query);
       case 'conversation.interaction.list':
+        interactionQueries.add(query);
+        final handler = interactionPage;
+        if (handler != null) return handler(query);
         return {
           'kind': 'interaction_list',
+          'next_cursor': null,
           'session_id': query['session_id'],
           'interactions': const <Map<String, dynamic>>[],
         };

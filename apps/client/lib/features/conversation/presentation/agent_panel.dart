@@ -223,7 +223,33 @@ class _AgentPanelState extends State<AgentPanel> {
                 ],
               ),
             );
-            final footer = _composer(strings, controller);
+            final footer = Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (controller.interactionPageFailure != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: FloeSpace.base,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Could not load interaction history.'),
+                        FloeButton.text(
+                          onPressed:
+                              controller.busy || controller.loadingInteractions
+                              ? null
+                              : controller.hasMoreInteractions
+                              ? controller.loadMoreInteractions
+                              : controller.refreshInteractions,
+                          child: const Text('Retry interaction history'),
+                        ),
+                      ],
+                    ),
+                  ),
+                _composer(strings, controller),
+              ],
+            );
             return LayoutBuilder(
               builder: (context, constraints) {
                 final compact =
@@ -257,7 +283,8 @@ class _AgentPanelState extends State<AgentPanel> {
                         itemCount:
                             messages.length +
                             extraInteractions.length +
-                            (controller.hasEarlierMessages ? 1 : 0),
+                            (controller.hasEarlierMessages ? 1 : 0) +
+                            (controller.hasMoreInteractions ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
                         itemBuilder: (context, index) {
@@ -284,6 +311,17 @@ class _AgentPanelState extends State<AgentPanel> {
                               ],
                             );
                           final contentIndex = index - offset;
+                          if (contentIndex ==
+                              messages.length + extraInteractions.length) {
+                            return FloeButton.text(
+                              onPressed:
+                                  controller.busy ||
+                                      controller.loadingInteractions
+                                  ? null
+                                  : controller.loadMoreInteractions,
+                              child: const Text('Load more interactions'),
+                            );
+                          }
                           if (contentIndex < messages.length) {
                             return _message(strings, messages[contentIndex]);
                           }

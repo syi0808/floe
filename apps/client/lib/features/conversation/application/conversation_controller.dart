@@ -104,6 +104,8 @@ final class ConversationController extends ChangeNotifier {
     _adoptionEpoch++;
     _historyGeneration++;
     loadingEarlier = false;
+    _interactionPageLoading = false;
+    _interactionPageFailure = null;
     _interactionBusy.clear();
     _busy = false;
     _clearRunUi();
@@ -152,6 +154,13 @@ final class ConversationController extends ChangeNotifier {
       _acceptsEpoch(epoch) && generation == _runUiGeneration;
 
   final Map<String, AgentInteractionSnapshot> _interactions = {};
+  AgentInteractionCursor? _interactionCursor;
+  bool _interactionPageLoading = false;
+  String? _interactionPageFailure;
+  bool get hasMoreInteractions => _interactionCursor != null;
+  bool get loadingInteractions => _interactionPageLoading;
+  String? get interactionPageFailure => _interactionPageFailure;
+
   final Set<String> _interactionBusy = {};
   final Map<String, String> _interactionFailures = {};
 
@@ -202,31 +211,38 @@ final class ConversationController extends ChangeNotifier {
       snapshot.actions.contains(AgentInteractionAction.refresh);
 
   /// Load one card snapshot when the panel first shows its reference.
-  Future<void> ensureInteraction(String interactionId) async {
+  Future<AgentInteractionSnapshot?> ensureInteraction(
+    String interactionId, {
+    bool reload = false,
+  }) async {
     final gateway = _interactionGateway;
     final original = session;
     final epoch = _adoptionEpoch;
     if (original == null ||
-        _interactions.containsKey(interactionId) ||
         _interactionBusy.contains(interactionId) ||
         _sealed ||
         _disposed) {
-      return;
+      return null;
+    }
+    if (!reload && _interactions.containsKey(interactionId)) {
+      return _interactions[interactionId];
     }
     _interactionBusy.add(interactionId);
     _interactionFailures.remove(interactionId);
     _notify();
     try {
       final snapshot = await gateway.loadInteraction(interactionId);
-      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return null;
       if (snapshot == null) {
         _interactionFailures[interactionId] = 'interaction_unavailable';
-        return;
+        return null;
       }
       _acceptInteractionSnapshot(snapshot, original);
+      return _interactions[interactionId];
     } on Object catch (error) {
-      if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
+      if (!_acceptsEpoch(epoch) || session?.id != original.id) return null;
       _interactionFailures[interactionId] = _interactionReason(error);
+      return null;
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
         _interactionBusy.remove(interactionId);
@@ -235,24 +251,55 @@ final class ConversationController extends ChangeNotifier {
     }
   }
 
-  /// Reload every card of the current Session, oldest first.
-  Future<void> refreshInteractions() async {
+  /// Reload the bounded inbox page; older cards are explicitly paged.
+  Future<void> refreshInteractions() => _loadInteractionPage();
+
+  Future<void> loadMoreInteractions() async {
+    final cursor = _interactionCursor;
+    if (cursor != null) await _loadInteractionPage(after: cursor);
+  }
+
+  Future<void> _loadInteractionPage({AgentInteractionCursor? after}) async {
     final gateway = _interactionGateway;
     final original = session;
     final epoch = _adoptionEpoch;
-    if (original == null || _busy || _sealed || _disposed) {
+    if (original == null ||
+        _busy ||
+        _interactionPageLoading ||
+        _sealed ||
+        _disposed) {
       return;
     }
-    _begin();
+    _interactionPageLoading = true;
+    _interactionPageFailure = null;
     _notify();
     try {
-      final snapshots = await gateway.loadSessionInteractions(original.id);
+      final page = await gateway.loadSessionInteractions(
+        original.id,
+        after: after,
+      );
       if (!_acceptsEpoch(epoch) || session?.id != original.id) return;
-      _interactions.clear();
-      _interactionFailures.clear();
-      for (final snapshot in snapshots) {
-        _acceptInteractionSnapshot(snapshot, original);
+      // Verify the entire page before changing the visible window.
+      if (page.interactions.any(
+        (snapshot) => snapshot.sessionId != original.id,
+      )) {
+        throw const FormatException('Interaction scope mismatch.');
       }
+      final newer = <String, AgentInteractionSnapshot>{};
+      for (final snapshot in page.interactions) {
+        final current = _interactions[snapshot.id];
+        if (current != null && current.revision > snapshot.revision) {
+          newer[snapshot.id] = current;
+        }
+      }
+      if (after == null) {
+        _interactions.clear();
+        _interactionFailures.clear();
+      }
+      for (final snapshot in page.interactions) {
+        _acceptInteractionSnapshot(newer[snapshot.id] ?? snapshot, original);
+      }
+      _interactionCursor = page.nextCursor;
     } on Object catch (error, stackTrace) {
       if (!_acceptsEpoch(epoch)) return;
       _recordError(
@@ -261,10 +308,12 @@ final class ConversationController extends ChangeNotifier {
         stackTrace,
         sessionId: original.id,
       );
-      _failFromError(error, 'transport_unavailable');
+      _interactionPageFailure = _interactionReason(error);
+      final owner = _ownerFailure(error);
+      if (owner != null) _applyOwnerFailure(owner);
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _end();
+        _interactionPageLoading = false;
         _notify();
       }
     }
@@ -472,7 +521,10 @@ final class ConversationController extends ChangeNotifier {
         session?.id != original.id) {
       throw const FormatException('Interaction scope mismatch.');
     }
-    _interactions[snapshot.id] = snapshot;
+    final previous = _interactions[snapshot.id];
+    if (previous == null || snapshot.revision >= previous.revision) {
+      _interactions[snapshot.id] = snapshot;
+    }
     _interactionFailures.remove(snapshot.id);
   }
 
@@ -484,6 +536,9 @@ final class ConversationController extends ChangeNotifier {
   }
 
   void _clearInteractions() {
+    _interactionCursor = null;
+    _interactionPageLoading = false;
+    _interactionPageFailure = null;
     _interactions.clear();
     _interactionBusy.clear();
     _interactionFailures.clear();

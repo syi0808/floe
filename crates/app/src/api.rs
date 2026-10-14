@@ -234,6 +234,7 @@ pub enum ConversationQuery {
     },
     ListInteractions {
         session_id: Uuid,
+        after: Option<floe_conversation::InteractionListCursor>,
     },
 }
 
@@ -327,7 +328,7 @@ pub enum ConversationQueryOutcome {
     Run(Option<floe_conversation::RunReceipt>),
     Message(Option<floe_conversation::MessageSnapshot>),
     Interaction(Option<floe_conversation::InteractionSnapshot>),
-    Interactions(Vec<floe_conversation::InteractionSnapshot>),
+    Interactions(floe_conversation::InteractionPage<floe_conversation::InteractionSnapshot>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

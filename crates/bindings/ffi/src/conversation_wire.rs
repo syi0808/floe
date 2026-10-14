@@ -237,9 +237,14 @@ pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQ
                 interaction_id: interaction_id.get(),
             }
         }
-        AppProductQueryDto::ConversationInteractionList { session_id } => {
+        AppProductQueryDto::ConversationInteractionList { session_id, after } => {
             ConversationQuery::ListInteractions {
                 session_id: session_id.get(),
+                after: after.map(|cursor| floe_conversation::InteractionListCursor {
+                    terminal: cursor.terminal,
+                    created_at_unix_ms: cursor.created_at_unix_ms,
+                    interaction_id: cursor.interaction_id.get(),
+                }),
             }
         }
         _ => return Err(validation("query.kind")),
@@ -358,15 +363,27 @@ pub(crate) fn query_out(
             interaction_id: InteractionRefDto::new(*interaction_id).ok_or_else(internal_error)?,
         },
         (
-            ConversationQuery::ListInteractions { session_id },
-            ConversationQueryOutcome::Interactions(interactions),
+            ConversationQuery::ListInteractions { session_id, .. },
+            ConversationQueryOutcome::Interactions(page),
         ) => AppQueryResultDto::InteractionList {
             list: AppInteractionListDto {
                 session_id: SessionRefDto::new(*session_id).ok_or_else(internal_error)?,
-                interactions: interactions
+                interactions: page
+                    .interactions
                     .into_iter()
                     .map(interaction_snapshot)
                     .collect::<AppWireResult<_>>()?,
+                next_cursor: page
+                    .next_cursor
+                    .map(|cursor| {
+                        Ok(AppInteractionListCursorDto {
+                            terminal: cursor.terminal,
+                            created_at_unix_ms: cursor.created_at_unix_ms,
+                            interaction_id: InteractionRefDto::new(cursor.interaction_id)
+                                .ok_or_else(internal_error)?,
+                        })
+                    })
+                    .transpose()?,
             },
         },
         _ => return Err(internal_error()),
@@ -991,6 +1008,34 @@ fn task_receipt_reference(
 #[cfg(test)]
 mod failure_projection_tests {
     use super::*;
+
+    #[test]
+    fn interaction_page_cursor_crosses_the_real_query_boundary() {
+        let session_id = Uuid::new_v4();
+        let interaction_id = Uuid::new_v4();
+        let request: AppQueryRequestDto = serde_json::from_value(serde_json::json!({
+            "schema_version": 2,
+            "request_id": Uuid::new_v4(),
+            "query": { "kind": "conversation.interaction.list", "session_id": session_id,
+                "after": { "terminal": true, "created_at_unix_ms": 123, "interaction_id": interaction_id }
+            }
+        })).expect("decode bounded interaction page request");
+        let AppQueryDto::Product(query) = request.query else {
+            panic!("expected product query")
+        };
+        assert!(matches!(query_in(query).expect("convert page query"),
+            ConversationQuery::ListInteractions { session_id: actual, after: Some(cursor) }
+                if actual == session_id && cursor.terminal && cursor.created_at_unix_ms == 123 && cursor.interaction_id == interaction_id));
+        let empty = AppInteractionListDto {
+            session_id: SessionRefDto::new(session_id).unwrap(),
+            interactions: vec![],
+            next_cursor: None,
+        };
+        assert_eq!(
+            serde_json::to_value(empty).unwrap()["next_cursor"],
+            serde_json::Value::Null
+        );
+    }
 
     #[test]
     fn flutter_interaction_resolve_digest_reaches_conversation_owner() {

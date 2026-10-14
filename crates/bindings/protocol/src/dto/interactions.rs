@@ -293,6 +293,15 @@ pub struct AppInteractionRefreshResultDto {
 pub struct AppInteractionListDto {
     pub session_id: SessionRefDto,
     pub interactions: Vec<AppInteractionSnapshotDto>,
+    pub next_cursor: Option<AppInteractionListCursorDto>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppInteractionListCursorDto {
+    pub terminal: bool,
+    pub created_at_unix_ms: i64,
+    pub interaction_id: InteractionRefDto,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

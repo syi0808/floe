@@ -103,7 +103,10 @@ final class AppCancelRunReceipt {
 }
 
 final class CalendarProposalCommandResult {
-  const CalendarProposalCommandResult({required this.operation, this.interaction});
+  const CalendarProposalCommandResult({
+    required this.operation,
+    this.interaction,
+  });
   final CalendarAction operation;
   final AgentInteractionSnapshot? interaction;
 }
@@ -369,7 +372,9 @@ final class AppWireConversationClient {
         !_wireId(originRunId) ||
         !_wireId(artifactId) ||
         !_wireId(destinationRef)) {
-      return Future.error(const FormatException('Invalid Calendar proposal identity.'));
+      return Future.error(
+        const FormatException('Invalid Calendar proposal identity.'),
+      );
     }
     final requestId = _newId();
     return _correlate(requestId, () async {
@@ -404,7 +409,9 @@ final class AppWireConversationClient {
                           .operation
                           .actionRef !=
                       operation.actionRef)) {
-        throw const FormatException('Calendar proposal response changed its owner identity.');
+        throw const FormatException(
+          'Calendar proposal response changed its owner identity.',
+        );
       }
       return CalendarProposalCommandResult(
         operation: operation,
@@ -617,8 +624,9 @@ final class AppWireConversationClient {
     });
   }
 
-  Future<List<AgentInteractionSnapshot>> listInteractions(
+  Future<AgentInteractionPage> listInteractions(
     String sessionId, {
+    AgentInteractionCursor? after,
     Duration timeout = const Duration(seconds: 3),
   }) {
     if (_closed)
@@ -634,6 +642,7 @@ final class AppWireConversationClient {
         'query': {
           'kind': 'conversation.interaction.list',
           'session_id': sessionId,
+          'after': after?.toJson(),
         },
       }, timeout: timeout);
       final payload = _map(result);
@@ -641,12 +650,29 @@ final class AppWireConversationClient {
       if (payload['kind'] != 'interaction_list' ||
           payload['session_id'] != sessionId ||
           interactions is! List ||
-          interactions.length > 64) {
+          interactions.length > 64 ||
+          !payload.containsKey('next_cursor')) {
         throw const FormatException('Invalid interaction list.');
       }
-      return List<AgentInteractionSnapshot>.unmodifiable(
+      final snapshots = List<AgentInteractionSnapshot>.unmodifiable(
         interactions.map((raw) => AgentInteractionSnapshot.parse(_map(raw))),
       );
+      if (snapshots.any((value) => value.sessionId != sessionId) ||
+          snapshots.map((value) => value.id).toSet().length !=
+              snapshots.length) {
+        throw const FormatException('Interaction page scope mismatch.');
+      }
+      final next = payload['next_cursor'] == null
+          ? null
+          : AgentInteractionCursor.parse(payload['next_cursor']);
+      if (next != null &&
+          (snapshots.isEmpty ||
+              snapshots.last.id != next.interactionId ||
+              snapshots.last.createdAtUnixMs != next.createdAtUnixMs ||
+              (after != null && !next.follows(after)))) {
+        throw const FormatException('Interaction page cursor did not advance.');
+      }
+      return AgentInteractionPage(interactions: snapshots, nextCursor: next);
     });
   }
 

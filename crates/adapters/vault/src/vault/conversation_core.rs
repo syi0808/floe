@@ -5176,6 +5176,9 @@ mod tests {
     #[path = "conversation_core_owner_custody_tests.rs"]
     mod owner_custody;
 
+    #[path = "conversation_core_interaction_paging_tests.rs"]
+    mod interaction_paging;
+
     #[derive(Clone, Default)]
     struct TestKeys(Arc<Mutex<HashMap<(PersonId, Uuid), [u8; 32]>>>);
 

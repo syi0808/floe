@@ -68,10 +68,11 @@ pub use errors::{
 pub use events::{AppEventDto, AppEventKindDto, AppEventsRequestDto, AppEventsResultDto};
 pub use interactions::{
     AppInteractionActionDto, AppInteractionDecisionDto, AppInteractionKindDto,
-    AppInteractionListDto, AppInteractionRefreshOutcomeDto, AppInteractionRefreshResultDto,
-    AppInteractionRequirementDto, AppInteractionResolveOutcomeDto, AppInteractionResolveResultDto,
-    AppInteractionSnapshotDto, AppInteractionStateDto, AppInteractionTargetDto,
-    AppNavigationDestinationDto, AppSourceAccessReasonDto, MAX_INTERACTIONS_PER_LIST,
+    AppInteractionListCursorDto, AppInteractionListDto, AppInteractionRefreshOutcomeDto,
+    AppInteractionRefreshResultDto, AppInteractionRequirementDto, AppInteractionResolveOutcomeDto,
+    AppInteractionResolveResultDto, AppInteractionSnapshotDto, AppInteractionStateDto,
+    AppInteractionTargetDto, AppNavigationDestinationDto, AppSourceAccessReasonDto,
+    MAX_INTERACTIONS_PER_LIST,
 };
 pub use local_context::{
     LocalContextAcquisitionModeDto, LocalContextAcquisitionRequestDto,

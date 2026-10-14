@@ -549,13 +549,20 @@ impl<Keys: VaultKeyProvider + 'static> InteractionRepository for VaultConversati
         person_id: floe_kernel::PersonId,
         session_id: Uuid,
         device_id: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<ConversationInteraction>, AgentFailure>> {
+        after: Option<floe_conversation::InteractionListCursor>,
+    ) -> BoxFuture<
+        'a,
+        Result<floe_conversation::InteractionPage<ConversationInteraction>, AgentFailure>,
+    > {
         Box::pin(async move {
             if person_id != self.vault.person_id() {
-                return Ok(Vec::new());
+                return Ok(floe_conversation::InteractionPage {
+                    interactions: vec![],
+                    next_cursor: None,
+                });
             }
             self.vault
-                .session_conversation_interactions(session_id, device_id)
+                .session_conversation_interactions(session_id, device_id, after)
                 .await
         })
     }

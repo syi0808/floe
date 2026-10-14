@@ -649,8 +649,8 @@ fn route_query(
                         .read_interaction(&actor, interaction_id, &scope)
                         .await
                         .map(ConversationQueryOutcome::Interaction),
-                    ConversationQuery::ListInteractions { session_id } => service
-                        .list_interactions(&actor, session_id, &scope)
+                    ConversationQuery::ListInteractions { session_id, after } => service
+                        .list_interactions(&actor, session_id, after, &scope)
                         .await
                         .map(ConversationQueryOutcome::Interactions),
                 };

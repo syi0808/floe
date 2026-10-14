@@ -1,7 +1,7 @@
 mod compaction;
 pub use compaction::{
     COMPACTION_MIN_RETAIN_ENTRIES, COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES,
-    COMPACTION_TRIGGER_MESSAGES, CompactionSource, CompactionAuthority,
+    COMPACTION_TRIGGER_MESSAGES, CompactionAuthority, CompactionSource,
 };
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, ModelConversation, ReplayReceipt,
@@ -34,9 +34,10 @@ pub use intent::{
 pub use interaction::{
     ConversationInteraction, DecisionAdmission, ExpireInteraction, ExpireOutcome,
     INTERACTION_PENDING_LIFETIME_MS, InteractionDecision, InteractionDecisionKind,
-    InteractionOrigin, InteractionRefresh, InteractionRequirement, InteractionResolution,
-    InteractionResolutionCause, InteractionResolutionReceipt, InteractionResumeRef,
-    InteractionState, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_RESUME_LINEAGE,
+    InteractionListCursor, InteractionOrigin, InteractionPage, InteractionRefresh,
+    InteractionRequirement, InteractionResolution, InteractionResolutionCause,
+    InteractionResolutionReceipt, InteractionResumeRef, InteractionState,
+    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_INTERACTIONS_PER_PAGE, MAX_RESUME_LINEAGE,
     MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES,
     MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS,
     NavigationDestination, NavigationOnlyTarget, ReviewedTarget, SupersedeInteraction,

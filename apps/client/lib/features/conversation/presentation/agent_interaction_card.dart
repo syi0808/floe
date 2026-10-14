@@ -71,6 +71,7 @@ final class _AgentInteractionCardState extends State<AgentInteractionCard> {
       final busy = controller.interactionBusyFor(widget.interactionId);
       final failure = controller.interactionFailureFor(widget.interactionId);
       if (snapshot == null) {
+        if (!busy && failure == null) _ensure();
         return FloeSquircle(
           size: FloeSquircleSize.md,
           fill: FloePalette.neutral50,
