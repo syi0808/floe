@@ -61,12 +61,11 @@ final class AppWireTransportException implements Exception {
 /// Command recovery follows the AppWire disposition. Owner reason codes do not
 /// prove whether the command was admitted or committed.
 bool mayDiscardPendingCommand(
-  AppWireTransportException error, {
+  CommandOutcome? outcome, {
   required bool previouslySubmitted,
 }) {
-  return error.commandOutcome == CommandOutcome.notApplied ||
-      (!previouslySubmitted &&
-          error.commandOutcome == CommandOutcome.notAdmitted);
+  return outcome == CommandOutcome.notApplied ||
+      (!previouslySubmitted && outcome == CommandOutcome.notAdmitted);
 }
 
 abstract interface class AppWireTransport {

@@ -67,7 +67,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       return snapshot;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-            error,
+            error.commandOutcome,
             previouslySubmitted: previouslySubmitted,
           ) &&
           identical(_pendingRefreshes[intent], active)) {
@@ -326,7 +326,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       return receipt;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-            error,
+            error.commandOutcome,
             previouslySubmitted: previouslySubmitted,
           ) &&
           active.submissionCount == submission &&
@@ -480,7 +480,7 @@ final class AppWireDayGateway implements DayGateway, DayRefreshGateway {
       return decoded;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-            error,
+            error.commandOutcome,
             previouslySubmitted: previouslySubmitted,
           ) &&
           identical(_pendingMutation, active)) {

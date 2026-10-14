@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -10,7 +9,13 @@ import 'package:floe_client/features/actions/application/operation_policy_comman
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
-enum CalendarActionErrorKind { vaultLocked, vaultUnavailable, conflict, unavailable, other }
+enum CalendarActionErrorKind {
+  vaultLocked,
+  vaultUnavailable,
+  conflict,
+  unavailable,
+  other,
+}
 
 final class CalendarActionError {
   const CalendarActionError({required this.kind, required this.code});
@@ -21,9 +26,12 @@ final class CalendarActionError {
       code: code,
       kind: switch (code) {
         'vault_locked' => CalendarActionErrorKind.vaultLocked,
-        'vault_unavailable' || 'storage_unavailable' => CalendarActionErrorKind.vaultUnavailable,
+        'vault_unavailable' ||
+        'storage_unavailable' => CalendarActionErrorKind.vaultUnavailable,
         'conflict' => CalendarActionErrorKind.conflict,
-        'unavailable' || 'deadline_exceeded' || 'timeout' => CalendarActionErrorKind.unavailable,
+        'unavailable' ||
+        'deadline_exceeded' ||
+        'timeout' => CalendarActionErrorKind.unavailable,
         _ => CalendarActionErrorKind.other,
       },
     );
@@ -33,11 +41,15 @@ final class CalendarActionError {
   final String code;
 
   String get message => switch (kind) {
-    CalendarActionErrorKind.vaultLocked => 'Runtime preparation is required to change operation permissions.',
+    CalendarActionErrorKind.vaultLocked =>
+      'Runtime preparation is required to change operation permissions.',
     CalendarActionErrorKind.vaultUnavailable => 'Operation permissions are unavailable until Runtime preparation completes.',
-    CalendarActionErrorKind.conflict => 'The operation policy changed. Refresh before changing it again.',
-    CalendarActionErrorKind.unavailable => 'The policy result could not be confirmed. Refresh its current value.',
-    CalendarActionErrorKind.other => 'The operation policy could not be confirmed.',
+    CalendarActionErrorKind.conflict =>
+      'The operation policy changed. Refresh before changing it again.',
+    CalendarActionErrorKind.unavailable =>
+      'The policy result could not be confirmed. Refresh its current value.',
+    CalendarActionErrorKind.other =>
+      'The operation policy could not be confirmed.',
   };
 }
 
@@ -62,6 +74,7 @@ final class OperationPolicyController extends ChangeNotifier {
   CalendarActionError? _error;
 
   ActionAuthority? get authority => _authority;
+  bool get hasPendingChange => _commands.pending != null;
   bool get busy => _busy || !runtime.ready;
   bool get loaded => _loaded;
   CalendarActionError? get error => runtime.ready
@@ -126,34 +139,17 @@ final class OperationPolicyController extends ChangeNotifier {
     if (current == null) {
       throw StateError('Access operation policy is unavailable until loaded.');
     }
-    final body = <String, Object?>{
-      'kind': 'conversation.calendar_policy.set',
-      'mode': mode.name,
-      'expected_revision': current.revision,
-    };
-    final key = jsonEncode(body);
-    return _mutate(
-      key,
-      (commandId) => gateway.setAuthority(
-        commandId: commandId,
-        mode: mode,
-        expectedRevision: current.revision,
-      ),
-      (next) {
-        if (next.calendarCreate != mode ||
-            next.revision < current.revision ||
-            (mode != current.calendarCreate && next.revision == current.revision)) {
-          throw StateError('Access policy response did not match the request.');
-        }
-        _authority = next;
-      },
-    );
+    return _mutate(() => _commands.retain(mode: mode, before: current));
   }
 
-  Future<T> _mutate<T>(
-    String payload,
-    Future<T> Function(String commandId) send,
-    void Function(T result) validate,
+  Future<ActionAuthority> retryPendingChange() {
+    final pending = _commands.pending;
+    if (pending == null) throw StateError('No policy change is pending.');
+    return _mutate(() => pending);
+  }
+
+  Future<ActionAuthority> _mutate(
+    OperationPolicyCommand Function() request,
   ) async {
     if (_disposed) throw StateError('Policy controller is disposed.');
     if (busy) throw StateError('Access operation policy is unavailable.');
@@ -161,16 +157,40 @@ final class OperationPolicyController extends ChangeNotifier {
     _busy = true;
     _error = null;
     notifyListeners();
+    OperationPolicyCommand? command;
+    int? submission;
     try {
-      final commandId = _commands.retain(payload);
-      final result = await send(commandId);
+      command = request();
+      submission = _commands.begin(command);
+      final result = await gateway.setAuthority(
+        commandId: command.commandId,
+        mode: command.mode,
+        expectedRevision: command.before.revision,
+      );
       if (!_current(generation)) {
         throw StateError('Policy result belongs to retired storage.');
       }
-      validate(result);
-      _commands.acknowledge(payload, commandId);
+      if (result.calendarCreate != command.mode ||
+          result.revision < command.before.revision ||
+          (command.mode != command.before.calendarCreate &&
+              result.revision == command.before.revision)) {
+        throw StateError('Access policy response did not match the request.');
+      }
+      // An exact replay may return a historical receipt. Never regress a newer
+      // current-value observation to that receipt just to retire correlation.
+      if (_authority == null || result.revision >= _authority!.revision) {
+        _acceptAuthority(result);
+      }
+      _commands.acknowledge(command);
       return result;
     } on Object catch (failure) {
+      if (command != null && submission != null) {
+        _commands.reject(
+          command,
+          submission,
+          failure is AppRuntimeException ? failure.commandOutcome : null,
+        );
+      }
       if (_current(generation)) {
         _reportStorageFailure(failure);
         _error = CalendarActionError.from(failure);

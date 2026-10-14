@@ -125,7 +125,10 @@ final class AppWireConversationGateway implements AgentConversationGateway {
       if (identical(_pending, pending)) _pending = null;
       return session;
     } on AppWireTransportException catch (error) {
-      if (mayDiscardPendingCommand(error, previouslySubmitted: wasSubmitted)) {
+      if (mayDiscardPendingCommand(
+        error.commandOutcome,
+        previouslySubmitted: wasSubmitted,
+      )) {
         if (identical(_pending, pending)) _pending = null;
       }
       throw AppOwnerException.fromAppWire(

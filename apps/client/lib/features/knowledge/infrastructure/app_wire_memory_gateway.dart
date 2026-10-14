@@ -141,7 +141,7 @@ final class AppWireMemoryGateway
       return acknowledgement;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
+        error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
         if (identical(_pendingForget, pending)) _pendingForget = null;
@@ -190,7 +190,7 @@ final class AppWireMemoryGateway
       return acknowledgement;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
+        error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
         if (identical(_pending, pending)) _pending = null;

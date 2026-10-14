@@ -8,7 +8,8 @@ class _OperationPolicySettings extends StatefulWidget {
   final OperationPolicyController controller;
 
   @override
-  State<_OperationPolicySettings> createState() => _OperationPolicySettingsState();
+  State<_OperationPolicySettings> createState() =>
+      _OperationPolicySettingsState();
 }
 
 class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
@@ -41,6 +42,7 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
   Future<void> selectPreset(_ActionPermissionPreset? nextPreset) async {
     if (nextPreset == null ||
         controller.busy ||
+        controller.hasPendingChange ||
         controller.authority == null ||
         controller.error != null) {
       return;
@@ -60,6 +62,7 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
   Future<void> selectMode(ActionAuthorityMode? mode) async {
     if (mode == null ||
         controller.busy ||
+        controller.hasPendingChange ||
         controller.authority == null ||
         controller.error != null) {
       return;
@@ -98,6 +101,7 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                     value: _ActionPermissionPreset.all,
                     enabled:
                         !controller.busy &&
+                        !controller.hasPendingChange &&
                         controller.authority != null &&
                         controller.error == null,
                     title: const Text('Allow Calendar event creation'),
@@ -106,6 +110,7 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                     value: _ActionPermissionPreset.customize,
                     enabled:
                         !controller.busy &&
+                        !controller.hasPendingChange &&
                         controller.authority != null &&
                         controller.error == null,
                     title: const Text('Customize permissions'),
@@ -121,6 +126,7 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                 enabled:
                     preset == _ActionPermissionPreset.customize &&
                     !controller.busy &&
+                    !controller.hasPendingChange &&
                     controller.error == null,
                 options: const [
                   FloeSelectOption(
@@ -153,6 +159,32 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                 height: 1.4,
               ),
             ),
+            if (controller.hasPendingChange) ...[
+              const SizedBox(height: FloeSpace.md),
+              const Text(
+                'A previous policy change has no confirmed result. Reloading '
+                'reads the current value; it does not resolve that change.',
+              ),
+              TextButton(
+                onPressed: controller.busy
+                    ? null
+                    : () async {
+                        try {
+                          await controller.retryPendingChange();
+                          if (mounted) {
+                            setState(
+                              () => _selectedPreset = _presetFor(
+                                controller.authority?.calendarCreate,
+                              ),
+                            );
+                          }
+                        } on Object {
+                          // Keep the exact pending command and owner failure visible.
+                        }
+                      },
+                child: const Text('Retry pending policy change'),
+              ),
+            ],
             if (controller.error case final error?) ...[
               const SizedBox(height: FloeSpace.md),
               Text(error.message),

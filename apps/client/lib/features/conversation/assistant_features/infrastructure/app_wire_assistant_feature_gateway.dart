@@ -171,7 +171,7 @@ final class AppWireAssistantFeatureGateway implements AssistantFeatureGateway {
       return decoded;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
+        error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
         if (identical(_pendingCommand, pending)) _pendingCommand = null;

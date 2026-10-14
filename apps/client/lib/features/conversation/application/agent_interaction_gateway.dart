@@ -64,7 +64,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
       return result;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
+        error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
         _pendingDecisions.remove(snapshot.id);
@@ -96,7 +96,7 @@ final class NativeAgentInteractionGateway implements AgentInteractionGateway {
       return result;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
-        error,
+        error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
         _pendingRefreshes.remove(snapshot.id);

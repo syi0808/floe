@@ -22,24 +22,30 @@ void main() {
 
     expect(
       mayDiscardPendingCommand(
-        ownerConflictMarkedIndeterminate,
+        ownerConflictMarkedIndeterminate.commandOutcome,
         previouslySubmitted: true,
       ),
       isFalse,
     );
     expect(
       mayDiscardPendingCommand(
-        ownerFailureMarkedNotApplied,
+        ownerFailureMarkedNotApplied.commandOutcome,
         previouslySubmitted: true,
       ),
       isTrue,
     );
     expect(
-      mayDiscardPendingCommand(notAdmitted, previouslySubmitted: false),
+      mayDiscardPendingCommand(
+        notAdmitted.commandOutcome,
+        previouslySubmitted: false,
+      ),
       isTrue,
     );
     expect(
-      mayDiscardPendingCommand(notAdmitted, previouslySubmitted: true),
+      mayDiscardPendingCommand(
+        notAdmitted.commandOutcome,
+        previouslySubmitted: true,
+      ),
       isFalse,
     );
   });
