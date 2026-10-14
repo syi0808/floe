@@ -25,6 +25,11 @@ final class ConversationTurnCompletion {
 abstract interface class ConversationRuntimeGateway {
   AppReadModel get readModel;
 
+  Future<ActionProposalPreview> previewCalendarProposal({
+    required Map<String, Object?> receipt,
+    required String artifactId,
+  });
+
   Future<CalendarProposalSubmission> submitCalendarProposal({
     required String commandId,
     required String sessionId,
@@ -107,6 +112,13 @@ final class NativeConversationRuntimeGateway
   final Future<void> Function()? _beforeStartTurn;
   final Duration _observationInterval;
   _ActiveConversationTurn? _active;
+
+  @override
+  Future<ActionProposalPreview> previewCalendarProposal({
+    required Map<String, Object?> receipt,
+    required String artifactId,
+  }) =>
+      _client.previewCalendarProposal(receipt: receipt, artifactId: artifactId);
 
   @override
   Future<CalendarProposalSubmission> submitCalendarProposal({

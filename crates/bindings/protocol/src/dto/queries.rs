@@ -115,6 +115,11 @@ pub enum AppProductQueryDto {
     ConversationSessionResume {},
     #[serde(rename = "conversation.calendar_policy.get")]
     ConversationCalendarPolicy {},
+    #[serde(rename = "conversation.calendar_proposal.preview")]
+    ConversationCalendarProposalPreview {
+        receipt: super::TaskExecutionReceiptRefDto,
+        artifact_id: super::UuidRefDto,
+    },
     #[serde(rename = "conversation.get_command")]
     ConversationGetCommand { command_id: CommandIdDto },
     #[serde(rename = "conversation.get_run")]
@@ -161,6 +166,7 @@ impl AppProductQueryDto {
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
             Self::ConversationCalendarPolicy {} => return Ok(()),
+            Self::ConversationCalendarProposalPreview { receipt, .. } => return receipt.validate(),
             Self::ConversationGetCommand { .. }
             | Self::ConversationGetRun { .. }
             | Self::ConversationGetMessage { .. }
@@ -173,6 +179,10 @@ impl AppProductQueryDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppQueryResultDto {
+    #[serde(rename = "conversation.calendar_proposal.preview")]
+    ConversationCalendarProposalPreview {
+        preview: super::ActionProposalPreviewDto,
+    },
     #[serde(rename = "calendar_acquisitions")]
     NativeHostCalendarAcquisitions {
         acquisitions: Vec<super::LocalContextAcquisitionRequestDto>,

@@ -355,3 +355,57 @@ fn parse_instant(
             }
         })
 }
+
+/// Exact receipt/artifact observation; never admits an operation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ActionProposalPreviewDto {
+    Ready {
+        title: String,
+        schedule: TimedScheduleDto,
+        destinations: Vec<ActionProposalDestinationDto>,
+    },
+    Existing {
+        action: ActionSnapshotDto,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActionProposalDestinationDto {
+    pub destination_ref: UuidRefDto,
+    pub label: String,
+}
+
+impl ActionProposalPreviewDto {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Self::Ready {
+                title,
+                schedule,
+                destinations,
+            } => {
+                validate_new_title(title)?;
+                schedule.validate_new_action()?;
+                if destinations.len() > 256 {
+                    return Err("proposal.destinations");
+                }
+                let mut seen = std::collections::HashSet::new();
+                for choice in destinations {
+                    validate_destination_label(&choice.label)?;
+                    if !seen.insert(choice.destination_ref.get()) {
+                        return Err("proposal.destinations");
+                    }
+                }
+                Ok(())
+            }
+            Self::Existing { action } => {
+                action.validate()?;
+                if action.origin != ActionOriginKindDto::Expert {
+                    return Err("proposal.origin");
+                }
+                Ok(())
+            }
+        }
+    }
+}

@@ -169,6 +169,7 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
     use AppProductQueryDto as Q;
     Ok(match value {
         query @ (Q::ConversationSessionResume { .. }
+        | Q::ConversationCalendarProposalPreview { .. }
         | Q::ConversationCalendarPolicy { .. }
         | Q::ConversationSessionGet { .. }
         | Q::ConversationGetCommand { .. }

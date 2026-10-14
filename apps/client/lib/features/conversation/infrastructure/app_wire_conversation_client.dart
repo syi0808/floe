@@ -355,6 +355,39 @@ final class AppWireConversationClient {
     });
   }
 
+  Future<ActionProposalPreview> previewCalendarProposal({
+    required Map<String, Object?> receipt,
+    required String artifactId,
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (_closed) {
+      return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
+    if (!_wireId(artifactId)) {
+      return Future.error(const FormatException('Invalid proposal artifact.'));
+    }
+    final checkedReceipt = TaskExecutionReceiptReference.fromJson(
+      Map<String, dynamic>.from(receipt),
+    );
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {
+          'kind': 'conversation.calendar_proposal.preview',
+          'receipt': checkedReceipt.toJson(),
+          'artifact_id': artifactId,
+        },
+      }, timeout: timeout);
+      _wireFields(result, const {'kind', 'preview'});
+      if (result['kind'] != 'conversation.calendar_proposal.preview') {
+        throw const FormatException('Invalid proposal preview response.');
+      }
+      return ActionProposalPreview.fromJson(_map(result['preview']));
+    });
+  }
+
   Future<CalendarProposalCommandResult> submitCalendarProposal({
     required String commandId,
     required String sessionId,

@@ -618,6 +618,13 @@ fn route_query(
                         };
                         outcome.map(ConversationQueryOutcome::AssistantFeature)
                     }
+                    ConversationQuery::CalendarProposalPreview {
+                        receipt,
+                        artifact_id,
+                    } => service
+                        .preview_calendar_proposal(&actor, receipt, artifact_id, &scope)
+                        .await
+                        .map(ConversationQueryOutcome::CalendarProposalPreview),
                     ConversationQuery::CalendarOperationPolicy => service
                         .calendar_operation_policy(&actor, &scope)
                         .await

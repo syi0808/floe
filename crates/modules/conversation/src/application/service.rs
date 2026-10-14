@@ -100,6 +100,13 @@ pub trait ConversationOwner: Send + Sync {
         command_id: CommandId,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<crate::SessionStartAdmission, crate::SessionStartFailure>>;
+    fn preview_calendar_proposal<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_calendar_operations::ActionProposalPreview, AgentFailure>>;
     fn calendar_operation_policy<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -685,6 +692,22 @@ where
                 })
                 .await
                 .map_err(crate::SessionStartFailure::Indeterminate)?
+        })
+    }
+    fn preview_calendar_proposal<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_calendar_operations::ActionProposalPreview, AgentFailure>> {
+        Box::pin(async move {
+            self.inner.check(actor)?;
+            self.inner
+                .dependencies
+                .calendar_operations
+                .proposal_preview(actor, receipt, artifact_id, scope)
+                .await
         })
     }
     fn calendar_operation_policy<'a>(

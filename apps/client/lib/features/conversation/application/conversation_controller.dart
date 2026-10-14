@@ -1,3 +1,4 @@
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 
 import 'dart:async';
@@ -317,6 +318,30 @@ final class ConversationController extends ChangeNotifier {
         _notify();
       }
     }
+  }
+
+  Future<ActionProposalPreview> previewCalendarProposal({
+    required Map<String, Object?> receipt,
+    required String artifactId,
+  }) async {
+    final current = session;
+    final epoch = _adoptionEpoch;
+    if (current == null ||
+        current.personId != personId ||
+        _sealed ||
+        _disposed) {
+      throw StateError(
+        'Conversation is not available to observe this proposal.',
+      );
+    }
+    final preview = await gateway.conversationRuntime.previewCalendarProposal(
+      receipt: receipt,
+      artifactId: artifactId,
+    );
+    if (!_acceptsEpoch(epoch) || session?.id != current.id) {
+      throw StateError('Conversation changed while observing this proposal.');
+    }
+    return preview;
   }
 
   Future<CalendarProposalSubmission> submitCalendarProposal({

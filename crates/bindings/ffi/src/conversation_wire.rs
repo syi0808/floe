@@ -203,6 +203,13 @@ pub(crate) fn command_out(
 
 pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQuery> {
     Ok(match value {
+        AppProductQueryDto::ConversationCalendarProposalPreview {
+            receipt,
+            artifact_id,
+        } => ConversationQuery::CalendarProposalPreview {
+            receipt: crate::calendar_operations_wire::task_receipt_in(receipt)?,
+            artifact_id: artifact_id.get(),
+        },
         AppProductQueryDto::ConversationSessionResume {} => ConversationQuery::ResumeSession,
         AppProductQueryDto::ConversationCalendarPolicy {} => {
             ConversationQuery::CalendarOperationPolicy
@@ -257,6 +264,12 @@ pub(crate) fn query_out(
     result: ConversationQueryOutcome,
 ) -> AppWireResult<AppQueryResultDto> {
     Ok(match (query, result) {
+        (
+            ConversationQuery::CalendarProposalPreview { .. },
+            ConversationQueryOutcome::CalendarProposalPreview(value),
+        ) => AppQueryResultDto::ConversationCalendarProposalPreview {
+            preview: crate::calendar_operations_wire::proposal_preview_out(value)?,
+        },
         (
             ConversationQuery::CalendarOperationPolicy,
             ConversationQueryOutcome::CalendarOperationPolicy(value),
@@ -1008,6 +1021,42 @@ fn task_receipt_reference(
 #[cfg(test)]
 mod failure_projection_tests {
     use super::*;
+
+    #[test]
+    fn proposal_preview_preserves_exact_execution_and_artifact_identity() {
+        let task = Uuid::new_v4();
+        let execution = Uuid::new_v4();
+        let artifact = Uuid::new_v4();
+        let request: AppQueryRequestDto = serde_json::from_value(serde_json::json!({
+            "schema_version": 2, "request_id": Uuid::new_v4(),
+            "query": {"kind": "conversation.calendar_proposal.preview", "artifact_id": artifact,
+                "receipt": {"execution": {"task_id": task, "execution_id": execution, "executor_generation": 7},
+                    "task_revision": 12, "journal_revision": 4, "digest": "ab".repeat(32)}}
+        })).unwrap();
+        request.validate().unwrap();
+        let AppQueryDto::Product(query) = request.query else {
+            panic!("product query required")
+        };
+        let ConversationQuery::CalendarProposalPreview {
+            receipt,
+            artifact_id,
+        } = query_in(query).unwrap()
+        else {
+            panic!("exact proposal query required")
+        };
+        assert_eq!(artifact_id, artifact);
+        assert_eq!(receipt.execution.task_id.as_uuid(), task);
+        assert_eq!(receipt.execution.execution_id, execution);
+        assert_eq!(receipt.execution.executor_generation, 7);
+        assert_eq!(
+            (
+                receipt.task_revision,
+                receipt.journal_revision,
+                receipt.digest
+            ),
+            (12, 4, [0xab; 32])
+        );
+    }
 
     #[test]
     fn interaction_page_cursor_crosses_the_real_query_boundary() {

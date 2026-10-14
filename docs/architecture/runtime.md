@@ -664,6 +664,8 @@ the matching successor: Approve/Approved, Reject/Rejected or Cancel/Cancelled.
 Negative decisions do not admit dispatch. Existing immutable subject checks,
 revision CAS, decision replay and execution fences remain required.
 
+Calendar proposal observation uses the Conversation product preview query with the exact immutable Task execution receipt and artifact identity. Calendar Operations resolves an already-admitted operation before fresh evidence/destination checks, or returns only writable destinations authenticated by that proposal's contributor evidence. Reading never admits, retries or dispatches an operation. Flutter uses this same query for review and status refresh; a shared Manager Run, an arbitrary approval interaction or a generic Day destination list is not a proposal identity. Client observations retain operation identity/revision and fence late screen/selection replies. Submission remains a separate exact command with its original replay identity.
+
 ## Retained Core validation
 
 Core transcript sequence numbers are lifetime identities, not page-size budgets.

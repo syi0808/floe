@@ -254,3 +254,40 @@ fn digest_out(value: [u8; 32]) -> AppWireResult<dto::DigestHex64Dto> {
     dto::DigestHex64Dto::new(value.iter().map(|byte| format!("{byte:02x}")).collect())
         .ok_or_else(internal_error)
 }
+
+pub(crate) fn proposal_preview_out(
+    value: owner::ActionProposalPreview,
+) -> AppWireResult<dto::ActionProposalPreviewDto> {
+    let preview = match value {
+        owner::ActionProposalPreview::Ready {
+            title,
+            schedule,
+            destinations,
+        } => {
+            let schedule = schedule_out(schedule);
+            schedule
+                .validate_new_action()
+                .map_err(|_| internal_error())?;
+            dto::ActionProposalPreviewDto::Ready {
+                title,
+                schedule,
+                destinations: destinations
+                    .into_iter()
+                    .map(|choice| {
+                        Ok(dto::ActionProposalDestinationDto {
+                            destination_ref: uuid_out(choice.destination_ref)?,
+                            label: choice.label,
+                        })
+                    })
+                    .collect::<AppWireResult<_>>()?,
+            }
+        }
+        owner::ActionProposalPreview::Existing { action } => {
+            dto::ActionProposalPreviewDto::Existing {
+                action: snapshot_out(action)?,
+            }
+        }
+    };
+    preview.validate().map_err(|_| internal_error())?;
+    Ok(preview)
+}

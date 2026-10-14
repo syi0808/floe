@@ -213,6 +213,10 @@ pub enum ProductQuery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQuery {
+    CalendarProposalPreview {
+        receipt: floe_agent_contract::TaskExecutionReceiptRef,
+        artifact_id: Uuid,
+    },
     CalendarOperationPolicy,
     AssistantFeature(AssistantFeatureQuery),
     ResumeSession,
@@ -321,6 +325,7 @@ pub enum ProductQueryOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQueryOutcome {
+    CalendarProposalPreview(floe_calendar_operations::ActionProposalPreview),
     CalendarOperationPolicy(OperationAuthorizationPolicy),
     AssistantFeature(AssistantFeatureQueryResult),
     Session(Option<floe_conversation::SessionSnapshot>),

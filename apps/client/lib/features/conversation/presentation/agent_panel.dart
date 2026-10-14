@@ -426,11 +426,7 @@ class _AgentPanelState extends State<AgentPanel> {
             ) &&
             message.executionReceipt != null) ...[
           const SizedBox(height: FloeSpace.md),
-          AgentProposalCard(
-            controller: widget.controller,
-            message: message,
-            dayGateway: widget.dayGateway,
-          ),
+          AgentProposalCard(controller: widget.controller, message: message),
         ],
       ],
     ),

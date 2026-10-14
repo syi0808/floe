@@ -1,3 +1,7 @@
+import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
+import 'package:floe_client/features/conversation/domain/agent_session.dart';
+import 'package:floe_client/features/actions/domain/calendar_action.dart';
+
 import 'dart:async';
 
 import '../../support/interaction_page_fixture.dart';
@@ -19,6 +23,236 @@ import 'package:floe_client/features/conversation/presentation/agent_panel.dart'
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  for (final invalidation in ['session', 'runtime', 'dispose']) {
+    test('proposal observation fences $invalidation replacement', () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final response = Completer<Map<String, dynamic>>();
+      final requested = Completer<void>();
+      h.transport.proposalPreview = (_) {
+        requested.complete();
+        return response.future;
+      };
+      final pending = h.controller.previewCalendarProposal(
+        receipt: _proposalReceipt(),
+        artifactId: _m3,
+      );
+      await requested.future;
+      final rejected = expectLater(pending, throwsStateError);
+      switch (invalidation) {
+        case 'session':
+          h.transport.replacementSession = _session(
+            id: _replacementSessionId,
+            messages: [_message(_replacementMessageId)],
+          );
+          await h.controller.load(newSession: true);
+        case 'runtime':
+          h.runtime.closeAdmission();
+        case 'dispose':
+          h.disposeController();
+      }
+      response.complete(
+        _proposalPreviewEnvelope(_readyProposal('Old generation')),
+      );
+      await rejected;
+    });
+  }
+
+  testWidgets(
+    'exact proposal refresh rejects a different operation and preserves its current card',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope({
+        'kind': 'existing',
+        'action': _proposalOperation(),
+      });
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      final replacement = _proposalOperation(title: 'Wrong replacement');
+      replacement['action_ref'] = _m4;
+      replacement['review_ref'] = {
+        ...(replacement['review_ref'] as Map),
+        'operation_id': _m4,
+      };
+      h.transport.proposalPreview = (_) async =>
+          _proposalPreviewEnvelope({'kind': 'existing', 'action': replacement});
+      await tester.tap(find.text('Refresh approval status'));
+      await tester.pumpAndSettle();
+      expect(find.text('Exact proposal operation'), findsOneWidget);
+      expect(find.text('Wrong replacement'), findsNothing);
+      expect(find.textContaining('identity changed'), findsWidgets);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'two artifacts from one Task remain separate across card replacement',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.proposalPreview = (query) async => _proposalPreviewEnvelope({
+        'kind': 'existing',
+        'action': _proposalOperation(
+          title: query['artifact_id'] == _m3
+              ? 'First artifact'
+              : 'Second artifact',
+        ),
+      });
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.text('First artifact'), findsOneWidget);
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m4, messageId: _m2)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.text('First artifact'), findsNothing);
+      expect(find.text('Second artifact'), findsOneWidget);
+      expect(h.transport.proposalQueries.map((q) => q['artifact_id']), [
+        _m3,
+        _m4,
+      ]);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'proposal does not alias a different approval from the same Run',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.interactionPage = (_) async =>
+          interactionPageFixture(_sessionId, [_proposalInteraction()]);
+      await h.controller.refreshInteractions();
+      h.transport.proposalPreview = (_) async =>
+          _proposalPreviewEnvelope(_readyProposal('Exact proposal calendar'));
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      expect(find.text('Review proposal'), findsOneWidget);
+      expect(find.text('Unrelated approval'), findsNothing);
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Exact proposal calendar'), findsOneWidget);
+      expect(h.transport.proposalQueries.single['receipt'], _proposalReceipt());
+      expect(h.transport.proposalQueries.single['artifact_id'], _m3);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'reopened proposal reads and refreshes its exact operation without an interaction',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var revision = 1;
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope({
+        'kind': 'existing',
+        'action': _proposalOperation(revision: revision++),
+      });
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.text('Exact proposal operation'), findsOneWidget);
+      await tester.tap(find.text('Refresh approval status'));
+      await tester.pumpAndSettle();
+      expect(h.transport.proposalQueries, hasLength(2));
+      expect(h.transport.proposalQueries[0], h.transport.proposalQueries[1]);
+      expect(h.controller.interactionSnapshots, isEmpty);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets('late proposal preview cannot populate a replacement artifact', (
+    tester,
+  ) async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    final old = Completer<Map<String, dynamic>>();
+    h.transport.proposalPreview = (query) => query['artifact_id'] == _m3
+        ? old.future
+        : Future.value(
+            _proposalPreviewEnvelope(_readyProposal('New artifact calendar')),
+          );
+    await tester.pumpWidget(_proposalApp(h.controller, _proposalMessage(_m3)));
+    await tester.tap(find.text('Review proposal'));
+    await tester.pump();
+    await tester.pumpWidget(
+      _proposalApp(h.controller, _proposalMessage(_m4, messageId: _m2)),
+    );
+    await tester.tap(find.text('Review proposal'));
+    await tester.pumpAndSettle();
+    old.complete(
+      _proposalPreviewEnvelope(_readyProposal('Stale artifact calendar')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('New artifact calendar'), findsOneWidget);
+    expect(find.textContaining('Stale artifact calendar'), findsNothing);
+    expect(h.transport.commands, isEmpty);
+  });
+
+  testWidgets(
+    'proposal preview owner failure does not fall back to generic destinations or submit',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.proposalPreview = (_) async =>
+          throw StateError('proposal evidence revoked');
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('proposal evidence revoked'), findsWidgets);
+      expect(h.transport.proposalQueries, hasLength(1));
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  test(
+    'proposal preview is a pure typed query and validates response and receipt',
+    () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.proposalPreview = (_) async =>
+          _proposalPreviewEnvelope(_readyProposal('Scoped'));
+      final preview = await h.controller.previewCalendarProposal(
+        receipt: _proposalReceipt(),
+        artifactId: _m3,
+      );
+      expect(preview, isA<ReadyActionProposal>());
+      await expectLater(
+        () => h.controller.previewCalendarProposal(
+          receipt: {..._proposalReceipt(), 'digest': 'bad'},
+          artifactId: _m3,
+        ),
+        throwsFormatException,
+      );
+      expect(h.transport.proposalQueries, hasLength(1));
+      h.transport.proposalPreview = (_) async => {
+        'kind': 'wrong',
+        'preview': _readyProposal('Scoped'),
+      };
+      await expectLater(
+        h.controller.previewCalendarProposal(
+          receipt: _proposalReceipt(),
+          artifactId: _m3,
+        ),
+        throwsFormatException,
+      );
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
   test('known interaction refresh uses its exact reference without restarting list discovery', () async {
     final h = await _Harness.create();
     addTearDown(h.dispose);
@@ -780,6 +1014,8 @@ final class _ConversationTransport implements AppWireTransport {
 
   final Map<String, Object?> initialSession;
   Map<String, Object?>? replacementSession;
+  final List<Map<String, dynamic>> proposalQueries = [];
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? proposalPreview;
   final List<Map<String, dynamic>> historyQueries = [];
   final List<Map<String, dynamic>> interactionQueries = [];
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? interactionPage;
@@ -814,6 +1050,9 @@ final class _ConversationTransport implements AppWireTransport {
   }) async {
     final query = Map<String, dynamic>.from(request['query'] as Map);
     switch (query['kind']) {
+      case 'conversation.calendar_proposal.preview':
+        proposalQueries.add(query);
+        return proposalPreview!(query);
       case 'conversation.session.resume':
         return _sessionEnvelope(initialSession);
       case 'conversation.session.get':
@@ -1024,3 +1263,111 @@ const _m5 = '00000000-0000-4000-8000-000000000105';
 const _m6 = '00000000-0000-4000-8000-000000000106';
 const _replacementMessageId = '00000000-0000-4000-8000-000000000107';
 const _terminalRunId = '00000000-0000-4000-8000-000000000108';
+
+Map<String, Object?> _proposalReceipt() => {
+  'execution': {'task_id': _m1, 'execution_id': _m2, 'executor_generation': 1},
+  'task_revision': 2,
+  'journal_revision': 2,
+  'digest': 'a' * 64,
+};
+AgentCapabilityMessage _proposalMessage(
+  String artifact, {
+  String messageId = _m1,
+}) => AgentCapabilityMessage.fromDelegation({
+  'kind': 'delegation',
+  'message_id': messageId,
+  'turn_id': '00000000-0000-4000-8000-000000000099',
+  'task': {
+    'execution_receipt': _proposalReceipt(),
+    'task_id': _m1,
+    'agent_id': 'scheduler',
+    'state': 'completed',
+    'result': 'Proposal ready',
+    'artifacts': [
+      {
+        'artifact_id': artifact,
+        'name': 'Schedule',
+        'media_types': [
+          'application/vnd.floe.actions.calendar-proposal+json;version=1',
+        ],
+      },
+    ],
+  },
+});
+Widget _proposalApp(
+  ConversationController controller,
+  AgentCapabilityMessage message,
+) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+  home: Scaffold(
+    body: SingleChildScrollView(
+      child: AgentProposalCard(controller: controller, message: message),
+    ),
+  ),
+);
+Map<String, dynamic> _proposalPreviewEnvelope(Map<String, dynamic> preview) => {
+  'kind': 'conversation.calendar_proposal.preview',
+  'preview': preview,
+};
+Map<String, dynamic> _readyProposal(String label) => {
+  'kind': 'ready',
+  'title': 'Proposal',
+  'schedule': {
+    'starts_at': '2026-10-12T10:00:00Z',
+    'ends_at': '2026-10-12T11:00:00Z',
+    'timezone': 'UTC',
+  },
+  'destinations': [
+    {'destination_ref': _m6, 'label': label},
+  ],
+};
+Map<String, dynamic> _proposalOperation({
+  int revision = 1,
+  String title = 'Exact proposal operation',
+}) => {
+  'action_ref': _m5,
+  'revision': revision,
+  'origin': 'expert',
+  'effect': {
+    'kind': 'create',
+    'destination_label': 'Personal Calendar',
+    'title': title,
+    'schedule': {
+      'starts_at': '2026-10-12T10:00:00Z',
+      'ends_at': '2026-10-12T11:00:00Z',
+      'timezone': 'UTC',
+    },
+  },
+  'review_ref': {
+    'id': _m6,
+    'operation_id': _m5,
+    'effect_digest': 'a' * 64,
+    'source_digest': 'b' * 64,
+    'person_id': _personId,
+    'device_id': 'synthetic-device',
+    'policy_revision': 3,
+    'created_at': '2026-10-10T10:00:00Z',
+    'expires_at': '2026-10-10T11:00:00Z',
+  },
+  'created_at': '2026-10-10T10:00:00Z',
+  'expires_at': '2026-10-10T11:00:00Z',
+  'status': {'state': 'pending_review'},
+  'allowed_actions': ['approve', 'reject'],
+  'next_observation_after_ms': null,
+};
+Map<String, dynamic> _proposalInteraction() {
+  final operation = _proposalOperation(title: 'Unrelated approval');
+  return {
+    ...interactionFixture(id: _m4, sessionId: _sessionId),
+    'interaction_kind': 'operation_approval',
+    'created_at': operation['created_at'],
+    'expires_at': operation['expires_at'],
+    'requirement': {
+      'kind': 'operation_approval',
+      'review_ref': operation['review_ref'],
+    },
+    'target': {'kind': 'operation_approval', 'operation': operation},
+    'actions': ['allow'],
+  };
+}

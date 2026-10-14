@@ -1453,26 +1453,20 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
         "the real Connections/Access source is writable"
     );
     let preview_receipt = receipt.clone();
-    let proposal_preview = support::with_ready(&host, |services, caller, owners| {
-        let actor = caller.owner_actor();
-        services
-            .execute_owner(async move {
-                owners
-                    .calendar_operations
-                    .proposal_preview(
-                        &actor,
-                        preview_receipt,
-                        artifact_id,
-                        &floe_app::host_scope(
-                            Uuid::new_v4(),
-                            floe_execution::Cancellation::new(),
-                            Duration::from_secs(30),
-                        ),
-                    )
-                    .await
-            })
-            .expect("prepare destination from the real Task/Vault admission evidence")
+    let preview_query = ProductQuery::Conversation(ConversationQuery::CalendarProposalPreview {
+        receipt: preview_receipt,
+        artifact_id,
     });
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::CalendarProposalPreview(
+        proposal_preview,
+    )) = host
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_query(preview_query.clone())
+        .expect("query the exact Task proposal through the real product boundary")
+    else {
+        panic!("unexpected proposal preview result")
+    };
     let destination_ref = match proposal_preview {
         floe_calendar_operations::ActionProposalPreview::Ready { destinations, .. } => {
             assert_eq!(destinations.len(), 1);
@@ -1550,6 +1544,18 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
         proposal.operation.status,
         floe_calendar_operations::ActionStatus::PendingReview
     ));
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::CalendarProposalPreview(
+        floe_calendar_operations::ActionProposalPreview::Existing { action: observed },
+    )) = host
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_query(preview_query)
+        .expect("query existing exact proposal after profile reopen without resubmitting")
+    else {
+        panic!("persisted proposal was not resolved exactly")
+    };
+    assert_eq!(observed.action_ref, proposal.operation.action_ref);
+    assert_eq!(observed.revision, proposal.operation.revision);
     let interaction = proposal
         .interaction
         .expect("Ask policy publishes the Access review in Conversation");

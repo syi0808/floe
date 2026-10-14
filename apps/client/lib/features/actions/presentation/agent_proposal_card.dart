@@ -12,10 +12,7 @@ import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/conversation/application/conversation_command_replay.dart';
 import 'package:floe_client/features/conversation/application/conversation_controller.dart';
-import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
-import 'package:floe_client/features/day/application/day_gateway.dart';
-import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
 class AgentProposalCard extends StatefulWidget {
@@ -23,12 +20,10 @@ class AgentProposalCard extends StatefulWidget {
     super.key,
     required this.controller,
     required this.message,
-    required this.dayGateway,
   });
 
   final ConversationController controller;
   final AgentCapabilityMessage message;
-  final DayGateway dayGateway;
 
   @override
   State<AgentProposalCard> createState() => _AgentProposalCardState();
@@ -40,14 +35,14 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
 
   final form = GlobalKey<FormState>();
   bool expanded = false;
-  List<ManualCalendarDestination> destinations = const [];
+  List<ActionDestinationChoice> destinations = const [];
   String? destinationRef;
   String? artifactId;
   ConversationCommandReplay? pendingCommands;
   final Map<String, CalendarAction> actionsByIntent = {};
   String? error;
-  bool loadingDestinations = false;
-  bool destinationsLoaded = false;
+  bool loadingPreview = false;
+  bool previewLoaded = false;
   bool submitting = false;
   int _messageEpoch = 0;
   int _destinationEpoch = 0;
@@ -63,8 +58,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
 
   bool get calendarChangesAvailable =>
       pendingCommands != null &&
-      destinationsLoaded &&
-      !loadingDestinations &&
+      previewLoaded &&
+      !loadingPreview &&
       destinations.isNotEmpty;
 
   CalendarAction? get selectedAction {
@@ -72,17 +67,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     final selectedArtifactId = artifactId;
     if (receipt == null || selectedArtifactId == null) return null;
     final key = _actionKey(receipt, selectedArtifactId);
-    final current = actionsByIntent[key];
-    if (current != null) return current;
-    for (final interaction in widget.controller.interactionSnapshots) {
-      final target = interaction.target;
-      if (interaction.originRunId == widget.message.turnId &&
-          interaction.kind == AgentInteractionKind.operationApproval &&
-          target is AgentOperationApprovalTarget) {
-        return target.operation;
-      }
-    }
-    return null;
+    return actionsByIntent[key];
   }
 
   String _actionKey(TaskExecutionReceiptReference receipt, String id) =>
@@ -102,6 +87,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
   void didUpdateWidget(AgentProposalCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     final gatewayChanged =
+        oldWidget.controller != widget.controller ||
         oldWidget.controller.gateway != widget.controller.gateway;
     if (gatewayChanged) {
       pendingCommands = ConversationCommandReplay.forGateway(
@@ -110,6 +96,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       actionsByIntent.clear();
     }
     if (gatewayChanged ||
+        oldWidget.message.messageId != widget.message.messageId ||
         oldWidget.message.callId != widget.message.callId ||
         oldWidget.message.executionReceipt != widget.message.executionReceipt) {
       _messageEpoch++;
@@ -120,26 +107,29 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       expanded = false;
       error = null;
       submitting = false;
-      loadingDestinations = false;
-      destinationsLoaded = false;
+      loadingPreview = false;
+      previewLoaded = false;
     }
   }
 
-  Future<void> _loadDestinations() async {
+  Future<void> _loadPreview() async {
     final messageEpoch = _messageEpoch;
     final destinationEpoch = ++_destinationEpoch;
     final receipt = widget.message.executionReceipt;
     final selectedArtifact = artifactId;
     if (receipt == null || selectedArtifact == null) return;
     setState(() {
-      loadingDestinations = true;
-      destinationsLoaded = false;
+      loadingPreview = true;
+      previewLoaded = false;
       destinations = const [];
       destinationRef = null;
       error = null;
     });
     try {
-      final loaded = await widget.dayGateway.loadExternalCalendarDestinations();
+      final preview = await widget.controller.previewCalendarProposal(
+        receipt: receipt.toJson(),
+        artifactId: selectedArtifact,
+      );
       if (!mounted ||
           messageEpoch != _messageEpoch ||
           destinationEpoch != _destinationEpoch ||
@@ -147,12 +137,19 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         return;
       }
       setState(() {
-        destinations = loaded;
-        destinationRef = loaded.length == 1
-            ? loaded.single.destinationRef
-            : null;
-        loadingDestinations = false;
-        destinationsLoaded = true;
+        switch (preview) {
+          case ExistingActionProposal(:final action):
+            _acceptAction(_actionKey(receipt, selectedArtifact), action);
+            destinations = const [];
+            destinationRef = null;
+          case ReadyActionProposal(:final destinations):
+            this.destinations = destinations;
+            destinationRef = destinations.length == 1
+                ? destinations.single.destinationRef
+                : null;
+        }
+        loadingPreview = false;
+        previewLoaded = true;
       });
     } on Object catch (failure) {
       if (!mounted ||
@@ -163,7 +160,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       }
       setState(() {
         error = failure.toString();
-        loadingDestinations = false;
+        loadingPreview = false;
       });
     }
   }
@@ -244,35 +241,20 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       error = null;
     });
     try {
-      final known = widget.controller.interactionSnapshots.where((snapshot) {
-        final target = snapshot.target;
-        return target is AgentOperationApprovalTarget &&
-            target.operation.actionRef == action.actionRef;
-      }).firstOrNull;
-      CalendarAction? observed;
-      if (known != null) {
-        final refreshed = await widget.controller.ensureInteraction(
-          known.id,
-          reload: true,
-        );
-        final target = refreshed?.target;
-        if (target is AgentOperationApprovalTarget &&
-            target.operation.actionRef == action.actionRef) {
-          observed = target.operation;
-        }
-      } else {
-        await widget.controller.refreshInteractions();
-        observed = widget.controller.interactionSnapshots
-            .map((snapshot) => snapshot.target)
-            .whereType<AgentOperationApprovalTarget>()
-            .map((target) => target.operation)
-            .where((operation) => operation.actionRef == action.actionRef)
-            .firstOrNull;
+      final preview = await widget.controller.previewCalendarProposal(
+        receipt: receipt.toJson(),
+        artifactId: selectedArtifact,
+      );
+      if (preview is! ExistingActionProposal ||
+          preview.action.actionRef != action.actionRef) {
+        throw StateError('Calendar proposal operation identity changed.');
       }
-      if (observed == null) {
-        throw StateError('Calendar operation status is not available yet.');
+      final observed = preview.action;
+      if (!mounted ||
+          epoch != _messageEpoch ||
+          artifactId != selectedArtifact) {
+        return;
       }
-      if (!mounted || epoch != _messageEpoch) return;
       final currentObservation = observed;
       setState(() {
         _acceptAction(key, currentObservation);
@@ -293,7 +275,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         return 'This proposal is not ready to submit yet.';
       }
       if (error case final currentError?) return currentError;
-      if (loadingDestinations) return strings.actionLoading;
+      if (loadingPreview) return strings.actionLoading;
       if (!expanded) return 'Review this proposal.';
       if (destinationRef != null) return 'Ready to add to your calendar.';
       return 'Choose where to add this proposal.';
@@ -378,7 +360,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                     ? null
                     : () {
                         setState(() => expanded = true);
-                        unawaited(_loadDestinations());
+                        unawaited(_loadPreview());
                       },
                 child: const Text('Review proposal'),
               ),
@@ -404,10 +386,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       artifactId = value;
                       destinations = const [];
                       destinationRef = null;
-                      destinationsLoaded = false;
-                      loadingDestinations = false;
+                      previewLoaded = false;
+                      loadingPreview = false;
                     });
-                    unawaited(_loadDestinations());
+                    unawaited(_loadPreview());
                   },
                   validator: (value) =>
                       value == null ? strings.actionFormInvalid : null,
@@ -435,15 +417,15 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                           ),
                         )
                         .toList(growable: false),
-                    enabled: !loadingDestinations && !submitting,
+                    enabled: !loadingPreview && !submitting,
                     onChanged: (value) =>
                         setState(() => destinationRef = value),
                     validator: (value) =>
                         value == null ? strings.actionFormInvalid : null,
                   ),
-                if (destinationsLoaded &&
+                if (previewLoaded &&
                     destinations.isEmpty &&
-                    !loadingDestinations &&
+                    !loadingPreview &&
                     error == null) ...[
                   const SizedBox(height: 8),
                   const Text(
@@ -454,9 +436,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   const SizedBox(height: 8),
                   Text(failure),
                   FloeButton.text(
-                    onPressed: loadingDestinations
+                    onPressed: loadingPreview
                         ? null
-                        : () => unawaited(_loadDestinations()),
+                        : () => unawaited(_loadPreview()),
                     child: Text(strings.actionReload),
                   ),
                 ],
