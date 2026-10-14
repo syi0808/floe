@@ -14,15 +14,17 @@ final class PersonalDayController extends ChangeNotifier {
   factory PersonalDayController({
     required DayGateway gateway,
     required DayQuery query,
-  }) => PersonalDayController._(gateway, query);
+    DateTime Function()? clock,
+  }) => PersonalDayController._(gateway, query, clock ?? DateTime.now);
 
-  PersonalDayController._(DayGateway gateway, this._query)
+  PersonalDayController._(DayGateway gateway, this._query, this._clock)
     : _gateway = gateway,
       _refreshGateway = gateway is DayRefreshGateway
           ? gateway as DayRefreshGateway
           : null;
 
   final DayGateway _gateway;
+  final DateTime Function() _clock;
   final DayRefreshGateway? _refreshGateway;
   bool get canRefresh => _refreshGateway != null;
   DayQuery _query;
@@ -41,6 +43,16 @@ final class PersonalDayController extends ChangeNotifier {
   CompletedDayRefresh? lastRefreshAcknowledgement;
 
   DayQuery get query => _query;
+
+  // Observation time advances independently of the selected civil day. Keep
+  // both offsets: recomputing the day from now would lose its DST bounds.
+  DayQuery _atCurrentTime(DayQuery query) => DayQuery(
+    personId: query.personId,
+    date: query.date,
+    now: _clock(),
+    timezoneOffsetSeconds: query.timezoneOffsetSeconds,
+    endTimezoneOffsetSeconds: query.endTimezoneOffsetSeconds,
+  );
 
   /// Only the latest successful read can decorate another feature's source rows.
   /// Retained Day content after a read failure is not current correlation evidence.
@@ -124,7 +136,7 @@ final class PersonalDayController extends ChangeNotifier {
   Future<void> _load(bool sync) async {
     if (_disposed) return;
     final generation = ++_loadGeneration;
-    final query = _query;
+    final query = _query = _atCurrentTime(_query);
     final previous = snapshot;
     final keepPrevious = previous != null && _matchesQuery(previous, query);
     if (!keepPrevious) snapshot = null;
@@ -198,7 +210,10 @@ final class PersonalDayController extends ChangeNotifier {
     if (refresher == null)
       throw StateError('Day source refresh is not available.');
     _refreshCommandId ??= newAgentRequestId();
-    _refreshQuery ??= query;
+    // Once admitted, this exact query survives uncertain responses. Only a
+    // genuinely new command samples the clock, including after another date's
+    // retained command has finished.
+    _refreshQuery ??= _atCurrentTime(query);
     final requestQuery = _refreshQuery!;
     final first =
         _refreshOperation ??
@@ -258,7 +273,7 @@ final class PersonalDayController extends ChangeNotifier {
   }
 
   Future<bool> submitCapture(String input) async {
-    final query = _query;
+    final query = _query = _atCurrentTime(_query);
     return _run(() async {
       final capture = await _gateway.submitCapture(input, query);
       if (!_disposed) pendingCapture = capture;
@@ -268,7 +283,7 @@ final class PersonalDayController extends ChangeNotifier {
   Future<bool> classify(ClassificationDraft draft) async {
     final capture = pendingCapture;
     if (capture == null) return false;
-    final query = _query;
+    final query = _query = _atCurrentTime(_query);
     return _run(() async {
       final result = await _gateway.classifyCapture(capture, draft, query);
       if (!_disposed && identical(pendingCapture, capture))
@@ -278,7 +293,7 @@ final class PersonalDayController extends ChangeNotifier {
   }
 
   Future<DaySnapshot?> setTaskCompleted(TaskItem task, bool completed) async {
-    final query = _query;
+    final query = _query = _atCurrentTime(_query);
     DaySnapshot? acknowledged;
     final succeeded = await _run(() async {
       final result = await _gateway.setTaskCompleted(task, completed, query);
@@ -289,7 +304,7 @@ final class PersonalDayController extends ChangeNotifier {
   }
 
   Future<void> deleteItem(DayItem item) async {
-    final query = _query;
+    final query = _query = _atCurrentTime(_query);
     await _run(() async {
       final result = await _gateway.deleteItem(item, query);
       await _displayAfterMutation(result, query);
@@ -301,8 +316,10 @@ final class PersonalDayController extends ChangeNotifier {
     String acknowledgement,
   ) async {
     try {
-      final current = await _gateway.loadDay(query);
-      if (!_matchesQuery(current, query)) {
+      final displayQuery = _atCurrentTime(query);
+      if (_sameQueryIntent(query, _query)) _query = displayQuery;
+      final current = await _gateway.loadDay(displayQuery);
+      if (!_matchesQuery(current, displayQuery)) {
         throw const FormatException('Day returned a different display query.');
       }
       return current;
@@ -350,14 +367,14 @@ final class PersonalDayController extends ChangeNotifier {
         _query.date.month,
         _query.date.day + offset,
       ),
-      now: DateTime.now(),
+      now: _clock(),
     );
     await load();
     await refreshIfStale();
   }
 
   Future<void> goToday() async {
-    final now = DateTime.now();
+    final now = _clock().toLocal();
     _query = DayQuery.local(
       personId: _query.personId,
       date: DateTime(now.year, now.month, now.day),
