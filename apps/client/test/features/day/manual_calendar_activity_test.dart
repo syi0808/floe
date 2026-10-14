@@ -8,6 +8,135 @@ import 'package:floe_client/features/day/infrastructure/app_wire_day_gateway.dar
 import 'package:floe_client/features/day/presentation/manual_calendar_activity.dart';
 
 void main() {
+  testWidgets(
+    'reopened succeeded activity can collect Day without another Calendar write',
+    (tester) async {
+      var admitted = false;
+      final transport = _SyntheticAppWireTransport(
+        onQuery: (query) async => switch (query['kind']) {
+          'day.external_calendar_operations' => _page([
+            _succeeded(revision: 4, pending: true),
+          ]),
+          'day.external_calendar_operation.get' => _operation(
+            _succeeded(revision: admitted ? 5 : 4, pending: !admitted),
+          ),
+          _ => throw StateError('Unexpected query: $query'),
+        },
+        onCommand: (command) async {
+          expect(command, {
+            'kind': 'day.external_calendar_operation.reconcile',
+            'operation_ref': _operationRef,
+            'expected_revision': 4,
+          });
+          admitted = true;
+          // Admission is not proof that the asynchronous Day collection finished.
+          return _operation(_succeeded(revision: 4, pending: true));
+        },
+      );
+      await tester.pumpWidget(_activityApp(AppWireDayGateway(transport)));
+      await tester.pump();
+      expect(find.text('Update Day'), findsOneWidget);
+      expect(find.text('Reconcile'), findsNothing);
+      expect(transport.commands, isEmpty);
+      await tester.tap(find.text('Update Day'));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.text('Calendar change succeeded; Day update is pending.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Check status'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Calendar change succeeded.'), findsOneWidget);
+      expect(find.text('Update Day'), findsNothing);
+      expect(transport.commands, hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'Day collection error remains recoverable with current revision',
+    (tester) async {
+      final pending = Completer<Map<String, dynamic>>();
+      var attempts = 0;
+      final transport = _SyntheticAppWireTransport(
+        onQuery: (query) async =>
+            query['kind'] == 'day.external_calendar_operations'
+            ? _page([_succeeded(revision: 4, pending: true)])
+            : _operation(_succeeded(revision: 6, pending: true)),
+        onCommand: (command) {
+          attempts++;
+          if (attempts == 1) return pending.future;
+          expect(command['expected_revision'], 6);
+          return Future.value(
+            _operation(_succeeded(revision: 7, pending: false)),
+          );
+        },
+      );
+      await tester.pumpWidget(_activityApp(AppWireDayGateway(transport)));
+      await tester.pump();
+      await tester.tap(find.text('Update Day'));
+      await tester.pump();
+      await tester.tap(find.text('Update Day'));
+      await tester.pump();
+      expect(transport.commands, hasLength(1));
+      pending.completeError(StateError('collection temporarily unavailable'));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.textContaining('collection temporarily unavailable'),
+        findsOneWidget,
+      );
+      expect(find.text('Update Day'), findsOneWidget);
+      await tester.tap(find.text('Check status'));
+      await tester.pump();
+      await tester.pump();
+      await tester.tap(find.text('Update Day'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Calendar change succeeded.'), findsOneWidget);
+      expect(transport.commands, hasLength(2));
+      expect(
+        transport.commands.every(
+          (c) => c['kind'] == 'day.external_calendar_operation.reconcile',
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  for (final status in ManualCalendarOperationStatus.values) {
+    testWidgets('Day collection action respects owner status ${status.name}', (
+      tester,
+    ) async {
+      final transport = _SyntheticAppWireTransport(
+        onQuery: (_) async => _page([
+          ManualCalendarOperationReceipt(
+            operationRef: _operationRef,
+            revision: 4,
+            status: status,
+            collectionPending: true,
+          ),
+        ]),
+      );
+      await tester.pumpWidget(_activityApp(AppWireDayGateway(transport)));
+      await tester.pump();
+      expect(
+        find.text('Update Day'),
+        status == ManualCalendarOperationStatus.succeeded
+            ? findsOneWidget
+            : findsNothing,
+      );
+      expect(
+        find.text('Reconcile'),
+        status == ManualCalendarOperationStatus.unknown
+            ? findsOneWidget
+            : findsNothing,
+      );
+      expect(transport.commands, isEmpty);
+    });
+  }
+
   testWidgets('a late list page cannot replace a newer inspection', (
     tester,
   ) async {

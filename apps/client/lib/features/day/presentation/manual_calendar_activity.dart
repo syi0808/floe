@@ -119,8 +119,12 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
   }
 
   Future<void> _inspect(ManualCalendarOperationReceipt operation) async {
-    await _update(operation, () => widget.gateway
-        .inspectExternalCalendarOperation(operation.operationRef));
+    await _update(
+      operation,
+      () => widget.gateway.inspectExternalCalendarOperation(
+        operation.operationRef,
+      ),
+    );
   }
 
   Future<void> _reconcile(ManualCalendarOperationReceipt operation) async {
@@ -190,13 +194,14 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
       switch (operation.status) {
         ManualCalendarOperationStatus.pending => 'Waiting to run',
         ManualCalendarOperationStatus.executing => 'In progress',
-        ManualCalendarOperationStatus.blocked => 'Blocked; no Calendar change was confirmed',
+        ManualCalendarOperationStatus.blocked =>
+          'Blocked; no Calendar change was confirmed',
         ManualCalendarOperationStatus.notApplied => 'Not applied',
-        ManualCalendarOperationStatus.unknown =>
-          'Outcome unknown. The Calendar may have changed; check status before trying again.',
-        ManualCalendarOperationStatus.succeeded => operation.collectionPending
-            ? 'Calendar change succeeded; Day update is pending.'
-            : 'Calendar change succeeded.',
+        ManualCalendarOperationStatus.unknown => 'Outcome unknown. The Calendar may have changed; check status before trying again.',
+        ManualCalendarOperationStatus.succeeded =>
+          operation.collectionPending
+              ? 'Calendar change succeeded; Day update is pending.'
+              : 'Calendar change succeeded.',
       };
 
   FloeBadgeTone _tone(ManualCalendarOperationStatus status) => switch (status) {
@@ -244,22 +249,26 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
                   FloeButton.text(
                     onPressed: _loading
                         ? null
-                        : () => unawaited(_load(
-                            useCursor: true,
-                            cursor: _previousCursors.last,
-                            consumePrevious: true,
-                          )),
+                        : () => unawaited(
+                            _load(
+                              useCursor: true,
+                              cursor: _previousCursors.last,
+                              consumePrevious: true,
+                            ),
+                          ),
                     child: const Text('Previous page'),
                   ),
                 if (_nextCursor case final next?)
                   FloeButton.text(
                     onPressed: _loading
                         ? null
-                        : () => unawaited(_load(
-                            useCursor: true,
-                            cursor: next,
-                            rememberCurrent: true,
-                          )),
+                        : () => unawaited(
+                            _load(
+                              useCursor: true,
+                              cursor: next,
+                              rememberCurrent: true,
+                            ),
+                          ),
                     child: const Text('Next page'),
                   ),
               ],
@@ -283,10 +292,13 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
                     child: FloeBadge(
                       label: switch (operation.status) {
                         ManualCalendarOperationStatus.pending => 'Pending',
-                        ManualCalendarOperationStatus.executing => 'In progress',
+                        ManualCalendarOperationStatus.executing =>
+                          'In progress',
                         ManualCalendarOperationStatus.blocked => 'Blocked',
-                        ManualCalendarOperationStatus.notApplied => 'Not applied',
-                        ManualCalendarOperationStatus.unknown => 'Outcome unknown',
+                        ManualCalendarOperationStatus.notApplied =>
+                          'Not applied',
+                        ManualCalendarOperationStatus.unknown =>
+                          'Outcome unknown',
                         ManualCalendarOperationStatus.succeeded => 'Succeeded',
                       },
                       tone: _tone(operation.status),
@@ -299,18 +311,28 @@ class _ManualCalendarActivityState extends State<ManualCalendarActivity>
                     spacing: 8,
                     children: [
                       FloeButton.text(
-                        onPressed: _busyOperations.contains(operation.operationRef)
+                        onPressed:
+                            _busyOperations.contains(operation.operationRef)
                             ? null
                             : () => unawaited(_inspect(operation)),
                         child: const Text('Check status'),
                       ),
                       if (operation.status ==
-                          ManualCalendarOperationStatus.unknown)
+                              ManualCalendarOperationStatus.unknown ||
+                          (operation.status ==
+                                  ManualCalendarOperationStatus.succeeded &&
+                              operation.collectionPending))
                         FloeButton.text(
-                          onPressed: _busyOperations.contains(operation.operationRef)
+                          onPressed:
+                              _busyOperations.contains(operation.operationRef)
                               ? null
                               : () => unawaited(_reconcile(operation)),
-                          child: const Text('Reconcile'),
+                          child: Text(
+                            operation.status ==
+                                    ManualCalendarOperationStatus.succeeded
+                                ? 'Update Day'
+                                : 'Reconcile',
+                          ),
                         ),
                     ],
                   ),
