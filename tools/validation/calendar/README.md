@@ -32,3 +32,22 @@ its exact target. Preserve private evidence and uncertain-operation records.
 Permission reauthorization is a separate user-approved operation. Never change
 TCC grants, edit the TCC database, reset credentials or alter unrelated events
 as a validation shortcut.
+
+## Portable observation identity check
+
+From the repository root, compile the production Foundation-only helper and its
+assertions with Swift (no EventKit permission or provider writes):
+
+```sh
+output="$(mktemp -d)/observation-identity"
+swiftc -warnings-as-errors \
+  apps/client/macos/Runner/CalendarObservationFingerprint.swift \
+  tools/validation/calendar/observation-identity.swift -o "$output"
+"$output"
+```
+
+This checks accepted payload bytes, raw titles, transport/fingerprint separation,
+modified time, timezone and all-day DST boundaries. It also demonstrates the old
+flat-schedule/normalized-title mismatch. Run it on Linux or macOS; Linux results
+do not qualify EventKit, Xcode linking, OS permissions or actual Calendar writes.
+The shared file must remain in both Runner Sources and `macos/build_native.sh`.

@@ -735,22 +735,12 @@ private func nativeSubjectFingerprint(_ store: EKEventStore, _ identifiers: [Str
 }
 
 private func nativeEventRevision(_ event: EKEvent) throws -> String {
-  let formatter = ISO8601DateFormatter()
-  formatter.timeZone = TimeZone(secondsFromGMT: 0)
-  formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-  // Fingerprints retain the native externally-tagged schedule shape; the
-  // returned native record uses the separate flat kind-tagged DTO.
-  let schedule: [String: Any] = ["Timed": [
-    "starts_at": formatter.string(from: event.startDate),
-    "ends_at": formatter.string(from: event.endDate),
-    "timezone": (event.timeZone ?? TimeZone.current).identifier
-  ]]
-  let data = try JSONSerialization.data(withJSONObject: [
-    "title": event.title ?? "",
-    "schedule": schedule,
-    "modified": event.lastModifiedDate.map { formatter.string(from: $0) } ?? ""
-  ], options: [.sortedKeys])
-  return sha256Hex(data)
+  let payload = try calendarObservationPayload(
+    title: event.title ?? "",
+    schedule: .timed(startsAt: event.startDate, endsAt: event.endDate,
+                     timezone: (event.timeZone ?? TimeZone.current).identifier),
+    modifiedAt: event.lastModifiedDate)
+  return sha256Hex(payload)
 }
 
 private func currentNativeSchedule(_ event: EKEvent) -> [String: Any] {
@@ -911,38 +901,12 @@ private func observationRecord(_ event: EKEvent, calendarID: String) -> [String:
   let identifier = event.calendarItemIdentifier
   let occurrence = (event.hasRecurrenceRules || event.isDetached)
     ? event.occurrenceDate.map { timestamp.string(from: $0) } ?? "" : ""
-  let date = DateFormatter()
-  date.calendar = Calendar(identifier: .gregorian)
-  date.locale = Locale(identifier: "en_US_POSIX")
-  date.timeZone = event.timeZone ?? TimeZone.current
-  date.dateFormat = "yyyy-MM-dd"
-  let allDayEnd = normalizedObservationAllDayEnd(
-    start: event.startDate,
-    end: event.endDate,
-    calendar: date.calendar
-  )
-  let schedule: [String: Any]
-  let revisionSchedule: [String: Any]
-  if event.isAllDay {
-    let startDate = date.string(from: event.startDate)
-    let endDateExclusive = date.string(from: allDayEnd)
-    schedule = ["kind": "all_day", "start_date": startDate,
-                "end_date_exclusive": endDateExclusive]
-    revisionSchedule = ["AllDay": ["start_date": startDate,
-                                   "end_date_exclusive": endDateExclusive]]
-  } else {
-    let startsAt = timestamp.string(from: event.startDate)
-    let endsAt = timestamp.string(from: event.endDate)
-    let timezone = (event.timeZone ?? TimeZone.current).identifier
-    schedule = ["kind": "timed", "starts_at": startsAt,
-                "ends_at": endsAt, "timezone": timezone]
-    revisionSchedule = ["Timed": ["starts_at": startsAt, "ends_at": endsAt,
-                                  "timezone": timezone]]
-  }
-  let revisionData = try! JSONSerialization.data(withJSONObject: [
-    "title": event.title ?? "", "schedule": revisionSchedule,
-    "modified": event.lastModifiedDate.map { timestamp.string(from: $0) } ?? ""
-  ], options: [.sortedKeys])
+  let timezone = event.timeZone ?? TimeZone.current
+  let schedule: CalendarObservationSchedule = event.isAllDay
+    ? .allDayDates(start: event.startDate, end: event.endDate, timeZone: timezone)
+    : .timed(startsAt: event.startDate, endsAt: event.endDate, timezone: timezone.identifier)
+  let revisionData = try! calendarObservationPayload(
+    title: event.title ?? "", schedule: schedule, modifiedAt: event.lastModifiedDate)
   let revision = SHA256.hash(data: revisionData).map { String(format: "%02x", $0) }.joined()
   return [
     "can_modify": event.calendar.allowsContentModifications && !event.calendar.isSubscribed &&
@@ -952,19 +916,8 @@ private func observationRecord(_ event: EKEvent, calendarID: String) -> [String:
     "external_id": "\(identifier)|\(occurrence)",
     "external_revision": revision,
     "title": event.title ?? "",
-    "schedule": schedule
+    "schedule": schedule.transport
   ]
-}
-
-private func normalizedObservationAllDayEnd(start: Date, end: Date, calendar: Calendar) -> Date {
-  let startDay = calendar.startOfDay(for: start)
-  let endDay = calendar.startOfDay(for: end)
-  let candidate = end > endDay
-    ? calendar.date(byAdding: .day, value: 1, to: endDay)!
-    : endDay
-  return candidate > startDay
-    ? candidate
-    : calendar.date(byAdding: .day, value: 1, to: startDay)!
 }
 
 private func calendarObservation(_ request: [String: Any]) throws -> [String: Any] {

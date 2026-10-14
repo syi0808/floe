@@ -16,6 +16,8 @@ Use the serde representation in `crates/modules/calendar_operations/src/domain/r
 
 Calendar external revision is tagged `{ "kind":"provider_opaque", "value":"..." }` or `{ "kind":"observation_fingerprint", "sha256":"<64 lowercase hex characters>" }`, exactly as owned by Day's CalendarExternalRevision serde codec. There is no array or second decoder. EventKit computes SHA256 over sorted-key JSON containing the exact raw title (including empty or whitespace-only titles), externally tagged `Timed`/`AllDay` schedule, and fractional UTC lastModifiedDate (or an empty string). The transport schedule remains tagged `kind: timed|all_day`; the fingerprint input is separate and identical for read and write preconditions. Recompute this exact ObservationFingerprint before update/delete; older mismatched fingerprints require a fresh read. Never label it provider opaque or claim atomic provider CAS. Keep the existing native check-to-write race limitation explicit. New native read/acknowledgement records must carry the actual computed revision. Gateway fingerprints do not grant write capability.
 
+The Runner acquisition reader, native observation reader and update/delete precondition use `CalendarObservationFingerprint.swift` for the same payload encoding. Both native build targets compile that source. Titles are preserved without trimming or an Untitled substitution; presentation may label an empty title without changing source evidence. All-day boundaries use a Gregorian calendar pinned to the observed timezone, including DST days. These are shared encoding rules, not an atomic EventKit CAS guarantee.
+
 ## Prepare
 
 Before product create selection, metadata-only destination inspection uses exact request keys:

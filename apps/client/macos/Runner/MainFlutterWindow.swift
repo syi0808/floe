@@ -364,30 +364,13 @@ final class CalendarBridge {
     let identifier = event.calendarItemIdentifier
     let occurrence = (event.hasRecurrenceRules || event.isDetached)
       ? event.occurrenceDate.map { formatter.string(from: $0) } ?? "" : ""
-    let dateFormatter = DateFormatter()
-    dateFormatter.calendar = Calendar(identifier: .gregorian)
-    dateFormatter.locale = Locale(identifier: "en_US_POSIX")
-    dateFormatter.timeZone = event.timeZone ?? TimeZone.current
-    dateFormatter.dateFormat = "yyyy-MM-dd"
-    let allDayEnd = normalizedAllDayEndExclusive(
-      start: event.startDate,
-      end: event.endDate,
-      calendar: dateFormatter.calendar
-    )
-    let schedule: [String: Any] = event.isAllDay ? [
-      "kind": "all_day", "start_date": dateFormatter.string(from: event.startDate),
-      "end_date_exclusive": dateFormatter.string(from: allDayEnd)
-    ] : [
-      "kind": "timed", "starts_at": formatter.string(from: event.startDate),
-      "ends_at": formatter.string(from: event.endDate),
-      "timezone": (event.timeZone ?? TimeZone.current).identifier
-    ]
-    let title = event.title?.trimmingCharacters(in: .whitespacesAndNewlines)
-    let normalizedTitle = title?.isEmpty == false ? title! : "(Untitled)"
-    let revisionData = try! JSONSerialization.data(withJSONObject: [
-      "title": normalizedTitle, "schedule": schedule,
-      "modified": event.lastModifiedDate.map { formatter.string(from: $0) } ?? ""
-    ], options: [.sortedKeys])
+    let timezone = event.timeZone ?? TimeZone.current
+    let schedule: CalendarObservationSchedule = event.isAllDay
+      ? .allDayDates(start: event.startDate, end: event.endDate, timeZone: timezone)
+      : .timed(startsAt: event.startDate, endsAt: event.endDate, timezone: timezone.identifier)
+    let rawTitle = event.title ?? ""
+    let revisionData = try! calendarObservationPayload(
+      title: rawTitle, schedule: schedule, modifiedAt: event.lastModifiedDate)
     let revision = SHA256.hash(data: revisionData).map { String(format: "%02x", $0) }.joined()
     return [
       "external_id": "\(identifier)|\(occurrence)",
@@ -395,23 +378,12 @@ final class CalendarBridge {
         !event.isAllDay && !event.hasRecurrenceRules && !event.isDetached && !event.hasAttendees &&
         event.endDate > event.startDate && event.endDate.timeIntervalSince(event.startDate) <= 86400,
       "external_revision": revision,
-      "title": normalizedTitle,
-      "schedule": schedule
+      "title": rawTitle,
+      "schedule": schedule.transport
     ]
   }
 
   private func failure(_ code: String) -> FlutterError {
     FlutterError(code: code, message: "Check your Calendar connection and try again.", details: nil)
   }
-}
-
-func normalizedAllDayEndExclusive(start: Date, end: Date, calendar: Calendar) -> Date {
-  let startDay = calendar.startOfDay(for: start)
-  let endDay = calendar.startOfDay(for: end)
-  let candidate = end > endDay
-    ? calendar.date(byAdding: .day, value: 1, to: endDay)!
-    : endDay
-  return candidate > startDay
-    ? candidate
-    : calendar.date(byAdding: .day, value: 1, to: startDay)!
 }

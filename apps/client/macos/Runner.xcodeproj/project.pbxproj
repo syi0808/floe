@@ -28,6 +28,7 @@
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
 		A55100012026091100000001 /* MacOSAttentionBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A55100022026091100000001 /* MacOSAttentionBridge.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
+		F10E00232026101400000001 /* CalendarObservationFingerprint.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10E00232026101400000002 /* CalendarObservationFingerprint.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +73,7 @@
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		F10E00232026101400000002 /* CalendarObservationFingerprint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarObservationFingerprint.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +145,7 @@
 			children = (
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
+				F10E00232026101400000002 /* CalendarObservationFingerprint.swift */,
 				A55100022026091100000001 /* MacOSAttentionBridge.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
@@ -259,6 +262,7 @@
 				"$(SRCROOT)/../apple/native_build.sh",
 				"$(SRCROOT)/../native/FloeNative",
 				"$(SRCROOT)/CalendarActions/EventKitActions.swift",
+				"$(SRCROOT)/Runner/CalendarObservationFingerprint.swift",
 			);
 			name = "Build Swift Libraries";
 			outputPaths = (
@@ -337,6 +341,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
+				F10E00232026101400000001 /* CalendarObservationFingerprint.swift in Sources */,
 				A55100012026091100000001 /* MacOSAttentionBridge.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
