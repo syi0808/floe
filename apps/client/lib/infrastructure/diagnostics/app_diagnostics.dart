@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
@@ -129,9 +130,22 @@ final class AppDiagnostics {
   static int _journalFileBytes = _defaultJournalFileBytes;
   static int _journalFileCount = _defaultJournalFileCount;
   static bool _initialized = false;
+  static bool _drainScheduled = false;
+  static bool _persistenceFailed = false;
+  static int _persistenceGeneration = 0;
+  static int _droppedPersistenceRecords = 0;
+  static const int _drainBatchSize = 32;
   static int _nextErrorId = 0;
 
   static List<DiagnosticRecord> get records => List.unmodifiable(_records);
+
+  @visibleForTesting
+  static ({bool available, int pendingRecords, int droppedRecords})
+  get persistenceStatus => (
+    available: _initialized && _journalDirectory != null && !_persistenceFailed,
+    pendingRecords: _pendingPersistence.length,
+    droppedRecords: _droppedPersistenceRecords,
+  );
 
   static Future<void> initialize({
     Directory? directory,
@@ -151,20 +165,20 @@ final class AppDiagnostics {
           : root;
       await journalDirectory.create(recursive: true);
       _journalDirectory = journalDirectory;
+      _persistenceFailed = false;
       final retained = await _readJournal(journalDirectory);
       final pending = List<DiagnosticRecord>.from(_pendingPersistence);
-      _pendingPersistence.clear();
       _records
         ..clear()
         ..addAll(retained);
       for (final record in pending) {
         _addToMemory(record);
-        _enqueuePersistence(record);
       }
       _initialized = true;
+      _schedulePersistence();
     } on Object {
       _journalDirectory = null;
-      _pendingPersistence.clear();
+      _persistenceFailed = true;
       _initialized = true;
     }
   }
@@ -197,9 +211,7 @@ final class AppDiagnostics {
         failureCategory: _safeTokenOrNull(failureCategory),
         reasonCode: _safeTokenOrNull(reasonCode),
         incidentId: _safeTokenOrNull(incidentId),
-        safeActions: List.unmodifiable(
-          safeActions.where(_safeToken).take(16),
-        ),
+        safeActions: List.unmodifiable(safeActions.where(_safeToken).take(16)),
         requestId: _safeTokenOrNull(requestId),
         sessionId: _safeTokenOrNull(sessionId),
         runId: _safeTokenOrNull(runId),
@@ -253,9 +265,24 @@ final class AppDiagnostics {
     return errorId;
   }
 
-  static Future<File> exportBundle() async {
-    await _writeQueue;
-    var exportRecords = List<DiagnosticRecord>.from(_records);
+  static Future<File> exportBundle() {
+    final result = Completer<File>();
+    // Serialize a finite export barrier with the writer. New log records remain
+    // in the bounded spool; they cannot keep the export waiting indefinitely.
+    _enqueue(() async {
+      try {
+        result.complete(await _exportSnapshot());
+      } on Object catch (error, stack) {
+        result.completeError(error, stack);
+      }
+    });
+    return result.future;
+  }
+
+  static Future<File> _exportSnapshot() async {
+    final memoryRecords = List<DiagnosticRecord>.from(_records);
+    final status = persistenceStatus;
+    var exportRecords = memoryRecords;
     final journalDirectory = _journalDirectory;
     if (journalDirectory != null) {
       final persisted = await _readJournal(journalDirectory, limit: null);
@@ -265,7 +292,7 @@ final class AppDiagnostics {
         counts[key] = (counts[key] ?? 0) + 1;
       }
       exportRecords = persisted;
-      for (final record in _records) {
+      for (final record in memoryRecords) {
         final key = jsonEncode(_sanitizedJson(record));
         final count = counts[key] ?? 0;
         if (count > 0) {
@@ -287,6 +314,11 @@ final class AppDiagnostics {
         'platform': Platform.operatingSystem,
         'platform_version': Platform.operatingSystemVersion,
         'dart_version': Platform.version,
+        'persistence': {
+          'available': status.available,
+          'pending_records': status.pendingRecords,
+          'dropped_records': status.droppedRecords,
+        },
         'records': exportRecords.map(_sanitizedJson).toList(),
       }),
       flush: true,
@@ -296,6 +328,10 @@ final class AppDiagnostics {
 
   @visibleForTesting
   static void clear() {
+    // A queued/in-flight drain belongs to the old journal contents. It must
+    // not consume records admitted after this deletion barrier.
+    _persistenceGeneration++;
+    _droppedPersistenceRecords = 0;
     _records.clear();
     _pendingPersistence.clear();
     _nextErrorId = 0;
@@ -321,15 +357,17 @@ final class AppDiagnostics {
   }
 
   @visibleForTesting
-  static Future<void> flush() => _writeQueue;
+  static Future<void> flush() async {
+    while (true) {
+      final current = _writeQueue;
+      await current;
+      if (identical(current, _writeQueue)) return;
+    }
+  }
 
   static void _append(DiagnosticRecord record) {
     _addToMemory(record);
-    if (_initialized && _journalDirectory != null) {
-      _enqueuePersistence(record);
-    } else {
-      _pendingPersistence.add(record);
-    }
+    _enqueuePersistence(record);
     try {
       developer.log(
         jsonEncode(_sanitizedJson(record)),
@@ -352,21 +390,74 @@ final class AppDiagnostics {
   }
 
   static void _enqueuePersistence(DiagnosticRecord record) {
+    if (_pendingPersistence.length == _capacity) {
+      _pendingPersistence.removeAt(0);
+      _droppedPersistenceRecords++;
+    }
+    _pendingPersistence.add(record);
+    _schedulePersistence();
+  }
+
+  static void _schedulePersistence() {
+    if (!persistenceStatus.available ||
+        _drainScheduled ||
+        _pendingPersistence.isEmpty) {
+      return;
+    }
+    _drainScheduled = true;
+    final generation = _persistenceGeneration;
+    final directory = _journalDirectory!;
     _enqueue(() async {
-      final directory = _journalDirectory;
-      if (directory == null) return;
-      final line = '${jsonEncode(_sanitizedJson(record))}\n';
-      final file = File('${directory.path}/$_journalFileName');
       try {
-        final length = await file.exists() ? await file.length() : 0;
-        if (length + utf8.encode(line).length > _journalFileBytes) {
-          await _rotateJournal(directory);
+        // At most one drain future and one in-flight record, regardless of
+        // producer rate. Bounded turns let export/delete barriers make progress.
+        for (
+          var remaining = _drainBatchSize;
+          remaining > 0 &&
+              persistenceStatus.available &&
+              generation == _persistenceGeneration &&
+              _pendingPersistence.isNotEmpty;
+          remaining--
+        ) {
+          final record = _pendingPersistence.removeAt(0);
+          if (!await _persistRecord(directory, record)) {
+            if (generation == _persistenceGeneration) {
+              _persistenceFailed = true;
+              if (_pendingPersistence.length < _capacity) {
+                _pendingPersistence.insert(0, record);
+              } else {
+                _droppedPersistenceRecords++;
+              }
+            }
+            break;
+          }
         }
-        await file.writeAsString(line, mode: FileMode.append, flush: true);
-      } on Object catch (error) {
-        _ignore(error);
+      } finally {
+        _drainScheduled = false;
+        _schedulePersistence();
       }
     });
+  }
+
+  static Future<bool> _persistRecord(
+    Directory directory,
+    DiagnosticRecord record,
+  ) async {
+    try {
+      final line = '${jsonEncode(_sanitizedJson(record))}\n';
+      final file = File('${directory.path}/$_journalFileName');
+      final length = await file.exists() ? await file.length() : 0;
+      if (length + utf8.encode(line).length > _journalFileBytes) {
+        await _rotateJournal(directory);
+      }
+      await file.writeAsString(line, mode: FileMode.append, flush: true);
+      return true;
+    } on Object catch (error) {
+      _ignore(error);
+      // Do not spin on a failing filesystem. An explicit initialize can retry
+      // the retained bounded spool; subsequent records still enter memory.
+      return false;
+    }
   }
 
   static void _enqueue(Future<void> Function() operation) {

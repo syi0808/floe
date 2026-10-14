@@ -327,6 +327,19 @@ installation, Vault and authorization checks beneath it. Profile and Release ign
 variable and retain `path_provider` resolution. Diagnostics persist under the selected
 support root, so QA journals stay with the selected test run.
 
+Flutter diagnostic persistence uses one bounded latest-500-record spool during
+startup, unavailable storage and producer backpressure, with one drain and at most
+one additional in-flight record. A drain yields after 32 writes so explicit
+export/delete barriers are finite. Overflow discards the oldest queued diagnostic
+and counts it; exports include availability, queued-record and dropped-record
+metadata rather than claiming complete history. A write failure pauses persistence
+without a retry loop; explicit initialization retries the retained spool. Clear
+fences the previous drain generation before deletion, preserving records admitted
+after that barrier. Export snapshots memory and disk within the same serialized
+writer lane. The existing journal rotation remains separate from the backlog cap;
+these are record-count bounds, not per-record byte limits or agent-context limits.
+
+
 The client AppRuntime owns one shared RuntimeController over AppWire `runtime.readiness`, `runtime.prepare`, `runtime.preparation.get` and explicit ACK. All features observe the current readiness and typed owner failure. An uncertain preparation keeps its UUID through route disposal and rejoins that operation; a new UUID is used only after a completed outcome was acknowledged and Runtime permits an explicit retry. Settings and Connections do not open Conversation or create a Session. Conversation performs Start/Resume/Run work only when its own view is opened and Runtime is ready; a successful zero-session lookup returns explicit absence, while arbitrary read failures never authorize a new Session. Calendar-policy presentation uses the Conversation product projection, while Day's manual Calendar activity remains a Day feature; Connections, Experts and Memory presentation controllers are app-lifetime peers with independent operation gates. A turn or provider failure does not invalidate Runtime readiness. Feature disposal and navigation cannot change physical Vault state. Explicit recovery follows owner safe actions, and `AppRuntime.closeAdmission` closes local presentation admission before bootstrap invokes its existing host retirement/drain path.
 
 `ExpertsService.activate` owns shipped-bundle reconciliation and Directory publication. Existing binding and enable configuration survive reopen, including empty or unavailable selections; activation does not silently rebind them. An intentionally empty Directory remains valid. Conversation Start/Resume/Get/Recover own Session semantics, while each admitted Run retains one Experts-owned environment for discovery and delegation. The public `StartTurn` intent contains session/revision, text and optional continuation or retry references. App supplies the verified actor separately; the caller does not choose a model profile or credential source.
