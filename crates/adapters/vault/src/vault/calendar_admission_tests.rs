@@ -433,3 +433,210 @@ async fn unavailable_or_corrupt_rejection_never_proves_not_applied() {
         Err(CommandFailure::Indeterminate(_))
     ));
 }
+
+async fn uncertain_operation(vault: &EncryptedAgentVault<Keys>, person: PersonId) -> ActionRecord {
+    let prepared = admission(person);
+    let record = vault.actions_admit(prepared).await.unwrap().record;
+    let dispatch = vault
+        .actions_prepare_dispatch(DispatchIntent {
+            action_id: record.id,
+            person_id: person,
+            device_id: record.device_id.clone(),
+            expected_revision: record.revision,
+            execution_id: record.execution_id,
+            effect_digest: record.effect_digest,
+            authorization: record.authorization.clone().unwrap(),
+            current_source_fence: record.source.clone(),
+            executor_generation: 1,
+            now: Utc::now(),
+        })
+        .await
+        .unwrap();
+    vault
+        .actions_settle_execution(ExecutionSettlement {
+            person_id: person,
+            execution_id: record.execution_id,
+            effect_digest: record.effect_digest,
+            expected_revision: dispatch.record_revision,
+            outcome: CalendarEffectOutcome::Unknown {
+                identity: dispatch.intent.identity(),
+                reason: ActionUnknownReason::ResponseLost,
+            },
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn reconciliation_replay_does_not_contend_with_an_unrelated_writer() {
+    let root = Root::new();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let vault = create(&root, person, &keys).await;
+    let record = uncertain_operation(&vault, person).await;
+    let request = ActionReconciliation {
+        command_id: Uuid::new_v4(),
+        person_id: person,
+        device_id: record.device_id.clone(),
+        action_id: record.id,
+        expected_revision: record.revision,
+        expected_origin: Some(ActionOriginKind::Direct),
+    };
+    let first = vault
+        .actions_admit_reconciliation(request.clone())
+        .await
+        .unwrap();
+    let mut connection = vault.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let replay = vault.actions_admit_reconciliation(request.clone()).await;
+    writer.rollback().await.unwrap();
+    let replay =
+        replay.expect("an immutable reconciliation receipt is a read, not a competing writer");
+    assert_eq!(replay, first);
+    assert_eq!(
+        vault.actions_admit_reconciliation(request).await.unwrap(),
+        first
+    );
+    vault.check_access().unwrap();
+}
+
+#[tokio::test]
+async fn reconciliation_first_admission_busy_preserves_exact_retry() {
+    let root = Root::new();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let vault = create(&root, person, &keys).await;
+    let record = uncertain_operation(&vault, person).await;
+    let request = ActionReconciliation {
+        command_id: Uuid::new_v4(),
+        person_id: person,
+        device_id: record.device_id.clone(),
+        action_id: record.id,
+        expected_revision: record.revision,
+        expected_origin: Some(ActionOriginKind::Direct),
+    };
+    let mut connection = vault.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert!(matches!(
+        vault.actions_admit_reconciliation(request.clone()).await,
+        Err(CommandFailure::Indeterminate(
+            CalendarOperationStoreError::StorageBusy
+        ))
+    ));
+    writer.rollback().await.unwrap();
+    vault.check_access().unwrap();
+    let admitted = vault
+        .actions_admit_reconciliation(request.clone())
+        .await
+        .unwrap();
+    assert_eq!(admitted, record);
+    assert_eq!(
+        vault.actions_admit_reconciliation(request).await.unwrap(),
+        record
+    );
+}
+
+#[tokio::test]
+async fn reconciliation_read_replay_validates_identity_digest_and_reopens() {
+    let root = Root::new();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let vault = create(&root, person, &keys).await;
+    let record = uncertain_operation(&vault, person).await;
+    let request = ActionReconciliation {
+        command_id: Uuid::new_v4(),
+        person_id: person,
+        device_id: record.device_id.clone(),
+        action_id: record.id,
+        expected_revision: record.revision,
+        expected_origin: Some(ActionOriginKind::Direct),
+    };
+    vault
+        .actions_admit_reconciliation(request.clone())
+        .await
+        .unwrap();
+    // Recovery advances the operation independently of the immutable command.
+    let record = vault
+        .actions_settle_execution(ExecutionSettlement {
+            person_id: person,
+            execution_id: record.execution_id,
+            effect_digest: record.effect_digest,
+            expected_revision: record.revision,
+            outcome: CalendarEffectOutcome::Unknown {
+                identity: record.execution.as_ref().unwrap().identity(),
+                reason: ActionUnknownReason::InconclusiveLookup,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(record.revision > request.expected_revision);
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&root.0, person, keys)
+        .await
+        .unwrap();
+    let mut connection = vault.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .actions_admit_reconciliation(request.clone())
+            .await
+            .unwrap(),
+        record
+    );
+    let mut changed_revision = request.clone();
+    changed_revision.expected_revision += 1;
+    let mut changed_device = request.clone();
+    changed_device.device_id = "foreign-device".into();
+    let mut changed_action = request.clone();
+    changed_action.action_id = Uuid::new_v4();
+    let mut changed_origin = request.clone();
+    changed_origin.expected_origin = None;
+    for changed in [
+        changed_revision,
+        changed_device,
+        changed_action,
+        changed_origin,
+    ] {
+        assert!(matches!(
+            vault.actions_admit_reconciliation(changed).await,
+            Err(CommandFailure::Indeterminate(
+                CalendarOperationStoreError::Conflict
+            ))
+        ));
+    }
+    let mut foreign = request.clone();
+    foreign.person_id = PersonId::new();
+    assert!(matches!(
+        vault.actions_admit_reconciliation(foreign).await,
+        Err(CommandFailure::Indeterminate(
+            CalendarOperationStoreError::NotFound
+        ))
+    ));
+    // An admission command from another family cannot be mistaken for a
+    // reconciliation, even though it points at the same operation.
+    let mut wrong_family = request.clone();
+    let ActionOrigin::Direct { command_id, .. } = record.origin else {
+        unreachable!()
+    };
+    wrong_family.command_id = command_id;
+    assert!(matches!(
+        vault.actions_admit_reconciliation(wrong_family).await,
+        Err(CommandFailure::Indeterminate(
+            CalendarOperationStoreError::Conflict
+        ))
+    ));
+    writer.rollback().await.unwrap();
+    assert_eq!(
+        vault.actions_admit_reconciliation(request).await.unwrap(),
+        record
+    );
+}

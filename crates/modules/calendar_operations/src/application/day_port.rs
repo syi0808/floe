@@ -193,6 +193,34 @@ fn day_failure(error: AgentFailure) -> floe_day::DayError {
         | AgentFailure::AccessReviewRequired => {
             floe_day::DayError::conflict("calendar operation could not be admitted")
         }
+        AgentFailure::StorageBusy => {
+            floe_day::DayError::storage("Calendar Operations storage is busy")
+                .with_metadata("reason_code", "storage_busy")
+        }
         _ => floe_day::DayError::storage("Calendar Operations is unavailable"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_contention_keeps_its_reason_and_command_disposition() {
+        let failure =
+            CommandFailure::Indeterminate(AgentFailure::StorageBusy).map_failure(day_failure);
+        let CommandFailure::Indeterminate(error) = failure else {
+            panic!("contention cannot become a definitive command rejection");
+        };
+        assert_eq!(error.code, floe_day::DayErrorCode::Storage);
+        assert_eq!(
+            error.metadata.get("reason_code").map(String::as_str),
+            Some("storage_busy")
+        );
+        assert_ne!(error, day_failure(AgentFailure::StorageUnavailable));
+        assert_eq!(
+            day_failure(AgentFailure::Conflict).code,
+            floe_day::DayErrorCode::Conflict
+        );
     }
 }

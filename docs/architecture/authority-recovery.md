@@ -248,6 +248,18 @@ Calendar submission preparation is not admission. The existing encrypted Calenda
 
 A known native acknowledgement settles a committed effect even if a later observation becomes unavailable. A positive prewrite rejection proves `NotApplied`; timeout, cancellation after dispatch, malformed receipt or lost response leaves `Unknown`. The bounded native cache retains immutable invocation identity and never redispatches a cached invocation. Explicit recovery reads causal receipts first. Only Create may use a unique matching execution marker as bounded positive recovery evidence; matching Update fields or absent Delete targets do not prove who performed the effect. Insufficient evidence remains uncertain, and startup performs no external replay.
 
+Calendar reconciliation first observes its immutable command receipt in a read-only
+snapshot. Exact replay validates the full command digest, actor scope, family and
+linked operation without reserving the database writer; it projects the current
+operation revision rather than requiring the original revision again. If the
+receipt is absent, the read transaction ends and an Immediate transaction repeats
+receipt lookup and all admission checks before inserting it. Absence in the read
+snapshot is never an admission or rejection proof. This prevents receipt replay
+from competing with the recovery worker's settlement/collection writes. Genuine
+write contention remains an uncertain exact-command retry, with `storage_busy`
+retained in Day error metadata; commit/rollback and integrity failures are not
+converted into contention or blindly retried.
+
 A succeeded effect and its pending Day collection ticket commit together. Day records the exact execution ID, receipt digest and normalized collection intent with its projection change, checking current source revision, incarnation and resource membership. Repeated collection rejoins that receipt. Collection failure leaves the Calendar operation succeeded with collection pending; one native acknowledgement does not mark whole-calendar coverage fresh.
 
 ## Lifecycle and Connections command recovery

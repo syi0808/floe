@@ -1816,85 +1816,109 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut connection = self
             .connection()
             .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
-        let mut replay_checked = false;
-        let mut prior_command = false;
-        let result = async {
-            self.ensure_actions_schema(&transaction).await?;
-            let digest = command_digest(b"floe.actions.reconciliation.v1\0", &command)?;
-            if command.person_id != self.person_id {
-                return Err(CalendarOperationStoreError::NotFound);
-            }
-            if let Some(record) = self
-                .replay_command_action(
+        // Exact receipt replay is a snapshot read. Reserving the writer here
+        // races the admitted recovery worker's settlement/collection writes.
+        // A missing receipt is not admission: release the read snapshot, then
+        // recheck the complete command under the normal Immediate transaction.
+        for read_only in [true, false] {
+            let behavior = if read_only {
+                TransactionBehavior::Deferred
+            } else {
+                TransactionBehavior::Immediate
+            };
+            let transaction = connection
+                .transaction_with_behavior(behavior)
+                .await
+                .map_err(|error| CommandFailure::Indeterminate(sql_error(error)))?;
+            let mut replay_checked = false;
+            let mut prior_command = false;
+            let result = async {
+                self.ensure_actions_schema(&transaction).await?;
+                let digest = command_digest(b"floe.actions.reconciliation.v1\0", &command)?;
+                if command.person_id != self.person_id {
+                    return Err(CalendarOperationStoreError::NotFound);
+                }
+                if let Some(record) = self
+                    .replay_command_action(
+                        &transaction,
+                        self.person_id,
+                        command.command_id,
+                        "reconciliation",
+                        &digest,
+                        &mut replay_checked,
+                        &mut prior_command,
+                    )
+                    .await?
+                {
+                    if record.id != command.action_id {
+                        return Err(CalendarOperationStoreError::CorruptRecord);
+                    }
+                    return Ok(Some(record));
+                }
+                if read_only {
+                    return Ok(None);
+                }
+                let current = self
+                    .action_by_id(&transaction, self.person_id, command.action_id)
+                    .await?
+                    .ok_or(CalendarOperationStoreError::NotFound)?;
+                if command
+                    .expected_origin
+                    .is_some_and(|expected| match expected {
+                        floe_calendar_operations::ActionOriginKind::Direct => !matches!(
+                            &current.record.origin,
+                            floe_calendar_operations::ActionOrigin::Direct { .. }
+                        ),
+                        floe_calendar_operations::ActionOriginKind::Expert => !matches!(
+                            &current.record.origin,
+                            floe_calendar_operations::ActionOrigin::Expert { .. }
+                        ),
+                    })
+                {
+                    return Err(CalendarOperationStoreError::Conflict);
+                }
+                let collection_pending = matches!(
+                    &current.record.state,
+                    ActionState::Succeeded {
+                        collection: floe_calendar_operations::ActionCollectionState::Pending { .. },
+                        ..
+                    }
+                );
+                if current.record.person_id != command.person_id
+                    || current.record.device_id != command.device_id
+                    || current.record.revision != command.expected_revision
+                    || !matches!(
+                        current.record.state,
+                        ActionState::Executing { .. } | ActionState::Unknown { .. }
+                    ) && !collection_pending
+                {
+                    return Err(CalendarOperationStoreError::Conflict);
+                }
+                self.insert_command_receipt(
                     &transaction,
                     self.person_id,
                     command.command_id,
                     "reconciliation",
                     &digest,
-                    &mut replay_checked,
-                    &mut prior_command,
+                    Some(current.record.id),
+                )
+                .await?;
+                Ok(Some(current.record))
+            }
+            .await;
+            if let Some(record) = self
+                .finish_actions_command_transaction(
+                    transaction,
+                    result,
+                    replay_checked,
+                    prior_command,
                 )
                 .await?
             {
-                if record.id != command.action_id {
-                    return Err(CalendarOperationStoreError::CorruptRecord);
-                }
                 return Ok(record);
             }
-            let current = self
-                .action_by_id(&transaction, self.person_id, command.action_id)
-                .await?
-                .ok_or(CalendarOperationStoreError::NotFound)?;
-            if command
-                .expected_origin
-                .is_some_and(|expected| match expected {
-                    floe_calendar_operations::ActionOriginKind::Direct => !matches!(
-                        &current.record.origin,
-                        floe_calendar_operations::ActionOrigin::Direct { .. }
-                    ),
-                    floe_calendar_operations::ActionOriginKind::Expert => !matches!(
-                        &current.record.origin,
-                        floe_calendar_operations::ActionOrigin::Expert { .. }
-                    ),
-                })
-            {
-                return Err(CalendarOperationStoreError::Conflict);
-            }
-            let collection_pending = matches!(
-                &current.record.state,
-                ActionState::Succeeded {
-                    collection: floe_calendar_operations::ActionCollectionState::Pending { .. },
-                    ..
-                }
-            );
-            if current.record.person_id != command.person_id
-                || current.record.device_id != command.device_id
-                || current.record.revision != command.expected_revision
-                || !matches!(
-                    current.record.state,
-                    ActionState::Executing { .. } | ActionState::Unknown { .. }
-                ) && !collection_pending
-            {
-                return Err(CalendarOperationStoreError::Conflict);
-            }
-            self.insert_command_receipt(
-                &transaction,
-                self.person_id,
-                command.command_id,
-                "reconciliation",
-                &digest,
-                Some(current.record.id),
-            )
-            .await?;
-            Ok(current.record)
         }
-        .await;
-        self.finish_actions_command_transaction(transaction, result, replay_checked, prior_command)
-            .await
+        unreachable!("the write phase either admits the reconciliation or returns a failure")
     }
 
     pub(crate) async fn actions_stop_before_dispatch(
