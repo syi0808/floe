@@ -109,8 +109,17 @@ impl<
         actor: &OwnerActor,
         request: &TurnRequest,
         scope: &ExecutionScope,
+        work: Option<crate::SurfaceWorkReceipt>,
     ) -> Result<RunAdmission, CommandFailure<AgentFailure>> {
         actor.validate().map_err(CommandFailure::NotAdmitted)?;
+        if let Some(work) = work.as_ref() {
+            work.validate().map_err(CommandFailure::NotAdmitted)?;
+            if work.person_id != actor.person_id || work.device_id != actor.device_id
+                || work.anchor.session_id != request.session_id || work.execution_command_id() != request.command_id
+                || request.mode != TurnMode::New || request.retry_of.is_some() {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
+            }
+        }
         if !request.command_id.is_valid() {
             return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
         }
@@ -134,6 +143,11 @@ impl<
                 .map_err(CommandFailure::Indeterminate)?;
             verify_existing(&request, request_digest, &receipt)
                 .map_err(CommandFailure::Indeterminate)?;
+            if let Some(expected) = work.as_ref() {
+                if self.repository.surface_work_for_run(receipt.run_id).await.map_err(CommandFailure::Indeterminate)?.as_ref() != Some(expected) {
+                    return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
+                }
+            }
             return Ok(RunAdmission::Existing(receipt));
         }
         let occupant = self
@@ -254,7 +268,10 @@ impl<
                     .await
                     .map_err(CommandFailure::Indeterminate)?
             }
-            _ => self.repository.admit_turn(admission_request).await?,
+            _ => match work {
+                Some(work) => self.repository.admit_surface_turn(work, admission_request).await?,
+                None => self.repository.admit_turn(admission_request).await?,
+            },
         };
         let admitted = match admission {
             TurnAdmission::Created(admitted) => admitted,

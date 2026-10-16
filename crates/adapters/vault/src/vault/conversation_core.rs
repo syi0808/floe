@@ -1426,6 +1426,26 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         request: TurnAdmissionRequest,
         identity: AgentIdentity,
     ) -> Result<super::VaultManagerConversationAdmission, CommandFailure<AgentFailure>> {
+        self.admit_manager_execution(request, identity, None).await
+    }
+
+    /// Queued work and the existing Manager Run/Core recorder share one
+    /// transaction. The queue does not create a second runtime or recorder.
+    pub async fn claim_manager_surface_work(
+        &self,
+        work: floe_conversation::SurfaceWorkReceipt,
+        request: TurnAdmissionRequest,
+        identity: AgentIdentity,
+    ) -> Result<super::VaultManagerConversationAdmission, CommandFailure<AgentFailure>> {
+        self.admit_manager_execution(request, identity, Some(work)).await
+    }
+
+    async fn admit_manager_execution(
+        &self,
+        request: TurnAdmissionRequest,
+        identity: AgentIdentity,
+        work: Option<floe_conversation::SurfaceWorkReceipt>,
+    ) -> Result<super::VaultManagerConversationAdmission, CommandFailure<AgentFailure>> {
         request
             .validate()
             .map_err(|_| CommandFailure::NotAdmitted(AgentFailure::InvalidInput))?;
@@ -1446,6 +1466,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .journal_transaction(&mut connection)
             .await
             .map_err(CommandFailure::Indeterminate)?;
+        if let Some(work) = work.as_ref() {
+            if let Err(failure) = self.verify_surface_claim_on(&transaction, work, &request).await {
+                // A normal FIFO/identity refusal must explicitly roll back and
+                // settle the journal guard, not mark the Vault indeterminate.
+                let rejected: Result<(), ConversationStoreFailure> = Err(owner_error(failure));
+                return match self.finish_conversation_core_transaction(guard, transaction, rejected).await {
+                    Err(failure) => Err(CommandFailure::Indeterminate(owner_store_failure(failure))),
+                    Ok(()) => Err(CommandFailure::Indeterminate(AgentFailure::StorageUnavailable)),
+                };
+            }
+        }
+        let claimed_run_id = request.run_id;
         let already_admitted = self
             .conversation_run_on(&transaction, request.run_id)
             .await
@@ -1476,6 +1508,17 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     ))
                 }
             });
+        let result = match result {
+            Ok(admission) => {
+                if let Some(work) = work.as_ref() {
+                    match self.link_surface_claim_on(&transaction, work, claimed_run_id).await {
+                        Ok(()) => Ok(admission),
+                        Err(failure) => Err(owner_error(failure)),
+                    }
+                } else { Ok(admission) }
+            }
+            Err(failure) => Err(failure),
+        };
         let result = self
             .finish_conversation_core_transaction(guard, transaction, result)
             .await

@@ -10,6 +10,8 @@ pub enum ConversationCommandKind {
     Cancel,
     InteractionDecision,
     InteractionRefresh,
+    SurfaceInput,
+    SurfaceWork,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -64,6 +64,7 @@ pub enum ModelOutput {
     UnsupportedManagerToolCall,
     ForgetUnprojectedMemory,
     WaitForCancellation(Arc<GenerateBarrier>),
+    WaitFirstThenAnswer(Arc<GenerateBarrier>),
     ScheduleExpertFlow,
     ScheduleExpertContinuationFlow,
     ScheduleExpertRevocationFlow,
@@ -374,6 +375,7 @@ impl ScriptedModel {
     ) -> Self {
         let expected_consumers = match &output {
             ModelOutput::ForgetUnprojectedMemory
+            | ModelOutput::WaitFirstThenAnswer(_)
             | ModelOutput::InvalidCompletionThenAnswer(_)
             | ModelOutput::UnsupportedManagerToolCall => vec![CONVERSATION_CONSUMER.into(); 2],
             ModelOutput::ScheduleExpertFlow => vec![
@@ -933,6 +935,10 @@ impl PreparedModelTransport for ScriptedTransport {
                         definition_revision: 1,
                         input: "{}".into(),
                     }]))
+                }
+                ModelOutput::WaitFirstThenAnswer(barrier) => {
+                    if call_index == 0 { barrier.wait(&request.cancellation).await?; }
+                    Ok(response(vec![ModelStep::Answer { text: SCRIPTED_REPLY.into(), artifacts: vec![] }]))
                 }
                 ModelOutput::WaitForCancellation(barrier) => {
                     barrier.wait(&request.cancellation).await?;

@@ -714,6 +714,7 @@ dependencies = [
  "floe-context",
  "floe-context-contract",
  "floe-conversation",
+ "floe-conversation-contract",
  "floe-day",
  "floe-diagnostics",
  "floe-execution",

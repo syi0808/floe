@@ -1805,3 +1805,106 @@ Final frozen qualification after the test-harness correction passed 348 workspac
 
 - macOS Swift 6.2 compiled the Foundation-only Calendar observation helper and Health sleep-window helper with warnings-as-errors; compile/run exit statuses were zero, with 15 and 17 assertions respectively. The supported Swift module-cache option selected temporary QA storage after the default cache location was denied. No native provider or real personal data was used.
 - Follow-up CUA inspection confirmed a macOS target, no exposed Floe window after cleanup, unavailable `cua.listWindows`, and app-binding error `-10005: timeoutReached`. No permission prompt surfaced and no accessibility/screen-recording/TCC settings were changed. The app was not relaunched into another identical failed binding attempt. Screen rendering/navigation, iOS build and live EventKit/HealthKit remain unverified; these tool limits do not invalidate the completed build/test gates or identify a product defect.
+
+## Voice extension — authorized 2026-10-16
+
+The user requested design refactoring and implementation from the supplied
+2026-10-14 voice handoff. Baseline is published 4059929e. Existing Apple screen,
+iOS and live-provider gates remain unverified; this authorization permits the
+new implementation sequence without representing those gates as closed.
+Root performs source work directly. ADR 0036 fixes the ownership target.
+
+1. Conversation-owned durable Surface/input/Work admission with immutable
+   anchors, exact replay, independent revisions and encrypted reopen tests.
+2. Atomic queue claim through the existing Manager Run path, text caller and
+   projection cutover, cancellation/recovery/late-result tests. Preserve Core
+   recorder fences; remove the busy-input rejection only with this cutover.
+3. Provider-neutral Voice session and fake-provider integration: concurrent
+   speech/delegation, duplicate event/digest conflict, ambiguous metadata,
+   hangup without work cancellation and unknown playback receipts.
+4. Separate native permission/audio and verified Rust/Go Codex control adapters;
+   provider-specific wire remains at the edges. No live account call or paid
+   fallback is implied by offline implementation.
+5. Flutter shared timeline/work/dock integration and same-snapshot Rust/Go/FFI/
+   Flutter gates. macOS signed/native/live proof and later iOS qualification are
+   explicitly separate from owner fixtures. Update current architecture only
+   as each runtime cutover lands; retire old paths in the same change.
+
+Current checkpoint: source inspection confirms Session active_turn admission,
+Core single-recorder custody and UI active-Run gating. The original handoff is
+recovered; no voice code existed at baseline. An independent Surface revision
+and durable Work admission are required, rather than relabeling the current
+Run as a Voice session. Provider protocol claims will be verified before adapter
+implementation; no undocumented route is treated as a stable official contract.
+
+
+### 2026-10-16 Voice V1 admission/dispatch checkpoint
+
+- Conversation now owns a separate input prefix and Work receipt. Vault keeps
+  one row per settled input, exact command/digest/origin identity, a monotonic
+  anchored prefix and a FIFO queued/linked state. It retains Core's single
+  recorder. Atomic text admission writes input and work together; voice input
+  can be retained before a metadata-only delegation requests work. The pending
+  queue bound does not cap retained history. New encrypted layout objects require
+  a same-snapshot explicitly selected fresh development profile; no old profile
+  or key is reset or migrated automatically.
+- Read-only exact replay precedes fresh writer reservation. Storage checks
+  Session/Person, voice-session binding, full immutable receipt, prefix membership,
+  command-family collisions, pending capacity and FIFO before linking a real
+  Manager Run. Startup scans bounded keyset pages without repairing corruption.
+- The existing generation recovery driver observes pending work and uses the same
+  RunCoordinator/Engine. Link and Run/Core admission commit atomically; a linked
+  work item is never dispatched again by queue discovery. Later input and later
+  Manager output cannot enter an earlier work's input prefix. Runtime shutdown
+  and existing uncertain-effect recovery retain their original semantics.
+- During development, two real claim regressions exposed a normal refusal
+  dropping the journal guard before explicit rollback. The composed path now
+  settles the guard on refusal; FIFO/wrong-text rejection leaves the Vault usable.
+  Four domain tests and ten encrypted storage tests passed, covering retained
+  prefixes, exact replay/reopen, unrelated writer, corruption, queue limits,
+  atomic text rollback, active Manager/Core custody, FIFO and claim replay.
+- A real App/Conversation/Vault/Engine test with a scripted model passes: first
+  work blocks at transport, second work queues while another final voice input
+  is retained, work executes serially, the second model context excludes that
+  later input and first result, and reopen/exact replay retains two dispatches.
+  Initial fixture compilation lacked its direct contract dev-dependency; the
+  next fixture declared only one expected model call. Both fixture definitions
+  were corrected without relaxing owner assertions. No live model was invoked.
+- Product cutover is deliberately not complete: Flutter still uses StartTurn;
+  Surface result/presentation custody, Surface-aware semantic compaction,
+  queued-work cancellation, protocol/UI cutover and Voice/native/provider layers
+  remain. Core compaction is not reused as a shortcut for Surface context. The
+  temporary direct New entry retires with text/projection cutover, not as a
+  permanent compatibility path. Whole-workspace/current-snapshot gates are in
+  progress; earlier 217-test Vault results predate the final owner wiring.
+
+Next V1 cutover constraints (not implemented by the admission checkpoint):
+
+- Replace the input-only Surface storage with one canonical ordered entry
+  envelope before exposing it as the product timeline. Person input, verified
+  Run-result publication and observed Voice output have different provenance.
+  A Manager result is referenced, not copied into a second authoritative body.
+- Presentation observations append evidence instead of rewriting a previous
+  prefix. A playback receipt arriving later cannot retroactively alter the
+  context available to an already admitted work item. Published text, provider
+  acceptance and observed audio playback retain different meanings.
+- Reuse the Conversation compaction owner against exact Surface prefixes and
+  live evidence coverage. Do not inject a current Core summary into an older
+  Surface anchor or silently treat a truncated input suffix as complete.
+- Migrate Flutter/protocol New input to atomic Work admission only after shared
+  history/presentation and cancellation are ready. Continue/Resume preserve
+  original input and effect lineage. Remove the product direct-New entry in the
+  same cutover; internal owner fixtures are not a second product route.
+
+- Final checkpoint qualification: `CARGO_INCREMENTAL=0 cargo test --workspace
+  --no-fail-fast` exits 0 with 408 passed, zero failed/ignored, including doctests.
+  `CARGO_INCREMENTAL=0 cargo test -p floe-app --no-default-features --features
+  qa-fixtures --tests --no-fail-fast` exits 0 with 66 passed and one intentionally
+  ignored standalone crash-driver entry exercised by its parent tests. The 42-case
+  Conversation suite, including the new queue fixture and 129-turn/reopen case,
+  completed in 854.46 seconds in this fresh cloud environment. This is an observed
+  duration, not a cross-environment performance comparison. Production `cargo build
+  -p floe-ffi` exits 0. Architecture boundary checks, new-file rustfmt and whitespace
+  checks pass. Flutter, Apple native and live voice/provider behavior were not
+  exercised by this internal owner checkpoint; their gates remain open. No live
+  model, account credential, microphone or actual provider data was used.

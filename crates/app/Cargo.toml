@@ -51,6 +51,7 @@ uuid.workspace = true
 libc = "0.2.177"
 
 [dev-dependencies]
+floe-conversation-contract = { path = "../contracts/conversation" }
 tempfile = "3.23.0"
 # The keyring smoke example drives this host against a real Keychain.
 keyring-core = "1.0.0"

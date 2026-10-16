@@ -9,3 +9,6 @@ pub use conversation_repository::ConversationRepository;
 pub use interaction_repository::{InteractionRecoveryCursor, InteractionRepository, RecoveryPage};
 pub use session_archive_repository::SessionArchiveRepository;
 pub use session_repository::SessionRepository;
+
+mod surface_repository;
+pub use surface_repository::SurfaceRepository;

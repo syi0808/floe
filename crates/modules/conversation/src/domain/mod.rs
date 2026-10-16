@@ -379,3 +379,6 @@ mod session_start;
 pub use session_start::{
     ConversationCommandKind, SessionStartAdmission, SessionStartFailure, SessionStartRefusal,
 };
+
+mod surface;
+pub use surface::*;

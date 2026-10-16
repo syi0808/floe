@@ -57,3 +57,5 @@ ADR status should describe the **decision**, not whether code, tests or live acc
 - [0032 — Retire the dedicated Schedule Feasibility vertical](0032-retire-dedicated-feasibility-vertical.md) — removes the event/location/ETA/weather vertical and its special contextual authority.
 
 There is no ADR 0009 in the repository; numbering is intentionally preserved rather than renumbered.
+
+- [0036 — Live Surface and durable Manager work](0036-live-surface-and-manager-work.md) — independent user presentation and serial agent execution; implementation gates remain in the active plan.

@@ -89,6 +89,44 @@ external write or crash recovery behavior.
 
 Conversation owns the durable Session/root-Run lifecycle and projects the state required by the role-neutral Agent Runtime. A newly persisted Session has revision zero before its first turn; product snapshots preserve that valid CAS revision. Session absence is explicit and must not be inferred from revision zero or from a failed read.
 
+### Person Surface custody boundary
+
+Conversation now defines a separate `SurfaceRepository` for settled user input
+and durable Work admission under the existing product Session ID. Vault stores
+immutable per-input receipts and a content-bound, monotonic prefix independently
+of the Manager Session revision and Core recorder. `SurfaceAnchor` is a history
+boundary, not a source grant. Voice input and delegation identities include the
+exact live-session identity; matching a model role is not sufficient.
+
+Work receipts reference a retained input and an exact prefix. Storage rejects
+cross-person, mismatched voice-session, future-input and changed-digest replay.
+Pending work is bounded at 64 per Session; transcript history has bounded pages
+but no lifetime entry cap. Exact receipt observation uses a Deferred transaction
+before any fresh writer reservation. Startup validation scans bounded pages and
+fails closed on missing or altered prefixes, rather than repairing custody.
+
+The generation-owned Conversation recovery driver discovers queued Sessions in
+bounded pages and claims FIFO work through the existing RunCoordinator. Vault
+links work and opens the Manager Run/Core recorder in one transaction. Work
+stores queue/link custody only; progress and results are read from the linked
+Run rather than copied into a second execution state machine. Normal claim
+refusals explicitly roll back and settle the journal guard.
+
+Queued execution projects its retained user-input prefix, not the latest Core
+head. Continue/Resume can resolve the original work through bounded, validated
+lineage. Core-only semantic compaction cannot substitute a different prefix for
+a Surface work anchor; that maintenance route fails closed until Surface
+presentation/checkpoint integration lands.
+
+This is an internal owner integration checkpoint. The existing Flutter StartTurn
+path still invokes the Manager directly; shared text/protocol projection, result
+presentation and the Voice provider/native/UI cutover remain execution-plan
+gates. The old New entry is bounded to that pending product cutover, not a
+second long-term user path. No public voice feature or busy-input UI relaxation
+is enabled by these contracts alone. Core recording and external-effect
+ownership are unchanged. [ADR 0036](../decisions/0036-live-surface-and-manager-work.md) records
+the target and the reasons for the remaining cutover.
+
 ### Production Manager conversation custody
 
 Conversation owns Manager product admission, Session compare-and-swap, Run

@@ -1,4 +1,5 @@
 mod compaction;
+mod surface;
 use std::sync::Arc;
 
 use crate::{
@@ -281,6 +282,27 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
         })
     }
 
+    fn surface_work_for_run<'a>(&'a self, run_id: RunId) -> BoxFuture<'a, Result<Option<floe_conversation::SurfaceWorkReceipt>, AgentFailure>> {
+        Box::pin(async move { self.vault.surface_work_for_run(run_id).await })
+    }
+    fn admit_surface_turn<'a>(&'a self, work: floe_conversation::SurfaceWorkReceipt, request: TurnAdmissionRequest)
+        -> BoxFuture<'a, Result<TurnAdmission, floe_kernel::CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            self.verify_principal(&request.principal).map_err(floe_kernel::CommandFailure::NotAdmitted)?;
+            match self.vault.claim_manager_surface_work(work.clone(), request, self.manager_identity.clone()).await? {
+                VaultManagerConversationAdmission::Created(record) => {
+                    let receipt = floe_conversation::project_run_receipt(record).map_err(floe_kernel::CommandFailure::Admitted)?;
+                    let (transcript, has_earlier_model_history) = self.manager_history_for_work(&work, receipt.user_message_id).await.map_err(floe_kernel::CommandFailure::Admitted)?;
+                    Ok(TurnAdmission::Created(AdmittedTurn { receipt, transcript, has_earlier_model_history }))
+                }
+                VaultManagerConversationAdmission::Existing(record) => {
+                    let receipt = floe_conversation::project_run_receipt(record).map_err(floe_kernel::CommandFailure::Admitted)?;
+                    Ok(TurnAdmission::Existing(self.attach_run_references(receipt).await.map_err(floe_kernel::CommandFailure::Admitted)?))
+                }
+                _ => Err(floe_kernel::CommandFailure::Indeterminate(AgentFailure::Conflict)),
+            }
+        })
+    }
     fn admit_turn<'a>(
         &'a self,
         request: TurnAdmissionRequest,
@@ -457,9 +479,11 @@ impl<Keys: VaultKeyProvider + 'static> ConversationRepository
             if session.revision != receipt.session_revision {
                 return Err(AgentFailure::Conflict);
             }
-            let (transcript, has_earlier_model_history) = self
-                .manager_history_for_session(receipt.session_id, Some(receipt.user_message_id))
-                .await?;
+            let (transcript, has_earlier_model_history) = if let Some(work) = self.vault.surface_work_for_run(run_id).await? {
+                self.manager_history_for_work(&work, receipt.user_message_id).await?
+            } else {
+                self.manager_history_for_session(receipt.session_id, Some(receipt.user_message_id)).await?
+            };
             Ok(Some(AdmittedTurn {
                 has_earlier_model_history,
                 receipt,

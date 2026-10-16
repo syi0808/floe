@@ -133,3 +133,11 @@ pub use application::{
 };
 
 pub use application::CompactionDriver;
+
+pub use domain::{AppendSurfaceInput, SurfaceAnchor, SurfaceInput, SurfaceInputOrigin, SurfaceInputReceipt, SubmitSurfaceWork, SurfaceWorkReceipt, WorkId, WorkOrigin, PresentationState, MAX_PENDING_SURFACE_WORK, MAX_SURFACE_PAGE_ITEMS};
+
+pub use ports::SurfaceRepository;
+
+pub use domain::{SurfaceWorkSnapshot, SurfaceWorkState};
+
+pub use domain::SubmitTextWork;

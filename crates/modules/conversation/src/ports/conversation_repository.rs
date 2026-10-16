@@ -7,6 +7,10 @@ use floe_kernel::{AgentFailure, CommandFailure, OwnerActor, RunId};
 use std::sync::Arc;
 
 pub trait ConversationRepository: Send + Sync {
+    fn admit_surface_turn<'a>(&'a self, work: crate::SurfaceWorkReceipt, request: TurnAdmissionRequest)
+        -> BoxFuture<'a, Result<TurnAdmission, CommandFailure<AgentFailure>>>;
+    fn surface_work_for_run<'a>(&'a self, run_id: RunId)
+        -> BoxFuture<'a, Result<Option<crate::SurfaceWorkReceipt>, AgentFailure>>;
     /// Read a bounded reverse page from normalized Manager custody. Product
     /// cursor aliases resolve to exact transcript references in the adapter.
     /// Model compaction never substitutes summaries for original product entries

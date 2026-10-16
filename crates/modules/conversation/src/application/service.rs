@@ -81,6 +81,16 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>>;
+    fn append_surface_input<'a>(&'a self, actor: &'a OwnerActor, request: AppendSurfaceInput, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>>;
+    fn submit_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitSurfaceWork, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
+    fn submit_text_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitTextWork, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
+    fn read_surface_work<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>>;
     /// Immediate lifetime fence for Drop/panic paths; shutdown also drains.
     fn close_admission(&self);
     #[cfg(feature = "qa-fixtures")]
@@ -267,6 +277,7 @@ where
         + InteractionRepository
         + SessionRepository
         + CompactionRepository
+        + SurfaceRepository
         + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
@@ -323,6 +334,7 @@ where
         + InteractionRepository
         + SessionRepository
         + CompactionRepository
+        + SurfaceRepository
         + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
@@ -367,6 +379,7 @@ where
         intent: CanonicalTurnIntent,
         session: AgentSession,
         scope: &ExecutionScope,
+        work: Option<SurfaceWorkReceipt>,
     ) -> Result<CommandReceipt, CommandFailure<AgentFailure>> {
         let _admission = self.admission.read().await;
         self.check(actor).map_err(CommandFailure::NotAdmitted)?;
@@ -394,7 +407,7 @@ where
             now_unix_ms: chrono::Utc::now().timestamp_millis(),
         };
         let prepared = match scope
-            .run(async { Ok(self.coordinator.prepare_run(actor, &request, scope).await) })
+            .run(async { Ok(self.coordinator.prepare_run(actor, &request, scope, work).await) })
             .await
             .map_err(CommandFailure::Indeterminate)?
             .map_err(|failure| failure)?
@@ -604,10 +617,43 @@ where
         + InteractionRepository
         + SessionRepository
         + CompactionRepository
+        + SurfaceRepository
         + 'static,
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
+    fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>> {
+        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_head(actor, session_id)).await })
+    }
+    fn append_surface_input<'a>(&'a self, actor: &'a OwnerActor, request: AppendSurfaceInput, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            let _admission = self.inner.admission.read().await;
+            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            scope.run(async { Ok(self.inner.dependencies.repository.append_surface_input(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+        })
+    }
+    fn submit_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitSurfaceWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            let _admission = self.inner.admission.read().await;
+            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
+            scope.run(async { Ok(self.inner.dependencies.repository.submit_surface_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+        })
+    }
+    fn submit_text_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitTextWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            let _admission = self.inner.admission.read().await;
+            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
+            scope.run(async { Ok(self.inner.dependencies.repository.submit_text_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+        })
+    }
+    fn read_surface_work<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>> {
+        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.read_surface_work(actor, command_id)).await })
+    }
     fn close_admission(&self) {
         self.inner.closing.store(true, Ordering::Release);
         self.inner
@@ -827,7 +873,7 @@ where
                 AgentFailure::StorageUnavailable,
             ))?;
             self.inner
-                .submit(actor, request.command_id, prepared.intent, session, scope)
+                .submit(actor, request.command_id, prepared.intent, session, scope, None)
                 .await
         })
     }
