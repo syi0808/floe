@@ -946,8 +946,13 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(database_failure)?;
+        if next.state != RunState::Completed {
+            self.publish_surface_outcome_on(transaction, &next).await?;
+        }
+        if next.output.is_some() {
+            self.publish_surface_result_on(transaction, &next).await?;
+        }
         if next.state == RunState::Completed {
-            self.publish_completed_surface_result_on(transaction, &next).await?;
             self.enqueue_learning_discovery_on(transaction, &next)
                 .await?;
         }

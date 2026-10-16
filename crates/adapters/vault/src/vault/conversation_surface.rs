@@ -68,9 +68,63 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         Ok(())
     }
-    /// Text availability is committed with the canonical completed Run. Audio
+    /// Publish only immutable execution-status metadata, with no source payload.
+    pub(super) async fn publish_surface_outcome_on(
+        &self,
+        connection: &turso::transaction::Transaction<'_>,
+        run: &floe_conversation::RunRecord,
+    ) -> Result<(), AgentFailure> {
+        let Some(work) = self.surface_work_for_run_on(connection, run.run_id).await? else {
+            return Ok(());
+        };
+        if work.person_id != run.person_id || work.anchor.session_id != run.session_id {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let reference = floe_conversation::SurfaceOutcomeReference::for_run(run)?;
+        if let Some(existing) = self
+            .surface_entry_command_on(connection, reference.command_id())
+            .await?
+        {
+            return match existing {
+                SurfaceEntryReceipt::RunOutcome(receipt)
+                    if receipt.outcome == reference
+                        && receipt.through.session_id == run.session_id =>
+                {
+                    Ok(())
+                }
+                _ => Err(AgentFailure::StorageUnavailable),
+            };
+        }
+        self.surface_command_free_on(connection, reference.command_id())
+            .await?;
+        let head = self.surface_head_on(connection, run.session_id).await?;
+        self.surface_anchor_on(connection, head).await?;
+        let actor = OwnerActor {
+            person_id: run.person_id,
+            device_id: run.device_id.clone(),
+            runtime_epoch: 1,
+        };
+        let receipt = floe_conversation::SurfaceOutcomeReceipt::admit(&actor, head, reference)?;
+        let message = receipt.outcome.model_status(run)?;
+        let recorded = super::context_dependencies::merge_context_dependency_coverage(
+            connection,
+            self.person_id,
+            run.session_id,
+            message.message_id,
+            message.coverage.clone(),
+        )
+        .await?;
+        if recorded != message.coverage {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let payload = encode(&SurfaceEntryReceipt::RunOutcome(receipt.clone()))?;
+        connection.execute("INSERT INTO agent_surface_entries (command_id, session_id, person_id, sequence, message_id, origin_key, kind, payload) VALUES (?, ?, ?, ?, ?, ?, 'run_outcome', ?)", (receipt.outcome.command_id().as_uuid().to_string(), run.session_id.to_string(), self.person_id.to_string(), receipt.through.sequence as i64, receipt.outcome.message_id().as_uuid().to_string(), format!("outcome:{}", run.run_id.as_uuid()), payload)).await.map_err(database_failure)?;
+        connection.execute("INSERT INTO agent_surface_heads (session_id, person_id, sequence, digest) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET sequence = excluded.sequence, digest = excluded.digest", (run.session_id.to_string(), self.person_id.to_string(), receipt.through.sequence as i64, receipt.through.digest.to_vec())).await.map_err(database_failure)?;
+        Ok(())
+    }
+    /// Text availability is committed with the canonical terminal Run. Audio
     /// delivery is separate evidence and is never inferred from this entry.
-    pub(super) async fn publish_completed_surface_result_on(
+    pub(super) async fn publish_surface_result_on(
         &self,
         connection: &Connection,
         run: &floe_conversation::RunRecord,
@@ -193,12 +247,41 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     format!("cancel:{}", entry.cancellation.command_id.as_uuid()),
                 )
             }
+            SurfaceEntryReceipt::RunOutcome(outcome) => {
+                let run = self
+                    .conversation_run_on(connection, outcome.outcome.run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                let work = self
+                    .surface_work_for_run_on(connection, run.run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if work.anchor.session_id != receipt.through().session_id
+                    || work.anchor.sequence > receipt.before().sequence
+                    || run.person_id != receipt.person_id()
+                    || run.device_id != receipt.device_id()
+                    || run.session_id != receipt.through().session_id
+                    || floe_conversation::SurfaceOutcomeReference::for_run(&run)? != outcome.outcome
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                (
+                    "run_outcome",
+                    format!("outcome:{}", outcome.outcome.run_id.as_uuid()),
+                )
+            }
             SurfaceEntryReceipt::PublishedResult(result) => {
                 let run = self
                     .conversation_run_on(connection, result.result.run_id)
                     .await?
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                if run.person_id != receipt.person_id()
+                let work = self
+                    .surface_work_for_run_on(connection, run.run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if work.anchor.session_id != receipt.through().session_id
+                    || work.anchor.sequence > receipt.before().sequence
+                    || run.person_id != receipt.person_id()
                     || run.device_id != receipt.device_id()
                     || run.session_id != receipt.through().session_id
                     || SurfaceResultReference::for_run(&run)? != result.result
@@ -269,11 +352,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         Ok(())
     }
-    pub(super) async fn surface_work_command_on(
+    async fn surface_work_row_on(
         &self,
         connection: &Connection,
         command: floe_kernel::CommandId,
-    ) -> Result<Option<SurfaceWorkReceipt>, AgentFailure> {
+    ) -> Result<Option<(SurfaceWorkReceipt, floe_conversation::SurfaceWorkState)>, AgentFailure>
+    {
         let mut rows = connection.query("SELECT work_id, session_id, person_id, origin_key, payload, state, run_id, queue_sequence FROM agent_surface_work WHERE command_id = ?", [command.as_uuid().to_string()]).await.map_err(database_failure)?;
         let Some(row) = rows.next().await.map_err(database_failure)? else {
             return Ok(None);
@@ -294,9 +378,53 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if row.get::<i64>(7).map_err(storage)? <= 0 {
             return Err(AgentFailure::StorageUnavailable);
         }
-        match (state.as_str(), linked) {
-            ("queued", None) => {}
-            ("cancelled", None) => {
+        let state = match (state.as_str(), linked) {
+            ("queued", None) => floe_conversation::SurfaceWorkState::Queued,
+            ("cancelled", None) => floe_conversation::SurfaceWorkState::Cancelled,
+            ("linked", Some(value)) => floe_conversation::SurfaceWorkState::Linked(
+                Uuid::parse_str(&value)
+                    .ok()
+                    .and_then(floe_kernel::RunId::from_uuid)
+                    .ok_or(AgentFailure::StorageUnavailable)?,
+            ),
+            _ => return Err(AgentFailure::StorageUnavailable),
+        };
+        Ok(Some((receipt, state)))
+    }
+    async fn verify_linked_surface_work_on(
+        &self,
+        connection: &Connection,
+        receipt: &SurfaceWorkReceipt,
+        run_id: floe_kernel::RunId,
+    ) -> Result<(), AgentFailure> {
+        let run = self
+            .conversation_run_on(connection, run_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if run.command_id != receipt.execution_command_id()
+            || run.person_id != receipt.person_id
+            || run.session_id != receipt.anchor.session_id
+            || run.device_id != receipt.device_id
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(())
+    }
+    pub(super) async fn surface_work_command_on(
+        &self,
+        connection: &Connection,
+        command: floe_kernel::CommandId,
+    ) -> Result<Option<SurfaceWorkReceipt>, AgentFailure> {
+        let Some((receipt, state)) = self.surface_work_row_on(connection, command).await? else {
+            return Ok(None);
+        };
+        match state {
+            floe_conversation::SurfaceWorkState::Queued => {}
+            floe_conversation::SurfaceWorkState::Linked(run_id) => {
+                self.verify_linked_surface_work_on(connection, &receipt, run_id)
+                    .await?
+            }
+            floe_conversation::SurfaceWorkState::Cancelled => {
                 let mut proofs = connection.query("SELECT command_id FROM agent_surface_work_cancellations WHERE work_command_id = ? ORDER BY command_id LIMIT 1", [command.as_uuid().to_string()]).await.map_err(database_failure)?;
                 let row = proofs
                     .next()
@@ -315,26 +443,50 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     return Err(AgentFailure::StorageUnavailable);
                 }
             }
-            ("linked", Some(value)) => {
-                let id = Uuid::parse_str(&value)
+        }
+        Ok(Some(receipt))
+    }
+    pub(super) async fn surface_work_snapshot_on(
+        &self,
+        connection: &Connection,
+        actor: &OwnerActor,
+        command_id: floe_kernel::CommandId,
+    ) -> Result<Option<floe_conversation::SurfaceWorkSnapshot>, AgentFailure> {
+        let Some(receipt) = self.surface_work_command_on(connection, command_id).await? else {
+            return Ok(None);
+        };
+        self.surface_session_on(connection, actor, receipt.anchor.session_id)
+            .await?;
+        let mut rows = connection
+            .query(
+                "SELECT state, run_id FROM agent_surface_work WHERE command_id = ?",
+                [command_id.as_uuid().to_string()],
+            )
+            .await
+            .map_err(database_failure)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(database_failure)?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let state: String = row.get(0).map_err(storage)?;
+        let state = match state.as_str() {
+            "queued" => floe_conversation::SurfaceWorkState::Queued,
+            "cancelled" => floe_conversation::SurfaceWorkState::Cancelled,
+            "linked" => {
+                let id: String = row.get(1).map_err(storage)?;
+                let id = Uuid::parse_str(&id)
                     .ok()
                     .and_then(floe_kernel::RunId::from_uuid)
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                let run = self
-                    .conversation_run_on(connection, id)
-                    .await?
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if run.command_id != receipt.execution_command_id()
-                    || run.person_id != receipt.person_id
-                    || run.session_id != receipt.anchor.session_id
-                    || run.device_id != receipt.device_id
-                {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
+                floe_conversation::SurfaceWorkState::Linked(id)
             }
             _ => return Err(AgentFailure::StorageUnavailable),
-        }
-        Ok(Some(receipt))
+        };
+        Ok(Some(floe_conversation::SurfaceWorkSnapshot {
+            receipt,
+            state,
+        }))
     }
     pub(super) async fn surface_command_free_on(
         &self,
@@ -355,6 +507,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 }
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault<Keys> {
+    fn list_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: floe_conversation::SurfaceWorkPageRequest,
+    ) -> BoxFuture<'a, Result<floe_conversation::SurfaceWorkPage, AgentFailure>> {
+        Box::pin(self.surface_work_page(actor, request))
+    }
+
     fn cancel_pending_work<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -503,45 +663,12 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
                 .map_err(database_failure)?;
-            let Some(receipt) = self.surface_work_command_on(&tx, command_id).await? else {
-                tx.commit().await.map_err(database_failure)?;
-                self.check_access()?;
-                return Ok(None);
-            };
-            self.surface_session_on(&tx, actor, receipt.anchor.session_id)
+            let snapshot = self
+                .surface_work_snapshot_on(&tx, actor, command_id)
                 .await?;
-            let mut rows = tx
-                .query(
-                    "SELECT state, run_id FROM agent_surface_work WHERE command_id = ?",
-                    [command_id.as_uuid().to_string()],
-                )
-                .await
-                .map_err(database_failure)?;
-            let row = rows
-                .next()
-                .await
-                .map_err(database_failure)?
-                .ok_or(AgentFailure::StorageUnavailable)?;
-            let state: String = row.get(0).map_err(storage)?;
-            let state = match state.as_str() {
-                "queued" => floe_conversation::SurfaceWorkState::Queued,
-                "cancelled" => floe_conversation::SurfaceWorkState::Cancelled,
-                "linked" => {
-                    let id: String = row.get(1).map_err(storage)?;
-                    let id = Uuid::parse_str(&id)
-                        .ok()
-                        .and_then(floe_kernel::RunId::from_uuid)
-                        .ok_or(AgentFailure::StorageUnavailable)?;
-                    floe_conversation::SurfaceWorkState::Linked(id)
-                }
-                _ => return Err(AgentFailure::StorageUnavailable),
-            };
             tx.commit().await.map_err(database_failure)?;
             self.check_access()?;
-            Ok(Some(floe_conversation::SurfaceWorkSnapshot {
-                receipt,
-                state,
-            }))
+            Ok(snapshot)
         })
     }
     fn pending_surface_work<'a>(
@@ -1144,7 +1271,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .ok()
                     .and_then(floe_kernel::CommandId::from_uuid)
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                found = self.surface_work_command_on(connection, command).await?;
+                // This lookup requires linked custody. It must not recurse
+                // through cancellation -> Surface-entry -> Run-publication proof.
+                let (receipt, state) = self
+                    .surface_work_row_on(connection, command)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if state != floe_conversation::SurfaceWorkState::Linked(current) {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                self.verify_linked_surface_work_on(connection, &receipt, current)
+                    .await?;
+                found = Some(receipt);
                 break;
             }
             let run = self

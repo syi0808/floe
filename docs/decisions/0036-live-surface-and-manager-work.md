@@ -40,6 +40,11 @@ output availability is appended atomically with its terminal settlement as a
 canonical result reference. Availability is sufficient to retrieve text, not
 proof that it was displayed/read or spoken. Later playback evidence must append
 its own observation and cannot rewrite the result's original prefix.
+A non-completed terminal outcome is also durable presentation evidence. Its
+status must not relabel partial text as completed, expose source/review payloads
+as independent context, or turn a blocked review into permission. Status and any
+partial body publish atomically with terminal custody, while the body retains
+its original dependency coverage and the Interaction owner retains reviews.
 Voice disconnect ends
 capture and its provider session, not admitted Manager work. Results remain
 available through the shared Assistant/Activity after hangup.

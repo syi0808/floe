@@ -81,6 +81,9 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    fn list_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceWorkPageRequest, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>>;
+
     fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>>;
 
@@ -668,6 +671,9 @@ where
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
             scope.run(async { Ok(self.inner.dependencies.repository.submit_text_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
         })
+    }
+    fn list_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceWorkPageRequest, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>> {
+        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.list_surface_work(actor, request)).await })
     }
     fn read_surface_work<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>> {
         Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.read_surface_work(actor, command_id)).await })

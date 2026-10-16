@@ -1142,6 +1142,46 @@ pub(super) async fn command_rejection_on(
     Ok(Some(rejection))
 }
 
+// One snapshot proof shared by optimistic replay and the writer recheck.
+async fn observe_product_insert_on(
+    connection: &turso::Connection,
+    expected: &ConnectionsRecord,
+) -> Result<Option<ConnectionsRecord>, AgentFailure> {
+    if command_rejection_on(connection, expected.person_id, expected.command_id)
+        .await?
+        .is_some()
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    let mut rows = connection.query("SELECT record_ref, person_id, command_id, revision, payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?) LIMIT 2", (expected.record_ref.to_string(), expected.person_id.to_string(), expected.command_id.to_string())).await.map_err(database_failure)?;
+    let Some(row) = rows.next().await.map_err(database_failure)? else {
+        return Ok(None);
+    };
+    if rows.next().await.map_err(database_failure)?.is_some() {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    let current: ConnectionsRecord = bounded_decode(&row.get::<String>(4).map_err(storage)?)?;
+    current
+        .validate()
+        .map_err(|_| AgentFailure::StorageUnavailable)?;
+    if row.get::<String>(0).map_err(storage)? != current.record_ref.to_string()
+        || row.get::<String>(1).map_err(storage)? != current.person_id.to_string()
+        || row.get::<String>(2).map_err(storage)? != current.command_id.to_string()
+        || row.get::<i64>(3).map_err(storage)? != current.revision as i64
+    {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    if current.record_ref != expected.record_ref
+        || current.person_id != expected.person_id
+        || current.command_id != expected.command_id
+        || current.device_id != expected.device_id
+        || current.intent_digest != expected.intent_digest
+    {
+        return Err(AgentFailure::Conflict);
+    }
+    Ok(Some(current))
+}
+
 impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K> {
     fn rejected_command<'a>(
         &'a self,
@@ -1320,31 +1360,56 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
         &'a self,
         record: ConnectionsRecord,
     ) -> BoxFuture<'a, Result<ConnectionsRecord, AgentFailure>> {
-        Box::pin(async move {
-            record.validate()?;
-            if record.person_id != self.person_id || record.revision != 1 {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            let mut connection = self.connection()?;
-            let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
-            let result=async{
-            if command_rejection_on(&tx, record.person_id, record.command_id).await?.is_some() {
-                return Err(AgentFailure::Conflict);
-            }
-            let mut rows=tx.query("SELECT payload FROM connections_product_records WHERE record_ref=? OR (person_id=? AND command_id=?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string())).await.map_err(database_failure)?;
-            if let Some(row)=rows.next().await.map_err(database_failure)?{let current:ConnectionsRecord=bounded_decode(&row.get::<String>(0).map_err(storage)?)?;
-                if current.record_ref!=record.record_ref||current.command_id!=record.command_id||current.intent_digest!=record.intent_digest||current.person_id!=record.person_id||current.device_id!=record.device_id{return Err(AgentFailure::Conflict)}return Ok(current)}drop(rows);
-            if matches!(record.payload, ConnectionsPayload::GatewayForgotten(_) | ConnectionsPayload::CancellationIntent { .. }) {
-                return Err(AgentFailure::PolicyDenied);
-            }
-            tx.execute("INSERT INTO connections_product_records VALUES(?,?,?,?,?)",(record.record_ref.to_string(),record.person_id.to_string(),record.command_id.to_string(),record.revision as i64,bounded_encode(&record)?)).await.map_err(database_failure)?;Ok(record)
-        }.await;
-            {
+        Box::pin(crate::write_fence::retry_exact_local_write(move || {
+            let record = record.clone();
+            async move {
+                record.validate()?;
+                if record.person_id != self.person_id || record.revision != 1 {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                let mut connection = self.connection()?;
+                let read = connection
+                    .transaction_with_behavior(TransactionBehavior::Deferred)
+                    .await
+                    .map_err(database_failure)?;
+                if let Some(current) = observe_product_insert_on(&read, &record).await? {
+                    read.commit().await.map_err(database_failure)?;
+                    self.check_access()?;
+                    return Ok(current);
+                }
+                read.commit().await.map_err(database_failure)?;
+                let (mut writer, tx) = self.journal_transaction(&mut connection).await?;
+                let result = async {
+                    if let Some(current) = observe_product_insert_on(&tx, &record).await? {
+                        return Ok(current);
+                    }
+                    if matches!(
+                        record.payload,
+                        ConnectionsPayload::GatewayForgotten(_)
+                            | ConnectionsPayload::CancellationIntent { .. }
+                    ) {
+                        return Err(AgentFailure::PolicyDenied);
+                    }
+                    tx.execute(
+                        "INSERT INTO connections_product_records VALUES(?,?,?,?,?)",
+                        (
+                            record.record_ref.to_string(),
+                            record.person_id.to_string(),
+                            record.command_id.to_string(),
+                            record.revision as i64,
+                            bounded_encode(&record)?,
+                        ),
+                    )
+                    .await
+                    .map_err(database_failure)?;
+                    Ok(record)
+                }
+                .await;
                 let outcome = self.finish_access_grant_transaction(tx, result).await;
                 writer.settled();
                 outcome
             }
-        })
+        }))
     }
     fn compare_and_swap<'a>(
         &'a self,
@@ -1373,3 +1438,6 @@ impl<K: VaultKeyProvider> ConnectionsProductRepository for EncryptedAgentVault<K
         })
     }
 }
+
+#[cfg(test)]
+mod storage_tests;

@@ -2016,3 +2016,170 @@ Next V1 cutover constraints (not implemented by the admission checkpoint):
 - Public text/protocol/UI cutover, incomplete/blocked outcome presentation and
   audio delivery evidence remain V1 gates. Live/native voice behavior is not
   qualified by synthetic owner tests.
+
+
+### 2026-10-16 terminal outcome and partial-result cutover
+
+- Extend the same Surface envelope with canonical non-completed Run outcome
+  references. Bind terminal state/issue/output/review custody without copying
+  source or review payloads. Status context contains only Run ID, state and
+  partial-output availability, under its own independent evidence identity.
+- Partial Failed output remains separately referenced, explicitly partial and
+  source-covered. Terminal transaction writes status before partial body; a
+  rollback publishes neither. Working/pending-terminal states remain excluded.
+  Completed Runs alone enqueue learning discovery. Interaction remains the
+  blocked-review owner; hangup and observation disposal still do not cancel Work.
+- Stored meaning uses Conversation schema 14 with an explicitly selected fresh
+  development profile, no reset or compatibility decoder. Focused domain tests
+  pass 39 cases; encrypted Surface storage tests pass 18, including rollback,
+  exact replay, reopen, canonical-reference corruption and retained output bounds.
+  Actual App failure-context, blocked-review and concurrent queue cases pass
+  together (3 cases), including Work recovery through the owner page API.
+  Additional custody checks reject a canonical terminal Run whose Surface Work
+  linkage is missing. Final focused/aggregate qualification is in progress.
+- Added bounded Work pages for product restart recovery. Canonical admission
+  commands pin membership and the exclusive older-page cursor; current queued/
+  linked/cancelled custody is observed separately. Exact lookup and paging share
+  the same decoder and one read snapshot. Tests cover intervening admission,
+  cancellation, unrelated writer contention, invalid cursor/owner and reopen.
+- The next product cutover must replace direct StartTurn/New and the client's
+  single active-turn admission assumption with Work receipts and shared Surface
+  rendering. Continue/retry are explicit execution controls and must preserve
+  original-input, source lineage and uncertain-effect checks. Do not disguise
+  not-yet-claimed Work as a Run or silently treat a retry as a new unlinked text.
+  These public/client changes are not implemented by this owner checkpoint.
+
+
+### 2026-10-16 post-voice-gate Connections publication contention
+
+- The initial expanded owner gate passed 430 workspace tests, but full App QA
+  failed two existing Calendar cases during synthetic Connections setup with
+  StorageBusy. New Surface tests and the 129-turn history case passed. FFI and
+  publication were held; this full App run is not counted as a pass.
+- Classification-only diagnostics reproduced `prepare_observe_review` returning
+  `Admitted(StorageBusy)` after Access saved the review. The next Connections
+  product publication hit `BEGIN Immediate` contention. Two preceding short
+  suite runs passed; the third reproduced it. Fifty isolated setup/day-refresh
+  runs passed and did not establish a fix. No raw payloads or credentials were
+  logged, and temporary adapter phase tracing has been removed.
+- A deterministic encrypted-store test holding an unrelated writer for 60 ms
+  failed before the fix and passes after it. Product-record insertion now shares
+  the existing bounded exact-local-write helper with Conversation, and reads
+  exact existing publication without a writer before a fresh transaction.
+  The writer recheck uses the same custody verifier. Tests preserve sustained
+  Busy, changed intent, conflicting negative receipt, altered row metadata and
+  encrypted reopen. No review/grant/provider action is retried by this helper.
+- A separate diagnostic Day submission encountered genuine first-admission
+  `Indeterminate` with `reason_code=storage_busy`. Its test now exercises bounded
+  exact-command recovery without changing the event revision, intent or ID.
+  A regression rejects retry of other errors/dispositions and limits attempts;
+  original provider effect/unknown-receipt assertions remain intact.
+- Post-fix short-suite repetition and fresh aggregate qualification are pending.
+  Earlier source blobs do not mean this change is committed or published.
+
+The post-publication-fix short suite passed twice (47 cases each), then hit an
+independent Expert setup `StorageBusy`. A stage-labelled diagnostic repeat
+confirmed `configure_assistant_feature: Indeterminate(StorageBusy)`, and also
+observed `apply_observe: Admitted(StorageBusy)`, session-start contention and an
+indeterminate corrected Conversation command. These are not evidence that the
+Connections immutable-publication fix failed: the failed operations are distinct
+and the owners preserve admission uncertainty. The test clients previously
+collapsed these dispositions into an unconditional success expectation.
+
+The affected fixture operations now retain one immutable request and observe its
+exact command at most four times (25/50/100 ms between attempts). Expert configure
+and observe-grant application retry only Admitted/Indeterminate StorageBusy;
+session start also permits its typed NotAdmitted StorageBusy. The corrected-turn
+case keeps its already chosen new command ID and original revision/text and
+retries only Indeterminate Conversation StorageBusy. No whole setup workflow,
+model/tool execution, review creation or revision rebase is retried. Dedicated
+client-helper tests assert identical requests, bounded exhaustion, nonretryable
+failures/dispositions and immediate stop at success. This is test-client recovery,
+not a claim that production contention is eliminated. Concurrent short suites and
+a fresh aggregate workspace/App/FFI qualification remain pending.
+
+The exact-client stress suite passed five 49-case repetitions, then exposed a
+real linked-Resume failure before dispatch. A stage-labelled reproduction proved
+`journal phase=intent: StorageBusy` after the adapter's short local retry window;
+projection did not report the failure. The child had no journal entries or model
+attempts. Temporary projection/journal diagnostics were removed after capturing
+that evidence. The runtime now waits for that same immutable intent under its
+existing execution scope rather than failing a still-live Run merely because
+175 ms of adapter-local backoff elapsed. This applies at the shared model/tool/
+delegation intent boundary; it never restarts external execution. Focused tests
+cover contention beyond the local retry window, identical event identity,
+nonretryable uncertainty/semantic failures, cancellation and deadline. Expert
+review preparation's observed Indeterminate(StorageBusy) also uses the same
+bounded exact-request test-client recovery as configure. Final qualification is
+still pending; this paragraph does not claim a successful full suite or publish.
+
+The intent-admission focused tests passed (3/3). The first three subsequent
+49-case concurrent repeats passed, including the previously failed linked Resume.
+The fourth exposed the Surface-capacity test's own one-shot Work submission
+expectation under writer contention. Both shared Surface test submit helpers now
+keep their original SubmitTextWork command/input/anchor and use bounded exact
+recovery for typed NotAdmitted/Indeterminate/Admitted StorageBusy; they never
+refresh the anchor or retry NotApplied Conflict. A fresh ten-repeat short gate
+followed by full workspace/App/FFI gates is running against frozen Rust inputs.
+
+The next concurrent pass exposed two further fixture assumptions, not provider
+redispatch: an already-admitted interaction refresh returned Admitted(StorageBusy)
+and Calendar observe-review preparation returned Indeterminate(StorageBusy).
+The existing refresh loop now rejoins the same command for both uncertain and
+admitted Busy. Calendar setup uniformly preserves each individual command's exact
+arguments across bounded NotAdmitted/Indeterminate/Admitted Busy recovery; it does
+not restart the workflow or retry negative receipts. A typed predicate regression
+was added. The affected Conversation suite and exact-client tests passed (44 + 3)
+after this fixture correction; the full ten-repeat and aggregate gate is pending.
+
+Further stress found an approved Calendar operation with five native preparations
+but no dispatch. A deterministic QA-only pre-CAS fault (five Busy admissions)
+reproduced the old worker's Blocked(ExecutorUnavailable) after its four-retry cap:
+`/tmp/floe-calendar-admission-before.log`. This is a runtime failure, not a fixture
+success expectation. Calendar drive now retains the same operation within its
+45-second job scope, rechecking the canonical Approved fence before re-running
+full preparation. Executing/Unknown remain lookup-only. Transient Busy source
+observations now propagate as contention instead of being flattened into
+SourceChanged. A focused observation-classification regression was added; default
+Calendar owner unit tests passed (5). The forced-contention real-owner approval,
+lost-ACK, reopen and Resume test is still being qualified. Its single-dispatch /
+single-effect / exact-review assertions remain intact. An unrelated positive
+assistant-feature fixture command now also retains its exact typed request when
+observing an Admitted/Indeterminate Conversation(StorageBusy), with sync-helper
+identity/exhaustion tests. No aggregate final gate has yet completed after these
+changes, and main is still unchanged.
+
+The forced five-Busy real-owner Calendar approval/lost-ACK/reopen/Resume regression
+now passes (1, 9.17 seconds; `/tmp/floe-calendar-admission-after.log`), where the
+pre-fix run failed after five preparations and zero dispatches. QA-feature owner
+unit tests, a fresh ten-repeat concurrent pass and final workspace/App/FFI gates
+are next; this focused pass alone does not qualify publication.
+
+Post-fix concurrent qualification passed ten consecutive repetitions of 51 cases
+(3 Day + 44 Conversation + 4 exact-client recovery), with no failures. The forced
+Calendar admission contention remains enabled in every approval/Resume run.
+QA-feature Calendar owner tests also passed (8). The final workspace gate has
+started; long-history App qualification and production FFI build follow only on
+success. No short-suite result is substituted for those final gates.
+
+Final workspace qualification completed successfully: 440 passed, zero failed,
+zero ignored, including doctests/default example compilation (exit 0,
+`/tmp/floe-terminal-requalified-workspace.log`). The App QA gate is running the
+45-case Conversation target, including the 129-turn persisted-history/reopen
+regression. Production FFI is still pending; main publication remains held until
+both complete against the same frozen inputs.
+
+This terminal-Surface/Work-recovery and contention-correction checkpoint is fully
+qualified on the Linux root workspace: final workspace 440 passed/0 failed/0
+ignored; App QA 74 passed/0 failed/1 intentional process-kill child-driver ignored
+(the parent crash-cut tests exercise it), including all 45 Conversation tests and
+the 129-turn history/reopen test (Conversation target 1256.08 seconds); production
+FFI build passed in 2m34s. All three final commands exited zero against the frozen
+579 Rust/Cargo inputs. Ten preceding concurrent 51-case runs and the deterministic
+before/after Calendar contention case are separate evidence, not substitutes.
+Boundary, focused formatting and whitespace checks pass. No Apple, Flutter UI,
+live Voice provider, microphone or real-provider effect is claimed by this gate.
+The next cutover remains safe public Surface projection, current Work descendant
+observation, coordinated App/FFI/Flutter admission and then Voice provider/native
+integration. Main publication uses the verified complete tree and a non-force
+expected-parent update; publication verification is recorded in the conversation.

@@ -8,26 +8,43 @@ use floe_kernel::{AgentFailure, CommandId, OwnerActor, PersonId, RunId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceResultCompleteness {
+    Complete,
+    Partial,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SurfaceResultReference {
     pub run_id: RunId,
     pub run_revision: u64,
+    pub completeness: SurfaceResultCompleteness,
     pub output_digest: [u8; 32],
 }
 impl SurfaceResultReference {
     pub fn for_run(run: &RunRecord) -> Result<Self, AgentFailure> {
         run.validate(run.person_id)?;
-        if run.state != RunState::Completed {
-            return Err(AgentFailure::Conflict);
-        }
+        let completeness = match run.state {
+            RunState::Completed => SurfaceResultCompleteness::Complete,
+            RunState::Failed if run.output.is_some() => SurfaceResultCompleteness::Partial,
+            _ => return Err(AgentFailure::Conflict),
+        };
         let output = run.output.as_ref().ok_or(AgentFailure::NotFound)?;
         Ok(Self {
             run_id: run.run_id,
             run_revision: run.aggregate_revision,
+            completeness,
             output_digest: digest(
                 b"floe.surface.result-body\0",
-                &(run.run_id, run.aggregate_revision, output, &run.coverage),
+                &(
+                    run.run_id,
+                    run.aggregate_revision,
+                    completeness,
+                    output,
+                    &run.coverage,
+                ),
             )?,
         })
     }
@@ -112,6 +129,7 @@ impl SurfaceResultReceipt {
 pub enum SurfaceEntryReceipt {
     Input(SurfaceInputReceipt),
     PublishedResult(SurfaceResultReceipt),
+    RunOutcome(crate::SurfaceOutcomeReceipt),
     PendingWorkCancelled(crate::PendingWorkCancellationEntry),
 }
 impl SurfaceEntryReceipt {
@@ -119,6 +137,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(value) => value.validate(),
             Self::PublishedResult(value) => value.validate(),
+            Self::RunOutcome(value) => value.validate(),
             Self::PendingWorkCancelled(value) => value.validate(),
         }
     }
@@ -126,6 +145,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => v.before,
             Self::PublishedResult(v) => v.before,
+            Self::RunOutcome(v) => v.before,
             Self::PendingWorkCancelled(v) => v.before,
         }
     }
@@ -133,6 +153,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => v.through,
             Self::PublishedResult(v) => v.through,
+            Self::RunOutcome(v) => v.through,
             Self::PendingWorkCancelled(v) => v.through,
         }
     }
@@ -140,6 +161,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => v.person_id,
             Self::PublishedResult(v) => v.person_id,
+            Self::RunOutcome(v) => v.person_id,
             Self::PendingWorkCancelled(v) => v.cancellation.person_id,
         }
     }
@@ -147,6 +169,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => &v.device_id,
             Self::PublishedResult(v) => &v.device_id,
+            Self::RunOutcome(v) => &v.device_id,
             Self::PendingWorkCancelled(v) => &v.cancellation.device_id,
         }
     }
@@ -154,6 +177,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => v.command_id,
             Self::PublishedResult(v) => v.result.command_id(),
+            Self::RunOutcome(v) => v.outcome.command_id(),
             Self::PendingWorkCancelled(v) => v.cancellation.command_id,
         }
     }
@@ -161,6 +185,7 @@ impl SurfaceEntryReceipt {
         match self {
             Self::Input(v) => v.input.message_id,
             Self::PublishedResult(v) => v.result.message_id(),
+            Self::RunOutcome(v) => v.outcome.message_id(),
             Self::PendingWorkCancelled(v) => v.message_id(),
         }
     }
@@ -268,7 +293,7 @@ mod tests {
         assert!(changed.validate().is_err());
     }
     #[test]
-    fn incomplete_or_failed_run_cannot_claim_completed_result() {
+    fn working_or_textless_failed_run_cannot_publish_result_body() {
         let mut run = completed();
         run.state = RunState::Working;
         run.output = None;
@@ -286,5 +311,126 @@ mod tests {
         run.issue = Some(AgentFailure::Cancelled);
         run.validate(run.person_id).unwrap();
         assert!(SurfaceResultReference::for_run(&run).is_err());
+    }
+    #[test]
+    fn partial_output_and_status_have_distinct_content_bound_evidence() {
+        let mut run = completed();
+        run.state = RunState::Failed;
+        run.issue = Some(AgentFailure::BudgetExceeded);
+        let body = SurfaceResultReference::for_run(&run).unwrap();
+        assert_eq!(body.completeness, SurfaceResultCompleteness::Partial);
+        let status = crate::SurfaceOutcomeReference::for_run(&run).unwrap();
+        assert_ne!(status.message_id(), body.message_id());
+        assert_ne!(status.command_id(), body.command_id());
+        let normalized = status.model_status(&run).unwrap();
+        assert_eq!(
+            normalized.coverage,
+            floe_agent_contract::DependencyCoverage::Independent
+        );
+        assert!(!normalized.text.contains("Synthetic result"));
+        assert!(normalized.text.contains("partial_output_available\":true"));
+        assert!(normalized.text.contains("failed"));
+        let original = status.clone();
+        run.output = Some("A changed partial output".into());
+        assert_ne!(
+            original,
+            crate::SurfaceOutcomeReference::for_run(&run).unwrap()
+        );
+        assert!(original.model_status(&run).is_err());
+    }
+    #[test]
+    fn textless_terminal_status_does_not_invent_result_or_delivery() {
+        for (state, issue) in [
+            (RunState::Failed, AgentFailure::StorageUnavailable),
+            (RunState::Cancelled, AgentFailure::Cancelled),
+            (RunState::TimedOut, AgentFailure::DeadlineExceeded),
+            (RunState::Interrupted, AgentFailure::Interrupted),
+        ] {
+            let mut run = completed();
+            run.state = state;
+            run.issue = Some(issue);
+            run.output = None;
+            run.coverage = floe_agent_contract::DependencyCoverage::Unknown;
+            let outcome = crate::SurfaceOutcomeReference::for_run(&run).unwrap();
+            assert!(SurfaceResultReference::for_run(&run).is_err());
+            let actor = OwnerActor {
+                person_id: run.person_id,
+                device_id: run.device_id.clone(),
+                runtime_epoch: 2,
+            };
+            let receipt = crate::SurfaceOutcomeReceipt::admit(
+                &actor,
+                SurfaceAnchor::empty(run.session_id).unwrap(),
+                outcome,
+            )
+            .unwrap();
+            receipt.validate().unwrap();
+            let encoded =
+                serde_json::to_string(&SurfaceEntryReceipt::RunOutcome(receipt.clone())).unwrap();
+            assert!(!encoded.contains("played"));
+            assert!(!encoded.contains("Synthetic result"));
+            let mut altered = receipt;
+            altered.outcome.terminal_digest[0] ^= 1;
+            assert!(altered.validate().is_err());
+        }
+    }
+    #[test]
+    fn blocked_status_keeps_review_targets_out_of_independent_context() {
+        let mut run = completed();
+        run.state = RunState::Blocked;
+        run.output = None;
+        run.coverage = floe_agent_contract::DependencyCoverage::Unknown;
+        run.blocked = Some(crate::RunBlockRecord {
+            review_group_id: Uuid::new_v4(),
+            prior_exhaustion: None,
+            interactions: vec![crate::BlockedInteractionLink {
+                interaction_id: Uuid::new_v4(),
+                origin: crate::RunBlockOrigin {
+                    session_id: run.session_id,
+                    person_id: run.person_id,
+                    device_id: run.device_id.clone(),
+                    run_id: run.run_id,
+                    executor_generation: run.executor_generation,
+                    origin: crate::InteractionOrigin::Projection {
+                        run_id: run.run_id,
+                        projection_operation_id: Uuid::new_v4(),
+                        target_digest: [17; 32],
+                    },
+                },
+                target: crate::ReviewedTarget::NavigationOnly(crate::NavigationOnlyTarget {
+                    destination: crate::NavigationDestination::ConnectionSettings,
+                    source_id: "synthetic-sensitive-source".into(),
+                    connection_id: None,
+                    consumer: "conversation".into(),
+                    purpose: "synthetic-private-purpose".into(),
+                }),
+            }],
+        });
+        let reference = crate::SurfaceOutcomeReference::for_run(&run).unwrap();
+        let message = reference.model_status(&run).unwrap();
+        assert!(message.text.contains("blocked"));
+        assert!(!message.text.contains("synthetic-sensitive-source"));
+        assert!(!message.text.contains("synthetic-private-purpose"));
+        assert!(SurfaceResultReference::for_run(&run).is_err());
+        run.blocked.as_mut().unwrap().review_group_id = Uuid::new_v4();
+        assert_ne!(
+            reference,
+            crate::SurfaceOutcomeReference::for_run(&run).unwrap()
+        );
+    }
+    #[test]
+    fn partial_body_at_existing_output_bound_is_not_wrapped_or_truncated() {
+        let mut run = completed();
+        run.state = RunState::Failed;
+        run.issue = Some(AgentFailure::BudgetExceeded);
+        run.output = Some("x".repeat(floe_agent_contract::MAX_OUTPUT_BYTES));
+        let reference = SurfaceResultReference::for_run(&run).unwrap();
+        assert_eq!(reference.completeness, SurfaceResultCompleteness::Partial);
+        assert_eq!(
+            run.output.as_ref().unwrap().len(),
+            floe_agent_contract::MAX_OUTPUT_BYTES
+        );
+        let status = crate::SurfaceOutcomeReference::for_run(&run).unwrap();
+        assert!(status.model_status(&run).unwrap().text.len() < 256);
     }
 }

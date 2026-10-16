@@ -8,6 +8,14 @@ fn submit(
     host: &AppHost<AppComposition>,
     session_id: Uuid,
 ) -> (SubmitTextWork, SurfaceWorkReceipt) {
+    submit_text(host, session_id, USER_TEXT)
+}
+fn submit_text(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    text: &str,
+) -> (SubmitTextWork, SurfaceWorkReceipt) {
+    let text = text.to_owned();
     support::with_ready(host, |services, caller, owners| {
         let actor = caller.owner_actor();
         services
@@ -21,13 +29,24 @@ fn submit(
                 let request = SubmitTextWork {
                     command_id,
                     expected,
-                    text: USER_TEXT.into(),
+                    text,
                 };
-                let receipt = owners
-                    .conversation
-                    .submit_text_work(&actor, request.clone(), &scope)
-                    .await
-                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                let receipt = support::exact_recovery::observe_exact_request(
+                    request.clone(),
+                    |exact| owners.conversation.submit_text_work(&actor, exact, &scope),
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_kernel::CommandFailure::NotAdmitted(AgentFailure::StorageBusy)
+                                | floe_kernel::CommandFailure::Indeterminate(
+                                    AgentFailure::StorageBusy
+                                )
+                                | floe_kernel::CommandFailure::Admitted(AgentFailure::StorageBusy)
+                        )
+                    },
+                )
+                .await
+                .map_err(floe_kernel::CommandFailure::into_failure)?;
                 Ok::<_, AgentFailure>((request, receipt))
             })
             .expect("atomic text/work admission through actual Conversation owner")
@@ -292,4 +311,124 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
         "later context retains the Person's cancellation intent"
     );
     assert_eq!(entries(&host, session_id, None).len(), 9);
+}
+
+#[test]
+fn owner_surface_failure_status_survives_reopen_and_reaches_later_context() {
+    let failed_model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::FailAfterDispatch(AgentFailure::ServerModelInvalidOutput),
+    );
+    let failed_recorder = failed_model.recorder();
+    let (profile, host) = create_ready_app(&failed_model);
+    let session_id = start_session(&host);
+    let (_, first) = submit(&host, session_id);
+    let first_run = linked(&host, first.command_id);
+    let failed = wait_terminal_run(&host, first_run);
+    assert_eq!(failed.state, RunState::Failed);
+    assert_eq!(failed.issue, Some(AgentFailure::ServerModelInvalidOutput));
+    assert!(failed.output.is_none());
+    let history = entries(&host, session_id, None);
+    assert_eq!(history.len(), 2);
+    let floe_conversation::SurfaceEntryReceipt::RunOutcome(status) = &history[1] else {
+        panic!("a failed Work must have a referenced terminal outcome");
+    };
+    assert_eq!(status.outcome.run_id, first_run);
+    assert_eq!(status.outcome.state, RunState::Failed);
+    assert_eq!(assert_script_clean(&failed_recorder).generated.len(), 1);
+    drop(host);
+
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let recorder = model.recorder();
+    let host = profile.open(&model);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    assert_eq!(entries(&host, session_id, None), history);
+    let recovered_work = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            owners
+                .conversation
+                .list_surface_work(
+                    &actor,
+                    floe_conversation::SurfaceWorkPageRequest {
+                        session_id,
+                        cursor: None,
+                        limit: 128,
+                    },
+                    &scope,
+                )
+                .await
+        })
+    })
+    .unwrap();
+    assert_eq!(recovered_work.items.len(), 1);
+    assert_eq!(recovered_work.items[0].receipt, first);
+    assert_eq!(
+        recovered_work.items[0].state,
+        SurfaceWorkState::Linked(first_run)
+    );
+    assert!(recovered_work.next.is_none());
+    assert!(assert_script_clean(&recorder).generated.is_empty());
+    let (_, later) = submit(&host, session_id);
+    let later_run = linked(&host, later.command_id);
+    assert_eq!(
+        wait_terminal_run(&host, later_run).state,
+        RunState::Completed
+    );
+    let observed = assert_script_clean(&recorder);
+    assert_eq!(observed.generated.len(), 1);
+    let context = serde_json::to_string(&observed.generated[0].envelope.conversation).unwrap();
+    assert!(context.contains("manager_execution_outcome"));
+    assert!(context.contains(&first_run.as_uuid().to_string()));
+    assert!(context.contains("failed"));
+    assert_eq!(entries(&host, session_id, None).len(), 4);
+}
+
+#[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
+#[test]
+fn owner_surface_blocked_outcome_keeps_review_with_existing_interaction_owner() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        SCHEDULE_REQUEST,
+        ModelOutput::ScheduleBlockedResumeFlow,
+    );
+    let recorder = model.recorder();
+    let profile = IsolatedProfile::new();
+    let host = profile.open_with_qa_source_transport(&model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    support::configure_fixture_calendar(&host, "Synthetic team calendar");
+    let session_id = start_session(&host);
+    let (_, work) = submit_text(&host, session_id, SCHEDULE_REQUEST);
+    let run_id = linked(&host, work.command_id);
+    let blocked = wait_terminal_run(&host, run_id);
+    assert_eq!(blocked.state, RunState::Blocked);
+    let history = entries(&host, session_id, None);
+    assert_eq!(history.len(), 2);
+    let floe_conversation::SurfaceEntryReceipt::RunOutcome(status) = &history[1] else {
+        panic!("blocked outcome must be published atomically with its canonical Run");
+    };
+    assert_eq!(status.outcome.state, RunState::Blocked);
+    assert_eq!(status.outcome.run_id, run_id);
+    let interactions = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            owners
+                .conversation
+                .list_interactions(&actor, session_id, None, &scope)
+                .await
+        })
+    })
+    .unwrap();
+    assert_eq!(interactions.interactions.len(), 1);
+    assert_eq!(interactions.interactions[0].origin_run_id, run_id);
+    let calls = assert_script_clean(&recorder).generated.len();
+    drop(host);
+    let host = profile.open_with_qa_source_transport(&model, support::UnavailableCalendarTransport);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    assert_eq!(entries(&host, session_id, None), history);
+    assert_eq!(wait_terminal_run(&host, run_id).state, RunState::Blocked);
+    assert_eq!(assert_script_clean(&recorder).generated.len(), calls);
 }

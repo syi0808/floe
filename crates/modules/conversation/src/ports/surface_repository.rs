@@ -9,6 +9,12 @@ use uuid::Uuid;
 /// verify Session ownership and atomically commit each receipt/prefix transition.
 /// No method reserves or weakens a Core output recorder.
 pub trait SurfaceRepository: Send + Sync {
+    fn list_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceWorkPageRequest,
+    ) -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>>;
+
     /// Only pending custody can be cancelled here. A linked Run returns a
     /// determinate refusal and retains its existing cancellation owner.
     fn cancel_pending_work<'a>(

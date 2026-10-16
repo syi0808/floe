@@ -94,10 +94,32 @@ Conversation owns the durable Session/root-Run lifecycle and projects the state 
 Conversation now defines a separate `SurfaceRepository` for settled user input
 and durable Work admission under the existing product Session ID. Vault stores
 one ordered `SurfaceEntryReceipt` envelope for original input, pending-work
-cancellation intent and canonical completed-result references, with a content-bound, monotonic prefix independently
+cancellation intent, terminal-outcome references and canonical complete/partial
+result references, with a content-bound, monotonic prefix independently
 of the Manager Session revision and Core recorder. `SurfaceAnchor` is a history
 boundary, not a source grant. Voice input and delegation identities include the
 exact live-session identity; matching a model role is not sufficient.
+
+The implemented internal Surface/Work path is shown below. The public App/FFI/
+Flutter text cutover and live Voice provider/native path remain pending; this
+is not a diagram of an already-working voice client.
+
+```mermaid
+flowchart LR
+    Submit[Conversation SubmitTextWork] --> Atomic[Atomic input and Work admission]
+    Atomic --> Surface[Immutable ordered Person Surface]
+    Atomic --> Work[Work queue and pinned Surface anchor]
+    Work --> FIFO[Generation-owned FIFO recovery driver]
+    FIFO --> Run[Existing Manager RunCoordinator and Core recorder]
+    Run --> Runtime[Role-neutral Agent Runtime]
+    Runtime --> Owners[Existing Experts and effect owners]
+    Run --> Terminal[Atomic canonical terminal publication]
+    Terminal --> Status[Typed outcome and result references]
+    Status --> Surface
+    Work --> Recovery[Bounded Work pages and exact receipt reads]
+    Run --> Progress[Canonical Run progress and Interaction reviews]
+    Surface --> Prefix[Typed prefix compaction and retained originals]
+```
 
 Work receipts reference a retained input and an exact prefix. Storage rejects
 cross-person, mismatched voice-session, future-input and changed-digest replay.
@@ -112,6 +134,15 @@ links work and opens the Manager Run/Core recorder in one transaction. Work
 stores queue/link custody only; progress and results are read from the linked
 Run rather than copied into a second execution state machine. Normal claim
 refusals explicitly roll back and settle the journal guard.
+
+Bounded Work pages recover admitted work without requiring a client to remember
+command IDs. The newest admission command pins page membership and an exclusive
+before-command cursor selects older items. New admissions cannot shift an old
+page; queue/link state is deliberately a current observation, not rewritten
+Surface history. Cursor ownership, queue order and canonical receipts are
+verified in one Deferred transaction, using the same snapshot decoder as exact
+Work lookup. Linked execution progress remains on Run; no duplicate status is
+stored on Work.
 
 Pending-work cancellation atomically changes queued custody and appends its
 canonical Person-intent receipt to that same Surface prefix. The target index
@@ -129,6 +160,21 @@ accepted or played. Its body and dependency coverage remain in the canonical
 Run, validated by a content-bound reference. A rollback cannot leave a phantom
 result entry. Reopen or terminal replay cannot publish it again. Result entries
 cannot be admitted as new Person input.
+
+Non-completed terminal Runs append a separate outcome reference bound to their
+canonical state, issue, output and blocked-review custody. The model-facing
+status contains only the exact Run identity, terminal state and whether partial
+output exists; it excludes review/source payloads and never grants access. This
+owner-known metadata has its own registered independent evidence identity.
+Source-derived partial output keeps its original Run evidence identity and
+coverage. A failed Run with partial text atomically publishes status followed by
+an explicitly partial result reference. Working Runs and pending terminal
+requests publish neither. Blocked reviews remain with the Interaction owner;
+reopen/replay cannot duplicate either terminal entry. Publication reads also
+require the actual Surface Work lineage, with an anchor preceding the entry;
+a valid terminal Run alone is not proof that its result belonged on this Surface.
+Learning discovery remains
+limited to completed Runs, and none of these entries proves audio delivery.
 
 Queued execution projects its retained input/result prefix, not the latest Core
 head. Model projection uses the canonical Run evidence identity when Context
@@ -152,7 +198,7 @@ hydration. Completed compaction replay is also read-only before reserving a
 writer; first installation still atomically commits checkpoint, coverage and
 execution receipt under the existing journal fence. Startup validates both the
 execution records and checkpoint index and never repairs corrupted custody.
-The stored meaning uses Conversation schema 13 and an explicitly selected fresh
+The stored meaning uses Conversation schema 14 and an explicitly selected fresh
 development profile; no automatic reset or old-data reinterpretation is added.
 
 This is an internal owner integration checkpoint. The existing Flutter StartTurn

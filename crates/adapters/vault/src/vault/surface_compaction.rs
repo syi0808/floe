@@ -143,6 +143,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     coverage: run.coverage,
                 }
             }
+            SurfaceEntryReceipt::RunOutcome(outcome) => {
+                let run = self
+                    .conversation_run_on(connection, outcome.outcome.run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if run.person_id != entry.person_id()
+                    || run.session_id != entry.through().session_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                outcome.outcome.model_status(&run)?
+            }
             SurfaceEntryReceipt::PendingWorkCancelled(item) => {
                 let target = self
                     .surface_work_command_on(connection, item.cancellation.work_command_id)

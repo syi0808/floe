@@ -269,6 +269,11 @@ pub trait DelegationPort: Sync {
 }
 
 pub trait ExecutionJournal: Send + Sync {
+    /// Publish this exact intent before external dispatch. StorageBusy permits
+    /// replay of the identical event only; it must never represent uncertain
+    /// commit/rollback or an abandoned write. Those failures remain unavailable.
+    /// The caller may wait within its execution deadline without regenerating
+    /// attempt identity, selection, projection, reservation or tool/task input.
     fn record_intent<'a>(
         &'a self,
         event: JournalEvent,

@@ -1,3 +1,4 @@
+pub mod exact_recovery;
 use std::{
     collections::VecDeque,
     sync::{Arc, Condvar, Mutex, mpsc},
@@ -1467,7 +1468,13 @@ pub fn configure_fixture_calendar(
             .execute_owner(async move {
                 let overview_scope =
                     host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
-                let overview = owners.connections.overview(&actor, &overview_scope).await?;
+                let overview = owners
+                    .connections
+                    .overview(&actor, &overview_scope)
+                    .await
+                    .inspect_err(|failure| {
+                        eprintln!("synthetic Calendar stage overview: {failure:?}")
+                    })?;
                 let integration = overview
                     .integrations
                     .iter()
@@ -1477,29 +1484,56 @@ pub fn configure_fixture_calendar(
                     })
                     .ok_or(AgentFailure::CapabilityUnavailable)?;
 
-                let integration_review = owners
-                    .connections
-                    .prepare_integration_review(
-                        &actor,
+                let integration_review_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let integration_review = exact_recovery::observe_exact_request(
+                    (
                         Uuid::new_v4(),
                         integration.integration_ref,
                         integration.revision,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())?;
-                let operation = owners
-                    .connections
-                    .start_integration(
-                        &actor,
+                    ),
+                    |(command, integration, revision)| {
+                        owners.connections.prepare_integration_review(
+                            &actor,
+                            command,
+                            integration,
+                            revision,
+                            &integration_review_scope,
+                        )
+                    },
+                    exact_recovery::connections_busy,
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage prepare_integration_review: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
+                let operation_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let operation = exact_recovery::observe_exact_request(
+                    (
                         Uuid::new_v4(),
                         integration.integration_ref,
                         integration_review.review_ref,
                         integration.revision,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())?;
+                    ),
+                    |(command, integration, review, revision)| {
+                        owners.connections.start_integration(
+                            &actor,
+                            command,
+                            integration,
+                            review,
+                            revision,
+                            &operation_scope,
+                        )
+                    },
+                    exact_recovery::connections_busy,
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage start_integration: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
 
                 let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
                 let operation = loop {
@@ -1517,7 +1551,10 @@ pub fn configure_fixture_calendar(
                                 Duration::from_secs(15),
                             ),
                         )
-                        .await?;
+                        .await
+                        .inspect_err(|failure| {
+                            eprintln!("synthetic Calendar stage observe_integration: {failure:?}")
+                        })?;
                     match snapshot.state {
                         floe_connections::ConnectionOperationState::Completed => break snapshot,
                         floe_connections::ConnectionOperationState::Failed
@@ -1531,35 +1568,59 @@ pub fn configure_fixture_calendar(
                 let source = operation
                     .source
                     .ok_or(AgentFailure::CapabilityUnavailable)?;
-                let source_review = owners
-                    .connections
-                    .prepare_source_review(
-                        &actor,
-                        Uuid::new_v4(),
-                        source.source_ref,
-                        source.revision,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())?;
+                let source_review_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let source_review = exact_recovery::observe_exact_request(
+                    (Uuid::new_v4(), source.source_ref, source.revision),
+                    |(command, source, revision)| {
+                        owners.connections.prepare_source_review(
+                            &actor,
+                            command,
+                            source,
+                            revision,
+                            &source_review_scope,
+                        )
+                    },
+                    exact_recovery::connections_busy,
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage prepare_source_review: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
                 let resource = source_review
                     .permitted_choices
                     .iter()
                     .find(|choice| choice.label == selected_calendar_label)
                     .ok_or(AgentFailure::NotFound)?;
-                let configured = owners
-                    .connections
-                    .configure_source(
-                        &actor,
+                let configured_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let configured = exact_recovery::observe_exact_request(
+                    (
                         Uuid::new_v4(),
                         source.source_ref,
                         source_review.review_ref,
                         vec![resource.resource_ref],
                         source.revision,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())?;
+                    ),
+                    |(command, source, review, resources, revision)| {
+                        owners.connections.configure_source(
+                            &actor,
+                            command,
+                            source,
+                            review,
+                            resources,
+                            revision,
+                            &configured_scope,
+                        )
+                    },
+                    exact_recovery::connections_busy,
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage configure_source: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
                 let configured = match configured {
                     floe_connections::SourceConfigurationResult::Configured { source } => source,
                     floe_connections::SourceConfigurationResult::NotSavedReviewRequired {
@@ -1568,31 +1629,67 @@ pub fn configure_fixture_calendar(
                         return Err(AgentFailure::AccessReviewRequired);
                     }
                 };
-                let observe_review = owners
-                    .connections
-                    .prepare_observe_review(
-                        &actor,
-                        Uuid::new_v4(),
-                        configured.source_ref,
-                        configured.revision,
-                        floe_connections::ProcessingChoice::DeviceOnly,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())?;
-                owners
-                    .connections
-                    .apply_observe(
-                        &actor,
-                        Uuid::new_v4(),
+                let observe_review_scope =
+                    host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
+                let observe_review = exact_recovery::observe_exact_request(
+                    (Uuid::new_v4(), configured.source_ref, configured.revision),
+                    |(command, source, revision)| {
+                        owners.connections.prepare_observe_review(
+                            &actor,
+                            command,
+                            source,
+                            revision,
+                            floe_connections::ProcessingChoice::DeviceOnly,
+                            &observe_review_scope,
+                        )
+                    },
+                    exact_recovery::connections_busy,
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage prepare_observe_review: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)?;
+                let observe_command = Uuid::new_v4();
+                let observe_scope = host_scope(
+                    observe_command,
+                    Cancellation::new(),
+                    Duration::from_secs(30),
+                );
+                exact_recovery::observe_exact_request(
+                    (
+                        observe_command,
                         configured.source_ref,
                         configured.revision,
                         observe_review.review_ref,
-                        floe_connections::ObserveDecision::Allow,
-                        &host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30)),
-                    )
-                    .await
-                    .map_err(|failure| failure.into_failure())
+                    ),
+                    |(command, source, revision, review)| {
+                        owners.connections.apply_observe(
+                            &actor,
+                            command,
+                            source,
+                            revision,
+                            review,
+                            floe_connections::ObserveDecision::Allow,
+                            &observe_scope,
+                        )
+                    },
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_connections::ConnectionsCommandFailure::Admitted(
+                                AgentFailure::StorageBusy
+                            ) | floe_connections::ConnectionsCommandFailure::Indeterminate(
+                                AgentFailure::StorageBusy
+                            )
+                        )
+                    },
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Calendar stage apply_observe: {failure:?}")
+                })
+                .map_err(floe_connections::ConnectionsCommandFailure::into_failure)
             })
             .expect("configure synthetic Calendar through real Connections and Access owners")
     })
@@ -1649,7 +1746,13 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
             .execute_owner(async move {
                 let scope =
                     || host_scope(Uuid::new_v4(), Cancellation::new(), Duration::from_secs(30));
-                let snapshot = owners.experts.assistant_features(&actor, &scope()).await?;
+                let snapshot = owners
+                    .experts
+                    .assistant_features(&actor, &scope())
+                    .await
+                    .inspect_err(|failure| {
+                        eprintln!("synthetic Expert stage features: {failure:?}")
+                    })?;
                 let feature = snapshot
                     .features
                     .iter()
@@ -1665,19 +1768,40 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
                     .iter()
                     .find(|requirement| requirement.requirement_ref == "floe.source.calendar")
                     .ok_or(AgentFailure::NotFound)?;
-                let review = owners
-                    .experts
-                    .prepare_assistant_feature_source_review(
-                        &actor,
-                        CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
+                let review_command = CommandId::new();
+                let review_scope = scope();
+                let review = exact_recovery::observe_exact_request(
+                    (
+                        review_command,
                         feature.feature_ref,
                         source_group.source_scope_ref,
                         requirement.requirement_ref.clone(),
                         source_group.binding_revision,
-                        &scope(),
-                    )
-                    .await
-                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                    ),
+                    |(command, feature, source, requirement, revision)| {
+                        owners.experts.prepare_assistant_feature_source_review(
+                            &actor,
+                            command,
+                            feature,
+                            source,
+                            requirement,
+                            revision,
+                            &review_scope,
+                        )
+                    },
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_kernel::CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                                | floe_kernel::CommandFailure::Admitted(AgentFailure::StorageBusy)
+                        )
+                    },
+                )
+                .await
+                .inspect_err(|failure| {
+                    eprintln!("synthetic Expert stage prepare_review: {failure:?}")
+                })
+                .map_err(floe_kernel::CommandFailure::into_failure)?;
                 let candidate = review
                     .candidate_refs_and_labels
                     .iter()
@@ -1687,25 +1811,45 @@ pub fn bind_schedule_expert(host: &AppHost<AppComposition>) {
                                 == floe_experts::CandidateAvailability::Available
                     })
                     .ok_or(AgentFailure::NotFound)?;
-                owners
-                    .experts
-                    .configure_assistant_feature(
-                        &actor,
-                        CommandId::from_uuid(Uuid::new_v4()).ok_or(AgentFailure::InvalidInput)?,
+                let configure_command = CommandId::new();
+                let configure_scope = scope();
+                let selections = vec![floe_experts::AssistantFeatureSourceSelection {
+                    source_scope_ref: source_group.source_scope_ref,
+                    requirement_ref: requirement.requirement_ref.clone(),
+                    review_ref: review.review_ref,
+                    expected_binding_revision: review.binding_revision,
+                    candidate_refs: vec![candidate.candidate_ref],
+                }];
+                exact_recovery::observe_exact_request(
+                    (
+                        configure_command,
                         feature.feature_ref,
                         snapshot.revision,
                         feature.enabled,
-                        vec![floe_experts::AssistantFeatureSourceSelection {
-                            source_scope_ref: source_group.source_scope_ref,
-                            requirement_ref: requirement.requirement_ref.clone(),
-                            review_ref: review.review_ref,
-                            expected_binding_revision: review.binding_revision,
-                            candidate_refs: vec![candidate.candidate_ref],
-                        }],
-                        &scope(),
-                    )
-                    .await
-                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                        selections,
+                    ),
+                    |(command, feature, revision, enabled, selections)| {
+                        owners.experts.configure_assistant_feature(
+                            &actor,
+                            command,
+                            feature,
+                            revision,
+                            enabled,
+                            selections,
+                            &configure_scope,
+                        )
+                    },
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_kernel::CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                                | floe_kernel::CommandFailure::Admitted(AgentFailure::StorageBusy)
+                        )
+                    },
+                )
+                .await
+                .inspect_err(|failure| eprintln!("synthetic Expert stage configure: {failure:?}"))
+                .map_err(floe_kernel::CommandFailure::into_failure)?;
                 Ok::<(), AgentFailure>(())
             })
             .expect("bind Schedule Expert through the real Experts owner")
@@ -1719,14 +1863,25 @@ pub fn start_session(host: &AppHost<AppComposition>) -> Uuid {
         let scope = host_scope(command_id.as_uuid(), Cancellation::new(), OWNER_TIMEOUT);
         services
             .execute_owner(async move {
-                match owners
-                    .conversation
-                    .start_session(&actor, command_id, &scope)
-                    .await
-                    .map_err(|failure| match failure {
-                        floe_conversation::SessionStartFailure::NotAdmitted(reason)
-                        | floe_conversation::SessionStartFailure::Indeterminate(reason) => reason,
-                    })? {
+                match exact_recovery::observe_exact_request(
+                    command_id,
+                    |command| owners.conversation.start_session(&actor, command, &scope),
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_conversation::SessionStartFailure::NotAdmitted(
+                                AgentFailure::StorageBusy
+                            ) | floe_conversation::SessionStartFailure::Indeterminate(
+                                AgentFailure::StorageBusy
+                            )
+                        )
+                    },
+                )
+                .await
+                .map_err(|failure| match failure {
+                    floe_conversation::SessionStartFailure::NotAdmitted(reason)
+                    | floe_conversation::SessionStartFailure::Indeterminate(reason) => reason,
+                })? {
                     SessionStartAdmission::Started(receipt)
                     | SessionStartAdmission::Replayed(receipt) => Ok(receipt.session_id),
                     SessionStartAdmission::NotApplied(refusal) => Err(refusal.reason()),

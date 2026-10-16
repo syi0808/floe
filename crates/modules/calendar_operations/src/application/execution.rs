@@ -125,36 +125,54 @@ impl CalendarOperationsService {
         unreachable!("bounded pre-dispatch stop retry loop must return")
     }
     async fn drive(&self, id: Uuid, scope: &ExecutionScope) -> Result<(), AgentFailure> {
-        const MAX_STORAGE_BUSY_RETRIES: usize = 4;
-
-        for attempt in 0..=MAX_STORAGE_BUSY_RETRIES {
+        let mut delay = Duration::from_millis(20);
+        loop {
             match self.drive_once(id, scope).await {
                 Ok(()) => return Ok(()),
                 Err(AgentFailure::StorageBusy) => {
-                    let record = match self.record(&self.actor, id).await {
+                    // Observe the durable fence before deciding whether another
+                    // preflight is allowed. A Busy read proves neither absence
+                    // nor that the effect remains undispatched.
+                    let record = match self.observe_driver_record(id, scope).await {
                         Ok(record) => record,
                         Err(failure) => {
                             return self.settle_driver_failure(id, failure, scope).await;
                         }
                     };
                     match record.state {
-                        ActionState::Approved if attempt < MAX_STORAGE_BUSY_RETRIES => {
-                            // StorageBusy before dispatch-intent CAS is retryable only while the
-                            // durable operation still proves that no intent committed. Restart
-                            // the complete preflight so every source/event/policy fence and the
-                            // native preparation are refreshed before the next CAS.
-                            tokio::time::sleep(Duration::from_millis(20 << attempt)).await;
-                        }
                         ActionState::Approved => {
-                            return self
-                                .settle_driver_failure(id, AgentFailure::StorageBusy, scope)
-                                .await;
+                            if self.closed.load(Ordering::Acquire)
+                                || scope.cancellation().is_cancelled()
+                            {
+                                return self.stop(&record, PreDispatchState::Cancelled).await;
+                            }
+                            if self.clock.now() >= record.expires_at {
+                                return self.stop(&record, PreDispatchState::Expired).await;
+                            }
+                            if Instant::now() >= scope.deadline() {
+                                return self
+                                    .stop(
+                                        &record,
+                                        PreDispatchState::Blocked {
+                                            reason: ActionBlockedReason::ExecutorUnavailable,
+                                        },
+                                    )
+                                    .await;
+                            }
+                            // Approved proves no dispatch-intent CAS committed.
+                            // Re-run all source/event/policy/native preparation
+                            // fences, retaining the same durable operation.
+                            let wake = (Instant::now() + delay).min(scope.deadline());
+                            tokio::select! {
+                                _ = scope.cancellation().cancelled() => {},
+                                _ = tokio::time::sleep_until(wake) => {},
+                            }
+                            delay = (delay * 2).min(Duration::from_millis(500));
                         }
                         ActionState::Executing { .. }
                         | ActionState::Unknown { .. }
                         | ActionState::Succeeded { .. } => {
-                            // Once intent may exist, recovery is lookup/receipt-only. Never rerun
-                            // the effect after a busy settlement or acknowledgement boundary.
+                            // Intent may exist: lookup/receipt recovery only.
                             return self.recover(id, scope).await;
                         }
                         _ => return Ok(()),
@@ -163,8 +181,26 @@ impl CalendarOperationsService {
                 Err(failure) => return self.settle_driver_failure(id, failure, scope).await,
             }
         }
+    }
 
-        unreachable!("bounded Calendar Operations worker retry loop must return")
+    async fn observe_driver_record(
+        &self,
+        id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<ActionRecord, AgentFailure> {
+        loop {
+            match scope.run(self.record(&self.actor, id)).await {
+                Err(AgentFailure::StorageBusy) => {
+                    scope
+                        .run(async {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            Ok(())
+                        })
+                        .await?;
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn drive_once(&self, id: Uuid, scope: &ExecutionScope) -> Result<(), AgentFailure> {
@@ -179,8 +215,19 @@ impl CalendarOperationsService {
         if self.clock.now() >= record.expires_at {
             return self.stop(&record, PreDispatchState::Expired).await;
         }
+        if Instant::now() >= scope.deadline() {
+            return self
+                .stop(
+                    &record,
+                    PreDispatchState::Blocked {
+                        reason: ActionBlockedReason::ExecutorUnavailable,
+                    },
+                )
+                .await;
+        }
         let dependencies = match self.prepare_dependency_sources(actor, &record, scope).await {
             Ok(value) => value,
+            Err(AgentFailure::StorageBusy) => return Err(AgentFailure::StorageBusy),
             Err(_) => {
                 return self
                     .stop(
@@ -194,6 +241,7 @@ impl CalendarOperationsService {
         };
         let source = match self.observe_source(actor, &record.effect).await {
             Ok(source) if source == record.source => source,
+            Err(AgentFailure::StorageBusy) => return Err(AgentFailure::StorageBusy),
             _ => {
                 return self
                     .stop(
@@ -207,6 +255,7 @@ impl CalendarOperationsService {
         };
         let events = match self.current_events(actor, &record.effect, scope).await {
             Ok(events) => events,
+            Err(AgentFailure::StorageBusy) => return Err(AgentFailure::StorageBusy),
             Err(_) => {
                 return self
                     .stop(
@@ -243,18 +292,19 @@ impl CalendarOperationsService {
                 )
                 .await;
         }
-        let unchanged_source = self
-            .observe_source(actor, &record.effect)
-            .await
-            .is_ok_and(|current| current == source);
-        let unchanged_events = self
-            .current_events(actor, &record.effect, scope)
-            .await
-            .is_ok_and(|current| current == events);
-        let unchanged_dependencies = self
-            .revalidate_dependency_sources(actor, &dependencies, scope)
-            .await
-            .is_ok();
+        let unchanged_source = observation_matches(
+            self.observe_source(actor, &record.effect).await,
+            |current| current == source,
+        )?;
+        let unchanged_events = observation_matches(
+            self.current_events(actor, &record.effect, scope).await,
+            |current| current == events,
+        )?;
+        let unchanged_dependencies = observation_matches(
+            self.revalidate_dependency_sources(actor, &dependencies, scope)
+                .await,
+            |_| true,
+        )?;
         // These asynchronous observations may overlap shutdown or expiry.
         // Fence the actual owner/job again before durable dispatch admission.
         if self.closed.load(Ordering::Acquire) || scope.cancellation().is_cancelled() {
@@ -282,6 +332,16 @@ impl CalendarOperationsService {
         }
         if self.clock.now() >= record.expires_at {
             return self.stop(&record, PreDispatchState::Expired).await;
+        }
+        #[cfg(feature = "qa-fixtures")]
+        if self
+            .busy_dispatch_admissions
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(AgentFailure::StorageBusy);
         }
         let admission = self
             .repository
@@ -349,7 +409,11 @@ impl CalendarOperationsService {
                             person_id: record.person_id,
                             action_id: record.id,
                             expected_revision: record.revision,
-                            state: PreDispatchState::Blocked { reason },
+                            state: if failure == AgentFailure::Cancelled {
+                                PreDispatchState::Cancelled
+                            } else {
+                                PreDispatchState::Blocked { reason }
+                            },
                         })
                         .await
                     {
@@ -518,6 +582,47 @@ impl Drop for ActionJobLease {
     fn drop(&mut self) {
         if let Ok(mut jobs) = self.jobs.lock() {
             jobs.remove(&self.id);
+        }
+    }
+}
+
+// Busy is not proof of changed source evidence. It remains retryable before
+// dispatch; every other failed observation still blocks closed.
+fn observation_matches<T>(
+    result: Result<T, AgentFailure>,
+    matches: impl FnOnce(T) -> bool,
+) -> Result<bool, AgentFailure> {
+    match result {
+        Ok(value) => Ok(matches(value)),
+        Err(AgentFailure::StorageBusy) => Err(AgentFailure::StorageBusy),
+        Err(_) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+    #[test]
+    fn busy_is_not_source_change_or_permission() {
+        assert_eq!(observation_matches(Ok(7), |value| value == 7), Ok(true));
+        assert_eq!(observation_matches(Ok(8), |value| value == 7), Ok(false));
+        for failure in [
+            AgentFailure::StorageBusy,
+            AgentFailure::StorageUnavailable,
+            AgentFailure::PolicyDenied,
+            AgentFailure::StaleContext,
+            AgentFailure::AccessReviewRequired,
+        ] {
+            assert_eq!(
+                observation_matches::<()>(Err(failure), |_| panic!(
+                    "failed evidence cannot authorize"
+                )),
+                if failure == AgentFailure::StorageBusy {
+                    Err(failure)
+                } else {
+                    Ok(false)
+                }
+            );
         }
     }
 }

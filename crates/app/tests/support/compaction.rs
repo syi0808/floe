@@ -421,11 +421,22 @@ fn admit_surface_test_work(
                     expected,
                     text,
                 };
-                let receipt = owners
-                    .conversation
-                    .submit_text_work(&actor, request.clone(), &scope)
-                    .await
-                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                let receipt = super::exact_recovery::observe_exact_request(
+                    request.clone(),
+                    |exact| owners.conversation.submit_text_work(&actor, exact, &scope),
+                    |failure| {
+                        matches!(
+                            failure,
+                            floe_kernel::CommandFailure::NotAdmitted(AgentFailure::StorageBusy)
+                                | floe_kernel::CommandFailure::Indeterminate(
+                                    AgentFailure::StorageBusy
+                                )
+                                | floe_kernel::CommandFailure::Admitted(AgentFailure::StorageBusy)
+                        )
+                    },
+                )
+                .await
+                .map_err(floe_kernel::CommandFailure::into_failure)?;
                 Ok::<_, AgentFailure>((request, receipt))
             })
             .expect("admit real Surface work")

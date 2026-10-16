@@ -42,6 +42,7 @@ mod expert_proposals;
 mod owner_custody;
 mod owner_transcript_reads;
 mod surface_compaction;
+mod surface_work_page;
 pub(crate) use owner_transcript_reads::ManagerHistoryView;
 mod storage_payload;
 mod typed_history;

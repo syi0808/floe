@@ -1,6 +1,7 @@
 //! Role-neutral execution loop. Session and task ownership stay in callers.
 mod engine;
 mod journal;
+mod intent_admission;
 pub use engine::{
     Engine, EngineBlock, EngineBlockage, EngineConfig, EngineOutcome, EnginePorts, EngineReport,
     FinalPayloadValidator, InvocationKind, ValidatedFinalPayload, stable_call_id,

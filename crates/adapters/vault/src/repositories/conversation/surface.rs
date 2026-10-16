@@ -7,6 +7,14 @@ use floe_conversation::{
 use floe_kernel::{CommandFailure, CommandId, OwnerActor};
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for VaultConversationRepository<Keys> {
+    fn list_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: floe_conversation::SurfaceWorkPageRequest,
+    ) -> BoxFuture<'a, Result<floe_conversation::SurfaceWorkPage, AgentFailure>> {
+        self.vault.list_surface_work(actor, request)
+    }
+
     fn cancel_pending_work<'a>(
         &'a self,
         actor: &'a OwnerActor,

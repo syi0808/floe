@@ -1497,3 +1497,331 @@ async fn surface_checkpoint_preserves_old_work_prefix_and_archive_after_lost_ack
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
+    for partial in [false, true] {
+        let (f, vault) = fixture().await;
+        vault.activate_conversation_executor().await.unwrap();
+        let identity =
+            floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+        let input = vault
+            .append_surface_input(
+                &f.actor,
+                request(&f, &vault, "Retained synthetic request").await,
+            )
+            .await
+            .unwrap();
+        let work = vault
+            .submit_surface_work(&f.actor, work(&input))
+            .await
+            .unwrap();
+        let execution = execution(&f, &work, &input.input.text, 0);
+        vault
+            .claim_manager_surface_work(work.clone(), execution.clone(), identity)
+            .await
+            .unwrap();
+        let run = vault
+            .conversation_run(execution.run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let terminal = if partial {
+            let mut terminal = completed_terminal(&vault, &run).await;
+            terminal.state = floe_conversation::RunState::Failed;
+            terminal.issue = Some(AgentFailure::BudgetExceeded);
+            terminal
+        } else {
+            floe_conversation::RunTerminal::from_failure(AgentFailure::Cancelled)
+        };
+        vault
+            .conversation_core_fault_after_owner_settlement
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert!(
+            vault
+                .settle_manager_conversation_run(run.run_id, 1, terminal.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            vault.surface_head(&f.actor, f.session).await.unwrap(),
+            input.through
+        );
+        let settled = vault
+            .settle_manager_conversation_run(run.run_id, 1, terminal.clone())
+            .await
+            .unwrap();
+        let head = vault.surface_head(&f.actor, f.session).await.unwrap();
+        assert_eq!(head.sequence, if partial { 3 } else { 2 });
+        let entries = vault.surface_entries(&f.actor, head, 0, 128).await.unwrap();
+        let SurfaceEntryReceipt::RunOutcome(status) = &entries[1] else {
+            panic!("status precedes any partial body")
+        };
+        assert_eq!(
+            status.outcome,
+            floe_conversation::SurfaceOutcomeReference::for_run(&settled).unwrap()
+        );
+        let message = status.outcome.model_status(&settled).unwrap();
+        assert_eq!(
+            vault
+                .read_turn_coverage(f.session, message.message_id)
+                .await
+                .unwrap(),
+            floe_agent_contract::DependencyCoverage::Independent
+        );
+        if partial {
+            let SurfaceEntryReceipt::PublishedResult(body) = &entries[2] else {
+                panic!("partial output remains canonical evidence")
+            };
+            assert_eq!(
+                body.result.completeness,
+                floe_conversation::SurfaceResultCompleteness::Partial
+            );
+            assert_ne!(body.result.message_id(), status.outcome.message_id());
+        }
+        assert_eq!(
+            vault
+                .settle_manager_conversation_run(run.run_id, 1, terminal)
+                .await
+                .unwrap(),
+            settled
+        );
+        assert_eq!(vault.surface_head(&f.actor, f.session).await.unwrap(), head);
+        drop(vault);
+        let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened
+                .surface_entries(&f.actor, head, 0, 128)
+                .await
+                .unwrap(),
+            entries
+        );
+        if partial {
+            let connection = reopened.connection().unwrap();
+            connection
+                .execute(
+                    "DELETE FROM agent_surface_work WHERE command_id = ?",
+                    [work.command_id.as_uuid().to_string()],
+                )
+                .await
+                .unwrap();
+            assert!(
+                reopened
+                    .surface_entries(&f.actor, head, 0, 128)
+                    .await
+                    .is_err(),
+                "a valid terminal Run alone cannot prove Surface publication custody"
+            );
+            drop(connection);
+            drop(reopened);
+            assert!(
+                EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+                    .await
+                    .is_err()
+            );
+        } else {
+            let mut reference = status.outcome.clone();
+            reference.terminal_digest[0] ^= 1;
+            let forged =
+                floe_conversation::SurfaceOutcomeReceipt::admit(&f.actor, status.before, reference)
+                    .unwrap();
+            let connection = reopened.connection().unwrap();
+            connection
+                .execute(
+                    "UPDATE agent_surface_entries SET payload = ? WHERE command_id = ?",
+                    (
+                        encode(&SurfaceEntryReceipt::RunOutcome(forged.clone())).unwrap(),
+                        forged.outcome.command_id().as_uuid().to_string(),
+                    ),
+                )
+                .await
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE agent_surface_heads SET digest = ? WHERE session_id = ?",
+                    (forged.through.digest.to_vec(), f.session.to_string()),
+                )
+                .await
+                .unwrap();
+            assert!(
+                reopened
+                    .surface_entries(&f.actor, forged.through, 0, 128)
+                    .await
+                    .is_err()
+            );
+            drop(connection);
+            drop(reopened);
+            assert!(
+                EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+                    .await
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn work_pages_pin_membership_but_observe_current_custody_without_writer() {
+    use floe_conversation::{SurfaceWorkCursor, SurfaceWorkPageRequest, SurfaceWorkState};
+    let (f, vault) = fixture().await;
+    let page_request = SurfaceWorkPageRequest {
+        session_id: f.session,
+        cursor: None,
+        limit: 2,
+    };
+    assert!(
+        vault
+            .list_surface_work(&f.actor, page_request.clone())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let mut work = Vec::new();
+    for index in 0..5 {
+        let expected = vault.surface_head(&f.actor, f.session).await.unwrap();
+        work.push(
+            vault
+                .submit_text_work(
+                    &f.actor,
+                    floe_conversation::SubmitTextWork {
+                        command_id: CommandId::new(),
+                        expected,
+                        text: format!("Retained request {index}"),
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let first = vault
+        .list_surface_work(&f.actor, page_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|item| item.receipt.clone())
+            .collect::<Vec<_>>(),
+        work[3..]
+    );
+    let cursor = first.next.unwrap();
+    assert_eq!(cursor.through, work[4].command_id);
+    assert_eq!(cursor.before, work[3].command_id);
+    let expected = vault.surface_head(&f.actor, f.session).await.unwrap();
+    let later = vault
+        .submit_text_work(
+            &f.actor,
+            floe_conversation::SubmitTextWork {
+                command_id: CommandId::new(),
+                expected,
+                text: "Admitted after the first page".into(),
+            },
+        )
+        .await
+        .unwrap();
+    vault
+        .cancel_pending_work(
+            &f.actor,
+            floe_conversation::CancelPendingWork {
+                command_id: CommandId::new(),
+                work_command_id: work[1].command_id,
+            },
+        )
+        .await
+        .unwrap();
+    let mut writer_connection = vault.connection().unwrap();
+    let writer = writer_connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let second = vault
+        .list_surface_work(
+            &f.actor,
+            SurfaceWorkPageRequest {
+                cursor: Some(cursor.clone()),
+                ..page_request.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        second
+            .items
+            .iter()
+            .map(|item| item.receipt.clone())
+            .collect::<Vec<_>>(),
+        work[1..3]
+    );
+    assert_eq!(second.items[0].state, SurfaceWorkState::Cancelled);
+    let last = vault
+        .list_surface_work(
+            &f.actor,
+            SurfaceWorkPageRequest {
+                cursor: second.next.clone(),
+                ..page_request.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(last.items.len(), 1);
+    assert_eq!(last.items[0].receipt, work[0]);
+    assert!(last.next.is_none());
+    writer.rollback().await.unwrap();
+    drop(writer_connection);
+    assert!(
+        vault
+            .list_surface_work(
+                &f.actor,
+                SurfaceWorkPageRequest {
+                    cursor: Some(SurfaceWorkCursor {
+                        through: work[0].command_id,
+                        before: later.command_id
+                    }),
+                    ..page_request.clone()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        vault
+            .list_surface_work(
+                &f.actor,
+                SurfaceWorkPageRequest {
+                    limit: 0,
+                    ..page_request.clone()
+                }
+            )
+            .await
+            .is_err()
+    );
+    let mut other = f.actor.clone();
+    other.person_id = PersonId::new();
+    assert!(
+        vault
+            .list_surface_work(&other, page_request.clone())
+            .await
+            .is_err()
+    );
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .list_surface_work(
+                &f.actor,
+                SurfaceWorkPageRequest {
+                    cursor: Some(cursor),
+                    ..page_request
+                }
+            )
+            .await
+            .unwrap(),
+        second
+    );
+}

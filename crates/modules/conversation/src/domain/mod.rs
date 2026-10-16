@@ -393,9 +393,17 @@ mod surface;
 pub use surface::*;
 
 mod presentation;
-pub use presentation::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};
+pub use presentation::{
+    SurfaceEntryReceipt, SurfaceResultCompleteness, SurfaceResultReceipt, SurfaceResultReference,
+};
 
 mod pending_work_cancellation;
 pub use pending_work_cancellation::{
     CancelPendingWork, PendingWorkCancellationEntry, PendingWorkCancellationReceipt,
 };
+
+mod surface_outcome;
+pub use surface_outcome::{SurfaceOutcomeReceipt, SurfaceOutcomeReference};
+
+mod surface_work_page;
+pub use surface_work_page::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};

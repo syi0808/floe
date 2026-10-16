@@ -559,17 +559,18 @@ impl ActiveDrive<'_> {
             };
             model_request.validate()?;
             prepared.validate_request(&model_request, &model_scope)?;
-            let intent = self
-                .request
-                .scope
-                .run(self.ports.journal.record_intent(JournalEvent::ModelIntent {
+            let intent = crate::intent_admission::record_intent(
+                self.ports.journal,
+                &self.request.scope,
+                JournalEvent::ModelIntent {
                     parent_task_id: self.request.scope.task_id(),
                     reservation_ceiling,
                     attempt_id,
                     projection_ref: model_projection.projection_ref,
                     plan: plan.clone(),
-                }))
-                .await?;
+                },
+            )
+            .await?;
             if let JournalAck::Replayed(receipt) = intent {
                 return Err(if receipt.tool_id.is_some() || receipt.agent_id.is_some() {
                     AgentFailure::InvalidInput
@@ -884,15 +885,14 @@ impl ActiveDrive<'_> {
                 None
             }
         });
-        let intent = self
-            .request
-            .scope
-            .run(
-                self.ports
-                    .journal
-                    .record_intent(JournalEvent::ToolIntent { call: call.clone() }),
-            )
-            .await?;
+        let intent = crate::intent_admission::record_intent(
+            self.ports.journal,
+            &self.request.scope,
+            JournalEvent::ToolIntent {
+                call: call.clone(),
+            },
+        )
+        .await?;
         let result = if let JournalAck::Replayed(receipt) = intent {
             verify_tool_replay(&self.request, &call, &receipt)?;
             ToolResult {
@@ -1065,17 +1065,14 @@ impl ActiveDrive<'_> {
         if !self.seen_invocations.insert(delegation.invocation_key) {
             return Err(AgentFailure::Conflict);
         }
-        let intent = self
-            .request
-            .scope
-            .run(
-                self.ports
-                    .journal
-                    .record_intent(JournalEvent::DelegationIntent {
-                        request: delegation.clone(),
-                    }),
-            )
-            .await?;
+        let intent = crate::intent_admission::record_intent(
+            self.ports.journal,
+            &self.request.scope,
+            JournalEvent::DelegationIntent {
+                request: delegation.clone(),
+            },
+        )
+        .await?;
         let child = self.request.scope.child_scope(
             self.request.scope.deadline(),
             self.config.max_task_tokens.max(1),

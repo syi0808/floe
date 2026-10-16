@@ -316,6 +316,17 @@ never writes a negative receipt from contention. Already-known admission remains
 admitted. A Busy observation does not retire the Vault; semantic Conflict and
 commit/rollback uncertainty retain their separate recovery behavior.
 
+Connections product-record insertion first observes exact positive/negative
+command custody in one Deferred snapshot, validating stored metadata and payload
+before returning an existing publication. Fresh insertion repeats that proof
+under the writer. A prepared immutable record can retry proven local Busy only
+at 25, 50 and 100 ms using the same helper as Conversation journal/terminal
+writes. Review generation, grants, provider calls and command identities are
+not repeated by this storage retry. Commit/rollback uncertainty is not retried;
+sustained contention remains StorageBusy with the exact command unresolved.
+The physical writer/drop fence is unchanged. An existing positive publication
+cannot hide conflicting negative custody or mismatched stored metadata.
+
 Assistant authorization receipts permit exact live replay after a lost acknowledgement.
 The operation/challenge, canonical digest, full expectation and expiry must match;
 current enrollment, grant, producer proof and expiry checks run again before the
@@ -448,3 +459,19 @@ A Run-owned memory deletion additionally pins `ManagerTool { run_id, call_id }` 
 ### One grammar for fresh and restored model batches
 
 The Agent contract owns the pure whole-batch grammar used both before fresh Runtime dispatch and by `ValidatedModelBatch::validate` during journal projection and resume admission. Preambles precede all executable steps; a batch contains either one final Answer, up to eight Tool calls, or one delegation, within sixteen total steps. Restored bytes are not proof that these checks previously ran. Invalid stored grammar fails before a new journal write or external dispatch; it is not repaired or fed to model correction. Identity, revision pins, coverage and delegation authority remain separate required checks. This is a validation consolidation, not an additional compatibility format or a change to the existing fresh-execution limits.
+
+Agent-runtime intent admission keeps one immutable model/tool/delegation event
+while the journal reports StorageBusy. Adapter-local short retries do not exhaust
+the Run's still-live admission opportunity: the runtime waits with capped backoff
+under the existing Run deadline/cancellation before external dispatch. It does not
+replan, reproject, reserve a second attempt or invoke a provider during this wait.
+Unavailable/uncertain writes and semantic failures escape immediately; results,
+output and checkpoint recovery retain their existing separate contracts.
+
+Calendar Operations likewise waits within its existing job deadline for
+pre-dispatch contention only after the durable record still proves Approved.
+Each retry re-observes source/event/dependency fences and repeats native
+preparation; it does not reuse a stale prepared effect. Executing/Unknown switch
+to receipt-only recovery, never redispatch. Busy evidence reads are not classified
+as SourceChanged. Expiry, cancellation and deadline still end this admission
+window, and semantic/authority failures remain fail-closed.

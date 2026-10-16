@@ -20,6 +20,79 @@ mod qa {
         ScriptedCalendarExecutor, ScriptedModel, prepare_runtime,
     };
 
+    // Genuine first-admission contention remains an uncertain command result.
+    // Model the client's exact-command recovery; never regenerate the intent,
+    // rebase the event revision or treat arbitrary Storage failures as retryable.
+    fn observe_exact_day_submission<T>(
+        request: &ProductCommandRequest,
+        mut submit: impl FnMut(ProductCommandRequest) -> Result<T, floe_app::ProductCommandFailure>,
+    ) -> Result<T, floe_app::ProductCommandFailure> {
+        let mut retries = 0;
+        loop {
+            match submit(request.clone()) {
+                Err(failure)
+                    if retries < 3
+                        && failure.disposition
+                            == floe_app::ProductCommandDisposition::Indeterminate
+                        && matches!(&failure.failure, floe_app::ProductFailure::Day(error)
+                        if error.code == floe_app::ErrorCode::Storage
+                            && error.metadata.get("reason_code").map(String::as_str) == Some("storage_busy")) =>
+                {
+                    std::thread::sleep(Duration::from_millis(25 << retries));
+                    retries += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[test]
+    fn direct_day_submission_retries_only_storage_busy_with_identical_request() {
+        use floe_app::{ProductCommandDisposition as D, ProductCommandFailure, ProductFailure};
+        let request = ProductCommandRequest {
+            command_id: floe_kernel::CommandId::new(),
+            command: ProductCommand::Day(DayCommand::ReconcileExternalCalendarOperation {
+                operation_ref: Uuid::new_v4(),
+                expected_revision: 7,
+            }),
+        };
+        let failure = |disposition, reason| ProductCommandFailure {
+            disposition,
+            failure: ProductFailure::Day(
+                floe_app::CoreError::new(floe_app::ErrorCode::Storage, "synthetic storage result")
+                    .with_metadata("reason_code", reason),
+            ),
+        };
+        let mut requests = Vec::new();
+        let value = observe_exact_day_submission(&request, |next| {
+            requests.push(next);
+            if requests.len() == 1 {
+                Err(failure(D::Indeterminate, "storage_busy"))
+            } else {
+                Ok(17)
+            }
+        })
+        .unwrap();
+        assert_eq!(value, 17);
+        assert_eq!(requests, vec![request.clone(), request.clone()]);
+        for (disposition, reason, expected) in [
+            (D::Indeterminate, "storage_busy", 4),
+            (D::Indeterminate, "storage_unavailable", 1),
+            (D::NotApplied, "storage_busy", 1),
+            (D::NotAdmitted, "storage_busy", 1),
+            (D::Admitted, "storage_busy", 1),
+        ] {
+            let mut calls = 0;
+            let result: Result<(), _> = observe_exact_day_submission(&request, |next| {
+                assert_eq!(next, request);
+                calls += 1;
+                Err(failure(disposition, reason))
+            });
+            assert_eq!(result.unwrap_err().disposition, disposition);
+            assert_eq!(calls, expected);
+        }
+    }
+
     const QUERY_DATE: (i32, u32, u32) = (2026, 10, 8);
 
     fn start_fixture_day(
@@ -172,14 +245,16 @@ mod qa {
             }
         };
         let command_id = Uuid::new_v4();
-        let result = host
-            .request(Uuid::new_v4())
-            .expect("admit direct Day operation")
-            .product_command(ProductCommandRequest {
-                command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
-                command: ProductCommand::Day(DayCommand::ExternalCalendarOperation { operation }),
-            })
-            .expect("Day forwards the manual operation to Calendar Operations");
+        let request = ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+            command: ProductCommand::Day(DayCommand::ExternalCalendarOperation { operation }),
+        };
+        let result = observe_exact_day_submission(&request, |same_request| {
+            host.request(Uuid::new_v4())
+                .expect("admit exact Day submission observation")
+                .product_command(same_request)
+        })
+        .expect("Day forwards the exact manual operation to Calendar Operations");
         let ProductCommandOutcome::Day(DayCommandOutcome::ExternalCalendarOperation(submitted)) =
             result
         else {

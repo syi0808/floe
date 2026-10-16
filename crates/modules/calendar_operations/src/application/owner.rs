@@ -41,6 +41,8 @@ pub struct CalendarOperationsService {
     command_locks: Arc<Mutex<HashMap<Uuid, Weak<tokio::sync::Mutex<()>>>>>,
     #[cfg(feature = "qa-fixtures")]
     lose_next_access_decision_ack: Arc<AtomicBool>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) busy_dispatch_admissions: Arc<AtomicU8>,
 }
 
 impl CalendarOperationsService {
@@ -63,6 +65,8 @@ impl CalendarOperationsService {
             command_locks: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "qa-fixtures")]
             lose_next_access_decision_ack: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "qa-fixtures")]
+            busy_dispatch_admissions: Arc::new(AtomicU8::new(0)),
         })
     }
 
@@ -70,6 +74,12 @@ impl CalendarOperationsService {
     pub fn qa_lose_next_access_decision_ack(&self) {
         self.lose_next_access_decision_ack
             .store(true, Ordering::Release);
+    }
+
+    /// Synthetic pre-CAS contention only; never injects after external dispatch.
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_busy_next_dispatch_admissions(&self, count: u8) {
+        self.busy_dispatch_admissions.store(count, Ordering::Release);
     }
 
     /// Serialize Calendar Operations command families by the shared immutable

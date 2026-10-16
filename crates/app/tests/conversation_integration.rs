@@ -23,6 +23,31 @@ use support::{
     wait_terminal_run,
 };
 
+// Explicit test-client recovery for positive command flows only. Tests that
+// assert a negative disposition continue to call the raw product API.
+fn submit_fixture_product(
+    host: &AppHost<AppComposition>,
+    request: ProductCommandRequest,
+) -> Result<ProductCommandOutcome, floe_app::ProductCommandFailure> {
+    support::exact_recovery::observe_exact_request_sync(
+        request,
+        |exact| {
+            host.request(Uuid::new_v4())
+                .expect("observe exact fixture command")
+                .product_command(exact)
+        },
+        |failure| {
+            matches!(
+                failure.disposition,
+                ProductCommandDisposition::Admitted | ProductCommandDisposition::Indeterminate
+            ) && matches!(
+                failure.failure,
+                ProductFailure::Conversation(AgentFailure::StorageBusy)
+            )
+        },
+    )
+}
+
 const USER_TEXT: &str = "Summarize my current priorities.";
 const REPLY: &str = "A deterministic scripted reply.";
 const WAIT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -496,6 +521,8 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
             // receipt instead of scheduling a second Resume.
             Err(floe_kernel::CommandFailure::Indeterminate(
                 floe_agent_contract::AgentFailure::StorageBusy,
+            ) | floe_kernel::CommandFailure::Admitted(
+                floe_agent_contract::AgentFailure::StorageBusy,
             )) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
                 continue;
@@ -773,20 +800,33 @@ fn definitive_conversation_conflict_allows_a_corrected_new_command_id() {
     assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
 
     let corrected_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
-    let corrected = host
-        .request(Uuid::new_v4())
-        .expect("admit corrected Conversation request")
-        .product_command(ProductCommandRequest {
-            command_id: corrected_id,
-            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
-                session_id,
-                expected_revision: before.revision,
-                text: USER_TEXT.into(),
-                continuation_id: None,
-                retry_of: None,
-            }),
-        })
-        .expect("a new id can carry the corrected intent after NotApplied");
+    let corrected_request = ProductCommandRequest {
+        command_id: corrected_id,
+        command: ProductCommand::Conversation(ConversationCommand::StartTurn {
+            session_id,
+            expected_revision: before.revision,
+            text: USER_TEXT.into(),
+            continuation_id: None,
+            retry_of: None,
+        }),
+    };
+    let mut retries = 0;
+    let corrected = loop {
+        let result = host
+            .request(Uuid::new_v4())
+            .expect("observe the exact corrected Conversation request")
+            .product_command(corrected_request.clone());
+        if matches!(&result, Err(failure)
+            if retries < 3
+                && failure.disposition == ProductCommandDisposition::Indeterminate
+                && matches!(failure.failure, ProductFailure::Conversation(AgentFailure::StorageBusy)))
+        {
+            std::thread::sleep(Duration::from_millis(25 << retries));
+            retries += 1;
+            continue;
+        }
+        break result.expect("a new id can carry the corrected intent after NotApplied");
+    };
     let ConversationCommandOutcome::Turn(receipt) = (match corrected {
         ProductCommandOutcome::Conversation(value) => value,
         _ => panic!("corrected turn returned another product outcome"),
@@ -1032,10 +1072,9 @@ fn assistant_feature_source_and_enablement_changes_share_one_owner_commit() {
     let requirement_ref = requirement.requirement_ref.clone();
     let expected_binding_revision = group.binding_revision;
 
-    let prepared = host
-        .request(Uuid::new_v4())
-        .expect("admit source review command")
-        .product_command(ProductCommandRequest {
+    let prepared = submit_fixture_product(
+        &host,
+        ProductCommandRequest {
             command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
             command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
                 AssistantFeatureCommand::PrepareSourceReview {
@@ -1045,8 +1084,9 @@ fn assistant_feature_source_and_enablement_changes_share_one_owner_commit() {
                     expected_binding_revision,
                 },
             )),
-        })
-        .expect("prepare source choices for the selected feature");
+        },
+    )
+    .expect("prepare source choices for the selected feature");
     let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
         AssistantFeatureCommandResult::SourceReview(review),
     )) = prepared
@@ -1063,10 +1103,9 @@ fn assistant_feature_source_and_enablement_changes_share_one_owner_commit() {
         .expect("source review contains the configured Calendar candidate")
         .candidate_ref;
 
-    let configured = host
-        .request(Uuid::new_v4())
-        .expect("admit one assistant-feature configuration command")
-        .product_command(ProductCommandRequest {
+    let configured = submit_fixture_product(
+        &host,
+        ProductCommandRequest {
             command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
             command: ProductCommand::Conversation(ConversationCommand::AssistantFeature(
                 AssistantFeatureCommand::Configure {
@@ -1082,8 +1121,9 @@ fn assistant_feature_source_and_enablement_changes_share_one_owner_commit() {
                     }],
                 },
             )),
-        })
-        .expect("commit enablement and source selection together");
+        },
+    )
+    .expect("commit enablement and source selection together");
     let ProductCommandOutcome::Conversation(ConversationCommandOutcome::AssistantFeature(
         AssistantFeatureCommandResult::Snapshot(updated),
     )) = configured
@@ -1770,6 +1810,11 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
         "restore the persisted Runtime after lost Access decision acknowledgement"
     );
 
+    // Keep the approved effect undispatched beyond the old four-retry window.
+    // Recovery must recheck its durable Approved state, then dispatch only once.
+    support::with_ready(&host, |_services, _caller, owners| {
+        owners.calendar_operations.qa_busy_next_dispatch_admissions(5);
+    });
     let resolved = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
         .expect("approve via Conversation and consume Access decision receipt");
     let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Interaction(resolved)) =
@@ -1786,8 +1831,9 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
         executor.wait_for_snapshot(WAIT_TIMEOUT, |snapshot| snapshot.dispatch_attempts == 1);
     assert!(
         dispatched.is_some(),
-        "approved Calendar operation did not reach the scripted dispatch seam: {:?}",
-        executor.snapshot()
+        "approved Calendar operation did not reach the scripted dispatch seam: executor={:?}; operation={:?}",
+        executor.snapshot(),
+        read_calendar_operation_snapshot(&host, action_ref)
     );
     let action_deadline = Instant::now() + WAIT_TIMEOUT;
     let action = loop {

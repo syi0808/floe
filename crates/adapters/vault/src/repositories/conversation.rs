@@ -1,5 +1,6 @@
 mod compaction;
 mod surface;
+use crate::write_fence::retry_exact_local_write;
 use std::sync::Arc;
 
 use crate::{
@@ -830,60 +831,5 @@ impl<Keys: VaultKeyProvider + 'static> ExecutionJournal for VaultConversationJou
         event: JournalEvent,
     ) -> BoxFuture<'a, Result<JournalAck, AgentFailure>> {
         self.record("checkpoint", event)
-    }
-}
-
-/// Retry only a proven local no-write/rolled-back Busy result, or a Busy read
-/// after exact receipt publication. Every invocation retains the same immutable
-/// payload and CAS identity. Commit uncertainty and all other failures escape;
-/// this never retries the model/tool execution that produced the outcome.
-async fn retry_exact_local_write<T, F, Fut>(mut write: F) -> Result<T, AgentFailure>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, AgentFailure>>,
-{
-    let mut attempt = 0u32;
-    loop {
-        match write().await {
-            Err(AgentFailure::StorageBusy) if attempt < 3 => {
-                tokio::time::sleep(std::time::Duration::from_millis(25 << attempt)).await;
-                attempt += 1;
-            }
-            result => return result,
-        }
-    }
-}
-
-#[cfg(test)]
-mod write_retry_tests {
-    use super::*;
-    use std::cell::Cell;
-    #[tokio::test]
-    async fn exact_local_write_retries_only_busy_and_remains_bounded() {
-        for failure in [
-            AgentFailure::StorageUnavailable,
-            AgentFailure::VaultUnavailable,
-            AgentFailure::Conflict,
-            AgentFailure::PolicyDenied,
-            AgentFailure::Cancelled,
-            AgentFailure::DeadlineExceeded,
-            AgentFailure::StorageBusy,
-        ] {
-            let attempts = Cell::new(0);
-            let result: Result<(), _> = retry_exact_local_write(|| {
-                attempts.set(attempts.get() + 1);
-                std::future::ready(Err(failure))
-            })
-            .await;
-            assert_eq!(result, Err(failure));
-            assert_eq!(
-                attempts.get(),
-                if failure == AgentFailure::StorageBusy {
-                    4
-                } else {
-                    1
-                }
-            );
-        }
     }
 }

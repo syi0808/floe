@@ -154,3 +154,7 @@ pub use domain::{
     CompactionPrefix, CoreCompactionPrefix, SurfaceCheckpointRef, SurfaceCompactionPrefix,
     surface_summary_id,
 };
+
+pub use domain::{SurfaceOutcomeReceipt, SurfaceOutcomeReference, SurfaceResultCompleteness};
+
+pub use domain::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};
