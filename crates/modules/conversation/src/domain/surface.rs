@@ -31,6 +31,19 @@ impl SurfaceAnchor {
             digest: hash.finalize().into(),
         })
     }
+    pub(super) fn advance(&self, request_digest: [u8; 32]) -> Result<Self, AgentFailure> {
+        self.validate()?;
+        let sequence = self
+            .sequence
+            .checked_add(1)
+            .filter(|value| *value <= i64::MAX as u64)
+            .ok_or(AgentFailure::BudgetExceeded)?;
+        Ok(Self {
+            session_id: self.session_id,
+            sequence,
+            digest: digest(b"floe.surface.link\0", &(*self, request_digest))?,
+        })
+    }
     pub fn validate(&self) -> Result<(), AgentFailure> {
         if self.session_id.is_nil() || self.sequence > i64::MAX as u64 {
             return Err(AgentFailure::InvalidInput);
@@ -127,17 +140,7 @@ impl AppendSurfaceInput {
                 &self.input,
             ),
         )?;
-        let sequence = self
-            .expected
-            .sequence
-            .checked_add(1)
-            .filter(|value| *value <= i64::MAX as u64)
-            .ok_or(AgentFailure::BudgetExceeded)?;
-        let through = SurfaceAnchor {
-            session_id: self.expected.session_id,
-            sequence,
-            digest: digest(b"floe.surface.link\0", &(self.expected, request_digest))?,
-        };
+        let through = self.expected.advance(request_digest)?;
         Ok(SurfaceInputReceipt {
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),
@@ -319,7 +322,7 @@ impl PresentationState {
     }
 }
 
-fn digest(domain: &[u8], value: &impl Serialize) -> Result<[u8; 32], AgentFailure> {
+pub(super) fn digest(domain: &[u8], value: &impl Serialize) -> Result<[u8; 32], AgentFailure> {
     let mut hash = Sha256::new();
     hash.update(domain);
     hash.update(serde_json::to_vec(value).map_err(|_| AgentFailure::InvalidInput)?);

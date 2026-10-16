@@ -947,6 +947,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(database_failure)?;
         if next.state == RunState::Completed {
+            self.publish_completed_surface_result_on(transaction, &next).await?;
             self.enqueue_learning_discovery_on(transaction, &next)
                 .await?;
         }
@@ -2186,7 +2187,7 @@ pub(super) async fn command_occupant(
          UNION ALL SELECT 'start' FROM agent_conversation_session_commands WHERE command_id = ?1
          UNION ALL SELECT 'decision' FROM agent_conversation_interaction_decisions WHERE command_id = ?1
          UNION ALL SELECT 'refresh' FROM agent_conversation_interaction_refreshes WHERE command_id = ?1
-         UNION ALL SELECT 'surface_input' FROM agent_surface_inputs WHERE command_id = ?1
+         UNION ALL SELECT 'surface_entry' FROM agent_surface_entries WHERE command_id = ?1
          UNION ALL SELECT 'surface_work' FROM agent_surface_work WHERE command_id = ?1",
         [command_id.to_string()],
     ).await.map_err(database_failure)?;
@@ -2199,7 +2200,7 @@ pub(super) async fn command_occupant(
         "start" => K::SessionStart,
         "decision" => K::InteractionDecision,
         "refresh" => K::InteractionRefresh,
-        "surface_input" => K::SurfaceInput,
+        "surface_entry" => K::SurfaceEntry,
         "surface_work" => K::SurfaceWork,
         _ => return Err(AgentFailure::VaultUnavailable),
     };

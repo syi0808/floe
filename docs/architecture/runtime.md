@@ -93,7 +93,8 @@ Conversation owns the durable Session/root-Run lifecycle and projects the state 
 
 Conversation now defines a separate `SurfaceRepository` for settled user input
 and durable Work admission under the existing product Session ID. Vault stores
-immutable per-input receipts and a content-bound, monotonic prefix independently
+one ordered `SurfaceEntryReceipt` envelope for original input and canonical
+completed-result references, with a content-bound, monotonic prefix independently
 of the Manager Session revision and Core recorder. `SurfaceAnchor` is a history
 boundary, not a source grant. Voice input and delegation identities include the
 exact live-session identity; matching a model role is not sufficient.
@@ -112,15 +113,25 @@ stores queue/link custody only; progress and results are read from the linked
 Run rather than copied into a second execution state machine. Normal claim
 refusals explicitly roll back and settle the journal guard.
 
-Queued execution projects its retained user-input prefix, not the latest Core
-head. Continue/Resume can resolve the original work through bounded, validated
+Completed Surface-origin Runs append one result reference in the same terminal
+transaction as the Run/Core settlement. The entry means available as text in the
+shared transcript; it proves neither that the Person read it nor that audio was
+accepted or played. Its body and dependency coverage remain in the canonical
+Run, validated by a content-bound reference. A rollback cannot leave a phantom
+result entry. Reopen or terminal replay cannot publish it again. Result entries
+cannot be admitted as new Person input.
+
+Queued execution projects its retained input/result prefix, not the latest Core
+head. Model projection uses the canonical Run evidence identity when Context
+reauthorizes a referenced result; a presentation/UI identity is not a grant.
+Later input or result publication cannot enter a previously admitted anchor. Continue/Resume can resolve the original work through bounded, validated
 lineage. Core-only semantic compaction cannot substitute a different prefix for
 a Surface work anchor; that maintenance route fails closed until Surface
 presentation/checkpoint integration lands.
 
 This is an internal owner integration checkpoint. The existing Flutter StartTurn
-path still invokes the Manager directly; shared text/protocol projection, result
-presentation and the Voice provider/native/UI cutover remain execution-plan
+path still invokes the Manager directly; shared text/protocol projection, audio
+presentation evidence and the Voice provider/native/UI cutover remain execution-plan
 gates. The old New entry is bounded to that pending product cutover, not a
 second long-term user path. No public voice feature or busy-input UI relaxation
 is enabled by these contracts alone. Core recording and external-effect

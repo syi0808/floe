@@ -382,3 +382,6 @@ pub use session_start::{
 
 mod surface;
 pub use surface::*;
+
+mod presentation;
+pub use presentation::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};

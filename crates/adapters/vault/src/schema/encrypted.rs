@@ -217,8 +217,8 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
         "CREATE TABLE agent_surface_heads (session_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence >= 0), digest BLOB NOT NULL CHECK (length(digest) = 32), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
     ),
     SchemaObject::table(
-        "agent_surface_inputs",
-        "CREATE TABLE agent_surface_inputs (command_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, person_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, origin_key TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768), UNIQUE (session_id, sequence), UNIQUE (session_id, message_id), UNIQUE (session_id, origin_key), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+        "agent_surface_entries",
+        "CREATE TABLE agent_surface_entries (command_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, person_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, origin_key TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('input', 'published_result')), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768), UNIQUE (session_id, sequence), UNIQUE (session_id, message_id), UNIQUE (session_id, origin_key), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
     ),
     SchemaObject::table(
         "agent_surface_work",
@@ -226,8 +226,8 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
     SchemaObject::marker(
         "agent_conversation_schema",
-        10,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 10))",
+        11,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 11))",
     ),
     SchemaObject::index(
         "agent_surface_work_pending",

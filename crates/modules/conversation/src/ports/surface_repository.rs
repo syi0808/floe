@@ -52,11 +52,11 @@ pub trait SurfaceRepository: Send + Sync {
         request: SubmitSurfaceWork,
     ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
     /// Forward bounded page; never reads beyond the supplied immutable anchor.
-    fn surface_inputs<'a>(
+    fn surface_entries<'a>(
         &'a self,
         actor: &'a OwnerActor,
         through: SurfaceAnchor,
         after: u64,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<SurfaceInputReceipt>, AgentFailure>>;
+    ) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>>;
 }

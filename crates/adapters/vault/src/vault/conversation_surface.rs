@@ -4,8 +4,8 @@ use super::*;
 use floe_agent_contract::BoxFuture;
 use floe_conversation::{
     AppendSurfaceInput, MAX_PENDING_SURFACE_WORK, MAX_SURFACE_PAGE_ITEMS, SubmitSurfaceWork,
-    SurfaceAnchor, SurfaceInputOrigin, SurfaceInputReceipt, SurfaceRepository, SurfaceWorkReceipt,
-    WorkOrigin,
+    SurfaceAnchor, SurfaceEntryReceipt, SurfaceInputOrigin, SurfaceInputReceipt, SurfaceRepository,
+    SurfaceResultReceipt, SurfaceResultReference, SurfaceWorkReceipt, WorkOrigin,
 };
 use floe_kernel::{CommandFailure, OwnerActor};
 use serde::{Serialize, de::DeserializeOwned};
@@ -68,6 +68,49 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         Ok(())
     }
+    /// Text availability is committed with the canonical completed Run. Audio
+    /// delivery is separate evidence and is never inferred from this entry.
+    pub(super) async fn publish_completed_surface_result_on(
+        &self,
+        connection: &Connection,
+        run: &floe_conversation::RunRecord,
+    ) -> Result<(), AgentFailure> {
+        let Some(work) = self.surface_work_for_run_on(connection, run.run_id).await? else {
+            return Ok(());
+        };
+        if work.person_id != run.person_id || work.anchor.session_id != run.session_id {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        let reference = SurfaceResultReference::for_run(run)?;
+        if let Some(existing) = self
+            .surface_entry_command_on(connection, reference.command_id())
+            .await?
+        {
+            return match existing {
+                SurfaceEntryReceipt::PublishedResult(receipt)
+                    if receipt.result == reference
+                        && receipt.through.session_id == run.session_id =>
+                {
+                    Ok(())
+                }
+                _ => Err(AgentFailure::StorageUnavailable),
+            };
+        }
+        self.surface_command_free_on(connection, reference.command_id())
+            .await?;
+        let head = self.surface_head_on(connection, run.session_id).await?;
+        self.surface_anchor_on(connection, head).await?;
+        let actor = OwnerActor {
+            person_id: run.person_id,
+            device_id: run.device_id.clone(),
+            runtime_epoch: 1,
+        };
+        let receipt = SurfaceResultReceipt::admit(&actor, head, reference)?;
+        let payload = encode(&SurfaceEntryReceipt::PublishedResult(receipt.clone()))?;
+        connection.execute("INSERT INTO agent_surface_entries (command_id, session_id, person_id, sequence, message_id, origin_key, kind, payload) VALUES (?, ?, ?, ?, ?, ?, 'published_result', ?)", (receipt.result.command_id().as_uuid().to_string(), run.session_id.to_string(), self.person_id.to_string(), receipt.through.sequence as i64, receipt.result.message_id().as_uuid().to_string(), format!("result:{}", run.run_id.as_uuid()), payload)).await.map_err(database_failure)?;
+        connection.execute("INSERT INTO agent_surface_heads (session_id, person_id, sequence, digest) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET sequence = excluded.sequence, digest = excluded.digest", (run.session_id.to_string(), self.person_id.to_string(), receipt.through.sequence as i64, receipt.through.digest.to_vec())).await.map_err(database_failure)?;
+        Ok(())
+    }
     async fn surface_head_on(
         &self,
         connection: &Connection,
@@ -83,7 +126,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let Some(row) = rows.next().await.map_err(database_failure)? else {
             let mut inputs = connection
                 .query(
-                    "SELECT 1 FROM agent_surface_inputs WHERE session_id = ? LIMIT 1",
+                    "SELECT 1 FROM agent_surface_entries WHERE session_id = ? LIMIT 1",
                     [session_id.to_string()],
                 )
                 .await
@@ -109,29 +152,60 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         head.validate()?;
         Ok(head)
     }
+    async fn surface_entry_command_on(
+        &self,
+        connection: &Connection,
+        command: floe_kernel::CommandId,
+    ) -> Result<Option<SurfaceEntryReceipt>, AgentFailure> {
+        let mut rows = connection.query("SELECT session_id, person_id, sequence, message_id, origin_key, payload, kind FROM agent_surface_entries WHERE command_id = ?", [command.as_uuid().to_string()]).await.map_err(database_failure)?;
+        let Some(row) = rows.next().await.map_err(database_failure)? else {
+            return Ok(None);
+        };
+        let receipt: SurfaceEntryReceipt = decode(row.get(5).map_err(storage)?)?;
+        receipt.validate()?;
+        let (kind, origin) = match &receipt {
+            SurfaceEntryReceipt::Input(input) => ("input", input_origin(input)),
+            SurfaceEntryReceipt::PublishedResult(result) => {
+                let run = self
+                    .conversation_run_on(connection, result.result.run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if run.person_id != receipt.person_id()
+                    || run.device_id != receipt.device_id()
+                    || run.session_id != receipt.through().session_id
+                    || SurfaceResultReference::for_run(&run)? != result.result
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                (
+                    "published_result",
+                    format!("result:{}", result.result.run_id.as_uuid()),
+                )
+            }
+        };
+        if receipt.command_id() != command
+            || receipt.person_id() != self.person_id
+            || row.get::<String>(0).map_err(storage)? != receipt.through().session_id.to_string()
+            || row.get::<String>(1).map_err(storage)? != receipt.person_id().to_string()
+            || row.get::<i64>(2).map_err(storage)? != receipt.through().sequence as i64
+            || row.get::<String>(3).map_err(storage)? != receipt.message_id().as_uuid().to_string()
+            || row.get::<String>(4).map_err(storage)? != origin
+            || row.get::<String>(6).map_err(storage)? != kind
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(Some(receipt))
+    }
     async fn surface_input_command_on(
         &self,
         connection: &Connection,
         command: floe_kernel::CommandId,
     ) -> Result<Option<SurfaceInputReceipt>, AgentFailure> {
-        let mut rows = connection.query("SELECT session_id, person_id, sequence, message_id, origin_key, payload FROM agent_surface_inputs WHERE command_id = ?", [command.as_uuid().to_string()]).await.map_err(database_failure)?;
-        let Some(row) = rows.next().await.map_err(database_failure)? else {
-            return Ok(None);
-        };
-        let receipt: SurfaceInputReceipt = decode(row.get(5).map_err(storage)?)?;
-        receipt.validate()?;
-        if receipt.command_id != command
-            || receipt.person_id != self.person_id
-            || row.get::<String>(0).map_err(storage)? != receipt.through.session_id.to_string()
-            || row.get::<String>(1).map_err(storage)? != receipt.person_id.to_string()
-            || row.get::<i64>(2).map_err(storage)? != receipt.through.sequence as i64
-            || row.get::<String>(3).map_err(storage)?
-                != receipt.input.message_id.as_uuid().to_string()
-            || row.get::<String>(4).map_err(storage)? != input_origin(&receipt)
-        {
-            return Err(AgentFailure::StorageUnavailable);
+        match self.surface_entry_command_on(connection, command).await? {
+            Some(SurfaceEntryReceipt::Input(input)) => Ok(Some(input)),
+            Some(_) => Err(AgentFailure::Conflict),
+            None => Ok(None),
         }
-        Ok(Some(receipt))
     }
     async fn surface_anchor_on(
         &self,
@@ -144,7 +218,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         let mut rows = connection
             .query(
-                "SELECT command_id FROM agent_surface_inputs WHERE session_id = ? AND sequence = ?",
+                "SELECT command_id FROM agent_surface_entries WHERE session_id = ? AND sequence = ?",
                 (anchor.session_id.to_string(), anchor.sequence as i64),
             )
             .await
@@ -159,10 +233,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .and_then(floe_kernel::CommandId::from_uuid)
             .ok_or(AgentFailure::StorageUnavailable)?;
         let receipt = self
-            .surface_input_command_on(connection, command)
+            .surface_entry_command_on(connection, command)
             .await?
             .ok_or(AgentFailure::StorageUnavailable)?;
-        if receipt.through != anchor {
+        if receipt.through() != anchor {
             return Err(AgentFailure::Conflict);
         }
         Ok(())
@@ -287,7 +361,7 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
                 return Err(AgentFailure::Conflict);
             }
             self.surface_anchor_on(&tx, work.anchor).await?;
-            let mut rows = tx.query("SELECT command_id FROM agent_surface_inputs WHERE session_id = ? AND message_id = ? AND sequence <= ?", (work.anchor.session_id.to_string(), work.input_id.as_uuid().to_string(), work.anchor.sequence as i64)).await.map_err(database_failure)?;
+            let mut rows = tx.query("SELECT command_id FROM agent_surface_entries WHERE kind = 'input' AND session_id = ? AND message_id = ? AND sequence <= ?", (work.anchor.session_id.to_string(), work.input_id.as_uuid().to_string(), work.anchor.sequence as i64)).await.map_err(database_failure)?;
             let row = rows
                 .next()
                 .await
@@ -545,13 +619,13 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
             self.finish_registry_command_transaction(tx, result).await
         })
     }
-    fn surface_inputs<'a>(
+    fn surface_entries<'a>(
         &'a self,
         actor: &'a OwnerActor,
         through: SurfaceAnchor,
         after: u64,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<SurfaceInputReceipt>, AgentFailure>> {
+    ) -> BoxFuture<'a, Result<Vec<SurfaceEntryReceipt>, AgentFailure>> {
         Box::pin(async move {
             if limit == 0 || limit > MAX_SURFACE_PAGE_ITEMS || after > through.sequence {
                 return Err(AgentFailure::InvalidInput);
@@ -564,7 +638,7 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
             self.surface_session_on(&tx, actor, through.session_id)
                 .await?;
             self.surface_anchor_on(&tx, through).await?;
-            let mut rows = tx.query("SELECT command_id FROM agent_surface_inputs WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT ?", (through.session_id.to_string(), after as i64, through.sequence as i64, limit as i64)).await.map_err(database_failure)?;
+            let mut rows = tx.query("SELECT command_id FROM agent_surface_entries WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT ?", (through.session_id.to_string(), after as i64, through.sequence as i64, limit as i64)).await.map_err(database_failure)?;
             let mut result = Vec::new();
             while let Some(row) = rows.next().await.map_err(database_failure)? {
                 let command = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
@@ -572,19 +646,19 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
                     .and_then(floe_kernel::CommandId::from_uuid)
                     .ok_or(AgentFailure::StorageUnavailable)?;
                 let receipt = self
-                    .surface_input_command_on(&tx, command)
+                    .surface_entry_command_on(&tx, command)
                     .await?
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                if receipt.through.sequence != after + result.len() as u64 + 1 {
+                if receipt.through().sequence != after + result.len() as u64 + 1 {
                     return Err(AgentFailure::StorageUnavailable);
                 }
                 if let Some(previous) = result.last() {
-                    let previous: &SurfaceInputReceipt = previous;
-                    if receipt.before != previous.through {
+                    let previous: &SurfaceEntryReceipt = previous;
+                    if receipt.before() != previous.through() {
                         return Err(AgentFailure::StorageUnavailable);
                     }
                 } else {
-                    self.surface_anchor_on(&tx, receipt.before).await?;
+                    self.surface_anchor_on(&tx, receipt.before()).await?;
                 }
                 result.push(receipt);
             }
@@ -734,6 +808,232 @@ mod tests {
             }),
         }
     }
+    async fn completed_terminal(
+        vault: &EncryptedAgentVault<Keys>,
+        run: &floe_conversation::RunRecord,
+    ) -> floe_conversation::RunTerminal {
+        use floe_agent_contract::*;
+        let text = "Synthetic surface result".to_owned();
+        let attempt_id = Uuid::new_v4();
+        let projection_ref = ProjectionRef::new();
+        let batch_id = Uuid::new_v4();
+        let events = vec![
+            JournalEvent::ModelIntent {
+                attempt_id,
+                parent_task_id: None,
+                reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                    tokens: 128,
+                    cost_micros: 128,
+                },
+                projection_ref,
+                plan: PreparedModelPlan {
+                    operation_id: Uuid::new_v4(),
+                    principal: run.person_id.to_string(),
+                    device_id: run.device_id.clone(),
+                    purpose: "everyday_assistance".into(),
+                    consumer: floe_conversation::CONVERSATION_CONSUMER.into(),
+                    capabilities: ModelCapabilities::chat(),
+                    boundary: ProcessingBoundary::Device,
+                    binding_digest: ModelBindingDigest([71; 32]),
+                    selection_commitment: ModelSelectionCommitment([72; 32]),
+                    budget_profile: ModelBudgetProfile::unknown(),
+                },
+            },
+            JournalEvent::ModelResult {
+                attempt_id,
+                usage: ModelUsage::default(),
+                accounting: floe_execution::budget::ModelAccounting {
+                    observed_tokens: None,
+                    observed_cost_micros: None,
+                    unknown_tokens: true,
+                    unknown_cost: true,
+                },
+            },
+            JournalEvent::ValidatedBatch {
+                batch: ValidatedModelBatch {
+                    execution_id: run.run_id.as_uuid(),
+                    attempt_id,
+                    projection_ref,
+                    batch_id,
+                    steps: vec![ModelStep::Answer {
+                        text: text.clone(),
+                        artifacts: vec![],
+                    }],
+                    catalog_revision: run.expert_environment.revision,
+                    tool_revisions: vec![],
+                    agent_revisions: vec![],
+                    projection_coverage: DependencyCoverage::Independent,
+                    delegation_context: None,
+                },
+            },
+            JournalEvent::BatchProgress {
+                cursor: BatchCursor {
+                    batch_id,
+                    next_step_index: 0,
+                },
+            },
+            JournalEvent::Output {
+                text: text.clone(),
+                artifacts: vec![],
+            },
+        ];
+        for event in events {
+            vault
+                .record_manager_conversation_journal(
+                    run.run_id,
+                    super::super::conversations::journal_kind(&event),
+                    event,
+                )
+                .await
+                .unwrap();
+        }
+        floe_conversation::RunTerminal {
+            state: floe_conversation::RunState::Completed,
+            output: Some(text.clone()),
+            steps: vec![EngineStep::Answer {
+                text,
+                artifacts: vec![],
+            }],
+            coverage: DependencyCoverage::Independent,
+            issue: None,
+            blocked: None,
+            interactions: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn publication_rolls_back_with_core_and_cannot_be_delegated_as_user_input() {
+        let (f, vault) = fixture().await;
+        vault.activate_conversation_executor().await.unwrap();
+        let identity =
+            floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+        let input = vault
+            .append_surface_input(&f.actor, request(&f, &vault, "one").await)
+            .await
+            .unwrap();
+        let work = vault
+            .submit_surface_work(&f.actor, work(&input))
+            .await
+            .unwrap();
+        let execution = execution(&f, &work, "one", 0);
+        vault
+            .claim_manager_surface_work(work.clone(), execution.clone(), identity)
+            .await
+            .unwrap();
+        let run = vault
+            .conversation_run(execution.run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let terminal = completed_terminal(&vault, &run).await;
+        vault
+            .conversation_core_fault_after_owner_settlement
+            .store(true, std::sync::atomic::Ordering::Release);
+        assert!(
+            vault
+                .settle_manager_conversation_run(run.run_id, 1, terminal.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            vault.surface_head(&f.actor, f.session).await.unwrap(),
+            input.through
+        );
+        assert_eq!(
+            vault
+                .conversation_run(run.run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            floe_conversation::RunState::Working
+        );
+        let completed = vault
+            .settle_manager_conversation_run(run.run_id, 1, terminal.clone())
+            .await
+            .unwrap();
+        assert_eq!(completed.state, floe_conversation::RunState::Completed);
+        let head = vault.surface_head(&f.actor, f.session).await.unwrap();
+        assert_eq!(head.sequence, 2);
+        let entries = vault.surface_entries(&f.actor, head, 0, 128).await.unwrap();
+        let SurfaceEntryReceipt::PublishedResult(result) = &entries[1] else {
+            panic!("actual terminal commit must publish one result");
+        };
+        assert_eq!(
+            result.result,
+            SurfaceResultReference::for_run(&completed).unwrap()
+        );
+        assert_eq!(
+            vault
+                .settle_manager_conversation_run(run.run_id, 1, terminal)
+                .await
+                .unwrap(),
+            completed
+        );
+        assert_eq!(vault.surface_head(&f.actor, f.session).await.unwrap(), head);
+        let forged = SubmitSurfaceWork {
+            command_id: CommandId::new(),
+            anchor: head,
+            input_id: result.result.message_id(),
+            origin: WorkOrigin::Text,
+        };
+        assert_eq!(
+            vault.submit_surface_work(&f.actor, forged).await,
+            Err(CommandFailure::NotApplied(AgentFailure::NotFound))
+        );
+        assert!(
+            vault
+                .pending_surface_work(&f.actor, f.session)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        drop(vault);
+        let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            vault.surface_entries(&f.actor, head, 0, 128).await.unwrap(),
+            entries
+        );
+        // Even a self-consistent rewritten prefix cannot substitute a body
+        // reference that disagrees with the canonical Run owner.
+        let mut forged_reference = result.result.clone();
+        forged_reference.output_digest[0] ^= 1;
+        let forged =
+            SurfaceResultReceipt::admit(&f.actor, result.before, forged_reference).unwrap();
+        let connection = vault.connection().unwrap();
+        connection
+            .execute(
+                "UPDATE agent_surface_entries SET payload = ? WHERE command_id = ?",
+                (
+                    encode(&SurfaceEntryReceipt::PublishedResult(forged.clone())).unwrap(),
+                    forged.result.command_id().as_uuid().to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE agent_surface_heads SET digest = ? WHERE session_id = ?",
+                (forged.through.digest.to_vec(), f.session.to_string()),
+            )
+            .await
+            .unwrap();
+        assert!(
+            vault
+                .surface_entries(&f.actor, forged.through, 0, 128)
+                .await
+                .is_err()
+        );
+        drop(connection);
+        drop(vault);
+        assert!(
+            EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+                .await
+                .is_err()
+        );
+    }
     #[tokio::test]
     async fn manager_busy_accepts_second_work_and_claims_once_after_real_core_settlement() {
         let (f, vault) = fixture().await;
@@ -812,10 +1112,10 @@ mod tests {
         );
         assert_eq!(
             vault
-                .surface_inputs(&f.actor, first.anchor, 0, 128)
+                .surface_entries(&f.actor, first.anchor, 0, 128)
                 .await
                 .unwrap(),
-            vec![first_input]
+            vec![SurfaceEntryReceipt::Input(first_input)]
         );
         vault
             .settle_manager_conversation_run(
@@ -954,10 +1254,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             vault
-                .surface_inputs(&f.actor, input.through, 0, 128)
+                .surface_entries(&f.actor, input.through, 0, 128)
                 .await
                 .unwrap(),
-            vec![input.clone()]
+            vec![SurfaceEntryReceipt::Input(input.clone())]
         );
         assert_eq!(
             vault
@@ -1086,7 +1386,7 @@ mod tests {
         ));
         let mut forged = input.through;
         forged.digest[0] ^= 1;
-        assert!(vault.surface_inputs(&f.actor, forged, 0, 1).await.is_err());
+        assert!(vault.surface_entries(&f.actor, forged, 0, 1).await.is_err());
     }
     #[tokio::test]
     async fn voice_metadata_cannot_delegate_another_session_utterance() {
@@ -1260,7 +1560,7 @@ mod tests {
         let through = last.unwrap().through;
         assert_eq!(
             vault
-                .surface_inputs(&f.actor, through, 0, 128)
+                .surface_entries(&f.actor, through, 0, 128)
                 .await
                 .unwrap()
                 .len(),
@@ -1268,7 +1568,7 @@ mod tests {
         );
         assert_eq!(
             vault
-                .surface_inputs(&f.actor, through, 128, 128)
+                .surface_entries(&f.actor, through, 128, 128)
                 .await
                 .unwrap()
                 .len(),
@@ -1276,7 +1576,7 @@ mod tests {
         );
         assert!(
             vault
-                .surface_inputs(&f.actor, through, 0, 129)
+                .surface_entries(&f.actor, through, 0, 129)
                 .await
                 .is_err()
         );
@@ -1310,7 +1610,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 self.surface_anchor_on(&tx, head).await?;
                 let mut totals = tx
                     .query(
-                        "SELECT count(*) FROM agent_surface_inputs WHERE session_id = ?",
+                        "SELECT count(*) FROM agent_surface_entries WHERE session_id = ?",
                         [cursor.clone()],
                     )
                     .await
@@ -1336,7 +1636,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 let query = if work {
                     "SELECT command_id FROM agent_surface_work WHERE command_id > ? ORDER BY command_id LIMIT 128"
                 } else {
-                    "SELECT command_id FROM agent_surface_inputs WHERE command_id > ? ORDER BY command_id LIMIT 128"
+                    "SELECT command_id FROM agent_surface_entries WHERE command_id > ? ORDER BY command_id LIMIT 128"
                 };
                 let mut rows = tx
                     .query(query, [cursor.clone()])
@@ -1356,24 +1656,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                             .await?
                             .ok_or(AgentFailure::StorageUnavailable)?;
                         self.surface_anchor_on(&tx, receipt.anchor).await?;
-                        let mut inputs = tx.query("SELECT 1 FROM agent_surface_inputs WHERE session_id = ? AND message_id = ? AND sequence <= ?", (receipt.anchor.session_id.to_string(), receipt.input_id.as_uuid().to_string(), receipt.anchor.sequence as i64)).await.map_err(database_failure)?;
+                        let mut inputs = tx.query("SELECT 1 FROM agent_surface_entries WHERE kind = 'input' AND session_id = ? AND message_id = ? AND sequence <= ?", (receipt.anchor.session_id.to_string(), receipt.input_id.as_uuid().to_string(), receipt.anchor.sequence as i64)).await.map_err(database_failure)?;
                         if inputs.next().await.map_err(database_failure)?.is_none() {
                             return Err(AgentFailure::StorageUnavailable);
                         }
                         (receipt.anchor.session_id, receipt.device_id)
                     } else {
                         let receipt = self
-                            .surface_input_command_on(&tx, command)
+                            .surface_entry_command_on(&tx, command)
                             .await?
                             .ok_or(AgentFailure::StorageUnavailable)?;
-                        self.surface_anchor_on(&tx, receipt.before).await?;
+                        self.surface_anchor_on(&tx, receipt.before()).await?;
                         let head = self
-                            .surface_head_on(&tx, receipt.through.session_id)
+                            .surface_head_on(&tx, receipt.through().session_id)
                             .await?;
-                        if head.sequence < receipt.through.sequence {
+                        if head.sequence < receipt.through().sequence {
                             return Err(AgentFailure::StorageUnavailable);
                         }
-                        (receipt.through.session_id, receipt.device_id)
+                        (receipt.through().session_id, receipt.device_id().to_owned())
                     };
                     let actor = OwnerActor {
                         person_id: self.person_id,
@@ -1384,7 +1684,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     let expected = if work {
                         floe_conversation::ConversationCommandKind::SurfaceWork
                     } else {
-                        floe_conversation::ConversationCommandKind::SurfaceInput
+                        floe_conversation::ConversationCommandKind::SurfaceEntry
                     };
                     if super::conversations::command_occupant(&tx, command.as_uuid()).await?
                         != Some(expected)
@@ -1427,16 +1727,20 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::Conflict);
         }
         self.surface_anchor_on(connection, work.anchor).await?;
-        let mut rows = connection.query("SELECT payload FROM agent_surface_inputs WHERE session_id = ? AND message_id = ? AND sequence <= ?", (work.anchor.session_id.to_string(), work.input_id.as_uuid().to_string(), work.anchor.sequence as i64)).await.map_err(database_failure)?;
-        let input: SurfaceInputReceipt = decode(
-            rows.next()
-                .await
-                .map_err(database_failure)?
-                .ok_or(AgentFailure::NotFound)?
-                .get(0)
-                .map_err(storage)?,
-        )?;
-        input.validate()?;
+        let mut rows = connection.query("SELECT command_id FROM agent_surface_entries WHERE kind = 'input' AND session_id = ? AND message_id = ? AND sequence <= ?", (work.anchor.session_id.to_string(), work.input_id.as_uuid().to_string(), work.anchor.sequence as i64)).await.map_err(database_failure)?;
+        let row = rows
+            .next()
+            .await
+            .map_err(database_failure)?
+            .ok_or(AgentFailure::NotFound)?;
+        let command = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+            .ok()
+            .and_then(floe_kernel::CommandId::from_uuid)
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let input = self
+            .surface_input_command_on(connection, command)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
         match &request.input {
             floe_conversation::TurnInput::NewMessage(message)
                 if message.text == input.input.text => {}
@@ -1534,7 +1838,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.surface_anchor_on(tx, head)
             .await
             .map_err(CommandFailure::Indeterminate)?;
-        let mut occupied = tx.query("SELECT 1 FROM agent_surface_inputs WHERE session_id = ? AND (message_id = ? OR origin_key = ?) LIMIT 1", (head.session_id.to_string(), expected.input.message_id.as_uuid().to_string(), input_origin(&expected))).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
+        let mut occupied = tx.query("SELECT 1 FROM agent_surface_entries WHERE session_id = ? AND (message_id = ? OR origin_key = ?) LIMIT 1", (head.session_id.to_string(), expected.input.message_id.as_uuid().to_string(), input_origin(&expected))).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
         if occupied
             .next()
             .await
@@ -1543,8 +1847,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(CommandFailure::NotApplied(AgentFailure::Conflict));
         }
-        let payload = encode(&expected).map_err(CommandFailure::NotApplied)?;
-        tx.execute("INSERT INTO agent_surface_inputs (command_id, session_id, person_id, sequence, message_id, origin_key, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", (expected.command_id.as_uuid().to_string(), head.session_id.to_string(), self.person_id.to_string(), expected.through.sequence as i64, expected.input.message_id.as_uuid().to_string(), input_origin(&expected), payload)).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
+        let payload = encode(&SurfaceEntryReceipt::Input(expected.clone()))
+            .map_err(CommandFailure::NotApplied)?;
+        tx.execute("INSERT INTO agent_surface_entries (command_id, session_id, person_id, sequence, message_id, origin_key, kind, payload) VALUES (?, ?, ?, ?, ?, ?, 'input', ?)", (expected.command_id.as_uuid().to_string(), head.session_id.to_string(), self.person_id.to_string(), expected.through.sequence as i64, expected.input.message_id.as_uuid().to_string(), input_origin(&expected), payload)).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
         tx.execute("INSERT INTO agent_surface_heads (session_id, person_id, sequence, digest) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET sequence = excluded.sequence, digest = excluded.digest", (head.session_id.to_string(), self.person_id.to_string(), expected.through.sequence as i64, expected.through.digest.to_vec())).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
         Ok(expected)
     }
@@ -1574,7 +1879,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.surface_anchor_on(tx, expected.anchor)
             .await
             .map_err(CommandFailure::NotApplied)?;
-        let mut rows = tx.query("SELECT command_id FROM agent_surface_inputs WHERE session_id = ? AND message_id = ? AND sequence <= ?", (expected.anchor.session_id.to_string(), expected.input_id.as_uuid().to_string(), expected.anchor.sequence as i64)).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
+        let mut rows = tx.query("SELECT command_id FROM agent_surface_entries WHERE kind = 'input' AND session_id = ? AND message_id = ? AND sequence <= ?", (expected.anchor.session_id.to_string(), expected.input_id.as_uuid().to_string(), expected.anchor.sequence as i64)).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
         let row = rows
             .next()
             .await
@@ -1662,6 +1967,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .await
             .map_err(database_failure)?;
+        let found = self.surface_work_for_run_on(&tx, run_id).await?;
+        tx.commit().await.map_err(database_failure)?;
+        self.check_access()?;
+        Ok(found)
+    }
+    async fn surface_work_for_run_on(
+        &self,
+        connection: &Connection,
+        run_id: floe_kernel::RunId,
+    ) -> Result<Option<SurfaceWorkReceipt>, AgentFailure> {
         let mut current = run_id;
         let mut seen = std::collections::HashSet::new();
         let mut found = None;
@@ -1672,23 +1987,23 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if !seen.insert(current) {
                 return Err(AgentFailure::StorageUnavailable);
             }
-            let mut rows = tx.query("SELECT command_id FROM agent_surface_work WHERE run_id = ? AND state = 'linked'", [current.as_uuid().to_string()]).await.map_err(database_failure)?;
+            let mut rows = connection.query("SELECT command_id FROM agent_surface_work WHERE run_id = ? AND state = 'linked'", [current.as_uuid().to_string()]).await.map_err(database_failure)?;
             if let Some(row) = rows.next().await.map_err(database_failure)? {
                 let command: String = row.get(0).map_err(storage)?;
                 let command = Uuid::parse_str(&command)
                     .ok()
                     .and_then(floe_kernel::CommandId::from_uuid)
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                found = self.surface_work_command_on(&tx, command).await?;
+                found = self.surface_work_command_on(connection, command).await?;
                 break;
             }
             let run = self
-                .conversation_run_on(&tx, current)
+                .conversation_run_on(connection, current)
                 .await?
                 .ok_or(AgentFailure::NotFound)?;
             if let Some(parent) = run.continuation_of.or(run.resume_of) {
                 let source = self
-                    .conversation_run_on(&tx, parent)
+                    .conversation_run_on(connection, parent)
                     .await?
                     .ok_or(AgentFailure::StorageUnavailable)?;
                 if source.person_id != run.person_id
@@ -1706,8 +2021,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if !reached_root && found.is_none() {
             return Err(AgentFailure::BudgetExceeded);
         }
-        tx.commit().await.map_err(database_failure)?;
-        self.check_access()?;
         Ok(found)
     }
 }

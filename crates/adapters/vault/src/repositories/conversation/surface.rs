@@ -51,14 +51,14 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for VaultConversationRe
     ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
         self.vault.submit_surface_work(actor, request)
     }
-    fn surface_inputs<'a>(
+    fn surface_entries<'a>(
         &'a self,
         actor: &'a OwnerActor,
         through: SurfaceAnchor,
         after: u64,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<SurfaceInputReceipt>, AgentFailure>> {
-        self.vault.surface_inputs(actor, through, after, limit)
+    ) -> BoxFuture<'a, Result<Vec<floe_conversation::SurfaceEntryReceipt>, AgentFailure>> {
+        self.vault.surface_entries(actor, through, after, limit)
     }
     fn read_surface_work<'a>(
         &'a self,
@@ -100,7 +100,7 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationRepository<Keys> {
             .saturating_sub(floe_conversation::MAX_SURFACE_PAGE_ITEMS as u64);
         let page = self
             .vault
-            .surface_inputs(
+            .surface_entries(
                 &actor,
                 work.anchor,
                 after,
@@ -109,6 +109,7 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationRepository<Keys> {
             .await?;
         let input = page
             .iter()
+            .filter_map(|item| item.input())
             .find(|item| item.input.message_id == work.input_id)
             .ok_or(AgentFailure::ModelInputCapacityExceeded)?;
         let selected = ContractMessage {
@@ -118,17 +119,44 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationRepository<Keys> {
             call_id: None,
             coverage: floe_agent_contract::DependencyCoverage::Independent,
         };
-        let mut messages = page
-            .into_iter()
-            .filter(|item| item.input.message_id != work.input_id)
-            .map(|item| ContractMessage {
-                message_id: item.input.message_id.as_uuid(),
-                role: floe_agent_contract::MessageRole::User,
-                text: item.input.text,
-                call_id: None,
-                coverage: floe_agent_contract::DependencyCoverage::Independent,
-            })
-            .collect::<Vec<_>>();
+        let mut messages = Vec::new();
+        for item in page {
+            match item {
+                floe_conversation::SurfaceEntryReceipt::Input(item) => {
+                    if item.input.message_id != work.input_id {
+                        messages.push(ContractMessage {
+                            message_id: item.input.message_id.as_uuid(),
+                            role: floe_agent_contract::MessageRole::User,
+                            text: item.input.text,
+                            call_id: None,
+                            coverage: floe_agent_contract::DependencyCoverage::Independent,
+                        });
+                    }
+                }
+                floe_conversation::SurfaceEntryReceipt::PublishedResult(item) => {
+                    let run = self
+                        .vault
+                        .conversation_run(item.result.run_id)
+                        .await?
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    if floe_conversation::SurfaceResultReference::for_run(&run)? != item.result
+                        || run.session_id != work.anchor.session_id
+                        || run.person_id != work.person_id
+                    {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    messages.push(ContractMessage {
+                        // Context reauthorizes canonical Run evidence, not the
+                        // presentation entry's separate UI message identity.
+                        message_id: item.result.run_id.as_uuid(),
+                        role: floe_agent_contract::MessageRole::Assistant,
+                        text: run.output.ok_or(AgentFailure::StorageUnavailable)?,
+                        call_id: None,
+                        coverage: run.coverage,
+                    });
+                }
+            }
+        }
         messages.push(selected);
         for message in &messages {
             message.validate()?;

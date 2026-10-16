@@ -10,7 +10,7 @@ pub enum ConversationCommandKind {
     Cancel,
     InteractionDecision,
     InteractionRefresh,
-    SurfaceInput,
+    SurfaceEntry,
     SurfaceWork,
 }
 

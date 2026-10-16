@@ -64,6 +64,34 @@ fn linked(host: &AppHost<AppComposition>, command_id: CommandId) -> floe_kernel:
     }
 }
 
+fn entries(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    anchor: Option<floe_conversation::SurfaceAnchor>,
+) -> Vec<floe_conversation::SurfaceEntryReceipt> {
+    support::with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+                let through = match anchor {
+                    Some(anchor) => anchor,
+                    None => {
+                        owners
+                            .conversation
+                            .surface_head(&actor, session_id, &scope)
+                            .await?
+                    }
+                };
+                owners
+                    .conversation
+                    .surface_entries(&actor, through, 0, 128, &scope)
+                    .await
+            })
+            .expect("read the actual ordered Surface prefix")
+    })
+}
+
 #[test]
 fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     let (barrier, entered, release) = GenerateBarrier::new();
@@ -142,6 +170,29 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
         "the first result happened after the second Work anchor"
     );
 
+    let published = entries(&host, session_id, None);
+    assert_eq!(
+        published.len(),
+        5,
+        "three original inputs and two completed output references"
+    );
+    assert_eq!(entries(&host, session_id, Some(second.anchor)).len(), 2);
+    let outputs = published
+        .iter()
+        .filter_map(|entry| match entry {
+            floe_conversation::SurfaceEntryReceipt::PublishedResult(receipt) => Some(receipt),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0].result.run_id, first_run);
+    assert_eq!(outputs[1].result.run_id, second_run);
+    assert_eq!(outputs[0].through.sequence, 4);
+    assert_eq!(outputs[1].through.sequence, 5);
+    assert_ne!(
+        outputs[0].result.message_id(),
+        outputs[1].result.message_id()
+    );
     drop(host);
     let host = profile.open(&model);
     assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
@@ -166,4 +217,27 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
             .expect("exact admitted work replay after reopen")
     });
     assert_eq!(assert_script_clean(&recorder).generated.len(), 2);
+    assert_eq!(
+        entries(&host, session_id, None),
+        published,
+        "reopen/replay cannot republish completed text"
+    );
+    let (_, third) = submit(&host, session_id);
+    let third_run = linked(&host, third.command_id);
+    assert_eq!(
+        wait_terminal_run(&host, third_run).state,
+        RunState::Completed
+    );
+    let observed = assert_script_clean(&recorder);
+    assert_eq!(observed.generated.len(), 3);
+    let context = serde_json::to_string(&observed.generated[2].envelope.conversation).unwrap();
+    assert!(
+        context.contains("FUTURE_INPUT_MUST_NOT_LEAK"),
+        "future input becomes eligible for a later anchor"
+    );
+    assert!(
+        context.contains(REPLY),
+        "published output is available to later work"
+    );
+    assert_eq!(entries(&host, session_id, None).len(), 7);
 }

@@ -374,8 +374,8 @@ impl ScriptedModel {
         output: ModelOutput,
     ) -> Self {
         let expected_consumers = match &output {
+            ModelOutput::WaitFirstThenAnswer(_) => vec![CONVERSATION_CONSUMER.into(); 3],
             ModelOutput::ForgetUnprojectedMemory
-            | ModelOutput::WaitFirstThenAnswer(_)
             | ModelOutput::InvalidCompletionThenAnswer(_)
             | ModelOutput::UnsupportedManagerToolCall => vec![CONVERSATION_CONSUMER.into(); 2],
             ModelOutput::ScheduleExpertFlow => vec![

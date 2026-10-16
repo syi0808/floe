@@ -81,6 +81,9 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>>;
+
     fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>>;
     fn append_surface_input<'a>(&'a self, actor: &'a OwnerActor, request: AppendSurfaceInput, scope: &'a ExecutionScope)
@@ -622,6 +625,9 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
+    fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>> {
+        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_entries(actor, through, after, limit)).await })
+    }
     fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>> {
         Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_head(actor, session_id)).await })
     }

@@ -141,3 +141,5 @@ pub use ports::SurfaceRepository;
 pub use domain::{SurfaceWorkSnapshot, SurfaceWorkState};
 
 pub use domain::SubmitTextWork;
+
+pub use domain::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};

@@ -32,7 +32,12 @@ existing original-input and uncertain-effect rules.
 Generated results remain owned by Run/Task evidence. Surface presentations link
 to that evidence and retain their own presentation receipts. Provider acceptance,
 playback completion, interruption and unknown delivery are distinct facts. An
-append acknowledgment is not proof that speech was heard. Voice disconnect ends
+append acknowledgment is not proof that speech was heard. Completed Manager
+output availability is appended atomically with its terminal settlement as a
+canonical result reference. Availability is sufficient to retrieve text, not
+proof that it was displayed/read or spoken. Later playback evidence must append
+its own observation and cannot rewrite the result's original prefix.
+Voice disconnect ends
 capture and its provider session, not admitted Manager work. Results remain
 available through the shared Assistant/Activity after hangup.
 

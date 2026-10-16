@@ -1908,3 +1908,41 @@ Next V1 cutover constraints (not implemented by the admission checkpoint):
   checks pass. Flutter, Apple native and live voice/provider behavior were not
   exercised by this internal owner checkpoint; their gates remain open. No live
   model, account credential, microphone or actual provider data was used.
+
+
+### 2026-10-16 ordered Surface and completed-result publication
+
+- Replaced the input-only table/API with one ordered `SurfaceEntryReceipt` envelope
+  and `surface_entries` page query. Entries are original input or references to
+  canonical completed Manager Run output. Conversation family version 11 requires
+  a fresh explicitly selected development profile; no migration/reset is automatic.
+- Completed Surface-origin Run settlement publishes the result reference in the
+  same transaction as its existing owner/Core settlement. Result body and coverage
+  remain in the original Run, not another output store. The distinct publication
+  command/message IDs are derived from the Run and share the product command
+  collision checks. Reopen, rollback and exact terminal replay preserve one entry.
+  A text-availability entry is not a read/playback receipt and cannot be delegated
+  as Person input. Continue/Resume lineage uses the original Work lookup.
+- Manager history now resolves only the admitted ordered prefix, including earlier
+  published results. The first real owner regression correctly dropped results
+  when their new presentation IDs lacked recorded Context coverage. Projection now
+  uses the canonical Run evidence identity, preserving the existing fail-closed
+  reauthorization instead of manufacturing coverage. The expanded three-work test
+  passes: prior results stay absent from an older anchor and become visible to a
+  later work item, with no duplicate dispatch/publication after encrypted reopen.
+- Focused domain, encrypted storage and actual App owner tests passed. The storage
+  regression injects an owner/Core failure after terminal application and verifies
+  that result publication rolls back too, then tests exact retry and rejection of
+  result-as-input. A further self-consistent forged-reference case checks canonical
+  output verification, not merely prefix checksums. Final gates for this checkpoint
+  pass: default workspace including doctests 412 passed/zero failed/ignored;
+  App QA integration 66 passed/zero failed/one intentionally ignored standalone
+  crash driver (exercised by its parent tests); production FFI build exit 0.
+  The 42-case Conversation suite completed in 1,024.77 seconds, including the
+  129-turn/reopen case. Boundary, changed-file rustfmt and whitespace checks pass.
+  These counts belong to this exact checkpoint; no live provider or Apple QA was
+  run by this internal storage/projection change.
+- Remaining V1 gates: Surface-aware semantic compaction, queued-work cancellation,
+  product text/protocol/UI cutover, incomplete/blocked outcome presentation, and
+  append-only audio delivery evidence. No live microphone/provider integration is
+  represented by this completed-result checkpoint.
