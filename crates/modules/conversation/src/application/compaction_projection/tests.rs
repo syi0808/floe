@@ -156,16 +156,18 @@ fn fixture() -> (
         session_id: Uuid::new_v4(),
         session_revision: 3,
         data_classes: vec![DataClass::Personal],
-        through: TranscriptReference {
-            conversation_id: head.conversation_id,
-            branch_id: head.branch_id,
-            message_id: MessageId::new(),
-            sequence: 4,
-        },
-        head,
-        previous_checkpoint: None,
-        prefix_digest: [42; 32],
-        through_turn_id: Uuid::new_v4(),
+        prefix: crate::CompactionPrefix::Core(crate::CoreCompactionPrefix {
+            through: TranscriptReference {
+                conversation_id: head.conversation_id,
+                branch_id: head.branch_id,
+                message_id: MessageId::new(),
+                sequence: 4,
+            },
+            head,
+            previous_checkpoint: None,
+            prefix_digest: [42; 32],
+            through_turn_id: Uuid::new_v4(),
+        }),
         messages,
     };
     let head = CompactionJournalHead::new(&actor, &source, 1000, 1000, 1024).unwrap();

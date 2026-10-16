@@ -56,7 +56,7 @@ impl CompactionJournalHead {
         max_output_bytes: usize,
     ) -> Result<Self, AgentFailure> {
         actor.validate()?;
-        if source.head.identity.person_id != actor.person_id {
+        if source.person_id() != actor.person_id {
             return Err(AgentFailure::PolicyDenied);
         }
         let source_digest = source_digest(source)?;
@@ -91,7 +91,7 @@ impl CompactionJournalHead {
             &serde_json::to_vec(&("floe.compaction-execution.v1", self.person_id, digest))
                 .map_err(|_| AgentFailure::StorageUnavailable)?,
         );
-        if self.person_id != source.head.identity.person_id
+        if self.person_id != source.person_id()
             || self.source_digest != digest
             || self.execution_id != expected_id
             || self.device_id.is_empty()
@@ -319,16 +319,18 @@ mod tests {
             session_id: Uuid::new_v4(),
             session_revision: 5,
             data_classes: vec![floe_agent_contract::DataClass::Synthetic],
-            through: TranscriptReference {
-                conversation_id: head.conversation_id,
-                branch_id: head.branch_id,
-                message_id: MessageId::new(),
-                sequence: 2,
-            },
-            head,
-            previous_checkpoint: None,
-            prefix_digest: [7; 32],
-            through_turn_id: Uuid::new_v4(),
+            prefix: crate::CompactionPrefix::Core(crate::CoreCompactionPrefix {
+                through: TranscriptReference {
+                    conversation_id: head.conversation_id,
+                    branch_id: head.branch_id,
+                    message_id: MessageId::new(),
+                    sequence: 2,
+                },
+                head,
+                previous_checkpoint: None,
+                prefix_digest: [7; 32],
+                through_turn_id: Uuid::new_v4(),
+            }),
             messages: vec![MessageRole::User, MessageRole::Assistant]
                 .into_iter()
                 .map(|role| AgentMessage {

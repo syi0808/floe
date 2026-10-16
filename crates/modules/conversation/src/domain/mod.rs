@@ -1,7 +1,8 @@
 mod compaction;
 pub use compaction::{
     COMPACTION_MIN_RETAIN_ENTRIES, COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES,
-    COMPACTION_TRIGGER_MESSAGES, CompactionAuthority, CompactionSource,
+    COMPACTION_TRIGGER_MESSAGES, CompactionAuthority, CompactionPrefix, CompactionSource,
+    CoreCompactionPrefix, SurfaceCheckpointRef, SurfaceCompactionPrefix, surface_summary_id,
 };
 use floe_agent_contract::{
     AgentMessage, BatchCursor, DependencyCoverage, ModelConversation, ReplayReceipt,
@@ -365,7 +366,15 @@ impl CompactionReceipt {
             .map_err(|_| AgentFailure::StorageUnavailable)?;
         if self.session_id.is_nil()
             || self.session_revision == 0
-            || self.summary.message_id != compaction_summary_id(self.pointer.through_turn_id)
+            || self.summary.message_id
+                != match &self.pointer {
+                    floe_agent_contract::ArchivePointer::Core {
+                        through_turn_id, ..
+                    } => compaction_summary_id(*through_turn_id),
+                    floe_agent_contract::ArchivePointer::Surface { archive_id, .. } => {
+                        surface_summary_id(*archive_id)
+                    }
+                }
             || self.summary.role != floe_agent_contract::MessageRole::Assistant
             || self.summary.call_id.is_some()
         {
@@ -387,4 +396,6 @@ mod presentation;
 pub use presentation::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};
 
 mod pending_work_cancellation;
-pub use pending_work_cancellation::{CancelPendingWork, PendingWorkCancellationReceipt, PendingWorkCancellationEntry};
+pub use pending_work_cancellation::{
+    CancelPendingWork, PendingWorkCancellationEntry, PendingWorkCancellationReceipt,
+};

@@ -2257,7 +2257,7 @@ async fn manager_compaction_archives_exact_normalized_prefix_without_pruning() {
         )
         .await
         .expect("commit archive manifest, exact Core checkpoint, and Session CAS");
-    let pointer = ArchivePointer {
+    let pointer = ArchivePointer::Core {
         archive_id: compacted.recovery.archive_id,
         source_revision: compacted.recovery.source_revision,
         through_turn_id: compacted.recovery.through_turn_id,
@@ -11669,26 +11669,28 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     corrupt.messages[1].message_id = corrupt.messages[0].message_id;
     assert!(corrupt.validate().is_err());
     let mut corrupt = source.clone();
-    corrupt.through.sequence = corrupt.head.head_revision;
+    let floe_conversation::CompactionPrefix::Core(prefix) = &mut corrupt.prefix else { panic!("expected Core fixture"); };
+    prefix.through.sequence = prefix.head.head_revision;
     assert!(corrupt.validate().is_err());
     let mut corrupt = source.clone();
-    corrupt.prefix_digest = [0; 32];
+    let floe_conversation::CompactionPrefix::Core(prefix) = &mut corrupt.prefix else { panic!("expected Core fixture"); };
+    prefix.prefix_digest = [0; 32];
     assert!(corrupt.validate().is_err());
-    assert_eq!(source.head.head_revision, 96);
-    assert!((80..=94).contains(&source.through.sequence));
+    assert_eq!(source.core_prefix().unwrap().head.head_revision, 96);
+    assert!((80..=94).contains(&source.core_prefix().unwrap().through.sequence));
     assert_eq!(
-        source.through.sequence % 2,
+        source.core_prefix().unwrap().through.sequence % 2,
         0,
         "never split a User/Assistant turn"
     );
-    assert_eq!(source.messages.len() as u64, source.through.sequence);
+    assert_eq!(source.messages.len() as u64, source.core_prefix().unwrap().through.sequence);
     assert_eq!(
-        source.through_turn_id,
-        runs[(source.through.sequence / 2 - 1) as usize]
+        source.core_prefix().unwrap().through_turn_id,
+        runs[(source.core_prefix().unwrap().through.sequence / 2 - 1) as usize]
             .run_id
             .as_uuid()
     );
-    assert!(source.previous_checkpoint.is_none());
+    assert!(source.core_prefix().unwrap().previous_checkpoint.is_none());
     scenario.reopen().await;
     let replay = scenario
         .vault()
@@ -11709,7 +11711,7 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
         .compact_manager_session(
             scenario.session_id,
             source.session_revision,
-            source.through_turn_id,
+            source.core_prefix().unwrap().through_turn_id,
             "Earlier full turns are summarized; recent turns remain verbatim.".into(),
         )
         .await
@@ -11760,8 +11762,8 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
         .expect("subsequent source incorporates the prior summary");
     successor.validate().unwrap();
     assert_eq!(
-        successor.previous_checkpoint.as_ref().unwrap().through,
-        source.through
+        successor.core_prefix().unwrap().previous_checkpoint.as_ref().unwrap().through,
+        source.core_prefix().unwrap().through
     );
     assert_eq!(
         successor.messages[0].text,
@@ -11769,7 +11771,7 @@ async fn compaction_source_is_bounded_pinned_and_keeps_recent_complete_turns() {
     );
     assert_eq!(
         successor.messages.len() as u64,
-        successor.through.sequence - source.through.sequence + 1
+        successor.core_prefix().unwrap().through.sequence - source.core_prefix().unwrap().through.sequence + 1
     );
     let mut corrupt = successor.clone();
     corrupt.messages[0].text = "An unrelated replacement summary".into();
@@ -11796,7 +11798,7 @@ async fn compaction_source_detects_byte_pressure_in_few_large_turns() {
         .expect("bytes trigger even below the entry high-water mark");
     source.validate().unwrap();
     assert!(source.messages.len() >= 2);
-    assert!(source.head.head_revision - source.through.sequence >= 2);
+    assert!(source.core_prefix().unwrap().head.head_revision - source.core_prefix().unwrap().through.sequence >= 2);
     assert!(
         serde_json::to_vec(&source.messages).unwrap().len()
             <= floe_conversation::COMPACTION_TRIGGER_BYTES
@@ -11828,8 +11830,8 @@ async fn compaction_source_prefers_sixteen_recent_entries_without_byte_pressure(
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(source.head.head_revision, 96);
-    assert_eq!(source.through.sequence, 80);
+    assert_eq!(source.core_prefix().unwrap().head.head_revision, 96);
+    assert_eq!(source.core_prefix().unwrap().through.sequence, 80);
     assert_eq!(source.messages.len(), 80);
     let smaller = scenario
         .vault()
@@ -11837,7 +11839,7 @@ async fn compaction_source_prefers_sixteen_recent_entries_without_byte_pressure(
         .await
         .unwrap()
         .expect("a smaller transport allowance selects a smaller prefix");
-    assert!(smaller.through.sequence < source.through.sequence);
+    assert!(smaller.core_prefix().unwrap().through.sequence < source.core_prefix().unwrap().through.sequence);
     assert!(serde_json::to_vec(&smaller.messages).unwrap().len() <= 4096);
     assert_eq!(
         scenario
@@ -12723,11 +12725,11 @@ async fn compaction_completion_requires_proof_and_preserves_next_command_revisio
     assert_eq!(receipt.summary.text, "A concise exact summary.");
     assert_eq!(
         receipt.summary.message_id,
-        floe_conversation::compaction_summary_id(job.source.through_turn_id)
+        floe_conversation::compaction_summary_id(job.source.core_prefix().unwrap().through_turn_id)
     );
     assert_eq!(receipt.summary.coverage, DependencyCoverage::Independent);
     assert_eq!(
-        receipt.pointer.archived_message_count,
+        receipt.pointer.archived_message_count(),
         job.source.messages.len()
     );
     let committed = scenario
@@ -12872,7 +12874,7 @@ async fn compaction_completion_supports_multiple_prefixes_at_one_product_revisio
             .unwrap();
         if let Some(through) = previous {
             assert_eq!(
-                job.source.previous_checkpoint.as_ref().unwrap().through,
+                job.source.core_prefix().unwrap().previous_checkpoint.as_ref().unwrap().through,
                 through
             );
         }
@@ -12883,7 +12885,7 @@ async fn compaction_completion_supports_multiple_prefixes_at_one_product_revisio
             .await
             .unwrap();
         assert_eq!(receipt.session_revision, request.expected_session_revision);
-        previous = Some(job.source.through);
+        previous = Some(job.source.core_prefix().unwrap().through);
     }
     scenario.reopen().await;
     assert_eq!(
@@ -12922,7 +12924,7 @@ async fn compaction_completion_missing_archive_is_not_a_valid_terminal_receipt()
     connection
         .execute(
             "DELETE FROM agent_conversation_manager_archives_v3 WHERE archive_id = ?",
-            [receipt.pointer.archive_id.to_string()],
+            [receipt.pointer.archive_id().to_string()],
         )
         .await
         .unwrap();

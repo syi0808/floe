@@ -1982,3 +1982,37 @@ Next V1 cutover constraints (not implemented by the admission checkpoint):
   text caller until product cutover. Retire that caller with shared text/protocol
   migration; this is not permission for a second Compaction runtime. Test Core
   custody independently from user-facing Surface history.
+
+
+### 2026-10-16 Surface-aware semantic compaction qualification
+
+- Implemented typed Core/Surface compaction source custody in the existing
+  CompactionDriver and journal. Surface checkpoints reference committed jobs,
+  retain original entries, protect the selected input and use exact Work anchors.
+  A bounded prefix can include one prior summary; no recursive chain hydration,
+  second runtime or disguised Core identities are introduced.
+- Normal model projection and archive recovery resolve canonical input/result/
+  cancellation evidence under a read snapshot and retain Context reauthorization.
+  Typed archive groups reject mixed owner kinds. Conversation schema 13 requires
+  an explicitly selected fresh development profile, never automatic deletion.
+- Reproduced a committed-compaction replay taking an unnecessary writer and
+  returning StorageBusy under an unrelated writer. Exact committed replay now
+  observes its verified receipt read-only. First installation still requires
+  the writer and remains pending on contention. Lost-ack fixtures reopen the
+  sealed Vault generation before observing the receipt; no fence was weakened.
+- Focused qualification passes: Conversation 34, Core compaction regressions 29,
+  Surface storage 16, typed archive contracts 3 and Context archive filtering 1.
+  An actual App/Context/Inference/Vault/Engine test passes with new input arriving
+  during blocked summarization: neither summary nor foreground sees future
+  input; originals survive, and encrypted reopen does not redispatch the Work.
+  The 130-input storage case covers bounded prefix, archive, restart, lost ACK,
+  writer contention and corrupt-checkpoint refusal.
+- Final qualification passes: default workspace 423 tests including doctests,
+  zero failed/ignored; App QA 67 passed, zero failed, one intentional standalone
+  crash-driver ignored and exercised by its parent tests; production FFI build
+  exit 0. The 43-case Conversation suite completed in 1,326.21 seconds, including
+  129-turn/reopen verification. Architecture boundaries, affected-file format
+  checks and whitespace checks pass. No live provider or Apple QA is claimed.
+- Public text/protocol/UI cutover, incomplete/blocked outcome presentation and
+  audio delivery evidence remain V1 gates. Live/native voice behavior is not
+  qualified by synthetic owner tests.

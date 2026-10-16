@@ -1,6 +1,8 @@
 use super::database_failure;
 use floe_agent_contract::AgentFailure;
-use floe_agent_contract::{ArchiveReadRequest, ArchiveSnapshot, ArchivedMessage};
+use floe_agent_contract::{
+    ArchiveMessageGroup, ArchivePointer, ArchiveReadRequest, ArchiveSnapshot, ArchivedMessage,
+};
 use floe_conversation::{AgentMessage as ManagerMessage, AgentSession, SessionRecoveryPointer};
 use floe_conversation_contract::{ConversationBranchId, ConversationCheckpoint, ConversationId};
 use floe_conversation_core::ConversationReadTarget;
@@ -841,6 +843,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         if request.person_id != self.person_id {
             return Err(AgentFailure::CapabilityDenied);
         }
+        if matches!(&request.pointer, ArchivePointer::Surface { .. }) {
+            return self.read_surface_compaction_archive(request).await;
+        }
         let mut connection = self.connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
@@ -862,14 +867,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 &transaction,
                 self.person_id,
                 request.session_id,
-                ManagerArchiveLookup::Id(request.pointer.archive_id),
+                ManagerArchiveLookup::Id(request.pointer.archive_id()),
             )
             .await?
             .ok_or(AgentFailure::NotFound)?;
-            if manifest.recovery().source_revision != request.pointer.source_revision
-                || manifest.recovery().through_turn_id != request.pointer.through_turn_id
+            if manifest.recovery().source_revision != request.pointer.source_revision()
+                || ArchiveMessageGroup::CoreTurn(manifest.recovery().through_turn_id)
+                    != request.pointer.through_group()
                 || manifest.recovery().archived_message_count
-                    != request.pointer.archived_message_count
+                    != request.pointer.archived_message_count()
                 || manifest.conversation_id != binding.conversation_id
                 || manifest.branch_id != binding.branch_id
             {
@@ -950,7 +956,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 }
                 encoded_bytes = next_bytes;
                 messages.push(ArchivedMessage {
-                    turn_id: previous.through_turn_id,
+                    group: ArchiveMessageGroup::CoreTurn(previous.through_turn_id),
                     message: floe_conversation::contract_message(&summary, message_id, coverage)?,
                 });
             }
@@ -999,10 +1005,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     resolved.alias_id,
                     resolved.coverage,
                 )?;
-                messages.push(ArchivedMessage { turn_id, message });
+                messages.push(ArchivedMessage {
+                    group: ArchiveMessageGroup::CoreTurn(turn_id),
+                    message,
+                });
             }
             if messages.len() != manifest.message_count
-                || messages.last().map(|message| message.turn_id) != Some(manifest.through_turn_id)
+                || messages.last().map(|message| message.group)
+                    != Some(ArchiveMessageGroup::CoreTurn(manifest.through_turn_id))
             {
                 return Err(AgentFailure::StorageUnavailable);
             }

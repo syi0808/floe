@@ -1,5 +1,6 @@
 //! Real App/Context/Inference/Vault capacity recovery with an in-process transport.
 use super::*;
+use floe_conversation::RunState;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone)]
@@ -395,5 +396,211 @@ pub(crate) fn run_compaction_shutdown_case() {
             .filter(|m| matches!(m, floe_conversation::SessionMessage::User { .. }))
             .count(),
         3
+    );
+}
+
+fn admit_surface_test_work(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    text: String,
+) -> (
+    floe_conversation::SubmitTextWork,
+    floe_conversation::SurfaceWorkReceipt,
+) {
+    super::with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+                let expected = owners
+                    .conversation
+                    .surface_head(&actor, session_id, &scope)
+                    .await?;
+                let request = floe_conversation::SubmitTextWork {
+                    command_id: floe_kernel::CommandId::new(),
+                    expected,
+                    text,
+                };
+                let receipt = owners
+                    .conversation
+                    .submit_text_work(&actor, request.clone(), &scope)
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                Ok::<_, AgentFailure>((request, receipt))
+            })
+            .expect("admit real Surface work")
+    })
+}
+fn wait_surface_test_run(
+    host: &AppHost<AppComposition>,
+    work: &floe_conversation::SurfaceWorkReceipt,
+) -> floe_conversation::RunReceipt {
+    let deadline = Instant::now() + LIFECYCLE_TIMEOUT;
+    let command_id = work.command_id;
+    loop {
+        let snapshot = super::with_ready(host, |services, caller, owners| {
+            let actor = caller.owner_actor();
+            services
+                .execute_owner(async move {
+                    let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+                    owners
+                        .conversation
+                        .read_surface_work(&actor, command_id, &scope)
+                        .await
+                })
+                .unwrap()
+                .unwrap()
+        });
+        if let floe_conversation::SurfaceWorkState::Linked(run_id) = snapshot.state {
+            return wait_terminal_run(host, run_id);
+        }
+        assert!(Instant::now() < deadline, "work remained queued");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+fn surface_test_entries(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+) -> Vec<floe_conversation::SurfaceEntryReceipt> {
+    super::with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+                let head = owners
+                    .conversation
+                    .surface_head(&actor, session_id, &scope)
+                    .await?;
+                owners
+                    .conversation
+                    .surface_entries(&actor, head, 0, 128, &scope)
+                    .await
+            })
+            .unwrap()
+    })
+}
+pub(crate) fn run_surface_capacity_compaction_case() {
+    let (barrier, entered, release) = GenerateBarrier::new();
+    let mut model = CapacityModel::history_model(&"A".repeat(500));
+    model.compaction_barrier = Some(barrier);
+    let profile = IsolatedProfile::new();
+    let host = model.open(&profile);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let session_id = start_session(&host);
+    for ordinal in 0..2 {
+        let (_, work) = admit_surface_test_work(
+            &host,
+            session_id,
+            format!("Surface input {ordinal}:{}", "u".repeat(500)),
+        );
+        assert_eq!(
+            wait_surface_test_run(&host, &work).state,
+            RunState::Completed
+        );
+    }
+    let before = surface_test_entries(&host, session_id);
+    assert_eq!(before.len(), 4);
+    let prior_size = serde_json::to_vec(&model.calls.lock().unwrap().last().unwrap().1.envelope)
+        .unwrap()
+        .len();
+    model.limit.store(prior_size + 500, Ordering::SeqCst);
+    let current = format!("Current Surface input:{}", "v".repeat(500));
+    let (request, work) = admit_surface_test_work(&host, session_id, current.clone());
+    entered
+        .recv_timeout(LIFECYCLE_TIMEOUT)
+        .expect("existing compaction Engine reached its synthetic transport");
+    super::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+                let expected = owners
+                    .conversation
+                    .surface_head(&actor, session_id, &scope)
+                    .await?;
+                owners
+                    .conversation
+                    .append_surface_input(
+                        &actor,
+                        floe_conversation::AppendSurfaceInput {
+                            command_id: floe_kernel::CommandId::new(),
+                            expected,
+                            input: floe_conversation::SurfaceInput {
+                                message_id: floe_conversation_contract::MessageId::new(),
+                                text: "FUTURE_DURING_SURFACE_SUMMARY".into(),
+                                origin: floe_conversation::SurfaceInputOrigin::Voice {
+                                    voice_session_id: Uuid::new_v4(),
+                                    utterance_id: "summary-race-u1".into(),
+                                },
+                            },
+                        },
+                        &scope,
+                    )
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                Ok::<_, AgentFailure>(())
+            })
+            .expect("voice input can arrive while history compaction is at transport")
+    });
+    release.send(()).unwrap();
+    let completed = wait_surface_test_run(&host, &work);
+    assert_eq!(completed.state, RunState::Completed, "{completed:?}");
+    assert_eq!(completed.attempt_refs.len(), 1);
+    let after = surface_test_entries(&host, session_id);
+    assert_eq!(&after[..4], &before);
+    assert_eq!(
+        after.len(),
+        7,
+        "summary does not replace or add Person-facing entries"
+    );
+    let calls = model.calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .map(|(consumer, _)| consumer.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            CONVERSATION_CONSUMER,
+            CONVERSATION_CONSUMER,
+            floe_conversation::COMPACTION_CONSUMER,
+            CONVERSATION_CONSUMER
+        ]
+    );
+    for (_, call) in &calls[2..] {
+        assert!(
+            !serde_json::to_string(&call.envelope)
+                .unwrap()
+                .contains("FUTURE_DURING_SURFACE_SUMMARY")
+        );
+    }
+    let last = &calls.last().unwrap().1.envelope.conversation;
+    assert!(last.history.iter().any(|entry| matches!(entry, floe_agent_contract::ModelConversationEntry::Assistant { text, .. } if text == "Earlier test discussion.")));
+    assert!(last.current_turn.iter().any(|entry| matches!(entry, floe_agent_contract::ModelConversationEntry::User { text, .. } if text == &current)));
+    let count = calls.len();
+    drop(calls);
+    host.shutdown().unwrap();
+    drop(host);
+    let reopened = model.open(&profile);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    assert_eq!(surface_test_entries(&reopened, session_id), after);
+    super::with_ready(&reopened, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+                let replay = owners
+                    .conversation
+                    .submit_text_work(&actor, request, &scope)
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                assert_eq!(replay, work);
+                Ok::<_, AgentFailure>(())
+            })
+            .unwrap()
+    });
+    assert_eq!(
+        model.calls.lock().unwrap().len(),
+        count,
+        "reopen and exact Work replay cannot redispatch summary or foreground"
     );
 }

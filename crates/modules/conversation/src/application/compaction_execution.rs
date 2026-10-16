@@ -62,9 +62,32 @@ impl CompactionExecution {
             receipt.validate()?;
             if receipt.session_id != self.source.session_id
                 || self.source.session_revision != receipt.session_revision
-                || receipt.pointer.source_revision != self.source.session_revision
-                || receipt.pointer.through_turn_id != self.source.through_turn_id
-                || receipt.pointer.archived_message_count != self.source.messages.len()
+                || receipt.pointer.source_revision() != self.source.session_revision
+                || receipt.pointer.archived_message_count() != self.source.messages.len()
+                || !match (&self.source.prefix, &receipt.pointer) {
+                    (
+                        crate::CompactionPrefix::Core(prefix),
+                        floe_agent_contract::ArchivePointer::Core {
+                            through_turn_id, ..
+                        },
+                    ) => *through_turn_id == prefix.through_turn_id,
+                    (
+                        crate::CompactionPrefix::Surface(prefix),
+                        floe_agent_contract::ArchivePointer::Surface {
+                            archive_id,
+                            through_entry_id,
+                            through_sequence,
+                            prefix_digest,
+                            ..
+                        },
+                    ) => {
+                        *archive_id == self.claim.execution_id
+                            && *through_entry_id == prefix.through_entry_id
+                            && *through_sequence == prefix.through.sequence
+                            && *prefix_digest == prefix.through.digest
+                    }
+                    _ => false,
+                }
                 || self
                     .entries
                     .iter()

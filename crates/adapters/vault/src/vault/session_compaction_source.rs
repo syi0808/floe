@@ -90,6 +90,22 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 authority,
             )
             .await?;
+        if let Some((surface_head, protected_input)) = self
+            .surface_compaction_target_on(transaction, session_id, authority)
+            .await?
+        {
+            return self
+                .prepare_surface_compaction_source_on(
+                    transaction,
+                    &session,
+                    expected_revision,
+                    byte_limit,
+                    authority,
+                    surface_head,
+                    protected_input,
+                )
+                .await;
+        }
         let start = checkpoint
             .as_ref()
             .map_or(0, |checkpoint| checkpoint.through.sequence);
@@ -250,11 +266,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 session_id,
                 session_revision: expected_revision,
                 data_classes: session.data_classes.clone(),
-                head: head.state.reference(),
-                previous_checkpoint: checkpoint.clone(),
-                through,
-                prefix_digest,
-                through_turn_id: turn_id,
+                prefix: floe_conversation::CompactionPrefix::Core(
+                    floe_conversation::CoreCompactionPrefix {
+                        head: head.state.reference(),
+                        previous_checkpoint: checkpoint.clone(),
+                        through,
+                        prefix_digest,
+                        through_turn_id: turn_id,
+                    },
+                ),
                 messages: messages.clone(),
             };
             selected.validate()?;

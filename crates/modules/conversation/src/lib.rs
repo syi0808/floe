@@ -134,7 +134,11 @@ pub use application::{
 
 pub use application::CompactionDriver;
 
-pub use domain::{AppendSurfaceInput, SurfaceAnchor, SurfaceInput, SurfaceInputOrigin, SurfaceInputReceipt, SubmitSurfaceWork, SurfaceWorkReceipt, WorkId, WorkOrigin, PresentationState, MAX_PENDING_SURFACE_WORK, MAX_SURFACE_PAGE_ITEMS};
+pub use domain::{
+    AppendSurfaceInput, MAX_PENDING_SURFACE_WORK, MAX_SURFACE_PAGE_ITEMS, PresentationState,
+    SubmitSurfaceWork, SurfaceAnchor, SurfaceInput, SurfaceInputOrigin, SurfaceInputReceipt,
+    SurfaceWorkReceipt, WorkId, WorkOrigin,
+};
 
 pub use ports::SurfaceRepository;
 
@@ -144,4 +148,9 @@ pub use domain::SubmitTextWork;
 
 pub use domain::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};
 
-pub use domain::{CancelPendingWork, PendingWorkCancellationReceipt, PendingWorkCancellationEntry};
+pub use domain::{CancelPendingWork, PendingWorkCancellationEntry, PendingWorkCancellationReceipt};
+
+pub use domain::{
+    CompactionPrefix, CoreCompactionPrefix, SurfaceCheckpointRef, SurfaceCompactionPrefix,
+    surface_summary_id,
+};

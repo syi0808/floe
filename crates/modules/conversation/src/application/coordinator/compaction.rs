@@ -17,12 +17,6 @@ impl<R: ConversationRepository + InteractionRepository + CompactionRepository + 
         receipt: &RunReceipt,
         scope: &ExecutionScope,
     ) -> Result<Option<crate::AdmittedTurn>, AgentFailure> {
-        // Core compaction does not summarize the independent Surface prefix.
-        // Until Surface presentation/checkpoint cutover, fail closed on this
-        // maintenance path rather than replace a Work anchor with latest Core.
-        if scope.run(self.repository.surface_work_for_run(receipt.run_id)).await?.is_some() {
-            return Ok(None);
-        }
         let _guard = scope
             .run(async { Ok(self.compaction_lock.lock().await) })
             .await?;

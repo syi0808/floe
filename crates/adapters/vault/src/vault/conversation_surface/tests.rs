@@ -1216,3 +1216,284 @@ async fn concurrent_claim_and_pending_cancellation_have_one_winner() {
         }
     }
 }
+
+async fn record_surface_summary(
+    vault: &EncryptedAgentVault<Keys>,
+    actor: &OwnerActor,
+    job: &floe_conversation::CompactionExecution,
+    text: &str,
+) {
+    use floe_agent_contract::*;
+    let attempt_id = Uuid::new_v4();
+    let projection_ref = ProjectionRef::new();
+    let batch_id = Uuid::new_v4();
+    let events = vec![
+        JournalEvent::ModelIntent {
+            attempt_id,
+            parent_task_id: None,
+            reservation_ceiling: floe_execution::budget::ModelReservationCeiling {
+                tokens: 100,
+                cost_micros: 100,
+            },
+            projection_ref,
+            plan: PreparedModelPlan {
+                operation_id: Uuid::new_v4(),
+                principal: actor.person_id.to_string(),
+                device_id: actor.device_id.clone(),
+                purpose: floe_conversation::CONVERSATION_PURPOSE.into(),
+                consumer: floe_conversation::COMPACTION_CONSUMER.into(),
+                capabilities: ModelCapabilities::chat(),
+                boundary: ProcessingBoundary::Device,
+                binding_digest: ModelBindingDigest([2; 32]),
+                selection_commitment: ModelSelectionCommitment([1; 32]),
+                budget_profile: ModelBudgetProfile::unknown(),
+            },
+        },
+        JournalEvent::ModelResult {
+            attempt_id,
+            usage: ModelUsage {
+                tokens: 10,
+                cost_micros: 10,
+            },
+            accounting: floe_execution::budget::ModelAccounting {
+                observed_tokens: Some(10),
+                observed_cost_micros: Some(10),
+                unknown_tokens: false,
+                unknown_cost: false,
+            },
+        },
+        JournalEvent::ValidatedBatch {
+            batch: ValidatedModelBatch {
+                execution_id: job.claim.execution_id,
+                attempt_id,
+                projection_ref,
+                batch_id,
+                steps: vec![ModelStep::Answer {
+                    text: text.into(),
+                    artifacts: vec![],
+                }],
+                catalog_revision: 1,
+                tool_revisions: vec![],
+                agent_revisions: vec![],
+                projection_coverage: DependencyCoverage::Independent,
+                delegation_context: None,
+            },
+        },
+        JournalEvent::BatchProgress {
+            cursor: BatchCursor {
+                batch_id,
+                next_step_index: 0,
+            },
+        },
+        JournalEvent::Output {
+            text: text.into(),
+            artifacts: vec![],
+        },
+    ];
+    for event in events {
+        vault
+            .append_manager_compaction(actor, job.claim, event)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn surface_checkpoint_preserves_old_work_prefix_and_archive_after_lost_ack() {
+    let (f, vault) = fixture().await;
+    vault.activate_conversation_executor().await.unwrap();
+    let mut inputs = Vec::new();
+    for ordinal in 0..130 {
+        let request = request(
+            &f,
+            &vault,
+            &format!("Settled voice history {ordinal}:{}", "u".repeat(300)),
+        )
+        .await;
+        inputs.push(vault.append_surface_input(&f.actor, request).await.unwrap());
+    }
+    let selected = inputs.last().unwrap();
+    let work = vault
+        .submit_surface_work(&f.actor, work(selected))
+        .await
+        .unwrap();
+    let execution = execution(&f, &work, &selected.input.text, 0);
+    vault
+        .claim_manager_surface_work(
+            work.clone(),
+            execution.clone(),
+            floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap(),
+        )
+        .await
+        .unwrap();
+    let job = vault
+        .admit_manager_compaction(
+            &f.actor,
+            floe_conversation::CompactionAdmission {
+                authority: floe_conversation::CompactionAuthority::BeforeFirstModel {
+                    run_id: execution.run_id,
+                },
+                session_id: f.session,
+                expected_session_revision: 1,
+                source_byte_limit: floe_conversation::COMPACTION_TRIGGER_BYTES,
+                max_tokens: 1000,
+                max_cost_micros: 1000,
+                max_output_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let floe_conversation::CompactionPrefix::Surface(prefix) = &job.source.prefix else {
+        panic!("a Work prefix cannot become Core execution custody");
+    };
+    assert_eq!(prefix.head, work.anchor);
+    assert_eq!(prefix.protected_input, selected.through);
+    assert_eq!(prefix.through.sequence, 96);
+    assert_eq!(job.source.messages.len(), 96);
+    let late = vault
+        .append_surface_input(
+            &f.actor,
+            request(&f, &vault, "FUTURE_AFTER_ADMITTED_COMPACTION").await,
+        )
+        .await
+        .unwrap();
+    record_surface_summary(&vault, &f.actor, &job, "Earlier synthetic voice requests.").await;
+    let mut first_writer = vault.connection().unwrap();
+    let first_transaction = first_writer
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.complete_manager_compaction(&f.actor, job.claim).await,
+        Err(AgentFailure::StorageBusy),
+        "first installation still needs the writer"
+    );
+    first_transaction.rollback().await.unwrap();
+    drop(first_writer);
+    assert_eq!(
+        vault
+            .load_manager_compaction(&f.actor, job.claim)
+            .await
+            .unwrap()
+            .disposition,
+        floe_conversation::CompactionDisposition::Pending
+    );
+
+    vault
+        .registry_transaction_ack_loss
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        vault.complete_manager_compaction(&f.actor, job.claim).await,
+        Err(AgentFailure::StorageUnavailable)
+    );
+    // A lost commit acknowledgement seals the old generation by design.
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    let receipt = vault
+        .complete_manager_compaction(&f.actor, job.claim)
+        .await
+        .unwrap();
+    assert!(matches!(
+        receipt.pointer,
+        floe_agent_contract::ArchivePointer::Surface { .. }
+    ));
+    assert_eq!(
+        vault.surface_head(&f.actor, f.session).await.unwrap(),
+        late.through
+    );
+    let mut unrelated = vault.connection().unwrap();
+    let writer = unrelated
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .complete_manager_compaction(&f.actor, job.claim)
+            .await
+            .unwrap(),
+        receipt,
+        "committed compaction replay must not reserve an unrelated writer"
+    );
+    writer.rollback().await.unwrap();
+    drop(unrelated);
+
+    let (history, incomplete) = vault
+        .surface_model_history_for_work(&work, execution.command_id.as_uuid())
+        .await
+        .unwrap();
+    assert!(!incomplete);
+    assert_eq!(history.len(), 35);
+    assert_eq!(history[0], receipt.summary);
+    assert_eq!(history.last().unwrap().text, selected.input.text);
+    assert!(
+        !serde_json::to_string(&history)
+            .unwrap()
+            .contains("FUTURE_AFTER_ADMITTED_COMPACTION")
+    );
+    let archive_request = floe_agent_contract::ArchiveReadRequest {
+        person_id: f.actor.person_id,
+        session_id: f.session,
+        pointer: receipt.pointer.clone(),
+        max_messages: 128,
+        max_bytes: 128 * 1024,
+    };
+    let archive = vault
+        .read_manager_session_archive(&archive_request)
+        .await
+        .unwrap();
+    archive.validate(&archive_request).unwrap();
+    assert_eq!(archive.messages.len(), 96);
+    for (archived, original) in archive.messages.iter().zip(&inputs) {
+        assert_eq!(
+            archived.group,
+            floe_agent_contract::ArchiveMessageGroup::SurfaceEntry(
+                original.input.message_id.as_uuid()
+            )
+        );
+        assert_eq!(archived.message.text, original.input.text);
+    }
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    vault.activate_conversation_executor().await.unwrap();
+    assert_eq!(
+        vault
+            .complete_manager_compaction(&f.actor, job.claim)
+            .await
+            .unwrap(),
+        receipt
+    );
+    assert_eq!(
+        vault
+            .read_manager_session_archive(&archive_request)
+            .await
+            .unwrap(),
+        archive
+    );
+    let connection = vault.connection().unwrap();
+    connection
+        .execute(
+            "UPDATE agent_surface_checkpoints SET through_digest = ? WHERE execution_id = ?",
+            (vec![9u8; 32], job.claim.execution_id.to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        vault
+            .read_manager_session_archive(&archive_request)
+            .await
+            .is_err()
+    );
+    drop(connection);
+    drop(vault);
+    assert!(
+        EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+            .await
+            .is_err()
+    );
+}

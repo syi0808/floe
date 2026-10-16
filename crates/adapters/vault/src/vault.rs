@@ -34,13 +34,14 @@ mod conversation_core;
 mod conversation_core_reads;
 mod conversation_delegation_recovery;
 mod conversation_interactions;
-mod conversations;
 mod conversation_surface;
 mod conversation_surface_cancel;
+mod conversations;
 pub(crate) mod expert_binding_reviews;
 mod expert_proposals;
 mod owner_custody;
 mod owner_transcript_reads;
+mod surface_compaction;
 pub(crate) use owner_transcript_reads::ManagerHistoryView;
 mod storage_payload;
 mod typed_history;
@@ -402,6 +403,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             self.validate_conversation_core_store().await?;
         }
         self.validate_manager_compaction_store().await?;
+        self.validate_surface_checkpoint_store().await?;
         self.validate_learning_discovery_store().await?;
         conversations::validate_schema(&connection).await?;
         tasks::validate_schema(&connection).await?;

@@ -25,8 +25,8 @@ mod replay;
 mod task_execution;
 
 pub use archive::{
-    ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot, ArchivedMessage,
-    MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
+    ArchiveMessageGroup, ArchivePointer, ArchiveReadRequest, ArchiveReader, ArchiveSnapshot,
+    ArchivedMessage, MAX_ARCHIVE_PROJECTION_BYTES, MAX_ARCHIVE_PROJECTION_MESSAGES,
 };
 pub use capability::CapabilityDescriptor;
 pub use context::{AgentContext, InferencePolicyDecision, MAX_CONTEXT_ISSUES};

@@ -134,9 +134,26 @@ Queued execution projects its retained input/result prefix, not the latest Core
 head. Model projection uses the canonical Run evidence identity when Context
 reauthorizes a referenced result; a presentation/UI identity is not a grant.
 Later input or result publication cannot enter a previously admitted anchor. Continue/Resume can resolve the original work through bounded, validated
-lineage. Core-only semantic compaction cannot substitute a different prefix for
-a Surface work anchor; that maintenance route fails closed until Surface
-presentation/checkpoint integration lands.
+lineage. The existing Conversation compaction driver accepts explicitly typed
+Core or Surface source prefixes. Surface selection is pinned to the admitted
+Work anchor and strictly precedes its selected input. A checkpoint references
+one committed compaction execution; its summary is registered with canonical
+Context dependency coverage. Model projection replaces only that prefix, keeps
+the selected input original, and reports an incomplete suffix rather than
+silently treating truncated history as complete. Later input received during
+summarization cannot enter that source or foreground request.
+
+Original Surface entries remain addressable in product history. Typed archive
+pointers and groups distinguish Core turns, Surface entries and prior Surface
+summaries; archive recovery validates the exact source before Context applies
+current authorization. Checkpoint selection and archive reads use one Deferred
+snapshot and bounded source records, without recursive checkpoint-chain
+hydration. Completed compaction replay is also read-only before reserving a
+writer; first installation still atomically commits checkpoint, coverage and
+execution receipt under the existing journal fence. Startup validates both the
+execution records and checkpoint index and never repairs corrupted custody.
+The stored meaning uses Conversation schema 13 and an explicitly selected fresh
+development profile; no automatic reset or old-data reinterpretation is added.
 
 This is an internal owner integration checkpoint. The existing Flutter StartTurn
 path still invokes the Manager directly; shared text/protocol projection, audio

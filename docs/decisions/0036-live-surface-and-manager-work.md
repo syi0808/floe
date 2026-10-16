@@ -50,6 +50,14 @@ agent execution custody. Referenced Manager results are not copied into another
 authoritative result store. Surface filler is not personal-memory evidence or
 permission for source access/actions.
 
+Semantic compaction has one Conversation execution owner. Its source must
+explicitly identify either a Core execution prefix or a Person Surface prefix;
+Surface identities must never be relabeled as Core turns. A Work retains its
+original selected input and immutable context anchor when a derived prefix
+summary is installed. Summaries affect model projection, not original product
+history. Archive recovery preserves the same typed source and live dependency
+authorization. Later speech cannot alter an in-flight summary's source.
+
 Voice owns normalized live-session lifecycle, delegation/event correlation and
 delivery state through a long-lived provider port. App composes Voice with the
 Conversation owner. Client media permission and native audio lifetime are

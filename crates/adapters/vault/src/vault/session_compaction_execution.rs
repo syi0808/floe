@@ -34,7 +34,7 @@ async fn family(connection: &Connection) -> Result<bool, AgentFailure> {
         .await
         .map_err(|failure| owner_store_failure(super::conversation_core::schema_error(failure)))
 }
-async fn read_on(
+pub(super) async fn read_on(
     connection: &Connection,
     person_id: PersonId,
     execution_id: Uuid,
@@ -106,27 +106,33 @@ async fn verify_committed_archive_on(
     let CompactionDisposition::Committed { receipt } = &job.disposition else {
         return Ok(());
     };
+    if matches!(
+        &job.source.prefix,
+        floe_conversation::CompactionPrefix::Surface(_)
+    ) {
+        return super::surface_compaction::verify_checkpoint_on(transaction, job).await;
+    }
+    let prefix = job.source.core_prefix()?;
     let manifest = super::session_archive::manager_archive_manifest_on(
         transaction,
         job.head.person_id,
         job.source.session_id,
-        super::session_archive::ManagerArchiveLookup::Id(receipt.pointer.archive_id),
+        super::session_archive::ManagerArchiveLookup::Id(receipt.pointer.archive_id()),
     )
     .await?
     .ok_or(AgentFailure::StorageUnavailable)?;
     if manifest.source_revision != job.source.session_revision
-        || manifest.through_turn_id != job.source.through_turn_id
+        || manifest.through_turn_id != prefix.through_turn_id
         || manifest.message_count != job.source.messages.len()
         || manifest.summary_alias_id != receipt.summary.message_id
         || manifest.summary != receipt.summary.text
         || manifest.start_sequence
-            != job
-                .source
+            != prefix
                 .previous_checkpoint
                 .as_ref()
                 .map_or(0, |c| c.through.sequence)
-        || manifest.checkpoint()?.through != job.source.through
-        || manifest.prefix_digest != job.source.prefix_digest
+        || manifest.checkpoint()?.through != prefix.through
+        || manifest.prefix_digest != prefix.prefix_digest
     {
         return Err(AgentFailure::StorageUnavailable);
     }
@@ -165,6 +171,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 for id in &ids {
                     let job = read_on(&transaction, self.person_id, *id).await?.ok_or(AgentFailure::StorageUnavailable)?;
                     verify_committed_archive_on(&transaction, &job).await?;
+                    if matches!(&job.source.prefix, floe_conversation::CompactionPrefix::Surface(_)) {
+                        self.verify_surface_source_payload_on(&transaction, &job.source).await?;
+                    }
                 }
                 after = Some(ids.last().unwrap().to_string());
             }
@@ -434,6 +443,36 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.validate_compaction_actor(actor)?;
         claim.validate()?;
         let mut connection = self.connection()?;
+        // A committed compaction is an immutable observation. Do not reserve
+        // the database writer merely to recover its exact lost acknowledgement.
+        let read = connection
+            .transaction_with_behavior(turso::transaction::TransactionBehavior::Deferred)
+            .await
+            .map_err(database_failure)?;
+        let observed = read_on(&read, self.person_id, claim.execution_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        observed.authorize_actor(actor)?;
+        if observed.claim != claim {
+            return Err(AgentFailure::Conflict);
+        }
+        if let CompactionDisposition::Committed { receipt } = &observed.disposition {
+            verify_committed_archive_on(&read, &observed).await?;
+            if matches!(
+                &observed.source.prefix,
+                floe_conversation::CompactionPrefix::Surface(_)
+            ) {
+                self.verify_surface_source_payload_on(&read, &observed.source)
+                    .await?;
+            }
+            let receipt = receipt.clone();
+            read.commit().await.map_err(database_failure)?;
+            self.check_access()?;
+            return Ok(receipt);
+        }
+        read.commit().await.map_err(database_failure)?;
+        // First completion still acquires the writer and rechecks every claim,
+        // source and terminal receipt in the same commit transaction.
         let (mut guard, transaction) = self.journal_transaction(&mut connection).await?;
         let result = async {
             let previous = read_on(&transaction, self.person_id, claim.execution_id)
@@ -490,38 +529,55 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     _ => None,
                 })
                 .ok_or(AgentFailure::StorageUnavailable)?;
-            let installed = self
-                .install_manager_compaction_on(
-                    &transaction,
-                    current.session_id,
-                    current.session_revision,
-                    current.authority,
-                    current.through_turn_id,
-                    summary.clone(),
-                    super::session_archive::SummaryCoverage::Recorded(coverage.clone()),
-                )
-                .await?;
-            let pointer = floe_agent_contract::ArchivePointer {
-                archive_id: installed.recovery.archive_id,
-                source_revision: installed.recovery.source_revision,
-                through_turn_id: installed.recovery.through_turn_id,
-                archived_message_count: installed.recovery.archived_message_count,
+            let receipt = match &current.prefix {
+                floe_conversation::CompactionPrefix::Surface(_) => {
+                    self.install_surface_compaction_checkpoint_on(
+                        &transaction,
+                        &previous,
+                        &current,
+                        summary.clone(),
+                        coverage.clone(),
+                    )
+                    .await?
+                }
+                floe_conversation::CompactionPrefix::Core(prefix) => {
+                    let installed = self
+                        .install_manager_compaction_on(
+                            &transaction,
+                            current.session_id,
+                            current.session_revision,
+                            current.authority,
+                            prefix.through_turn_id,
+                            summary.clone(),
+                            super::session_archive::SummaryCoverage::Recorded(coverage.clone()),
+                        )
+                        .await?;
+                    let pointer = floe_agent_contract::ArchivePointer::Core {
+                        archive_id: installed.recovery.archive_id,
+                        source_revision: installed.recovery.source_revision,
+                        through_turn_id: installed.recovery.through_turn_id,
+                        archived_message_count: installed.recovery.archived_message_count,
+                    };
+                    let receipt = floe_conversation::CompactionReceipt {
+                        session_id: installed.session.id,
+                        session_revision: installed.session.revision,
+                        summary: floe_agent_contract::AgentMessage {
+                            message_id: floe_conversation::compaction_summary_id(
+                                installed.recovery.through_turn_id,
+                            ),
+                            role: floe_agent_contract::MessageRole::Assistant,
+                            text: summary,
+                            call_id: None,
+                            coverage,
+                        },
+                        pointer,
+                    };
+                    if installed.summary_coverage != receipt.summary.coverage {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    receipt
+                }
             };
-            let receipt = floe_conversation::CompactionReceipt {
-                session_id: installed.session.id,
-                session_revision: installed.session.revision,
-                summary: floe_agent_contract::AgentMessage {
-                    message_id: floe_conversation::compaction_summary_id(pointer.through_turn_id),
-                    role: floe_agent_contract::MessageRole::Assistant,
-                    text: summary,
-                    call_id: None,
-                    coverage,
-                },
-                pointer,
-            };
-            if installed.summary_coverage != receipt.summary.coverage {
-                return Err(AgentFailure::StorageUnavailable);
-            }
             let next = previous.complete(actor, receipt.clone())?;
             update_on(&transaction, &previous, &next).await?;
             self.check_access()?;

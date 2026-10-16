@@ -1122,7 +1122,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         self.check_access()?;
         Ok(found)
     }
-    async fn surface_work_for_run_on(
+    pub(super) async fn surface_work_for_run_on(
         &self,
         connection: &Connection,
         run_id: floe_kernel::RunId,

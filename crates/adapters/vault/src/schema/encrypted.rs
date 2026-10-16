@@ -232,10 +232,14 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
         "agent_surface_work_cancellations_target",
         "CREATE INDEX agent_surface_work_cancellations_target ON agent_surface_work_cancellations (work_command_id, command_id)",
     ),
+    SchemaObject::table(
+        "agent_surface_checkpoints",
+        "CREATE TABLE agent_surface_checkpoints (execution_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, session_id TEXT NOT NULL, through_sequence INTEGER NOT NULL CHECK (through_sequence > 0), through_digest BLOB NOT NULL CHECK (length(through_digest) = 32), UNIQUE (session_id, through_sequence), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+    ),
     SchemaObject::marker(
         "agent_conversation_schema",
-        12,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 12))",
+        13,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 13))",
     ),
     SchemaObject::index(
         "agent_surface_work_pending",

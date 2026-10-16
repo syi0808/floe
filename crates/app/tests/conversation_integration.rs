@@ -3540,3 +3540,8 @@ fn invalid_transport_or_authority_failure_never_enters_output_correction() {
 
 #[path = "support/surface_work.rs"]
 mod surface_work;
+
+#[test]
+fn surface_capacity_compacts_exact_work_prefix_while_listening_continues() {
+    support::compaction::run_surface_capacity_compaction_case();
+}
