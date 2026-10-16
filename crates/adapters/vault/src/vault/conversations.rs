@@ -298,6 +298,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         {
             return Err(AgentFailure::Conflict);
         }
+        let mut inherited_resume_lineage = 0;
         if let Some(reference) = &continuation {
             let source = self
                 .conversation_run_on(transaction, reference.run_id)
@@ -315,6 +316,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 || source.device_id != request.device_id
                 || source.user_message_id != user_message_id
                 || source.executor_generation != reference.executor_generation
+                || source.resume_lineage != reference.resume_lineage
                 || source
                     .continuation_level
                     .checked_add(1)
@@ -323,6 +325,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             {
                 return Err(AgentFailure::Conflict);
             }
+            inherited_resume_lineage = source.resume_lineage;
         }
         if let Some(retry_of) = request.retry_of {
             let source = self
@@ -415,7 +418,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             continuation_level: continuation.as_ref().map_or(0, |value| value.level),
             retry_of: request.retry_of,
             resume_of: resume.as_ref().map(|value| value.origin_run_id),
-            resume_lineage: resume.as_ref().map_or(0, |value| value.lineage),
+            resume_lineage: resume.as_ref().map_or(inherited_resume_lineage, |value| value.lineage),
         };
         record.validate(self.person_id)?;
         transaction
@@ -433,20 +436,18 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             )
             .await
             .map_err(database_failure)?;
-        if let Some(reference) = &resume {
-            transaction
-                .execute(
-                    "INSERT INTO agent_conversation_resume_slots (origin_run_id, child_run_id, child_command_id, session_id, person_id) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        reference.origin_run_id.as_uuid().to_string(),
-                        record.run_id.as_uuid().to_string(),
-                        record.command_id.as_uuid().to_string(),
-                        record.session_id.to_string(),
-                        record.person_id.to_string(),
-                    ),
-                )
-                .await
-                .map_err(database_failure)?;
+        if let Some(parent_id) = record.continuation_of.or(record.resume_of) {
+            let parent = self.conversation_run_on(transaction, parent_id).await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let (kind, name) = if record.continuation_of.is_some() {
+                (floe_conversation::RunSuccessorKind::Continue, "continue")
+            } else { (floe_conversation::RunSuccessorKind::Resume, "resume") };
+            floe_conversation::validate_run_successor(&parent, &record, kind)
+                .map_err(|_| AgentFailure::Conflict)?;
+            transaction.execute(
+                "INSERT INTO agent_conversation_run_successors (origin_run_id, child_run_id, child_command_id, session_id, person_id, kind) VALUES (?, ?, ?, ?, ?, ?)",
+                (parent_id.as_uuid().to_string(), record.run_id.as_uuid().to_string(), record.command_id.as_uuid().to_string(), record.session_id.to_string(), record.person_id.to_string(), name),
+            ).await.map_err(database_failure)?;
         }
         self.check_access()?;
         Ok(VaultConversationAdmission::Created { record, session })
@@ -723,6 +724,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                 || reference.run_id != parent_id
                 || child.continuation_executor_generation != Some(parent.executor_generation)
                 || child.continuation_level != reference.level
+                || child.resume_lineage != reference.resume_lineage
             {
                 return Err(AgentFailure::StorageUnavailable);
             }
@@ -1297,13 +1299,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         command_id: CommandId,
     ) -> Result<Option<RunRecord>, AgentFailure> {
-        read_record(
+        let record = read_record(
             self.person_id,
             connection,
             "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs WHERE command_id = ?",
             command_id.as_uuid().to_string(),
         )
-        .await
+        .await?;
+        if let Some(record) = &record { self.validate_run_backlink_on(connection, record).await?; }
+        Ok(record)
     }
 
     pub(super) async fn conversation_run_on(
@@ -1311,13 +1315,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         connection: &turso::Connection,
         run_id: RunId,
     ) -> Result<Option<RunRecord>, AgentFailure> {
-        read_record(
+        let record = read_record(
             self.person_id,
             connection,
             "SELECT run_id, command_id, session_id, person_id, state, aggregate_revision, journal_revision, executor_generation, payload FROM agent_conversation_runs WHERE run_id = ?",
             run_id.as_uuid().to_string(),
         )
-        .await
+        .await?;
+        if let Some(record) = &record { self.validate_run_backlink_on(connection, record).await?; }
+        Ok(record)
     }
 
     /// The child already admitted for one origin, if its slot is claimed.
@@ -1326,25 +1332,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         origin_run_id: RunId,
     ) -> Result<Option<RunId>, AgentFailure> {
-        let mut rows = transaction
-            .query(
-                "SELECT child_run_id FROM agent_conversation_resume_slots WHERE origin_run_id = ?",
-                [origin_run_id.as_uuid().to_string()],
-            )
-            .await
-            .map_err(database_failure)?;
-        let Some(row) = rows.next().await.map_err(database_failure)? else {
-            return Ok(None);
-        };
-        let child = RunId::from_uuid(
-            Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-                .map_err(|_| AgentFailure::VaultUnavailable)?,
-        )
-        .ok_or(AgentFailure::VaultUnavailable)?;
-        if rows.next().await.map_err(database_failure)?.is_some() {
-            return Err(AgentFailure::VaultUnavailable);
-        }
-        Ok(Some(child))
+        let parent = self.conversation_run_on(transaction, origin_run_id).await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        let Some(child) = self.run_successor_on(transaction, &parent).await? else { return Ok(None); };
+        if child.resume_of != Some(origin_run_id) { return Err(AgentFailure::StorageUnavailable); }
+        Ok(Some(child.run_id))
     }
 
     /// The origin group admits a child only once every card is terminal

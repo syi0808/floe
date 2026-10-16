@@ -143,3 +143,14 @@ an actual queue/recovery fixture. Integrate native capture, verified Gateway
 signaling and Flutter as later gates of the same active plan. No temporary API
 is advertised as complete. Stored-layout changes require a same-snapshot fresh
 explicit development profile; never reset existing data automatically.
+
+
+### Current Work observation
+
+A Work claim identifies its initial Run, not a permanent active-Run pointer.
+Continue and Resume are immutable typed successor references under Conversation;
+progress remains canonical on each Run. The owner derives the current descendant
+and verifies forward references against the indexed canonical parent payload,
+rather than caching execution status on Work or scanning all Runs per page.
+Continue retains cumulative Resume depth. A retry is a new explicit Work intent,
+not a lineage edge that silently bypasses queue order or original-intent policy.

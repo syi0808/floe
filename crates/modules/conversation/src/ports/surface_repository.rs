@@ -9,6 +9,14 @@ use uuid::Uuid;
 /// verify Session ownership and atomically commit each receipt/prefix transition.
 /// No method reserves or weakens a Core output recorder.
 pub trait SurfaceRepository: Send + Sync {
+    /// Bounded immutable-prefix product projection, including canonical bodies.
+    /// Read entry custody and referenced Run/Work records in one local snapshot.
+    fn read_surface<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceReadRequest,
+    ) -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>>;
+
     fn list_surface_work<'a>(
         &'a self,
         actor: &'a OwnerActor,

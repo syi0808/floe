@@ -81,6 +81,9 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceReadRequest, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>>;
+
     fn list_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceWorkPageRequest, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>>;
 
@@ -631,6 +634,9 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
+    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceReadRequest, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>> {
+        Box::pin(async move { self.inner.check(actor)?; request.validate()?; scope.run(self.inner.dependencies.repository.read_surface(actor, request)).await })
+    }
     fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
             let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;

@@ -483,9 +483,14 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             }
             _ => return Err(AgentFailure::StorageUnavailable),
         };
+        let current_run_id = match &state {
+            floe_conversation::SurfaceWorkState::Linked(root) => Some(self.current_run_descendant_on(connection, *root).await?),
+            _ => None,
+        };
         Ok(Some(floe_conversation::SurfaceWorkSnapshot {
             receipt,
             state,
+            current_run_id,
         }))
     }
     pub(super) async fn surface_command_free_on(
@@ -507,6 +512,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 }
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault<Keys> {
+    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: floe_conversation::SurfaceReadRequest) -> BoxFuture<'a, Result<floe_conversation::SurfaceSnapshot, AgentFailure>> {
+        Box::pin(self.surface_snapshot(actor, request))
+    }
+
     fn list_surface_work<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -823,37 +832,47 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
             self.surface_session_on(&tx, actor, through.session_id)
                 .await?;
             self.surface_anchor_on(&tx, through).await?;
-            let mut rows = tx.query("SELECT command_id FROM agent_surface_entries WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT ?", (through.session_id.to_string(), after as i64, through.sequence as i64, limit as i64)).await.map_err(database_failure)?;
-            let mut result = Vec::new();
-            while let Some(row) = rows.next().await.map_err(database_failure)? {
-                let command = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
-                    .ok()
-                    .and_then(floe_kernel::CommandId::from_uuid)
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                let receipt = self
-                    .surface_entry_command_on(&tx, command)
-                    .await?
-                    .ok_or(AgentFailure::StorageUnavailable)?;
-                if receipt.through().sequence != after + result.len() as u64 + 1 {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
-                if let Some(previous) = result.last() {
-                    let previous: &SurfaceEntryReceipt = previous;
-                    if receipt.before() != previous.through() {
-                        return Err(AgentFailure::StorageUnavailable);
-                    }
-                } else {
-                    self.surface_anchor_on(&tx, receipt.before()).await?;
-                }
-                result.push(receipt);
-            }
-            if result.len() != limit.min((through.sequence - after) as usize) {
-                return Err(AgentFailure::StorageUnavailable);
-            }
+            let result = self.surface_entries_on(&tx, through, after, limit).await?;
             tx.commit().await.map_err(database_failure)?;
             self.check_access()?;
             Ok(result)
         })
+    }
+}
+
+impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
+    pub(super) async fn surface_entries_on(&self, connection: &Connection, through: SurfaceAnchor, after: u64, limit: usize) -> Result<Vec<SurfaceEntryReceipt>, AgentFailure> {
+        if limit == 0 || limit > MAX_SURFACE_PAGE_ITEMS || after > through.sequence {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut rows = connection.query("SELECT command_id FROM agent_surface_entries WHERE session_id = ? AND sequence > ? AND sequence <= ? ORDER BY sequence LIMIT ?", (through.session_id.to_string(), after as i64, through.sequence as i64, limit as i64)).await.map_err(database_failure)?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next().await.map_err(database_failure)? {
+            let command = Uuid::parse_str(&row.get::<String>(0).map_err(storage)?)
+                .ok()
+                .and_then(floe_kernel::CommandId::from_uuid)
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            let receipt = self
+                .surface_entry_command_on(connection, command)
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if receipt.through().sequence != after + result.len() as u64 + 1 {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            if let Some(previous) = result.last() {
+                let previous: &SurfaceEntryReceipt = previous;
+                if receipt.before() != previous.through() {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+            } else {
+                self.surface_anchor_on(connection, receipt.before()).await?;
+            }
+            result.push(receipt);
+        }
+        if result.len() != limit.min((through.sequence - after) as usize) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        Ok(result)
     }
 }
 
@@ -1259,7 +1278,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let mut found = None;
         let mut reached_root = false;
         // Each allowed Resume may carry up to three Continue links.
-        let limit = (usize::from(floe_conversation::MAX_RESUME_LINEAGE) + 1) * 4;
+        let limit = floe_conversation::MAX_RUN_LINEAGE_RECORDS;
         for _ in 0..limit {
             if !seen.insert(current) {
                 return Err(AgentFailure::StorageUnavailable);
@@ -1294,12 +1313,12 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .conversation_run_on(connection, parent)
                     .await?
                     .ok_or(AgentFailure::StorageUnavailable)?;
-                if source.person_id != run.person_id
-                    || source.session_id != run.session_id
-                    || source.user_message_id != run.user_message_id
-                {
-                    return Err(AgentFailure::StorageUnavailable);
-                }
+                let kind = if run.continuation_of.is_some() {
+                    floe_conversation::RunSuccessorKind::Continue
+                } else {
+                    floe_conversation::RunSuccessorKind::Resume
+                };
+                floe_conversation::validate_run_successor(&source, &run, kind)?;
                 current = parent;
             } else {
                 reached_root = true;

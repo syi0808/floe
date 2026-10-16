@@ -43,6 +43,8 @@ mod owner_custody;
 mod owner_transcript_reads;
 mod surface_compaction;
 mod surface_work_page;
+mod surface_projection;
+mod run_successors;
 pub(crate) use owner_transcript_reads::ManagerHistoryView;
 mod storage_payload;
 mod typed_history;
@@ -390,6 +392,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 
     async fn validate_stored_records(&self) -> Result<(), AgentFailure> {
         self.validate_session_records().await?;
+        self.validate_run_successor_store().await.map_err(|failure| {
+            // Startup rejects corrupt stored lineage as an unavailable Vault;
+            // live owner reads retain StorageUnavailable. Do not flatten Busy,
+            // policy or key/access failures into corruption.
+            match failure {
+                AgentFailure::StorageUnavailable => AgentFailure::VaultUnavailable,
+                other => other,
+            }
+        })?;
         self.validate_surface_store().await?;
         self.validate_pending_work_cancellation_store().await?;
         self.validate_access_grant_store().await?;

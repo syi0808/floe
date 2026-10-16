@@ -177,6 +177,8 @@ pub struct ContinuationRef {
     pub run_id: RunId,
     pub executor_generation: u64,
     pub level: u8,
+    /// Cumulative Resume depth retained across this Continue admission.
+    pub resume_lineage: u8,
 }
 
 impl ContinuationRef {
@@ -185,6 +187,7 @@ impl ContinuationRef {
             || self.executor_generation == 0
             || self.level == 0
             || self.level > 3
+            || self.resume_lineage > MAX_RESUME_LINEAGE
         {
             return Err(AgentFailure::InvalidInput);
         }
@@ -407,3 +410,10 @@ pub use surface_outcome::{SurfaceOutcomeReceipt, SurfaceOutcomeReference};
 
 mod surface_work_page;
 pub use surface_work_page::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};
+
+mod surface_projection;
+pub use surface_projection::{MAX_SURFACE_SNAPSHOT_BYTES, SurfaceReadRequest, SurfaceInputKind,
+    SurfaceMessageContent, SurfaceMessage, SurfaceSnapshot};
+
+mod run_successor;
+pub use run_successor::{RunSuccessorKind, MAX_RUN_LINEAGE_RECORDS, validate_run_successor};

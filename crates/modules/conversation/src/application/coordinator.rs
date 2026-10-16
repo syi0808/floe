@@ -315,6 +315,7 @@ impl<
                         || admitted.receipt.continuation_executor_generation
                             != Some(reference.executor_generation)
                         || admitted.receipt.continuation_level != reference.level
+                        || admitted.receipt.resume_lineage != reference.resume_lineage
                         || admitted
                             .transcript
                             .iter()
@@ -1005,6 +1006,7 @@ pub async fn continuation<Repository: ConversationRepository>(
             || child.continuation_executor_generation != Some(parent.executor_generation)
             || parent.continuation().as_ref().is_none_or(|reference| {
                 reference.run_id != parent_run_id || reference.level != child.continuation_level
+                    || reference.resume_lineage != child.resume_lineage
             })
         {
             return Err(AgentFailure::StorageUnavailable);
@@ -1285,6 +1287,7 @@ pub fn validate_task_delegation_lineage(
             if run.continuation_of != Some(parent.run_id)
                 || run.continuation_executor_generation != Some(parent.executor_generation)
                 || run.continuation_level != reference.level
+                || run.resume_lineage != reference.resume_lineage
             {
                 return Err(AgentFailure::Conflict);
             }

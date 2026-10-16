@@ -48,19 +48,25 @@ mod qa {
         if policy.calendar_create == mode {
             return;
         }
-        let result = host
-            .request(Uuid::new_v4())
-            .expect("admit Conversation policy command")
-            .product_command(ProductCommandRequest {
-                command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
-                command: ProductCommand::Conversation(
-                    ConversationCommand::SetCalendarOperationPolicy {
-                        mode,
-                        expected_revision: policy.revision,
-                    },
-                ),
-            })
-            .expect("update Access operation policy through Conversation");
+        let request = ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
+            command: ProductCommand::Conversation(
+                ConversationCommand::SetCalendarOperationPolicy {
+                    mode,
+                    expected_revision: policy.revision,
+                },
+            ),
+        };
+        let result = support::exact_recovery::observe_exact_request_sync(
+            request,
+            |exact| host.request(Uuid::new_v4())
+                .expect("observe exact Conversation policy command")
+                .product_command(exact),
+            |failure| matches!(
+                failure.disposition,
+                ProductCommandDisposition::Admitted | ProductCommandDisposition::Indeterminate
+            ) && matches!(failure.failure, ProductFailure::Conversation(AgentFailure::StorageBusy)),
+        ).expect("update Access operation policy through Conversation");
         let ProductCommandOutcome::Conversation(
             ConversationCommandOutcome::CalendarOperationPolicy(updated),
         ) = result
@@ -68,6 +74,7 @@ mod qa {
             panic!("Conversation returned a different policy command result")
         };
         assert_eq!(updated.calendar_create, mode);
+        assert_eq!(updated.revision, policy.revision + 1, "exact response recovery must not apply the policy twice");
     }
 
     fn prepare_scenario(mode: OperationPolicyMode, script: CalendarExecutorScript) -> Scenario {

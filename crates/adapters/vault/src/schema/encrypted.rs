@@ -238,8 +238,8 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
     SchemaObject::marker(
         "agent_conversation_schema",
-        14,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 14))",
+        15,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 15))",
     ),
     SchemaObject::index(
         "agent_surface_work_pending",
@@ -266,8 +266,12 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
         "CREATE TABLE agent_conversation_commands (command_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('cancel_run')), target_id TEXT NOT NULL, FOREIGN KEY (target_id) REFERENCES agent_conversation_runs(run_id))",
     ),
     SchemaObject::table(
-        "agent_conversation_resume_slots",
-        "CREATE TABLE agent_conversation_resume_slots (origin_run_id TEXT PRIMARY KEY, child_run_id TEXT NOT NULL, child_command_id TEXT NOT NULL, session_id TEXT NOT NULL, person_id TEXT NOT NULL, FOREIGN KEY (child_run_id) REFERENCES agent_conversation_runs(run_id))",
+        "agent_conversation_run_successors",
+        "CREATE TABLE agent_conversation_run_successors (origin_run_id TEXT PRIMARY KEY, child_run_id TEXT NOT NULL UNIQUE, child_command_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('continue', 'resume')), FOREIGN KEY (origin_run_id) REFERENCES agent_conversation_runs(run_id), FOREIGN KEY (child_run_id) REFERENCES agent_conversation_runs(run_id))",
+    ),
+    SchemaObject::index(
+        "agent_conversation_run_parent",
+        "CREATE UNIQUE INDEX agent_conversation_run_parent ON agent_conversation_runs (COALESCE(json_extract(payload, '$.continuation_of'), json_extract(payload, '$.resume_of')))",
     ),
     SchemaObject::table(
         "agent_conversation_resume_requests",

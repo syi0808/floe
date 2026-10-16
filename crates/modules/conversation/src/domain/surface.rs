@@ -428,6 +428,9 @@ pub enum SurfaceWorkState {
 pub struct SurfaceWorkSnapshot {
     pub receipt: SurfaceWorkReceipt,
     pub state: SurfaceWorkState,
+    /// Latest canonical Continue/Resume descendant, observed without rewriting
+    /// the immutable initial claim link. Progress remains owned by this Run.
+    pub current_run_id: Option<floe_kernel::RunId>,
 }
 
 /// Text admission retains the input and queues work atomically. Voice instead

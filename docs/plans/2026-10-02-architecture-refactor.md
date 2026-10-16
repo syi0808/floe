@@ -2183,3 +2183,67 @@ The next cutover remains safe public Surface projection, current Work descendant
 observation, coordinated App/FFI/Flutter admission and then Voice provider/native
 integration. Main publication uses the verified complete tree and a non-force
 expected-parent update; publication verification is recorded in the conversation.
+
+Next cutover (after 90f08fe), in progress and not yet published:
+
+- Conversation owns a bounded, safe Person-facing Surface snapshot. Vault joins
+  the immutable prefix and canonical Run/Work records in one Deferred snapshot.
+  Original bodies remain whole; immutable older anchors and a 2 MiB page budget
+  bound reads without provider utterance/session identifiers or another result
+  store. Core execution journals are not folded for each displayed body.
+- One typed immutable Continue/Resume successor receipt replaces Resume-only
+  slots. An indexed canonical parent independently detects missing forward proof.
+  Work retains its original claim and derives its current Run descendant through
+  bounded verified edges; no mutable copy of execution status is introduced.
+- Continue now retains cumulative Resume depth. The canonical continuation
+  reference, intent digest, exact admission checks and coordinator validation all
+  bind that depth, preventing alternating Resume/Continue from renewing the
+  existing Resume limit. Both forward and reverse Work lineage use this invariant.
+- Stored meaning is Conversation schema 15. Use a fresh explicitly selected dev
+  profile; no automatic migration, reset or credential replacement is performed.
+- Focused evidence: Conversation unit tests 47 passed; Surface storage 20 passed;
+  Resume 13 passed; Continue 11 passed, including real mixed Resume→Continue,
+  reopen and corrupted-depth rejection. The whole Vault regression is running.
+  New real App-owner display/paging/reopen assertions are being qualified.
+- App/FFI/Flutter admission/timeline cutover, explicit retry-linked Work semantics,
+  FIFO controls and Voice provider/native integration remain pending. No live
+  microphone, Apple UI or provider proof is implied by these owner tests.
+- Complete workspace, App QA and production FFI gates are required on the next
+  frozen publication tree. A zero-match test filter is not qualification evidence.
+
+The real generation-owned App queue/display regression passed (1): original
+Surface text, latest/older pinned pages, no provider utterance identifiers,
+current linked Run IDs and exact reopen/replay without redispatch. The initial
+short exact selector matched zero tests; only the fully qualified passing case
+is evidence. Whole Vault iteration exposed an existing startup error contract:
+corrupt continuation ancestry must report VaultUnavailable at open, while live
+reads report StorageUnavailable. The new successor validator now preserves that
+startup distinction without flattening Busy/policy/key failures. Its unchanged
+ancestry regression passes, and all 20 Surface storage tests pass after this fix.
+Final workspace → App QA → FFI qualification has started against 585 frozen
+Rust/Cargo inputs; this is still pending and does not imply publication.
+
+The next-checkpoint final workspace gate passed: 451 passed, zero failed, zero
+ignored, including doctests/default examples (exit 0). The 212-case Vault suite
+includes the unchanged corruption regression and long retained-history/reopen
+cases. App QA is now running, with production FFI queued after its success. No
+publication or client/native Voice-completion claim is made while those gates
+remain pending.
+
+App QA found another positive fixture caller that assumed a policy update could
+not return Indeterminate(StorageBusy). The policy owner correctly preserved its
+command as uncertain; the test client now observes the exact same command, mode
+and revision using the existing bounded typed-recovery helper. It additionally
+asserts one policy revision advance, retaining all allow/deny and single-effect
+assertions. This does not retry an external dispatch or relax a negative check.
+The earlier full App run is not a pass; focused Calendar/exact-recovery tests and
+new final qualification are required after this test-client change.
+
+This display/current-lineage checkpoint is now fully qualified on the Linux root
+workspace after the exact policy-response recovery correction: final workspace
+451 passed/0 failed/0 ignored; App QA 74 passed/0 failed/1 intentional process-kill
+child-driver ignored, including all 45 Conversation cases and the 129-turn
+history/reopen regression; production FFI build passed (2m17s). All three commands
+exited zero against the same frozen 585 Rust/Cargo inputs. Boundary and whitespace
+checks pass. This qualifies owner/storage/display foundations, not the pending
+App/FFI/Flutter Surface admission cutover or live/native Voice integration.

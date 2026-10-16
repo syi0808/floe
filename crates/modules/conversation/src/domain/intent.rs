@@ -114,6 +114,7 @@ fn append_mode(bytes: &mut Vec<u8>, mode: &TurnMode) -> Result<(), AgentFailure>
             bytes.extend_from_slice(reference.run_id.as_uuid().as_bytes());
             bytes.extend_from_slice(&reference.executor_generation.to_be_bytes());
             bytes.push(reference.level);
+            bytes.push(reference.resume_lineage);
         }
         TurnMode::Resume(reference) => {
             reference.validate()?;

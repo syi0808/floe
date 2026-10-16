@@ -7,6 +7,10 @@ use floe_conversation::{
 use floe_kernel::{CommandFailure, CommandId, OwnerActor};
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for VaultConversationRepository<Keys> {
+    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: floe_conversation::SurfaceReadRequest) -> BoxFuture<'a, Result<floe_conversation::SurfaceSnapshot, AgentFailure>> {
+        self.vault.read_surface(actor, request)
+    }
+
     fn list_surface_work<'a>(
         &'a self,
         actor: &'a OwnerActor,

@@ -111,6 +111,35 @@ fn entries(
     })
 }
 
+
+fn visible_surface(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+    through: Option<floe_conversation::SurfaceAnchor>,
+    limit: usize,
+) -> floe_conversation::SurfaceSnapshot {
+    support::with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+                owners
+                    .conversation
+                    .read_surface(
+                        &actor,
+                        floe_conversation::SurfaceReadRequest {
+                            session_id,
+                            through,
+                            limit,
+                        },
+                        &scope,
+                    )
+                    .await
+            })
+            .expect("read canonical display snapshot through generation-owned Conversation")
+    })
+}
+
 #[test]
 fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     let (barrier, entered, release) = GenerateBarrier::new();
@@ -217,6 +246,17 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
         "the first result happened after the second Work anchor"
     );
 
+    let display = visible_surface(&host, session_id, None, 128);
+    assert_eq!(display.messages.len(), 7);
+    let display_json = serde_json::to_string(&display).unwrap();
+    assert!(!display_json.contains("future-u1"), "provider utterance identifiers are not product display data");
+    let last_page = visible_surface(&host, session_id, Some(display.through), 2);
+    assert_eq!(last_page.messages, display.messages[5..]);
+    let earlier_page = visible_surface(&host, session_id, last_page.older, 128);
+    assert_eq!(earlier_page.messages, display.messages[..5]);
+    assert_eq!(snapshot(&host, first.command_id).current_run_id, Some(first_run));
+    assert_eq!(snapshot(&host, second.command_id).current_run_id, Some(second_run));
+    assert_eq!(snapshot(&host, cancelled.command_id).current_run_id, None);
     let published = entries(&host, session_id, None);
     assert_eq!(
         published.len(),
@@ -243,6 +283,7 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     drop(host);
     let host = profile.open(&model);
     assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    assert_eq!(visible_surface(&host, session_id, Some(display.through), 128), display);
     assert_eq!(
         snapshot(&host, second.command_id).state,
         SurfaceWorkState::Linked(second_run)

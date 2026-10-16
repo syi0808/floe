@@ -1587,6 +1587,23 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
             settled
         );
         assert_eq!(vault.surface_head(&f.actor, f.session).await.unwrap(), head);
+        let snapshot_request = floe_conversation::SurfaceReadRequest { session_id: f.session, through: Some(head), limit: 128 };
+        let snapshot = vault.read_surface(&f.actor, snapshot_request.clone()).await.unwrap();
+        let mut writer_connection = vault.connection().unwrap();
+        let unrelated_writer = writer_connection.transaction_with_behavior(TransactionBehavior::Immediate).await.unwrap();
+        assert_eq!(vault.read_surface(&f.actor, snapshot_request.clone()).await.unwrap(), snapshot,
+            "canonical result/status joins are read-only too");
+        unrelated_writer.rollback().await.unwrap();
+        drop(writer_connection);
+        assert_eq!(snapshot.messages.len(), entries.len());
+        assert!(matches!(&snapshot.messages[1].content,
+            floe_conversation::SurfaceMessageContent::Outcome { run_id, state, .. }
+            if *run_id == run.run_id && *state == settled.state));
+        if partial {
+            assert!(matches!(&snapshot.messages[2].content,
+                floe_conversation::SurfaceMessageContent::Result { run_id, completeness: floe_conversation::SurfaceResultCompleteness::Partial, text }
+                if *run_id == run.run_id && Some(text) == settled.output.as_ref()));
+        }
         drop(vault);
         let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
             .await
@@ -1598,6 +1615,7 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
                 .unwrap(),
             entries
         );
+        assert_eq!(reopened.read_surface(&f.actor, snapshot_request.clone()).await.unwrap(), snapshot);
         if partial {
             let connection = reopened.connection().unwrap();
             connection
@@ -1614,6 +1632,8 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
                     .is_err(),
                 "a valid terminal Run alone cannot prove Surface publication custody"
             );
+            assert!(reopened.read_surface(&f.actor, snapshot_request.clone()).await.is_err(),
+                "a safe body projection must retain the Work lineage proof");
             drop(connection);
             drop(reopened);
             assert!(
@@ -1823,5 +1843,221 @@ async fn work_pages_pin_membership_but_observe_current_custody_without_writer() 
             .await
             .unwrap(),
         second
+    );
+}
+
+#[tokio::test]
+async fn surface_snapshot_pages_are_original_pinned_read_only_and_verified_on_reopen() {
+    use floe_conversation::{SurfaceReadRequest, SurfaceMessageContent, SurfaceInputKind};
+    let (f, vault) = fixture().await;
+    let query = SurfaceReadRequest { session_id:f.session, through:None, limit:2 };
+    assert!(vault.read_surface(&f.actor,query.clone()).await.unwrap().messages.is_empty());
+    let first = vault.append_surface_input(&f.actor, request(&f,&vault,"one").await).await.unwrap();
+    let voice = Uuid::new_v4();
+    let mut second_request = request(&f,&vault,"two spoken words").await;
+    second_request.input.origin = SurfaceInputOrigin::Voice { voice_session_id:voice, utterance_id:"opaque-provider-utterance".into() };
+    let second = vault.append_surface_input(&f.actor,second_request).await.unwrap();
+    let third = vault.append_surface_input(&f.actor,request(&f,&vault,"three").await).await.unwrap();
+    let page = vault.read_surface(&f.actor,query.clone()).await.unwrap();
+    assert_eq!(page.through,third.through);
+    assert_eq!(page.older,Some(first.through));
+    assert_eq!(page.messages.len(),2);
+    assert_eq!(page.messages[0].content,SurfaceMessageContent::Input {text:"two spoken words".into(),origin:SurfaceInputKind::Voice});
+    let encoded=serde_json::to_string(&page).unwrap();
+    assert!(!encoded.contains("opaque-provider-utterance"));
+    assert!(!encoded.contains(&voice.to_string()));
+    let pinned=SurfaceReadRequest {through:Some(page.through),..query.clone()};
+    let mut writer_connection=vault.connection().unwrap();
+    let writer=writer_connection.transaction_with_behavior(TransactionBehavior::Immediate).await.unwrap();
+    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
+    writer.rollback().await.unwrap(); drop(writer_connection);
+    vault.append_surface_input(&f.actor,request(&f,&vault,"later arrival").await).await.unwrap();
+    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
+    let previous=vault.read_surface(&f.actor,SurfaceReadRequest {through:page.older,..query.clone()}).await.unwrap();
+    assert_eq!(previous.messages.len(),1); assert!(previous.older.is_none());
+    assert_eq!(previous.messages[0].message_id,first.input.message_id);
+    let wrong_actor=OwnerActor {person_id:PersonId::new(),..f.actor.clone()};
+    assert_eq!(vault.read_surface(&wrong_actor,query.clone()).await,Err(AgentFailure::PolicyDenied));
+    let mut forged=page.through; forged.digest[0]^=1;
+    assert!(vault.read_surface(&f.actor,SurfaceReadRequest {through:Some(forged),..query.clone()}).await.is_err());
+    drop(vault);
+    let vault=EncryptedAgentVault::open(&f.root,f.actor.person_id,f.keys.clone()).await.unwrap();
+    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
+    let mut corrupted=second.clone(); corrupted.input.text="altered original".into();
+    vault.connection().unwrap().execute("UPDATE agent_surface_entries SET payload = ? WHERE command_id = ?",
+        (encode(&SurfaceEntryReceipt::Input(corrupted)).unwrap(),second.command_id.as_uuid().to_string())).await.unwrap();
+    assert!(vault.read_surface(&f.actor,pinned).await.is_err(),"safe display must still verify original custody");
+}
+
+#[tokio::test]
+async fn work_observes_current_continue_child_without_rewriting_claim_or_missing_link_proof() {
+    use floe_conversation::{
+        CanonicalTurnIntent, SurfaceReadRequest, SurfaceWorkState, TurnAdmissionRequest, TurnInput,
+        TurnMode,
+    };
+    let (f, vault) = fixture().await;
+    vault.activate_conversation_executor().await.unwrap();
+    let input = vault
+        .append_surface_input(
+            &f.actor,
+            request(&f, &vault, "continue original Work").await,
+        )
+        .await
+        .unwrap();
+    let work = vault
+        .submit_surface_work(&f.actor, work(&input))
+        .await
+        .unwrap();
+    let initial = execution(&f, &work, &input.input.text, 0);
+    let identity = floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+    vault
+        .claim_manager_surface_work(work.clone(), initial.clone(), identity.clone())
+        .await
+        .unwrap();
+    let parent = vault
+        .settle_manager_conversation_run(
+            initial.run_id,
+            1,
+            floe_conversation::RunTerminal::from_failure(AgentFailure::BudgetExceeded),
+        )
+        .await
+        .unwrap();
+    let pinned = vault
+        .read_surface(
+            &f.actor,
+            SurfaceReadRequest {
+                session_id: f.session,
+                through: None,
+                limit: 128,
+            },
+        )
+        .await
+        .unwrap();
+    let mode = TurnMode::Continue(
+        floe_conversation::project_run_receipt(parent.clone())
+            .unwrap()
+            .continuation()
+            .unwrap(),
+    );
+    let intent = CanonicalTurnIntent {
+        session_id: f.session,
+        expected_revision: parent.session_revision,
+        text: input.input.text.clone(),
+        mode: mode.clone(),
+        retry_of: None,
+    };
+    let request = TurnAdmissionRequest {
+        expert_environment: parent.expert_environment,
+        run_id: floe_kernel::RunId::new(),
+        command_id: CommandId::new(),
+        session_id: f.session,
+        expected_session_revision: parent.session_revision,
+        principal: f.actor.person_id.to_string(),
+        device_id: f.actor.device_id.clone(),
+        request_digest: intent.digest(&f.actor.person_id.to_string()).unwrap(),
+        mode,
+        retry_of: None,
+        input: TurnInput::ExistingMessage {
+            message_id: parent.user_message_id,
+        },
+    };
+    let child = match vault
+        .admit_manager_conversation_turn(request.clone(), identity.clone())
+        .await
+        .unwrap()
+    {
+        crate::VaultManagerConversationAdmission::Created(child) => child,
+        other => panic!("expected Continue child, got {other:?}"),
+    };
+    let snapshot = vault
+        .read_surface_work(&f.actor, work.command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(snapshot.receipt, work);
+    assert_eq!(snapshot.state, SurfaceWorkState::Linked(parent.run_id));
+    assert_eq!(snapshot.current_run_id, Some(child.run_id));
+    let terminal = completed_terminal(&vault, &child).await;
+    vault
+        .settle_manager_conversation_run(child.run_id, 1, terminal)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .read_surface(
+                &f.actor,
+                SurfaceReadRequest {
+                    session_id: f.session,
+                    through: Some(pinned.through),
+                    limit: 128
+                }
+            )
+            .await
+            .unwrap(),
+        pinned
+    );
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    let mut writer_connection = vault.connection().unwrap();
+    let writer = writer_connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let page = vault
+        .list_surface_work(
+            &f.actor,
+            floe_conversation::SurfaceWorkPageRequest {
+                session_id: f.session,
+                cursor: None,
+                limit: 128,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.items[0].receipt, work);
+    assert_eq!(page.items[0].state, SurfaceWorkState::Linked(parent.run_id));
+    assert_eq!(page.items[0].current_run_id, Some(child.run_id));
+    writer.rollback().await.unwrap();
+    drop(writer_connection);
+    let connection = vault.connection().unwrap();
+    connection.execute("UPDATE agent_conversation_run_successors SET child_command_id = ? WHERE origin_run_id = ?",(Uuid::new_v4().to_string(),parent.run_id.as_uuid().to_string())).await.unwrap();
+    assert!(
+        vault
+            .read_surface_work(&f.actor, work.command_id)
+            .await
+            .is_err()
+    );
+    connection.execute("UPDATE agent_conversation_run_successors SET child_command_id = ? WHERE origin_run_id = ?",(child.command_id.as_uuid().to_string(),parent.run_id.as_uuid().to_string())).await.unwrap();
+    assert_eq!(
+        vault
+            .read_surface_work(&f.actor, work.command_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .current_run_id,
+        Some(child.run_id)
+    );
+    connection
+        .execute(
+            "DELETE FROM agent_conversation_run_successors WHERE origin_run_id = ?",
+            [parent.run_id.as_uuid().to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        vault
+            .read_surface_work(&f.actor, work.command_id)
+            .await
+            .is_err(),
+        "missing forward proof must not silently restore the old root as current"
+    );
+    drop(connection);
+    drop(vault);
+    assert!(
+        EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+            .await
+            .is_err()
     );
 }

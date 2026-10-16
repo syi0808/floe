@@ -6996,6 +6996,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mixed_resume_continue_keeps_cumulative_depth_and_current_descendant_after_reopen() {
+        let mut scenario = Scenario::new().await;
+        let (origin, input) = scenario
+            .admit_run_and_append_input("mixed lineage input")
+            .await;
+        let original_core = scenario.last_core_input_request.clone();
+        let pending = scenario.create_pending_resume(&origin).await;
+        let request = scenario.resume_child_admission(pending, &origin, "mixed lineage input");
+        let (core_request, _) = scenario.resume_core_request();
+        let CoreComposedRunAdmission::Admitted {
+            record: resumed, ..
+        } = scenario
+            .admit_resume_and_bind_input(request, core_request)
+            .await
+        else {
+            panic!("expected real Resume child");
+        };
+        assert_eq!(resumed.resume_lineage, 1);
+        let failed = scenario.budget_exceeded_owner_run(&resumed).await;
+        // This helper consumes the retained original input, not a new Person message.
+        scenario.last_core_input_request = original_core;
+        let (continued, rebound) = scenario
+            .admit_owner_run_reusing_input(&failed, "mixed lineage input")
+            .await;
+        assert_eq!(continued.continuation_of, Some(resumed.run_id));
+        assert_eq!(continued.resume_of, None);
+        assert_eq!(continued.resume_lineage, 1);
+        assert_eq!(rebound.receipt.transcript, input.receipt.transcript);
+        let receipt = floe_conversation::project_run_receipt(continued.clone()).unwrap();
+        assert_eq!(receipt.resume_lineage, 1);
+        assert_eq!(
+            scenario
+                .vault()
+                .current_run_descendant_on(&scenario.vault().connection().unwrap(), origin.run_id)
+                .await
+                .unwrap(),
+            continued.run_id
+        );
+        scenario.reopen().await;
+        assert_eq!(
+            scenario
+                .vault()
+                .current_run_descendant_on(&scenario.vault().connection().unwrap(), origin.run_id)
+                .await
+                .unwrap(),
+            continued.run_id
+        );
+        let mut reset = continued.clone();
+        reset.resume_lineage = 0;
+        let connection = scenario.vault().connection().unwrap();
+        connection
+            .execute(
+                "UPDATE agent_conversation_runs SET payload = ? WHERE run_id = ?",
+                (
+                    serde_json::to_string(&reset).unwrap(),
+                    continued.run_id.as_uuid().to_string(),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(
+            scenario
+                .vault()
+                .current_run_descendant_on(&connection, origin.run_id)
+                .await
+                .is_err(),
+            "a reset counter cannot masquerade as the same lineage"
+        );
+        drop(connection);
+        drop(scenario.vault.take());
+        assert!(
+            EncryptedAgentVault::open(&scenario.root.0, scenario.person_id, scenario.keys.clone())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn resolved_interaction_resume_admits_one_child_input_and_recorder_and_replays_after_reopen()
      {
         let mut scenario = Scenario::new().await;
@@ -7066,7 +7144,7 @@ mod tests {
             .expect("connect to test Vault");
         assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             1
         );
         assert_eq!(
@@ -7235,7 +7313,7 @@ mod tests {
             .expect("reconnect after replay");
         assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             1
         );
         assert_eq!(
@@ -7297,7 +7375,7 @@ mod tests {
 
         let tables = [
             "agent_conversation_runs",
-            "agent_conversation_resume_slots",
+            "agent_conversation_run_successors",
             "agent_conversation_core_v3_entries",
             "agent_conversation_core_v3_input_receipts",
             "agent_conversation_core_v3_owner_bindings",
@@ -7321,7 +7399,7 @@ mod tests {
         );
         let mut slots = connection
             .query(
-                "SELECT child_run_id FROM agent_conversation_resume_slots WHERE origin_run_id = ?",
+                "SELECT child_run_id FROM agent_conversation_run_successors WHERE origin_run_id = ?",
                 [origin.run_id.as_uuid().to_string()],
             )
             .await
@@ -7544,7 +7622,7 @@ mod tests {
             .expect("connect after concurrent claims");
         assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             1
         );
         assert_eq!(
@@ -7578,7 +7656,7 @@ mod tests {
         let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
         let tables = [
             "agent_conversation_runs",
-            "agent_conversation_resume_slots",
+            "agent_conversation_run_successors",
             "agent_conversation_core_v3_entries",
             "agent_conversation_core_v3_input_receipts",
             "agent_conversation_core_v3_owner_bindings",
@@ -7635,7 +7713,7 @@ mod tests {
             Some("pending")
         );
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             0
         );
     }
@@ -7656,7 +7734,7 @@ mod tests {
         let before_session = session_storage_snapshot(&connection, scenario.session_id).await;
         let tables = [
             "agent_conversation_runs",
-            "agent_conversation_resume_slots",
+            "agent_conversation_run_successors",
             "agent_conversation_core_v3_entries",
             "agent_conversation_core_v3_input_receipts",
             "agent_conversation_core_v3_owner_bindings",
@@ -7776,7 +7854,7 @@ mod tests {
         );
         assert_eq!(table_count(&connection, "agent_conversation_runs").await, 2);
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             0
         );
         assert_eq!(
@@ -7858,7 +7936,7 @@ mod tests {
         );
         assert_eq!(table_count(&connection, "agent_conversation_runs").await, 1);
         assert_eq!(
-            table_count(&connection, "agent_conversation_resume_slots").await,
+            table_count(&connection, "agent_conversation_run_successors").await,
             0
         );
     }

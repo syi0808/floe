@@ -231,7 +231,8 @@ impl RunReceipt {
         if self.continuation_of.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation == Some(0)
-            || self.resume_of.is_some() != (self.resume_lineage > 0)
+            || self.resume_of.is_some() && self.resume_lineage == 0
+            || self.resume_lineage > 0 && self.resume_of.is_none() && self.continuation_of.is_none()
             || self.resume_of.is_some()
                 && (self.continuation_of.is_some()
                     || self.continuation_level > 0
@@ -291,6 +292,7 @@ impl RunReceipt {
             run_id: self.run_id,
             executor_generation: self.executor_generation,
             level,
+            resume_lineage: self.resume_lineage,
         })
     }
 
@@ -502,7 +504,8 @@ impl RunRecord {
         if self.continuation_of.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation.is_some() != (self.continuation_level > 0)
             || self.continuation_executor_generation == Some(0)
-            || self.resume_of.is_some() != (self.resume_lineage > 0)
+            || self.resume_of.is_some() && self.resume_lineage == 0
+            || self.resume_lineage > 0 && self.resume_of.is_none() && self.continuation_of.is_none()
             || self.resume_of.is_some()
                 && (self.continuation_of.is_some()
                     || self.continuation_level > 0
@@ -599,7 +602,10 @@ impl RunRecord {
                 == continuation.map(|value| value.executor_generation)
             && self.continuation_level == continuation.map_or(0, |value| value.level)
             && self.resume_of == resume.map(|value| value.origin_run_id)
-            && self.resume_lineage == resume.map_or(0, |value| value.lineage)
+            && self.resume_lineage == resume.map_or_else(
+                || continuation.map_or(0, |value| value.resume_lineage),
+                |value| value.lineage,
+            )
     }
 }
 

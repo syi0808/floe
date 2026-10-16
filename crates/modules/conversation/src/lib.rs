@@ -158,3 +158,8 @@ pub use domain::{
 pub use domain::{SurfaceOutcomeReceipt, SurfaceOutcomeReference, SurfaceResultCompleteness};
 
 pub use domain::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};
+
+pub use domain::{MAX_SURFACE_SNAPSHOT_BYTES, SurfaceReadRequest, SurfaceInputKind,
+    SurfaceMessageContent, SurfaceMessage, SurfaceSnapshot};
+
+pub use domain::{RunSuccessorKind, MAX_RUN_LINEAGE_RECORDS, validate_run_successor};

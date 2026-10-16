@@ -144,6 +144,25 @@ verified in one Deferred transaction, using the same snapshot decoder as exact
 Work lookup. Linked execution progress remains on Run; no duplicate status is
 stored on Work.
 
+`SurfaceWorkSnapshot.current_run_id` observes the current canonical descendant
+while the initial `Linked(root)` claim remains immutable. One typed Continue/
+Resume successor receipt replaces the Resume-only slot and commits atomically
+with child admission. The query checks that receipt against the canonical Run
+payload's indexed parent reference; deleting a slot cannot silently regress the
+current Work to its old root. Reads follow bounded, validated edges, not a global
+Run scan or a second mutable Work execution cache. Startup verifies missing,
+orphaned and inconsistent links without repair. Continue carries cumulative
+Resume depth, so interleaving Continue cannot renew the existing Resume budget.
+
+The owner-level Surface snapshot resolves original input, canonical complete or
+partial bodies, terminal status and pending-cancellation references in one
+Deferred snapshot. Safe display entries omit provider utterance/session IDs,
+source/review payloads and grants. Pages end at an immutable prefix and return
+the before-anchor of their oldest retained entry as the older cursor. A bounded
+whole-entry byte budget can shorten a page; it never clips original text or
+substitutes compaction summaries. Public App/FFI/Flutter mapping remains a separate
+same-snapshot cutover gate.
+
 Pending-work cancellation atomically changes queued custody and appends its
 canonical Person-intent receipt to that same Surface prefix. The target index
 contains references only. Original input remains retained; a later model sees
@@ -198,7 +217,7 @@ hydration. Completed compaction replay is also read-only before reserving a
 writer; first installation still atomically commits checkpoint, coverage and
 execution receipt under the existing journal fence. Startup validates both the
 execution records and checkpoint index and never repairs corrupted custody.
-The stored meaning uses Conversation schema 14 and an explicitly selected fresh
+The stored meaning uses Conversation schema 15 and an explicitly selected fresh
 development profile; no automatic reset or old-data reinterpretation is added.
 
 This is an internal owner integration checkpoint. The existing Flutter StartTurn
