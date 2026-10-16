@@ -218,16 +218,24 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
     SchemaObject::table(
         "agent_surface_entries",
-        "CREATE TABLE agent_surface_entries (command_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, person_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, origin_key TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('input', 'published_result')), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768), UNIQUE (session_id, sequence), UNIQUE (session_id, message_id), UNIQUE (session_id, origin_key), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
+        "CREATE TABLE agent_surface_entries (command_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, person_id TEXT NOT NULL, sequence INTEGER NOT NULL CHECK (sequence > 0), message_id TEXT NOT NULL, origin_key TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('input', 'published_result', 'work_cancelled')), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768), UNIQUE (session_id, sequence), UNIQUE (session_id, message_id), UNIQUE (session_id, origin_key), FOREIGN KEY (session_id) REFERENCES agent_sessions(id))",
     ),
     SchemaObject::table(
         "agent_surface_work",
         "CREATE TABLE agent_surface_work (command_id TEXT PRIMARY KEY, work_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, person_id TEXT NOT NULL, origin_key TEXT NOT NULL, queue_sequence INTEGER NOT NULL CHECK (queue_sequence > 0), state TEXT NOT NULL CHECK (state IN ('queued', 'linked', 'cancelled')), run_id TEXT UNIQUE, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) <= 32768), UNIQUE (session_id, origin_key), UNIQUE (session_id, queue_sequence), CHECK ((state = 'linked' AND run_id IS NOT NULL) OR (state IN ('queued', 'cancelled') AND run_id IS NULL)), FOREIGN KEY (session_id) REFERENCES agent_sessions(id), FOREIGN KEY (run_id) REFERENCES agent_conversation_runs(run_id))",
     ),
+    SchemaObject::table(
+        "agent_surface_work_cancellations",
+        "CREATE TABLE agent_surface_work_cancellations (command_id TEXT PRIMARY KEY, work_command_id TEXT NOT NULL, person_id TEXT NOT NULL, FOREIGN KEY (command_id) REFERENCES agent_surface_entries(command_id), FOREIGN KEY (work_command_id) REFERENCES agent_surface_work(command_id))",
+    ),
+    SchemaObject::index(
+        "agent_surface_work_cancellations_target",
+        "CREATE INDEX agent_surface_work_cancellations_target ON agent_surface_work_cancellations (work_command_id, command_id)",
+    ),
     SchemaObject::marker(
         "agent_conversation_schema",
-        11,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 11))",
+        12,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 12))",
     ),
     SchemaObject::index(
         "agent_surface_work_pending",

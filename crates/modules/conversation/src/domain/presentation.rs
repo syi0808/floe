@@ -112,48 +112,56 @@ impl SurfaceResultReceipt {
 pub enum SurfaceEntryReceipt {
     Input(SurfaceInputReceipt),
     PublishedResult(SurfaceResultReceipt),
+    PendingWorkCancelled(crate::PendingWorkCancellationEntry),
 }
 impl SurfaceEntryReceipt {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         match self {
             Self::Input(value) => value.validate(),
             Self::PublishedResult(value) => value.validate(),
+            Self::PendingWorkCancelled(value) => value.validate(),
         }
     }
     pub fn before(&self) -> SurfaceAnchor {
         match self {
             Self::Input(v) => v.before,
             Self::PublishedResult(v) => v.before,
+            Self::PendingWorkCancelled(v) => v.before,
         }
     }
     pub fn through(&self) -> SurfaceAnchor {
         match self {
             Self::Input(v) => v.through,
             Self::PublishedResult(v) => v.through,
+            Self::PendingWorkCancelled(v) => v.through,
         }
     }
     pub fn person_id(&self) -> PersonId {
         match self {
             Self::Input(v) => v.person_id,
             Self::PublishedResult(v) => v.person_id,
+            Self::PendingWorkCancelled(v) => v.cancellation.person_id,
         }
     }
     pub fn device_id(&self) -> &str {
         match self {
             Self::Input(v) => &v.device_id,
             Self::PublishedResult(v) => &v.device_id,
+            Self::PendingWorkCancelled(v) => &v.cancellation.device_id,
         }
     }
     pub fn command_id(&self) -> CommandId {
         match self {
             Self::Input(v) => v.command_id,
             Self::PublishedResult(v) => v.result.command_id(),
+            Self::PendingWorkCancelled(v) => v.cancellation.command_id,
         }
     }
     pub fn message_id(&self) -> MessageId {
         match self {
             Self::Input(v) => v.input.message_id,
             Self::PublishedResult(v) => v.result.message_id(),
+            Self::PendingWorkCancelled(v) => v.message_id(),
         }
     }
     pub fn input(&self) -> Option<&SurfaceInputReceipt> {

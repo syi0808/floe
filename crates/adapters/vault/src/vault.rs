@@ -36,6 +36,7 @@ mod conversation_delegation_recovery;
 mod conversation_interactions;
 mod conversations;
 mod conversation_surface;
+mod conversation_surface_cancel;
 pub(crate) mod expert_binding_reviews;
 mod expert_proposals;
 mod owner_custody;
@@ -388,6 +389,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     async fn validate_stored_records(&self) -> Result<(), AgentFailure> {
         self.validate_session_records().await?;
         self.validate_surface_store().await?;
+        self.validate_pending_work_cancellation_store().await?;
         self.validate_access_grant_store().await?;
         self.validate_actions_store().await?;
         self.validate_expert_binding_reviews().await?;

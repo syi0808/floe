@@ -1946,3 +1946,39 @@ Next V1 cutover constraints (not implemented by the admission checkpoint):
   product text/protocol/UI cutover, incomplete/blocked outcome presentation, and
   append-only audio delivery evidence. No live microphone/provider integration is
   represented by this completed-result checkpoint.
+
+
+### 2026-10-16 pending-work cancellation and Surface compaction cutover
+
+- Pending cancellation uses a distinct exact command, with its canonical receipt
+  in the ordered Surface. A small target index points at that receipt; it does
+  not store a second payload. Queue state, cancellation entry/index and prefix
+  advance commit in one transaction. Original input stays addressable. A later
+  model projection receives the normalized Person cancellation intent and exact
+  target input ID; current Work state cannot rewrite an earlier pinned prefix.
+- A linked Run is a determinate refusal for this pending-only command. Existing
+  Run cancellation remains the execution authority. Claim and cancellation
+  serialize on the same storage boundary; no implicit hangup/disposal cancel.
+  Focused storage (15 cases, including four concurrent claim/cancel races), domain
+  and actual App/Vault/Engine fixtures cover exact replay, writer contention,
+  encrypted reopen, missing-proof corruption and a cancelled queued item causing
+  no model call. Final checkpoint qualification passes: default workspace with
+  doctests 417 passed, zero failed/ignored; App QA 66 passed, zero failed, one
+  intentional standalone crash-driver ignored and exercised by its parents;
+  production FFI build exit 0. The 42-case Conversation suite completed in
+  1,168.58 seconds, including 129-turn/reopen verification. Architecture boundaries,
+  affected/new-file formatting and whitespace checks pass. No live provider,
+  microphone or Apple screen behavior is qualified by these owner tests.
+- Next compaction change reuses the existing single CompactionDriver, journal,
+  budget and Context reauthorization. Source custody must be explicitly typed:
+  Core execution prefix versus Person Surface prefix. Do not cast Surface IDs
+  into Core identities or substitute a latest Core checkpoint.
+- Surface checkpoints are derived immutable prefix references backed by the
+  existing compaction execution. Selection must stay at/before the Work anchor
+  and strictly before its selected input. Later Surface appends do not invalidate
+  that source or authorize including future context. Original entries remain
+  retained; archive recovery must resolve the corresponding source kind.
+- The Core-specific Manager source path remains bounded to the existing direct
+  text caller until product cutover. Retire that caller with shared text/protocol
+  migration; this is not permission for a second Compaction runtime. Test Core
+  custody independently from user-facing Surface history.

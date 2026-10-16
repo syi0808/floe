@@ -81,6 +81,9 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope)
+        -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>>;
+
     fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope)
         -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>>;
 
@@ -625,6 +628,15 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
+    fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            let _admission = self.inner.admission.read().await;
+            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
+            scope.run(async { Ok(self.inner.dependencies.repository.cancel_pending_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+        })
+    }
     fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>> {
         Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_entries(actor, through, after, limit)).await })
     }

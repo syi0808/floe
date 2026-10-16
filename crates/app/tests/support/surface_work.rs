@@ -115,6 +115,30 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     );
     assert_eq!(assert_script_clean(&recorder).generated.len(), 1);
 
+    let (_, cancelled) = submit(&host, session_id);
+    let cancel_request = floe_conversation::CancelPendingWork {
+        command_id: CommandId::new(),
+        work_command_id: cancelled.command_id,
+    };
+    let cancel_receipt = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let request = cancel_request.clone();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+                owners
+                    .conversation
+                    .cancel_pending_work(&actor, request, &scope)
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)
+            })
+            .expect("cancel actual pending work while another Run owns the recorder")
+    });
+    assert_eq!(
+        snapshot(&host, cancelled.command_id).state,
+        SurfaceWorkState::Cancelled
+    );
+
     support::with_ready(&host, |services, caller, owners| {
         let actor = caller.owner_actor();
         services
@@ -166,6 +190,10 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     let context = serde_json::to_string(&observed.generated[1].envelope.conversation).unwrap();
     assert!(!context.contains("FUTURE_INPUT_MUST_NOT_LEAK"));
     assert!(
+        !context.contains("cancel_pending_work"),
+        "later cancellation cannot rewrite an earlier Work anchor"
+    );
+    assert!(
         !context.contains(REPLY),
         "the first result happened after the second Work anchor"
     );
@@ -173,8 +201,8 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     let published = entries(&host, session_id, None);
     assert_eq!(
         published.len(),
-        5,
-        "three original inputs and two completed output references"
+        7,
+        "four original inputs, one cancellation intent and two completed outputs"
     );
     assert_eq!(entries(&host, session_id, Some(second.anchor)).len(), 2);
     let outputs = published
@@ -187,8 +215,8 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].result.run_id, first_run);
     assert_eq!(outputs[1].result.run_id, second_run);
-    assert_eq!(outputs[0].through.sequence, 4);
-    assert_eq!(outputs[1].through.sequence, 5);
+    assert_eq!(outputs[0].through.sequence, 6);
+    assert_eq!(outputs[1].through.sequence, 7);
     assert_ne!(
         outputs[0].result.message_id(),
         outputs[1].result.message_id()
@@ -222,6 +250,26 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
         published,
         "reopen/replay cannot republish completed text"
     );
+    assert_eq!(
+        snapshot(&host, cancelled.command_id).state,
+        SurfaceWorkState::Cancelled
+    );
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services
+            .execute_owner(async move {
+                let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+                let replay = owners
+                    .conversation
+                    .cancel_pending_work(&actor, cancel_request, &scope)
+                    .await
+                    .map_err(floe_kernel::CommandFailure::into_failure)?;
+                assert_eq!(replay, cancel_receipt);
+                Ok::<_, AgentFailure>(())
+            })
+            .expect("cancelled work remains cancelled after reopen without another event");
+    });
+    assert_eq!(entries(&host, session_id, None), published);
     let (_, third) = submit(&host, session_id);
     let third_run = linked(&host, third.command_id);
     assert_eq!(
@@ -239,5 +287,9 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
         context.contains(REPLY),
         "published output is available to later work"
     );
-    assert_eq!(entries(&host, session_id, None).len(), 7);
+    assert!(
+        context.contains("cancel_pending_work"),
+        "later context retains the Person's cancellation intent"
+    );
+    assert_eq!(entries(&host, session_id, None).len(), 9);
 }

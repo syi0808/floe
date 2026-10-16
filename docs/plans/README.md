@@ -3,9 +3,9 @@
 Use [the architecture completion plan](2026-10-02-architecture-refactor.md) for the remaining P0–P6 sequence and its current checkpoint. It is the only active migration/execution plan. Read current source and [architecture](../architecture/README.md) for implementation reality.
 
 The current slice is the Voice Surface/Work cutover authorized on 2026-10-16.
-Durable admission, existing-Manager dispatch and ordered completed-result
-publication/projection checkpoints are qualified. Surface-aware compaction,
-queued-work cancellation, audio presentation evidence and product/protocol
+Durable admission, existing-Manager dispatch, ordered completed-result
+publication/projection and pending-work cancellation checkpoints are qualified.
+Surface-aware compaction, audio presentation evidence and product/protocol
 cutover remain next. Consult the final Voice
 checkpoint in the active plan for exact evidence. Existing Apple screen, iOS and
 live-provider gates are not closed by screenless owner tests. Historical P1 or

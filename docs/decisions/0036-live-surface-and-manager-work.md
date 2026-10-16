@@ -27,7 +27,10 @@ executor claims one work item per Session at a time. Claim binds an immutable
 execution request to a Run inside storage, before dispatch; restart rejoins that
 binding and never creates another effect-bearing execution. New Surface input
 does not mutate an admitted Run's history or budget. Continue/Resume retain
-existing original-input and uncertain-effect rules.
+existing original-input and uncertain-effect rules. A Person cancellation of
+pending Work is itself ordered Surface intent; retaining its original input
+without the cancellation would misrepresent the later context. Cancellation and
+queue state commit together, while active execution remains Run-owned.
 
 Generated results remain owned by Run/Task evidence. Surface presentations link
 to that evidence and retain their own presentation receipts. Provider acceptance,

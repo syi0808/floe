@@ -7,6 +7,17 @@ use floe_conversation::{
 use floe_kernel::{CommandFailure, CommandId, OwnerActor};
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for VaultConversationRepository<Keys> {
+    fn cancel_pending_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: floe_conversation::CancelPendingWork,
+    ) -> BoxFuture<
+        'a,
+        Result<floe_conversation::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>,
+    > {
+        self.vault.cancel_pending_work(actor, request)
+    }
+
     fn queued_surface_sessions<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -132,6 +143,27 @@ impl<Keys: VaultKeyProvider + 'static> VaultConversationRepository<Keys> {
                             coverage: floe_agent_contract::DependencyCoverage::Independent,
                         });
                     }
+                }
+                floe_conversation::SurfaceEntryReceipt::PendingWorkCancelled(item) => {
+                    let target = self
+                        .vault
+                        .read_surface_work(&actor, item.cancellation.work_command_id)
+                        .await?
+                        .ok_or(AgentFailure::StorageUnavailable)?;
+                    if target.receipt.work_id != item.cancellation.work_id
+                        || target.receipt.anchor.session_id != work.anchor.session_id
+                    {
+                        return Err(AgentFailure::StorageUnavailable);
+                    }
+                    // A normalized Person command, not invented assistant
+                    // speech and not a mutation of the original user text.
+                    messages.push(ContractMessage {
+                        message_id: item.message_id().as_uuid(),
+                        role: floe_agent_contract::MessageRole::User,
+                        text: serde_json::json!({"person_intent": "cancel_pending_work", "input_message_id": target.receipt.input_id.as_uuid(), "work_id": target.receipt.work_id.as_uuid()}).to_string(),
+                        call_id: None,
+                        coverage: floe_agent_contract::DependencyCoverage::Independent,
+                    });
                 }
                 floe_conversation::SurfaceEntryReceipt::PublishedResult(item) => {
                     let run = self

@@ -385,3 +385,6 @@ pub use surface::*;
 
 mod presentation;
 pub use presentation::{SurfaceEntryReceipt, SurfaceResultReceipt, SurfaceResultReference};
+
+mod pending_work_cancellation;
+pub use pending_work_cancellation::{CancelPendingWork, PendingWorkCancellationReceipt, PendingWorkCancellationEntry};

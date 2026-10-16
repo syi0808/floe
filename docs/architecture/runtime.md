@@ -93,8 +93,8 @@ Conversation owns the durable Session/root-Run lifecycle and projects the state 
 
 Conversation now defines a separate `SurfaceRepository` for settled user input
 and durable Work admission under the existing product Session ID. Vault stores
-one ordered `SurfaceEntryReceipt` envelope for original input and canonical
-completed-result references, with a content-bound, monotonic prefix independently
+one ordered `SurfaceEntryReceipt` envelope for original input, pending-work
+cancellation intent and canonical completed-result references, with a content-bound, monotonic prefix independently
 of the Manager Session revision and Core recorder. `SurfaceAnchor` is a history
 boundary, not a source grant. Voice input and delegation identities include the
 exact live-session identity; matching a model role is not sufficient.
@@ -112,6 +112,15 @@ links work and opens the Manager Run/Core recorder in one transaction. Work
 stores queue/link custody only; progress and results are read from the linked
 Run rather than copied into a second execution state machine. Normal claim
 refusals explicitly roll back and settle the journal guard.
+
+Pending-work cancellation atomically changes queued custody and appends its
+canonical Person-intent receipt to that same Surface prefix. The target index
+contains references only. Original input remains retained; a later model sees
+an explicit normalized cancellation intent with the exact input/Work identity,
+not a retroactive filter based on current queue state. Exact replay is read-only
+before writer reservation. A claim/cancel race has one winner. Linked Runs are
+refused by this pending-only command and keep the existing Run cancellation
+owner. Neither closing the panel nor voice hangup issues a cancellation.
 
 Completed Surface-origin Runs append one result reference in the same terminal
 transaction as the Run/Core settlement. The entry means available as text in the
