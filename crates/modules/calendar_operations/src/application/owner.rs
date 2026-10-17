@@ -49,6 +49,12 @@ pub struct CalendarOperationsService {
     pub(super) lose_receipt_settlement_ack: Arc<AtomicBool>,
     #[cfg(feature = "qa-fixtures")]
     pub(super) receipt_settlement_attempts: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) busy_submission_admissions: Arc<AtomicU8>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) lose_submission_ack: Arc<AtomicBool>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) submission_admission_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CalendarOperationsService {
@@ -79,7 +85,28 @@ impl CalendarOperationsService {
             lose_receipt_settlement_ack: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "qa-fixtures")]
             receipt_settlement_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(feature = "qa-fixtures")]
+            busy_submission_admissions: Arc::new(AtomicU8::new(0)),
+            #[cfg(feature = "qa-fixtures")]
+            lose_submission_ack: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "qa-fixtures")]
+            submission_admission_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
+    }
+
+    /// Local positive-admission contention, before any provider dispatch.
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_busy_next_submission_admissions(&self, count: u8) {
+        self.busy_submission_admissions
+            .store(count, Ordering::Release);
+    }
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_lose_next_submission_ack(&self) {
+        self.lose_submission_ack.store(true, Ordering::Release);
+    }
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_submission_admission_attempts(&self) -> usize {
+        self.submission_admission_attempts.load(Ordering::Acquire)
     }
 
     /// Synthetic local contention after a provider outcome is already known.

@@ -192,6 +192,7 @@
       "responsibility": "Authorized projections, lazy source reads, provenance",
       "group": "modules",
       "allowed_internal_dependencies": [
+        "model_contract",
         "agent_contract",
         "context_contract",
         "execution",

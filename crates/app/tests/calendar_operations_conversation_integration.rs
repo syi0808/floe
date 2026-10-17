@@ -873,6 +873,186 @@ mod qa {
         );
     }
 
+    fn direct_admission_fixture_operation(
+        scenario: &Scenario,
+    ) -> floe_day::ManualCalendarOperation {
+        let ProductQueryOutcome::Day(DayQueryOutcome::ExternalCalendarDestinations(destinations)) =
+            scenario
+                .host
+                .request(Uuid::new_v4())
+                .unwrap()
+                .product_query(ProductQuery::Day(
+                    DayProductQuery::ExternalCalendarDestinations,
+                ))
+                .unwrap()
+        else {
+            panic!("destinations")
+        };
+        let [destination] = destinations.as_slice() else {
+            panic!("one destination")
+        };
+        let starts = chrono::DateTime::parse_from_rfc3339("2026-10-13T10:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let ends = chrono::DateTime::parse_from_rfc3339("2026-10-13T11:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        floe_day::ManualCalendarOperation::Create {
+            destination_ref: destination.destination_ref,
+            title: "Exact direct admission".into(),
+            schedule: floe_day::TimedSchedule::new(starts, ends, "UTC").unwrap(),
+        }
+    }
+
+    fn direct_admission_contention_case(lose_ack: bool) {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let operation = direct_admission_fixture_operation(&scenario);
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            owners.calendar_operations.clone()
+        });
+        if lose_ack {
+            owner.qa_lose_next_submission_ack();
+        } else {
+            owner.qa_busy_next_submission_admissions(2);
+        }
+        let command_id = floe_kernel::CommandId::new();
+        let command = ProductCommandRequest {
+            command_id,
+            command: ProductCommand::Day(DayCommand::ExternalCalendarOperation { operation }),
+        };
+        let ProductCommandOutcome::Day(DayCommandOutcome::ExternalCalendarOperation(receipt)) =
+            scenario
+                .host
+                .request(Uuid::new_v4())
+                .unwrap()
+                .product_command(command.clone())
+                .expect("temporary local admission contention must retain this command and retry")
+        else {
+            panic!("direct receipt")
+        };
+        assert!(owner.qa_submission_admission_attempts() >= if lose_ack { 2 } else { 3 });
+        let settled = wait_for_status(&scenario.host, receipt.operation_id, |status| {
+            matches!(
+                status,
+                floe_calendar_operations::ActionStatus::Succeeded { .. }
+            )
+        });
+        assert!(matches!(
+            settled.status,
+            floe_calendar_operations::ActionStatus::Succeeded { .. }
+        ));
+        let ProductCommandOutcome::Day(DayCommandOutcome::ExternalCalendarOperation(replay)) =
+            scenario
+                .host
+                .request(Uuid::new_v4())
+                .unwrap()
+                .product_command(command)
+                .unwrap()
+        else {
+            panic!("exact replay")
+        };
+        assert_eq!(replay.operation_id, receipt.operation_id);
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(effects.lookups, 0);
+    }
+
+    #[test]
+    fn direct_day_admission_retries_local_busy_before_one_external_dispatch() {
+        direct_admission_contention_case(false);
+    }
+
+    #[test]
+    fn direct_day_admission_rejoins_lost_commit_ack_before_one_external_dispatch() {
+        direct_admission_contention_case(true);
+    }
+
+    #[test]
+    fn direct_day_admission_cancellation_retains_command_without_external_dispatch() {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let floe_day::ManualCalendarOperation::Create {
+            destination_ref,
+            title,
+            schedule,
+        } = direct_admission_fixture_operation(&scenario)
+        else {
+            panic!("create fixture")
+        };
+        let intent = floe_calendar_operations::ActionIntent::DirectCreate {
+            destination_ref,
+            title,
+            schedule,
+        };
+        let command_id = Uuid::new_v4();
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            owners.calendar_operations.clone()
+        });
+        owner.qa_busy_next_submission_admissions(255);
+        let failed = support::with_ready(&scenario.host, |services, caller, _| {
+            let actor = caller.owner_actor();
+            let owner = owner.clone();
+            let intent = intent.clone();
+            services.execute_owner(async move {
+                let cancellation = floe_execution::Cancellation::new();
+                let scope = floe_app::host_scope(
+                    Uuid::new_v4(),
+                    cancellation.clone(),
+                    Duration::from_secs(3),
+                );
+                let cancel_after_retry = async {
+                    while owner.qa_submission_admission_attempts() < 2 {
+                        assert!(
+                            tokio::time::Instant::now() < scope.deadline(),
+                            "submission did not reach local retry"
+                        );
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                    cancellation.cancel();
+                };
+                let (result, ()) = tokio::join!(
+                    owner.submit(&actor, command_id, intent, &scope),
+                    cancel_after_retry
+                );
+                result
+            })
+        });
+        assert!(matches!(
+            failed,
+            Err(floe_kernel::CommandFailure::Indeterminate(
+                AgentFailure::Cancelled
+            ))
+        ));
+        assert!(owner.qa_submission_admission_attempts() < 255);
+        assert_eq!(scenario.executor.snapshot().dispatch_attempts, 0);
+        owner.qa_busy_next_submission_admissions(0);
+        let replay = support::with_ready(&scenario.host, |services, caller, _| {
+            let actor = caller.owner_actor();
+            let owner = owner.clone();
+            services.execute_owner(async move {
+                let scope = floe_app::host_scope(
+                    Uuid::new_v4(),
+                    floe_execution::Cancellation::new(),
+                    Duration::from_secs(3),
+                );
+                owner.submit(&actor, command_id, intent, &scope).await
+            })
+        })
+        .expect("same command can rejoin after the local cancellation");
+        let settled = wait_for_status(&scenario.host, replay.action_ref, |status| {
+            matches!(
+                status,
+                floe_calendar_operations::ActionStatus::Succeeded { .. }
+            )
+        });
+        assert!(matches!(
+            settled.status,
+            floe_calendar_operations::ActionStatus::Succeeded { .. }
+        ));
+        assert_eq!(scenario.executor.snapshot().dispatch_attempts, 1);
+        assert_eq!(scenario.executor.snapshot().external_effects, 1);
+    }
+
     #[test]
     fn day_pages_only_direct_origins_and_rejects_expert_reconciliation_before_owner_mutation() {
         let scenario = prepare_scenario_with_scripts(

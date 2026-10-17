@@ -2355,3 +2355,167 @@ async fn retry_work_keeps_original_input_and_survives_intervening_claim_and_reop
         Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     );
 }
+
+#[tokio::test]
+async fn live_result_point_read_preserves_exact_publication_scope_and_reopen() {
+    use floe_context::LiveResultReader;
+    use floe_context_contract::LiveProjectionSource;
+    let (f, vault) = fixture().await;
+    vault.activate_conversation_executor().await.unwrap();
+    let input = vault
+        .append_surface_input(&f.actor, request(&f, &vault, "voice work").await)
+        .await
+        .unwrap();
+    let work = vault
+        .submit_surface_work(&f.actor, work(&input))
+        .await
+        .unwrap();
+    let execution = execution(&f, &work, "voice work", 0);
+    let identity = floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+    vault
+        .claim_manager_surface_work(work, execution.clone(), identity)
+        .await
+        .unwrap();
+    let run = vault
+        .conversation_run(execution.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let terminal = completed_terminal(&vault, &run).await;
+    let completed = vault
+        .settle_manager_conversation_run(run.run_id, 1, terminal)
+        .await
+        .unwrap();
+    let through = vault.surface_head(&f.actor, f.session).await.unwrap();
+    let message_id = SurfaceResultReference::for_run(&completed)
+        .unwrap()
+        .message_id();
+    let source = LiveProjectionSource::SurfaceResult {
+        through,
+        surface_message_id: message_id,
+    };
+    let result = vault.read_live_result(&f.actor, &source).await.unwrap();
+    assert_eq!(result.text, "Synthetic surface result");
+    assert!(!result.partial);
+    assert_eq!(
+        result.coverage,
+        floe_context_contract::DependencyCoverage::Independent
+    );
+    assert!(!format!("{result:?}").contains(&result.text));
+    // Exercise the actual encrypted owner read through Context projection; no
+    // provider, native audio or UI cache participates in this fixture.
+    let plan = floe_model_contract::LiveModelPlan {
+        operation_id: Uuid::new_v4(),
+        actor: f.actor.clone(),
+        capabilities: floe_model_contract::LiveModelCapabilities::conversational(),
+        limits: floe_model_contract::LiveTransportLimits {
+            initial_context_bytes: 16384,
+            append_bytes: 500,
+            local_session_duration_ms: 60000,
+        },
+        boundary: floe_model_contract::ProcessingBoundary::Device,
+        binding_digest: floe_model_contract::ModelBindingDigest([61; 32]),
+        selection_commitment: floe_model_contract::ModelSelectionCommitment([62; 32]),
+    };
+    let budget = floe_execution::budget::BudgetLedger::new(
+        floe_execution::budget::BudgetConfig::new(1, 1),
+        floe_execution::budget::ModelUsage::default(),
+    );
+    let scope = floe_execution::ExecutionScope::root(
+        floe_execution::Cancellation::new(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+        budget.root_lease(),
+        floe_kernel::TraceContext::new(Uuid::new_v4()),
+    );
+    let voice_session_id = Uuid::new_v4();
+    let floe_context::LiveProjectionOutcome::Ready(projection) =
+        floe_context::prepare_live_result_projection(
+            &vault,
+            floe_context::LiveResultProjectionRequest {
+                plan: &plan,
+                voice_session_id,
+                surface_session_id: f.session,
+                projection_id: Uuid::new_v4(),
+                source: &source,
+            },
+            &scope,
+            |_| async { panic!("Independent canonical result has no source dependency") },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("ready projection")
+    };
+    projection
+        .validate_for_plan(&plan, voice_session_id, f.session)
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_str(projection.payload.as_str()).unwrap();
+    assert_eq!(payload["text"], result.text);
+    assert_eq!(payload["partial"], false);
+    assert!(payload.get("run_id").is_none());
+    // A newer Person input cannot silently advance the captured result prefix.
+    vault
+        .append_surface_input(&f.actor, request(&f, &vault, "newer input").await)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.read_live_result(&f.actor, &source).await.unwrap(),
+        result
+    );
+    let too_old = LiveProjectionSource::SurfaceResult {
+        through: input.through,
+        surface_message_id: message_id,
+    };
+    assert_eq!(
+        vault.read_live_result(&f.actor, &too_old).await,
+        Err(AgentFailure::NotFound)
+    );
+    let person_input = LiveProjectionSource::SurfaceResult {
+        through,
+        surface_message_id: input.input.message_id,
+    };
+    assert_eq!(
+        vault.read_live_result(&f.actor, &person_input).await,
+        Err(AgentFailure::NotFound)
+    );
+    let mut foreign = f.actor.clone();
+    foreign.person_id = PersonId::new();
+    assert_eq!(
+        vault.read_live_result(&foreign, &source).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    let mut forged = through;
+    forged.digest = [99; 32];
+    assert!(
+        vault
+            .read_live_result(
+                &f.actor,
+                &LiveProjectionSource::SurfaceResult {
+                    through: forged,
+                    surface_message_id: message_id
+                }
+            )
+            .await
+            .is_err()
+    );
+    // Pure canonical reads do not reserve a writer, even under contention.
+    let mut writer = vault.connection().unwrap();
+    let held = writer
+        .transaction_with_behavior(turso::transaction::TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.read_live_result(&f.actor, &source).await.unwrap(),
+        result
+    );
+    held.rollback().await.unwrap();
+    drop(writer);
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.read_live_result(&f.actor, &source).await.unwrap(),
+        result
+    );
+}

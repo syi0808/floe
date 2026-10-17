@@ -2665,3 +2665,78 @@ This qualifies normalized live values and Context binding/review extraction.
 It does not qualify production live source assembly, streaming transport,
 encrypted Voice event custody, WebRTC, microphone permission or Apple UI.
 No Flutter/Go/native source or persisted schema changed in this slice.
+
+### Canonical Manager result to live Context projection (in progress)
+
+The next slice now has a Context-owned LiveResultReader port and an encrypted
+Vault implementation. It point-reads a published result inside the requested
+immutable Surface prefix, verifies its Conversation publication against the
+canonical Run, and returns its original body, completeness and coverage in one
+Deferred snapshot. It neither follows a newer active Run nor treats a Person
+input or provider caption as a Manager result. No writer reservation is needed.
+
+Context prepares a provider-facing result payload containing only the result
+kind, partial flag and text. Actor/plan/Voice/Surface identity and source lineage
+remain in the separate projection binding. Unknown lineage is denied; current
+source withdrawal and storage failures retain their error semantics, and the
+shared source-processing checks can return an exact processing review. Actual
+Inference dispatch/release still needs its own live authorization fence.
+
+This path reads an already-published result, not newly retrieved saved memory.
+Startup-prefix projection, semantic compaction scheduling, live transport and
+Voice event/delivery custody are not implemented by this result-only path.
+
+Focused checks pass: four Context projection tests and one real encrypted Vault
+fixture that also calls the Context projector, covers a newer input, wrong
+Person/input/prefix, held writer contention and reopen. These are synthetic data
+and model-plan fixtures; no actual provider, microphone or Apple run occurred.
+An initial reader query used the wrong result discriminator and failed NotFound;
+the fixture caught it and the query now uses the actual published_result kind.
+A review fixture initially used a non-view resource and was corrected to the
+existing connection-qualified Calendar view format rather than weakening policy.
+Full snapshot qualification is pending for this slice.
+
+#### Aggregate-discovered direct Day admission contention
+
+The result-projection snapshot passed workspace 497, but aggregate App QA failed
+one existing direct Day pagination scenario with Indeterminate / StorageBusy at
+the external Calendar command boundary. The log did not identify the exact SQL
+statement. Two deterministic real-App fixtures then reproduced the same failure
+at positive admission: pre-write Busy and a committed local admission with lost
+ACK. The initial call returned immediately rather than rejoining its exact local
+command. This is a separate phase from the earlier received-provider-outcome fix.
+
+Submission now retries only local preparation/custody StorageBusy within the
+existing caller deadline/cancellation and owner shutdown checks. Preparation
+retains the same user intent and command. Once prepared, the exact admission
+record is frozen across retries; provider driver admission stays outside both
+loops. Other errors and definitive command dispositions are not retried. A wait
+failure preserves admitted/indeterminate certainty rather than inventing absence.
+Three local policy tests and eleven Calendar Conversation integration tests pass,
+including transient Busy, lost ACK, cancellation followed by exact command reuse,
+no pre-admission external dispatch and one effect after successful admission.
+
+A physical held-writer test additionally reproduced needless writer reservation
+when replaying an already committed submission. Admission now checks canonical
+positive/negative receipts through the existing Deferred lookup; only an absent
+receipt enters Immediate and rechecks the shared namespace. Changed request
+identity remains an error, and an actually fresh contended write remains
+Indeterminate. Physical store and refreshed aggregate gates are still pending.
+
+#### Refreshed result/admission qualification
+
+The unchanged 604 Rust/Cargo input snapshot now passes workspace 500 tests
+including doctests; App QA 82 passed, 0 failed and one intentional process-kill
+driver ignore; production Linux FFI; and architecture boundaries (27 nodes,
+145 edges). The selected development-profile encrypted Calendar admission suite
+passes all 11 tests, including the new held-writer replay regression. This does
+not mean all feature-gated Vault tests were executed. The originally failing
+Day pagination scenario also passes five additional isolated executions of the
+same final test binary. Whitespace checks pass; existing compiler warnings remain.
+
+The earlier aggregate failure and all deterministic pre-fix failures are retained
+as evidence, not overwritten by a passing rerun. No checks were relaxed or
+removed. This qualifies the canonical live-result projection and the two local
+admission-contention corrections. Voice startup-prefix projection, durable live
+event/delivery custody, provider/native transport and actual Apple/audio QA remain
+open. No Flutter/Go/native source, persisted schema or existing profile changed.

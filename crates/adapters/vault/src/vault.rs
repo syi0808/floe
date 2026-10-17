@@ -44,6 +44,7 @@ mod owner_transcript_reads;
 mod surface_compaction;
 mod surface_work_page;
 mod surface_projection;
+mod live_result_projection;
 mod run_successors;
 pub(crate) use owner_transcript_reads::ManagerHistoryView;
 mod storage_payload;

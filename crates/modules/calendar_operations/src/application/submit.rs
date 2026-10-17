@@ -137,16 +137,65 @@ impl CalendarOperationsService {
         intent: ActionIntent,
         scope: &ExecutionScope,
     ) -> Result<ActionSnapshot, floe_kernel::CommandFailure<AgentFailure>> {
-        let admission = self
-            .prepare_admission(actor, command_id, intent, scope)
-            .await?;
-        let record = self
+        let admission = retry_submission_storage_busy(
+            scope,
+            || self.admit_actor(actor, scope),
+            || self.prepare_admission(actor, command_id, intent.clone(), scope),
+        )
+        .await?;
+        // Freeze the prepared source/effect/command identity across local CAS
+        // retries. A lost commit ACK rejoins this same admission; no source
+        // re-resolution, new command or provider invocation belongs in the loop.
+        let record = retry_submission_storage_busy(
+            scope,
+            || self.admit_actor(actor, scope),
+            || async {
+                self.admit_actor(actor, scope)
+                    .map_err(floe_kernel::CommandFailure::Indeterminate)?;
+                self.admit_submission_once(admission.clone()).await
+            },
+        )
+        .await?
+        .record;
+        // Driver admission is outside both retries. Never replay external work
+        // because the initial local command receipt was temporarily unavailable.
+        self.complete_admission(actor, record, scope).await
+    }
+
+    async fn admit_submission_once(
+        &self,
+        admission: OperationAdmission,
+    ) -> Result<AdmittedOperation, floe_kernel::CommandFailure<AgentFailure>> {
+        #[cfg(feature = "qa-fixtures")]
+        {
+            use std::sync::atomic::Ordering;
+            self.submission_admission_attempts
+                .fetch_add(1, Ordering::AcqRel);
+            if self
+                .busy_submission_admissions
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return Err(floe_kernel::CommandFailure::Indeterminate(
+                    AgentFailure::StorageBusy,
+                ));
+            }
+        }
+        let result = self
             .repository
             .admit(admission)
             .await
-            .map_err(|failure| failure.map_failure(AgentFailure::from))?
-            .record;
-        self.complete_admission(actor, record, scope).await
+            .map_err(|failure| failure.map_failure(AgentFailure::from))?;
+        #[cfg(feature = "qa-fixtures")]
+        if self
+            .lose_submission_ack
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Err(floe_kernel::CommandFailure::Indeterminate(
+                AgentFailure::StorageBusy,
+            ));
+        }
+        Ok(result)
     }
 
     /// Successful preparation returns an unadmitted Expert proposal. A terminal
@@ -535,5 +584,159 @@ impl CalendarOperationsService {
                 }
             },
         }
+    }
+}
+
+/// Retry only local submission preparation/custody, with unchanged caller input.
+/// This is deliberately private to this phase, never a provider-effect retry.
+async fn retry_submission_storage_busy<T, Check, Operation, OperationFuture>(
+    scope: &ExecutionScope,
+    mut check: Check,
+    mut operation: Operation,
+) -> Result<T, floe_kernel::CommandFailure<AgentFailure>>
+where
+    Check: FnMut() -> Result<(), AgentFailure>,
+    Operation: FnMut() -> OperationFuture,
+    OperationFuture:
+        std::future::Future<Output = Result<T, floe_kernel::CommandFailure<AgentFailure>>>,
+{
+    use floe_kernel::CommandFailure;
+    use std::time::Duration;
+    let mut delay = Duration::from_millis(20);
+    loop {
+        match operation().await {
+            Err(
+                failure @ (CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                | CommandFailure::Admitted(AgentFailure::StorageBusy)),
+            ) => {
+                if let Err(reason) = check() {
+                    return Err(failure.map_failure(|_| reason));
+                }
+                let waited = scope
+                    .run(async {
+                        tokio::time::sleep(delay).await;
+                        Ok(())
+                    })
+                    .await;
+                if let Err(reason) = waited {
+                    return Err(failure.map_failure(|_| reason));
+                }
+                if let Err(reason) = check() {
+                    return Err(failure.map_failure(|_| reason));
+                }
+                delay = (delay * 2).min(Duration::from_millis(100));
+            }
+            result => return result,
+        }
+    }
+}
+
+#[cfg(test)]
+mod submission_retry_tests {
+    use super::*;
+    use floe_execution::{
+        Cancellation,
+        budget::{BudgetConfig, BudgetLedger, ModelUsage},
+    };
+    use floe_kernel::{CommandFailure, TraceContext};
+    use std::{cell::Cell, time::Duration};
+    fn scope(duration: Duration) -> ExecutionScope {
+        let budget = BudgetLedger::new(BudgetConfig::new(1, 1), ModelUsage::default());
+        ExecutionScope::root(
+            Cancellation::new(),
+            tokio::time::Instant::now() + duration,
+            budget.root_lease(),
+            TraceContext::new(Uuid::new_v4()),
+        )
+    }
+    #[tokio::test]
+    async fn local_submission_retry_keeps_other_failures_and_definitive_dispositions() {
+        for failure in [
+            CommandFailure::Indeterminate(AgentFailure::StorageUnavailable),
+            CommandFailure::Indeterminate(AgentFailure::Conflict),
+            CommandFailure::Indeterminate(AgentFailure::PolicyDenied),
+            CommandFailure::NotApplied(AgentFailure::StorageBusy),
+            CommandFailure::NotAdmitted(AgentFailure::StorageBusy),
+        ] {
+            let calls = Cell::new(0);
+            let result: Result<(), _> = retry_submission_storage_busy(
+                &scope(Duration::from_secs(1)),
+                || Ok(()),
+                || {
+                    calls.set(calls.get() + 1);
+                    async move { Err(failure) }
+                },
+            )
+            .await;
+            assert_eq!(result, Err(failure));
+            assert_eq!(calls.get(), 1);
+        }
+    }
+    #[tokio::test]
+    async fn local_submission_retry_retains_admission_certainty_at_deadline() {
+        for admitted in [false, true] {
+            let calls = Cell::new(0);
+            let result: Result<(), _> = retry_submission_storage_busy(
+                &scope(Duration::from_millis(45)),
+                || Ok(()),
+                || {
+                    calls.set(calls.get() + 1);
+                    async move {
+                        Err(if admitted {
+                            CommandFailure::Admitted(AgentFailure::StorageBusy)
+                        } else {
+                            CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                        })
+                    }
+                },
+            )
+            .await;
+            assert_eq!(
+                result,
+                Err(if admitted {
+                    CommandFailure::Admitted(AgentFailure::DeadlineExceeded)
+                } else {
+                    CommandFailure::Indeterminate(AgentFailure::DeadlineExceeded)
+                })
+            );
+            assert!((1..=3).contains(&calls.get()));
+        }
+    }
+    #[tokio::test]
+    async fn local_submission_retry_checks_shutdown_and_cancellation_before_retry() {
+        let s = scope(Duration::from_secs(1));
+        let calls = Cell::new(0);
+        let result: Result<(), _> = retry_submission_storage_busy(
+            &s,
+            || Err(AgentFailure::VaultUnavailable),
+            || {
+                calls.set(calls.get() + 1);
+                async { Err(CommandFailure::Indeterminate(AgentFailure::StorageBusy)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(CommandFailure::Indeterminate(
+                AgentFailure::VaultUnavailable
+            ))
+        );
+        assert_eq!(calls.get(), 1);
+        let calls = Cell::new(0);
+        let result: Result<(), _> = retry_submission_storage_busy(
+            &s,
+            || Ok(()),
+            || {
+                calls.set(calls.get() + 1);
+                s.cancellation().cancel();
+                async { Err(CommandFailure::Indeterminate(AgentFailure::StorageBusy)) }
+            },
+        )
+        .await;
+        assert_eq!(
+            result,
+            Err(CommandFailure::Indeterminate(AgentFailure::Cancelled))
+        );
+        assert_eq!(calls.get(), 1);
     }
 }

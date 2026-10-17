@@ -1613,6 +1613,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             admission.command_id,
             admission.request_digest,
         );
+        // Existing positive/negative custody is a read. An unrelated writer
+        // cannot make an already committed command's outcome uncertain again.
+        // A missing receipt still enters Immediate below, which rechecks the
+        // shared namespace and exact digest before any admission mutation.
+        match self
+            .actions_find_admission(identity.0, identity.1, identity.2)
+            .await
+        {
+            Ok(Some(record)) => {
+                return Ok(AdmittedOperation {
+                    record,
+                    replayed: true,
+                });
+            }
+            Ok(None) => {}
+            Err(CalendarOperationStoreError::Rejected(reason)) => {
+                return Err(CommandFailure::NotApplied(
+                    CalendarOperationStoreError::Rejected(reason),
+                ));
+            }
+            Err(error) => return Err(CommandFailure::Indeterminate(error)),
+        }
         let mut connection = self
             .connection()
             .map_err(|error| CommandFailure::Indeterminate(access_error(error)))?;

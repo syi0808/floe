@@ -12,6 +12,7 @@ qa-fixtures = [
 ]
 
 [dependencies]
+floe-model-contract = { path = "../../contracts/model" }
 chrono.workspace = true
 jsonschema.workspace = true
 floe-access = { path = "../access" }

@@ -14,6 +14,7 @@ mod application {
     pub mod history;
     pub mod learner_projection;
     pub mod leases;
+    pub mod live_projection;
     pub mod model_coverage;
     pub mod model_projection;
     pub mod native_calendar;
@@ -43,6 +44,7 @@ mod ports {
     pub mod day_context_evidence;
     pub mod evidence_reader;
     pub mod expert_execution;
+    pub mod live_result;
     pub mod personal_source;
     pub mod source_metadata;
     pub mod source_reader;
@@ -171,3 +173,9 @@ pub use application::dependency_resolver::ContextDependencyResolver;
 
 pub use application::source_review::ContextSourceReview;
 pub use ports::source_metadata::SourceMetadataTransport;
+
+pub use ports::live_result::{LiveResultReader, LiveResultSnapshot};
+
+pub use application::live_projection::{
+    LiveProjectionOutcome, LiveResultProjectionRequest, prepare_live_result_projection,
+};

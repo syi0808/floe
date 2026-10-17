@@ -750,3 +750,80 @@ async fn known_calendar_settlement_replay_is_read_only_and_survives_reopen() {
         current
     );
 }
+
+#[tokio::test]
+async fn submission_admission_replay_is_read_only_but_fresh_write_remains_uncertain() {
+    let root = Root::new();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let positive = admission(person);
+    let negative = admission(person);
+    let fresh = admission(person);
+    let vault = create(&root, person, &keys).await;
+    let original = vault.actions_admit(positive.clone()).await.unwrap().record;
+    vault
+        .actions_reject_admission(
+            person,
+            negative.command_id,
+            negative.request_digest,
+            AgentFailure::PolicyDenied,
+        )
+        .await
+        .unwrap();
+    let mut connection = vault.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let replay = vault.actions_admit(positive.clone()).await;
+    let rejection = vault.actions_admit(negative.clone()).await;
+    let mut changed = positive.clone();
+    changed.request_digest[0] ^= 1;
+    let conflict = vault.actions_admit(changed).await;
+    let unadmitted = vault.actions_admit(fresh.clone()).await;
+    writer.rollback().await.unwrap();
+    let replay = replay.expect("exact positive submission receipt must not reserve a writer");
+    assert!(replay.replayed);
+    assert_eq!(replay.record, original);
+    assert!(matches!(
+        rejection,
+        Err(CommandFailure::NotApplied(
+            CalendarOperationStoreError::Rejected(AgentFailure::PolicyDenied)
+        ))
+    ));
+    assert!(matches!(
+        conflict,
+        Err(CommandFailure::Indeterminate(
+            CalendarOperationStoreError::Conflict
+        ))
+    ));
+    assert!(matches!(
+        unadmitted,
+        Err(CommandFailure::Indeterminate(
+            CalendarOperationStoreError::StorageBusy
+        ))
+    ));
+    assert!(
+        vault
+            .actions_find_admission(person, fresh.command_id, fresh.request_digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(!vault.actions_admit(fresh).await.unwrap().replayed);
+    drop(connection);
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&root.0, person, keys)
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened.actions_admit(positive).await.unwrap().record,
+        original
+    );
+    assert!(matches!(
+        reopened.actions_admit(negative).await,
+        Err(CommandFailure::NotApplied(
+            CalendarOperationStoreError::Rejected(AgentFailure::PolicyDenied)
+        ))
+    ));
+}
