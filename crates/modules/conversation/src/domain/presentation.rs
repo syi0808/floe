@@ -1,7 +1,7 @@
 //! Immutable presentation evidence on the same Person-facing prefix as input.
 //! Published text means available in the transcript, never proof of being read
 //! or of audio playback. The body remains in its canonical Manager Run.
-use super::surface::{SurfaceAnchor, SurfaceInputReceipt, digest};
+use super::surface::{SurfaceAnchor, SurfaceInputReceipt, advance_surface, digest};
 use crate::{RunRecord, RunState};
 use floe_conversation_contract::MessageId;
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, PersonId, RunId};
@@ -94,7 +94,7 @@ impl SurfaceResultReceipt {
             b"floe.surface.publish-result\0",
             &(actor.person_id, &actor.device_id, before, &result),
         )?;
-        let through = before.advance(request_digest)?;
+        let through = advance_surface(before, request_digest)?;
         Ok(Self {
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),

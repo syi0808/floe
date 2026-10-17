@@ -97,7 +97,11 @@ one ordered `SurfaceEntryReceipt` envelope for original input, pending-work
 cancellation intent, terminal-outcome references and canonical complete/partial
 result references, with a content-bound, monotonic prefix independently
 of the Manager Session revision and Core recorder. `SurfaceAnchor` is a history
-boundary, not a source grant. Voice input and delegation identities include the
+boundary, not a source grant. The value lives in the Conversation contract so
+Context/Inference can carry the same exact prefix without depending on the
+Conversation implementation. Link advancement and stored-prefix membership
+remain Conversation-owned; shape validation does not authenticate a reference.
+Voice input and delegation identities include the
 exact live-session identity; matching a model role is not sufficient.
 
 The implemented internal Surface/Work path is shown below. The public App/FFI/

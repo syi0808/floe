@@ -6,6 +6,9 @@
 
 mod identity;
 mod message;
+mod surface;
+
+pub use surface::SurfaceAnchor;
 
 pub use identity::{
     AgentIdentity, AgentInstanceId, AssignmentId, ConversationBranchId, ConversationId,

@@ -2247,3 +2247,28 @@ history/reopen regression; production FFI build passed (2m17s). All three comman
 exited zero against the same frozen 585 Rust/Cargo inputs. Boundary and whitespace
 checks pass. This qualifies owner/storage/display foundations, not the pending
 App/FFI/Flutter Surface admission cutover or live/native Voice integration.
+
+
+### 2026-10-17 Voice recovery and shared prefix checkpoint
+
+- Executor recovery exposed a filesystem without the later unpublished Voice
+  working copy. Restored published `faabeb72` from GitHub and verified every
+  tracked blob, the tree and commit identity. Historical unpublished test
+  counts are not validation of reconstructed source. A partial external archive
+  preserves three delivery fragments; it is not a complete buildable checkpoint.
+- Reconstruct coherent slices from this published base. First move the exact
+  `SurfaceAnchor` value into the Conversation contract for shared live-context
+  proofs, retaining link advancement and membership checks in Conversation.
+  All four entry families use the same owner-private link function. No wire,
+  stored schema, hash meaning, admission authority or public client route changes.
+- Verify fixed published empty/link digest vectors, invalid identities, overflow,
+  forged empty prefixes and all affected owner tests. Focused contract/owner
+  tests pass 52 cases on the reconstructed source. The final workspace gate
+  passes 455 tests, App QA passes 74 with one intentional crash-driver ignore,
+  and the production FFI build passes. Architecture (26 nodes/139 edges),
+  changed-file rustfmt and whitespace checks pass. These results cover this
+  shared-prefix slice only; they do not restore or qualify the missing Voice
+  implementation, Flutter or native/provider behavior.
+  Continue with coordinated text/Work admission, live selection/context fences,
+  durable Voice custody, native/control adapters and client integration in the
+  existing sequence. External checkpoints accompany the reconstructed source.

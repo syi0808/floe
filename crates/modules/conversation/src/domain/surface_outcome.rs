@@ -1,6 +1,6 @@
 //! Immutable non-completed Run outcome evidence on the Person-facing Surface.
 //! A status describes execution custody, never a permission or audio receipt.
-use super::surface::{SurfaceAnchor, digest};
+use super::surface::{SurfaceAnchor, advance_surface, digest};
 use crate::{RunRecord, RunState};
 use floe_conversation_contract::MessageId;
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, PersonId, RunId};
@@ -117,7 +117,7 @@ impl SurfaceOutcomeReceipt {
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),
             before,
-            through: before.advance(request_digest)?,
+            through: advance_surface(before, request_digest)?,
             outcome,
             request_digest,
         })

@@ -1,5 +1,6 @@
 //! Person-facing custody and work admission, independent of the Core recorder.
 use floe_conversation_contract::MessageId;
+pub use floe_conversation_contract::SurfaceAnchor;
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, PersonId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,49 +11,22 @@ use uuid::Uuid;
 pub const MAX_PENDING_SURFACE_WORK: usize = 64;
 pub const MAX_SURFACE_PAGE_ITEMS: usize = 128;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SurfaceAnchor {
-    pub session_id: Uuid,
-    pub sequence: u64,
-    pub digest: [u8; 32],
-}
-impl SurfaceAnchor {
-    pub fn empty(session_id: Uuid) -> Result<Self, AgentFailure> {
-        if session_id.is_nil() {
-            return Err(AgentFailure::InvalidInput);
-        }
-        let mut hash = Sha256::new();
-        hash.update(b"floe.surface.prefix\0");
-        hash.update(session_id.as_bytes());
-        Ok(Self {
-            session_id,
-            sequence: 0,
-            digest: hash.finalize().into(),
-        })
-    }
-    pub(super) fn advance(&self, request_digest: [u8; 32]) -> Result<Self, AgentFailure> {
-        self.validate()?;
-        let sequence = self
-            .sequence
-            .checked_add(1)
-            .filter(|value| *value <= i64::MAX as u64)
-            .ok_or(AgentFailure::BudgetExceeded)?;
-        Ok(Self {
-            session_id: self.session_id,
-            sequence,
-            digest: digest(b"floe.surface.link\0", &(*self, request_digest))?,
-        })
-    }
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.session_id.is_nil() || self.sequence > i64::MAX as u64 {
-            return Err(AgentFailure::InvalidInput);
-        }
-        if self.sequence == 0 && *self != Self::empty(self.session_id)? {
-            return Err(AgentFailure::Conflict);
-        }
-        Ok(())
-    }
+/// Only the Conversation owner computes a new link after admission.
+pub(super) fn advance_surface(
+    anchor: SurfaceAnchor,
+    request_digest: [u8; 32],
+) -> Result<SurfaceAnchor, AgentFailure> {
+    anchor.validate()?;
+    let sequence = anchor
+        .sequence
+        .checked_add(1)
+        .filter(|value| *value <= i64::MAX as u64)
+        .ok_or(AgentFailure::BudgetExceeded)?;
+    Ok(SurfaceAnchor {
+        session_id: anchor.session_id,
+        sequence,
+        digest: digest(b"floe.surface.link\0", &(anchor, request_digest))?,
+    })
 }
 
 /// These are host-normalized origins, not provider roles or source grants.
@@ -140,7 +114,7 @@ impl AppendSurfaceInput {
                 &self.input,
             ),
         )?;
-        let through = self.expected.advance(request_digest)?;
+        let through = advance_surface(self.expected, request_digest)?;
         Ok(SurfaceInputReceipt {
             person_id: actor.person_id,
             device_id: actor.device_id.clone(),
@@ -332,6 +306,39 @@ pub(super) fn digest(domain: &[u8], value: &impl Serialize) -> Result<[u8; 32], 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_reference_keeps_owner_chain_encoding_and_bounds() {
+        let anchor =
+            SurfaceAnchor::empty(Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap())
+                .unwrap();
+        let next = advance_surface(anchor, [7; 32]).unwrap();
+        assert_eq!(next.sequence, 1);
+        assert_eq!(next.session_id, anchor.session_id);
+        assert_eq!(
+            next.digest,
+            [
+                31, 184, 253, 73, 142, 184, 227, 142, 120, 167, 7, 149, 5, 121, 28, 230, 14, 36,
+                60, 71, 203, 160, 136, 96, 221, 184, 7, 108, 231, 242, 77, 56
+            ]
+        );
+        assert_eq!(
+            advance_surface(
+                SurfaceAnchor {
+                    sequence: i64::MAX as u64,
+                    ..next
+                },
+                [7; 32]
+            ),
+            Err(AgentFailure::BudgetExceeded)
+        );
+        let mut forged = anchor;
+        forged.digest[0] ^= 1;
+        assert_eq!(
+            advance_surface(forged, [7; 32]),
+            Err(AgentFailure::Conflict)
+        );
+    }
+
     fn actor() -> OwnerActor {
         OwnerActor {
             person_id: PersonId::new(),

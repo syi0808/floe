@@ -1,7 +1,7 @@
 //! Cancellation of queued Work only. Once a Run exists, its existing owner is
 //! the sole cancellation authority; this command cannot rewrite linked custody.
 use crate::WorkId;
-use crate::domain::surface::digest;
+use crate::domain::surface::{advance_surface, digest};
 use floe_kernel::{AgentFailure, CommandId, OwnerActor, PersonId};
 use serde::{Deserialize, Serialize};
 
@@ -119,10 +119,10 @@ impl PendingWorkCancellationEntry {
         cancellation: PendingWorkCancellationReceipt,
     ) -> Result<Self, AgentFailure> {
         cancellation.validate()?;
-        let through = before.advance(digest(
-            b"floe.surface.cancelled-work-entry\0",
-            &cancellation,
-        )?)?;
+        let through = advance_surface(
+            before,
+            digest(b"floe.surface.cancelled-work-entry\0", &cancellation)?,
+        )?;
         Ok(Self {
             before,
             through,
