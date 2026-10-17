@@ -13,8 +13,8 @@ use floe_execution::ExecutionScope;
 use uuid::Uuid;
 
 use crate::{
-    AdmittedDispatchTarget, CanonicalModelRequest, LocalObservation, ModelProvider,
-    ObservedModelCapability, PreparedModelProfile, PreparedModelTransport, PrimaryObservation,
+    AdmittedDispatchTarget, CanonicalModelRequest, ModelProvider, ObservedModelCapability,
+    PreparedModelProfile, PreparedModelTransport,
 };
 
 const MAX_ATTEMPT_TOKENS: u64 = 4_096;
@@ -45,7 +45,7 @@ impl InferenceAvailability {
 
 /// The sole role-neutral planner. Source projection follows its immutable plan.
 pub struct InferenceService<Provider, Resolver, Authority> {
-    provider: Provider,
+    pub(super) provider: Provider,
     resolver: Arc<Resolver>,
     authority: Arc<Authority>,
 }
@@ -75,37 +75,11 @@ where
             request.validate()?;
             scope
                 .run(async {
-                    // Only a positively established Primary absence permits local observation.
-                    let (selected, expected_boundary) = match self
-                        .provider
-                        .observe_primary(&request, scope)
-                        .await
-                        .map_err(AgentFailure::from)?
-                    {
-                        PrimaryObservation::Available(selected) => {
-                            (selected, ProcessingBoundary::Gateway)
-                        }
-                        PrimaryObservation::Absent(_) => match self
-                            .provider
-                            .observe_local_fallback(&request, scope)
-                            .await
-                            .map_err(|error| match error {
-                                crate::ModelObservationError::InvalidInventory => {
-                                    AgentFailure::LocalModelInvalidOutput
-                                }
-                                crate::ModelObservationError::TransportUnavailable => {
-                                    AgentFailure::LocalModelUnavailable
-                                }
-                                error => AgentFailure::from(error),
-                            })? {
-                            LocalObservation::Available(selected) => {
-                                (selected, ProcessingBoundary::Device)
-                            }
-                            LocalObservation::Unavailable(_) => {
-                                return Err(AgentFailure::ModelUnavailable);
-                            }
-                        },
-                    };
+                    let (selected, expected_boundary) = super::selection::select_primary_or_local(
+                        self.provider.observe_primary(&request, scope),
+                        || self.provider.observe_local_fallback(&request, scope),
+                    )
+                    .await?;
                     let PreparedModelProfile {
                         capability,
                         transport,

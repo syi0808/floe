@@ -116,9 +116,10 @@ pub const MAX_AGENT_MESSAGES: usize = 128;
 pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 pub use model_plan::{
-    ModelBindingDigest, ModelCapabilities, ModelCapability, ModelExecutionSelection,
-    ModelPlanRequest, ModelSelectionCommitment, ModelSelectionState, PreparedModelPlan,
-    ProcessingBoundary, validate_model_intent_selection,
+    ModelCapabilities, ModelCapability, ModelExecutionSelection, ModelPlanRequest,
+    ModelSelectionState, PreparedModelPlan, validate_model_intent_selection,
 };
 
 pub use floe_model_contract::{ModelOutputFormat, ModelSchema, strict_json as strict_model_json};
+
+pub use floe_model_contract::{ModelBindingDigest, ModelSelectionCommitment, ProcessingBoundary};

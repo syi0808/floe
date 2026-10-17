@@ -16,9 +16,9 @@
       "id": "model_contract",
       "package": "floe-model-contract",
       "path": "crates/contracts/model",
-      "responsibility": "Neutral bounded model schemas and DeviceModel wire values",
+      "responsibility": "Neutral model schemas, shared routing identities, live planning values and DeviceModel wire values",
       "group": "contracts",
-      "allowed_internal_dependencies": []
+      "allowed_internal_dependencies": ["kernel"]
     },
     {
       "id": "context_contract",
@@ -136,12 +136,21 @@
       ]
     },
     {
+      "id": "voice",
+      "package": "floe-voice",
+      "path": "crates/modules/voice",
+      "responsibility": "Live session lifecycle, native intent correlation and presentation ownership; no OS or provider wire",
+      "group": "modules",
+      "allowed_internal_dependencies": ["kernel"]
+    },
+    {
       "id": "inference",
       "package": "floe-inference",
       "path": "crates/modules/inference",
       "responsibility": "Shared purpose/capability planning and fenced dispatch, with Gateway-primary and valid-absence local fallback",
       "group": "modules",
       "allowed_internal_dependencies": [
+        "model_contract",
         "agent_contract",
         "context_contract",
         "execution",

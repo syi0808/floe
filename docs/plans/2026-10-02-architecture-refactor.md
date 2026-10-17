@@ -2428,3 +2428,66 @@ or provider-call qualification is claimed. Voice owner/native/control/runtime
 integration and the separate intermittent Calendar storage-recovery follow-up
 remain open. The next live-session design above defines the next slice; it is
 not an implemented feature claim.
+
+### Live selection/context reconstruction in progress
+
+The published text/Work slice is `dd0dcfd8` (tree `ba4e6aa9`). A subsequent
+executor reset removed its local checkout/toolchains. Retained publication
+contents over the verified base reproduced that exact tree before publication;
+raw final prior-executor logs were not restored, so they must not be fabricated.
+The observed counts above belong to that same verified tree. Individual Git
+blobs plus one matching tree/commit and non-force expected-head update completed
+publication after two large combined-tree calls were cancelled. CI reported no
+check runs; this is not a CI-green claim.
+
+The next work extracts the one Primary-valid-absence selector for generation and
+live planning and introduces neutral live capabilities/confirmed limits. Existing
+generation callers retain their actual profile and transport, not a compatibility
+route. Live preparation pins actor/epoch, selection commitment, Gateway target,
+capabilities and preparation lifetime in a non-clone handle. It does not start a
+call or authorize capture, source access or result release. No App/FFI/live-provider
+start route exists yet. Durable startup dispatch, Context proof/revalidation,
+long-lived control/event custody and native integration remain the next steps.
+Focused selection/contract/owned-handle tests pass on this in-progress source;
+generation adapter compilation/regressions and wider gates remain pending. Do not
+attribute the published text/Work validation to these new files.
+
+- Added the provider/OS-independent Voice lifecycle policy with exact binding and
+  native command generations. Stop intent does not claim actual capture/playback
+  termination. Provider loss requests native stop; confirmed native stop can
+  release a local lease while remote close stays Unknown. No transcript, Manager
+  cancellation, provider start, native permission or billing result is invented.
+  Eight lifecycle tests and nine Inference plus three model-contract tests pass;
+  generation provider regressions pass 18 tests (the opt-in real Rust-Go smoke
+  was not enabled and its default-return test must not be claimed as live proof).
+  App QA tests/examples are being compiled after signature migration. This is
+  in-progress source, not a composed Voice feature or a new all-green snapshot.
+
+- Shared binding digest, selection commitment and processing-boundary values now
+  have one neutral model-contract definition with unchanged generation wire.
+  Live plan snapshots live there too, so Context need not import the Inference
+  owner. Agent contracts reexport the same values, not translated duplicates.
+  Focused neutral checks pass Agent 13, Inference 9, Model 4 and Voice 8 cases;
+  App QA tests/examples compile after the signature and identity cutover.
+  Voice's binding explicitly names the Person-facing `surface_session_id`, not
+  an Agent Core conversation ID. Neither these checks nor the earlier lifecycle
+  policy are proof of composed event persistence or provider/native behavior.
+
+
+### Live planning/lifecycle foundation qualification
+
+The frozen foundation inputs pass `CARGO_INCREMENTAL=0 cargo test --workspace
+--no-fail-fast` (483 tests, including doctests) and the existing App QA-feature
+aggregate (76 passed, one intentional crash-driver ignore). Production Linux
+`cargo build -p floe-ffi` passes. Architecture checking reports 27 nodes and 142
+edges with no errors or warnings; changed Rust formatting and whitespace checks
+pass. Existing unused/dead-code warnings remain, including prepared live transport
+fields awaiting the next dispatcher. App QA examples/tests also compile.
+
+No Flutter/Go/native source or public AppWire command changed in this foundation.
+The preceding 237-test Flutter result is historical same-Dart evidence, not a new
+Flutter execution on this snapshot. No live provider, native audio, durable Voice
+journal, Context live projection, App composition or Apple bundle is qualified.
+The foundation is neutral model identity/capability/selection plus pure Voice
+lifecycle policy. Next integrate Context and exact encrypted startup/event
+custody before exposing a provider start or microphone command in the product.

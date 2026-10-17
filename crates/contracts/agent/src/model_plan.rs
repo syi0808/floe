@@ -3,14 +3,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AgentFailure, ModelBudgetProfile};
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProcessingBoundary {
-    Device,
-    Gateway,
-}
+use crate::{
+    AgentFailure, ModelBindingDigest, ModelBudgetProfile, ModelSelectionCommitment,
+    ProcessingBoundary,
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -68,25 +64,6 @@ impl ModelCapabilities {
             return Err(AgentFailure::InvalidInput);
         }
         Ok(())
-    }
-}
-
-/// Correlation only. Possession of a digest never authorizes a dispatch.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct ModelBindingDigest(pub [u8; 32]);
-
-/// Opaque provider-owned commitment to the selected target and its revision.
-/// It is correlation evidence only; it cannot authorize a model dispatch.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct ModelSelectionCommitment(pub [u8; 32]);
-
-impl ModelSelectionCommitment {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        (self.0 != [0; 32])
-            .then_some(())
-            .ok_or(AgentFailure::InvalidInput)
     }
 }
 

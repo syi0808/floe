@@ -19,6 +19,7 @@ members = [
     "crates/modules/day",
     "crates/modules/experts",
     "crates/modules/inference",
+    "crates/modules/voice",
     "crates/modules/knowledge",
     "crates/experts/builtin",
     "crates/adapters/providers",

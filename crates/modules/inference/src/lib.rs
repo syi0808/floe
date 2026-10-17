@@ -11,8 +11,19 @@ pub use floe_agent_contract::{
     ProcessingBoundary,
 };
 pub use ports::model_provider::{
-    AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, LocalAvailabilityReason,
-    LocalObservation, ModelObservationError, ModelProvider, ObservedModelCapability,
-    PreparedModelProfile, PreparedModelTransport, PrimaryAbsence, PrimaryObservation,
+    AdmittedDispatchTarget, CanonicalModelRequest, CanonicalModelResponse, ModelProvider,
+    ObservedModelCapability, PreparedModelProfile, PreparedModelTransport,
     ProviderUsageObservation,
+};
+
+pub use ports::selection::{
+    LocalAvailabilityReason, LocalObservation, ModelObservationError, PrimaryAbsence,
+    PrimaryObservation,
+};
+
+pub use application::PreparedLiveSelection;
+pub use floe_model_contract::LiveModelPlan;
+pub use ports::live_provider::{
+    LIVE_PRESENTATION_CONSUMER, LIVE_PRESENTATION_PURPOSE, LiveModelPlanRequest, LiveModelProvider,
+    ObservedLiveModelCapability, PreparedLiveModelProfile,
 };

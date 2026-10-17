@@ -119,8 +119,13 @@ impl DeviceModelProvider {
         &'a self,
         request: &'a ModelPlanRequest,
         scope: &'a ExecutionScope,
-    ) -> BoxFuture<'a, Result<LocalObservation<PreparedDeviceTransport>, ModelObservationError>>
-    {
+    ) -> BoxFuture<
+        'a,
+        Result<
+            LocalObservation<PreparedModelProfile<PreparedDeviceTransport>>,
+            ModelObservationError,
+        >,
+    > {
         Box::pin(async move {
             request
                 .validate()

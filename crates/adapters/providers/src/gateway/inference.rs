@@ -32,7 +32,10 @@ impl GatewayModelProvider {
         &self,
         request: &ModelPlanRequest,
         scope: &ExecutionScope,
-    ) -> Result<PrimaryObservation<PreparedGatewayTransport>, ModelObservationError> {
+    ) -> Result<
+        PrimaryObservation<PreparedModelProfile<PreparedGatewayTransport>>,
+        ModelObservationError,
+    > {
         request
             .validate()
             .map_err(|_| ModelObservationError::InvalidIdentity)?;
@@ -625,7 +628,10 @@ mod tests {
             _scope: &'a ExecutionScope,
         ) -> floe_execution::BoxFuture<
             'a,
-            Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+            Result<
+                PrimaryObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+                ModelObservationError,
+            >,
         > {
             Box::pin(async { Err(ModelObservationError::CapabilityUnavailable) })
         }
@@ -637,7 +643,9 @@ mod tests {
         ) -> floe_execution::BoxFuture<
             'a,
             Result<
-                floe_inference::LocalObservation<Box<dyn PreparedModelTransport>>,
+                floe_inference::LocalObservation<
+                    PreparedModelProfile<Box<dyn PreparedModelTransport>>,
+                >,
                 ModelObservationError,
             >,
         > {

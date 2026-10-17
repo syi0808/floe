@@ -60,7 +60,11 @@ impl floe_inference::ModelProvider for SyntheticDeviceProvider {
     ) -> BoxFuture<
         'a,
         Result<
-            floe_inference::PrimaryObservation<Box<dyn floe_inference::PreparedModelTransport>>,
+            floe_inference::PrimaryObservation<
+                floe_inference::PreparedModelProfile<
+                    Box<dyn floe_inference::PreparedModelTransport>,
+                >,
+            >,
             floe_inference::ModelObservationError,
         >,
     > {
@@ -82,7 +86,11 @@ impl floe_inference::ModelProvider for SyntheticDeviceProvider {
     ) -> BoxFuture<
         'a,
         Result<
-            floe_inference::LocalObservation<Box<dyn floe_inference::PreparedModelTransport>>,
+            floe_inference::LocalObservation<
+                floe_inference::PreparedModelProfile<
+                    Box<dyn floe_inference::PreparedModelTransport>,
+                >,
+            >,
             floe_inference::ModelObservationError,
         >,
     > {

@@ -769,7 +769,10 @@ impl ModelProvider for ScriptedModelProvider {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            PrimaryObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         let model = self.model.clone();
         Box::pin(async move {
@@ -794,7 +797,10 @@ impl ModelProvider for ScriptedModelProvider {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            LocalObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         let model = self.model.clone();
         Box::pin(async move {

@@ -27,7 +27,10 @@ impl ModelProvider for CompositeModelProvider {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            PrimaryObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         Box::pin(async move {
             Ok(match self.gateway.observe_primary(request, scope).await? {
@@ -48,7 +51,10 @@ impl ModelProvider for CompositeModelProvider {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            LocalObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         Box::pin(async move {
             Ok(

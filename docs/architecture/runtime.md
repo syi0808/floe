@@ -1058,3 +1058,31 @@ regression against the real encrypted engine; that test does not qualify macOS
 Keychain access, signing, key deletion or GUI behavior. The native diagnostic
 retains its explicit exercise/cleanup modes, exact disposable key identity,
 private-root checks and key-loss access fence. No model or provider is called.
+
+
+### Live model planning boundary
+
+Inference's live preparation uses the same Primary-valid-absence selection rule
+as generation while retaining separate live capabilities and confirmed byte/time
+limits from the neutral model contract. The privately constructed non-clone
+selection pins Person/device/epoch, model binding, selection commitment and its
+preparation lifetime. Invalid available Primary capability, identity, purpose or
+limits fail closed; they do not enable fallback. This planning handle grants no
+microphone, source-processing or provider-start authority. Generation remains on
+its existing bounded `generate` path. No production live dispatch/runtime path
+is present yet; its current implementation sequence belongs to the active plan.
+
+
+### Voice local-media versus remote-finalization state
+
+The Voice lifecycle policy tracks one exact Person/device/epoch/conversation/
+voice-session/media-lease/plan binding. It initially requests muted preparation;
+provider dispatch requires a confirmed muted native receipt, and remote readiness
+cannot issue unmute. Native requests carry a monotonic command generation; late
+unmute/ready observations cannot revive a stopping lease. Listening and speaking
+activity can coexist. A remote end/loss records a stop intent without pretending
+that the local microphone has already stopped. Only the exact native Stop receipt
+releases the local lease. Remote Unknown remains distinct from Closed; neither
+implies playback or final usage/zero cost. There is no Manager cancellation in
+this lifecycle module. This pure policy currently has no production App/native/
+control driver or encrypted journal; the active plan owns that integration work.

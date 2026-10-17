@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-model-contract = { path = "../../contracts/model" }
 floe-access = { path = "../access" }
 floe-agent-contract = { path = "../../contracts/agent" }
 floe-context-contract = { path = "../../contracts/context" }

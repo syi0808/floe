@@ -25,7 +25,10 @@ impl ModelProvider for CapacityModel {
         _: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<PrimaryObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            PrimaryObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         Box::pin(async move {
             self.plans.fetch_add(1, Ordering::SeqCst);
@@ -40,7 +43,10 @@ impl ModelProvider for CapacityModel {
         scope: &'a ExecutionScope,
     ) -> BoxFuture<
         'a,
-        Result<LocalObservation<Box<dyn PreparedModelTransport>>, ModelObservationError>,
+        Result<
+            LocalObservation<PreparedModelProfile<Box<dyn PreparedModelTransport>>>,
+            ModelObservationError,
+        >,
     > {
         Box::pin(async move {
             self.plans.fetch_add(1, Ordering::SeqCst);
