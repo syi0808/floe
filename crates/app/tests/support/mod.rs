@@ -16,7 +16,6 @@ use floe_app::{
 use floe_conversation::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CommandReceipt, EventPayload, EventRead,
     ReadConversationEvents, RunEventRecord, RunReceipt, SessionSnapshot, SessionStartAdmission,
-    StartTurn,
 };
 use floe_execution::{Cancellation, ExecutionScope};
 use floe_inference::{
@@ -61,6 +60,7 @@ pub enum PrimaryBehavior {
 pub enum ModelOutput {
     Answer,
     FailAfterDispatch(AgentFailure),
+    FailFirstThenAnswer(AgentFailure),
     InvalidCompletionThenAnswer(AgentFailure),
     UnsupportedManagerToolCall,
     ForgetUnprojectedMemory,
@@ -376,7 +376,8 @@ impl ScriptedModel {
     ) -> Self {
         let expected_consumers = match &output {
             ModelOutput::WaitFirstThenAnswer(_) => vec![CONVERSATION_CONSUMER.into(); 3],
-            ModelOutput::ForgetUnprojectedMemory
+            ModelOutput::FailFirstThenAnswer(_)
+            | ModelOutput::ForgetUnprojectedMemory
             | ModelOutput::InvalidCompletionThenAnswer(_)
             | ModelOutput::UnsupportedManagerToolCall => vec![CONVERSATION_CONSUMER.into(); 2],
             ModelOutput::ScheduleExpertFlow => vec![
@@ -896,6 +897,16 @@ impl PreparedModelTransport for ScriptedTransport {
             )?;
             match &self.model.output {
                 ModelOutput::FailAfterDispatch(failure) => Err(*failure),
+                ModelOutput::FailFirstThenAnswer(failure) => {
+                    if call_index == 0 {
+                        Err(*failure)
+                    } else {
+                        Ok(response(vec![ModelStep::Answer {
+                            text: SCRIPTED_REPLY.into(),
+                            artifacts: vec![],
+                        }]))
+                    }
+                }
                 ModelOutput::InvalidCompletionThenAnswer(failure) => {
                     if call_index == 0 {
                         Ok(CanonicalModelResponse {
@@ -938,8 +949,13 @@ impl PreparedModelTransport for ScriptedTransport {
                     }]))
                 }
                 ModelOutput::WaitFirstThenAnswer(barrier) => {
-                    if call_index == 0 { barrier.wait(&request.cancellation).await?; }
-                    Ok(response(vec![ModelStep::Answer { text: SCRIPTED_REPLY.into(), artifacts: vec![] }]))
+                    if call_index == 0 {
+                        barrier.wait(&request.cancellation).await?;
+                    }
+                    Ok(response(vec![ModelStep::Answer {
+                        text: SCRIPTED_REPLY.into(),
+                        artifacts: vec![],
+                    }]))
                 }
                 ModelOutput::WaitForCancellation(barrier) => {
                     barrier.wait(&request.cancellation).await?;
@@ -1891,64 +1907,123 @@ pub fn start_session(host: &AppHost<AppComposition>) -> Uuid {
     })
 }
 
+pub fn surface_head(
+    host: &AppHost<AppComposition>,
+    session_id: Uuid,
+) -> floe_conversation::SurfaceAnchor {
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
+        services
+            .execute_owner(async move {
+                owners
+                    .conversation
+                    .surface_head(&actor, session_id, &scope)
+                    .await
+            })
+            .expect("read real Surface head")
+    })
+}
+
+async fn observe_work_claim(
+    owner: &dyn floe_conversation::ConversationOwner,
+    actor: &floe_kernel::OwnerActor,
+    work: &floe_conversation::SurfaceWorkReceipt,
+    scope: &ExecutionScope,
+) -> Result<CommandReceipt, AgentFailure> {
+    scope
+        .run(async {
+            loop {
+                if let Some(snapshot) = owner
+                    .read_surface_work(actor, work.command_id, scope)
+                    .await?
+                {
+                    if snapshot.receipt != *work {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    if let Some(run_id) = snapshot.current_run_id {
+                        let run = owner
+                            .read_run(actor, run_id, scope)
+                            .await?
+                            .ok_or(AgentFailure::StorageUnavailable)?;
+                        return Ok(CommandReceipt::from(&run));
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+}
+
+pub fn wait_work_run(
+    host: &AppHost<AppComposition>,
+    work: floe_conversation::SurfaceWorkReceipt,
+) -> CommandReceipt {
+    with_ready(host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = host_scope(
+            work.command_id.as_uuid(),
+            Cancellation::new(),
+            OWNER_TIMEOUT,
+        );
+        services
+            .execute_owner(async move {
+                observe_work_claim(owners.conversation.as_ref(), &actor, &work, &scope).await
+            })
+            .expect("observe existing Work Manager claim")
+    })
+}
+
 pub fn start_turn(
     host: &AppHost<AppComposition>,
     session_id: Uuid,
     text: impl Into<String>,
 ) -> CommandReceipt {
+    let expected = surface_head(host, session_id);
     let text = text.into();
     with_ready(host, |services, caller, owners| {
         let actor = caller.owner_actor();
-        let session_scope = host_scope(Uuid::new_v4(), Cancellation::new(), OWNER_TIMEOUT);
-        let session = services
-            .execute_owner({
-                let owner = owners.conversation.clone();
-                let actor = actor.clone();
-                async move {
-                    owner
-                        .get_session(&actor, session_id, None, &session_scope)
-                        .await
-                }
-            })
-            .expect("read real Conversation session");
-        let command_id = CommandId::from_uuid(Uuid::new_v4()).expect("random command id");
+        let command_id = CommandId::new();
+        // Preserve the existing owner deadline across both admission and claim
+        // observation; report the failed phase without extending that budget.
         let scope = host_scope(command_id.as_uuid(), Cancellation::new(), OWNER_TIMEOUT);
         services
             .execute_owner(async move {
-                let request = StartTurn {
+                let request = floe_conversation::SubmitTextWork {
                     command_id,
-                    session_id,
-                    expected_revision: session.revision,
+                    expected,
                     text,
-                    continuation_ref: None,
                     retry_of: None,
                 };
-                loop {
-                    let result = owners
-                        .conversation
-                        .start_turn(&actor, request.clone(), &scope)
-                        .await;
-                    // Busy is a supported admission uncertainty, not permission
-                    // to create a new command or rebase its expected revision.
-                    // Keep the original scope deadline and replay exact intent.
-                    if matches!(
-                        &result,
-                        Err(
-                            floe_kernel::CommandFailure::Indeterminate(AgentFailure::StorageBusy)
-                                | floe_kernel::CommandFailure::NotAdmitted(
-                                    AgentFailure::StorageBusy
-                                )
-                        )
-                    ) && tokio::time::Instant::now() + Duration::from_millis(20)
-                        < scope.deadline()
-                    {
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                        continue;
-                    }
-                    return result;
-                }
+                let work =
+                    loop {
+                        let result = owners
+                            .conversation
+                            .submit_text_work(&actor, request.clone(), &scope)
+                            .await;
+                        if matches!(
+                            &result,
+                            Err(floe_kernel::CommandFailure::Indeterminate(
+                                AgentFailure::StorageBusy
+                            ) | floe_kernel::CommandFailure::NotAdmitted(
+                                AgentFailure::StorageBusy
+                            ) | floe_kernel::CommandFailure::NotApplied(
+                                AgentFailure::StorageBusy
+                            ))
+                        ) && tokio::time::Instant::now() + Duration::from_millis(20)
+                            < scope.deadline()
+                        {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            continue;
+                        }
+                        break result
+                            .map_err(|failure| format!("phase=work_admission: {failure:?}"))?;
+                    };
+                observe_work_claim(owners.conversation.as_ref(), &actor, &work, &scope)
+                    .await
+                    .map_err(|failure| format!("phase=work_claim_observation: {failure:?}"))
             })
-            .expect("admit real Conversation turn")
+            .expect("admit real Surface Work and observe its Manager claim")
     })
 }
 

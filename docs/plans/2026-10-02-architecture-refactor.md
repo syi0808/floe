@@ -2272,3 +2272,159 @@ App/FFI/Flutter Surface admission cutover or live/native Voice integration.
   Continue with coordinated text/Work admission, live selection/context fences,
   durable Voice custody, native/control adapters and client integration in the
   existing sequence. External checkpoints accompany the reconstructed source.
+
+
+### 2026-10-17 reconstructed text/Work product cutover
+
+- Replace public `conversation.start_turn` and owner `StartTurn` with atomic
+  text/Retry Work admission and a Continue-only owner-reference command. New
+  Work flows through the existing FIFO/Manager/Core path. Retry verifies the
+  canonical original text, actor/device/session and terminal source, including
+  after intervening Work claims and encrypted reopen. Stored Work origin meaning
+  uses schema 16 and fresh explicit development profiles; no automatic reset.
+- App/FFI project bounded Surface pages, Work pages/current descendants, exact
+  receipts and pending cancellation. Work labels/retry text are projected from
+  canonical input custody in the same read snapshot, not stored on Work. The
+  client renders one Surface timeline plus separate execution details; pure
+  polling does not start/cancel work or resubmit unresolved admission.
+- A new replay test exposed a mutable command-receipt revision: admission returned
+  revision 3 but replay after settlement returned 4 for the same Continue. Fixed
+  projection to derive the immutable admission stamp from the existing Run
+  record. Run status continues to expose its current revision. The regression
+  now passes with one original User input and no replay dispatch.
+- The synthetic provider's initial post-dispatch failure has unknown usage and
+  consumes the remaining Work cost allowance. The test originally expected the
+  child to complete; inspection established conservative cumulative accounting.
+  It now asserts the retained BudgetExceeded outcome and exact cumulative known/
+  unknown usage, without raising budgets or removing production checks.
+- Protocol testing exposed unknown-field acceptance on internally tagged unit
+  variants. Empty struct variants now enforce rejection of injected provider
+  metadata; all 13 protocol unit tests pass. The historical T0 wire fixture is
+  retained unchanged as evidence; the current Work fixture has its own feature
+  fixture path and a live round-trip test.
+- Focused evidence: Conversation owner 49 passed before the Continue-only API
+  replacement; encrypted retry/rollback/reopen fixture passes; typed App exact
+  Work replay passes; Continue admission/replay/accounting fixture passes. The
+  Surface Dart codec passes 20 SDK-only checks and single-file analysis. These
+  are not whole-snapshot or Flutter/native qualification. Final workspace, App,
+  FFI and Flutter checks remain required; no live Voice call is claimed.
+- Further executor recovery again exposed a filesystem without recent edits.
+  Recovered the published shared-prefix checkpoint and verified all 1,328 source
+  files from the external archive. Subsequent in-progress changes and available
+  logs are checkpointed outside that executor before wider compilation. The
+  disconnect cause is unverified; reduced compiler concurrency is a precaution,
+  not a diagnosis or a change to assertions, deadlines, profiles or RUSTFLAGS.
+
+- Client qualification on the reconstructed cutover: full `flutter test --no-pub
+  --reporter expanded` passes 237 tests. `flutter analyze --no-pub` exits 1 with
+  0 errors, 2 existing unused-import warnings in `connector_screen.dart` and 91
+  info-level findings; no new conversation-file findings remain. The existing
+  agent interaction/session files retain their unrelated lint baseline. Frozen
+  lockfile resolution succeeded with Flutter 3.47.6 / Dart 3.13.5; lockfile and
+  generated/platform source are unchanged. These are Linux synthetic tests, not
+  an Apple bundle, microphone or provider-call qualification.
+- Runtime/UI regressions now cover an explicit Run observer not following a
+  different queued Work, exact retained-command recovery after synchronous
+  readiness failure, accepting later input while a Manager is working, queued
+  cancellation, and a stale in-flight Surface read arriving after positive Work
+  admission. The latter retains the admitted prefix as a lower bound before
+  enabling the next send, without inventing a head or automatically rebasing
+  uncertain intent. View detach stops polling timers without cancelling work;
+  composer text clears only on admission and does not cross controller identity.
+- The final unchanged-input Rust workspace gate, including doctests, passes
+  462 tests. App QA-feature, production FFI and boundary gates are still running;
+  publication follows their actual results. macOS/iOS/native and live Voice
+  gates remain open.
+
+- The broader App gate exposed a cutover regression: the private submit guard
+  allowed non-Work input only for Continue, accidentally rejecting the existing
+  owner-only interaction Resume driver. Calendar review completion and Expert
+  binding recovery therefore retained their requests without admitting a child.
+  The guard now requires Work exactly for New and permits the existing Continue/
+  Resume modes without new Work. No public Resume route or caller-supplied new
+  input is added. The existing failing linked-Resume regression additionally
+  checks one Surface input, one Work and the exact resumed descendant. The prior
+  462-test workspace result predates this fix; new frozen qualification is
+  required. This failure was a deterministic admission regression, not evidence
+  that the earlier separate intermittent Calendar storage issue is resolved.
+
+### Next live-session cutover: ownership and teardown constraints
+
+This is the implementation target for the next dependency-closed slice, not a
+claim that a Voice runtime, provider transport or native microphone is present.
+Use the existing Conversation Surface/Work path; Voice is a live presentation
+owner, not an Expert, tool executor or second Manager.
+
+- Inference remains the sole model-selection/processing-fence owner. Generation
+  and live selection must share the Primary-valid-absence/local-fallback rule;
+  transport, inventory, credentials, authority and quota failures never enable
+  fallback. Live capability/limits belong in neutral model contracts rather than
+  encoding a live call as a generation attempt with fake tool/context values.
+- Startup has an immutable encrypted intent before provider handoff. Only the
+  fresh transition to Dispatching consumes a prepared transport. Replay, restart
+  or an unknown response cannot issue the same call again. Provider route and
+  credentials remain in adapters; product callers receive no bearer token.
+- One active native media lease is bound to Person, device, runtime epoch and
+  voice-session identity. Start is muted. Provider readiness cannot unmute the
+  microphone. Every unmute/release must validate that same live authority, and
+  authority loss stops capture independently of blocked control I/O.
+- Local capture/render termination and remote session finalization are different
+  facts. Confirmed local stop releases the media lease; an unconfirmed native
+  stop blocks another capture lease. Missing remote terminal evidence remains
+  durable Unknown, not proof of playback, zero usage or successful remote close.
+  Keep unknown usage conservatively charged against its reserved ceiling; a
+  history of unresolved remote receipts must not masquerade as an active mic or
+  prevent local shutdown/Vault sealing. New-call budget admission still accounts
+  for those unresolved charges. Never retry an unknown append to obtain an ACK.
+- The control reader belongs to the live owner and outlives screen/query windows.
+  Native stop does not discard already received events before encrypted custody.
+  Bound cleanup/finalization observation, retain its uncertainty, and separate
+  ingress, authority revalidation and result-delivery progress so one stalled
+  stream cannot suppress revocation or already completed Manager results.
+- Preserve provider final-utterance identity at the adapter boundary. Partial
+  transcript events are not settled User input. A delegation with only text is
+  a lookup hint: ambiguous or absent exact input cannot create a fabricated User
+  message. Confirmed input custody precedes event acknowledgement and Work
+  admission. Manager results are point-read from their canonical receipt and
+  Context-authorized before exact append; acceptance and playback stay distinct.
+
+Source constraint: inspected [Codex frameless parser](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_websocket/protocol_frameless_bidi.rs)
+and its fixtures expose `turn.done` identity but the parser discards it. Inspected
+[writer methods](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_websocket/methods.rs)
+send close and close the socket; that client behavior does not establish a
+provider terminal-usage/playback receipt, nor prove the backend lacks one.
+Public Realtime API semantics cannot silently be assigned to this distinct
+Codex control protocol. Adapter work must verify its exact supported events.
+
+Qualification will use fake native/control boundaries plus real encrypted
+Conversation/Vault custody: duplicate/changed event, ambiguous delegation,
+revocation during blocked I/O, unknown startup/append/close, local stop with
+remote uncertainty, and hangup preserving admitted Manager work. Actual Apple
+permission/WebRTC/audio/provider behavior remains a separate required gate.
+
+### Reconstructed text/Work cutover final qualification
+
+After fixing the owner-only Resume guard, the same frozen Rust inputs pass:
+
+- `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`: 462 passed,
+  0 failed, including doctests and default example compilation.
+- `CARGO_INCREMENTAL=0 cargo test -p floe-app --no-default-features --features
+  qa-fixtures --tests --no-fail-fast`: 76 passed, 0 failed, 1 intentional ignored
+  crash-process driver. Calendar review Resume and Expert binding Resume pass
+  in this aggregate run as well as their focused reproductions. The original
+  129-turn history/reopen case and its assertions remain unchanged.
+- `cargo build -p floe-ffi`: Linux production-feature build passes.
+- `python3 tools/architecture/check_boundaries.py`: 26 nodes, 139 edges, no
+  errors/warnings. Changed Rust files formatted; `git diff --check` passes.
+- Flutter 3.47.6 / Dart 3.13.5: full tests 237 passed on the final Dart source;
+  analysis exits 1 with 0 errors, 2 unchanged connector-screen import warnings,
+  91 infos. Exact lockfile retained. Earlier focused protocol/FFI/Dart codec
+  tests are supplementary, not replacements for these aggregate gates.
+
+The immutable command receipt, text/Retry FIFO admission, Continue/Resume,
+Surface/Work AppWire and Flutter cutover are qualified within that synthetic
+Linux scope. No macOS/iOS bundle, real screen/audio/permission, Go live-control
+or provider-call qualification is claimed. Voice owner/native/control/runtime
+integration and the separate intermittent Calendar storage-recovery follow-up
+remain open. The next live-session design above defines the next slice; it is
+not an implemented feature claim.

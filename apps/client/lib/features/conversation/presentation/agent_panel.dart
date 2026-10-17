@@ -14,6 +14,9 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/infrastructure/diagnostics/app_diagnostics.dart';
 import 'package:floe_client/features/conversation/application/conversation_controller.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
+import 'package:floe_client/features/conversation/domain/conversation_surface.dart';
+import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart'
+    show AppRunStateTerminal;
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
@@ -62,6 +65,7 @@ class _AgentPanelState extends State<AgentPanel> {
     super.initState();
     _wasBusy = widget.controller.busy;
     widget.controller.addListener(_changed);
+    widget.controller.attachView();
     _ensureConversationWhenReady();
   }
 
@@ -72,10 +76,13 @@ class _AgentPanelState extends State<AgentPanel> {
       _historyLoadGeneration++;
       _loadingHistory = false;
       oldWidget.controller.removeListener(_changed);
+      oldWidget.controller.detachView();
+      _composerText.clear();
       widget.controller.addListener(_changed);
       _wasBusy = widget.controller.busy;
       _wasReady = false;
       _sessionRequested = false;
+      widget.controller.attachView();
       _ensureConversationWhenReady();
     }
   }
@@ -134,8 +141,9 @@ class _AgentPanelState extends State<AgentPanel> {
     await controller.loadEarlierMessages();
     if (!mounted) return;
     if (generation != _historyLoadGeneration ||
-        !identical(controller, widget.controller))
+        !identical(controller, widget.controller)) {
       return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (generation != _historyLoadGeneration) return;
@@ -173,6 +181,7 @@ class _AgentPanelState extends State<AgentPanel> {
 
   @override
   void dispose() {
+    widget.controller.detachView();
     widget.controller.removeListener(_changed);
     _scroll.dispose();
     _actionFocus.dispose();
@@ -220,12 +229,36 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                     ],
                   ),
+                  if (controller.workItems.isNotEmpty)
+                    _workStrip(strings, controller),
                 ],
               ),
             );
             final footer = Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (controller.hasPendingWorkAdmission)
+                  FloeButton.outlined(
+                    onPressed: controller.inputBusy
+                        ? null
+                        : controller.retryPendingWorkAdmission,
+                    child: const Text('Recover pending message'),
+                  ),
+                if (controller.surfaceFailure case final surfaceFailure?)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: FloeSpace.base,
+                    ),
+                    child: Column(
+                      children: [
+                        Text(surfaceFailure, style: FloeType.bodySmall),
+                        FloeButton.text(
+                          onPressed: controller.refreshSurface,
+                          child: const Text('Refresh conversation'),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (controller.interactionPageFailure != null)
                   Padding(
                     padding: const EdgeInsets.symmetric(
@@ -255,15 +288,16 @@ class _AgentPanelState extends State<AgentPanel> {
                 final compact =
                     constraints.maxHeight < 650 ||
                     MediaQuery.textScalerOf(context).scale(14) > 20;
-                final messages = controller.messages;
-                final represented = messages
-                    .whereType<AgentInteractionMessage>()
-                    .map((message) => message.interactionId)
-                    .toSet();
+                final messages = controller.surfaceMessages;
                 final extraInteractions = controller.interactionSnapshots
-                    .where((snapshot) => !represented.contains(snapshot.id))
                     .toList(growable: false);
-                final content = messages.isEmpty && extraInteractions.isEmpty
+                final activity = controller.messages
+                    .whereType<AgentCapabilityMessage>()
+                    .toList(growable: false);
+                final content =
+                    messages.isEmpty &&
+                        extraInteractions.isEmpty &&
+                        activity.isEmpty
                     ? Padding(
                         padding: const EdgeInsets.all(FloeSpace.base),
                         child: Text(
@@ -283,20 +317,19 @@ class _AgentPanelState extends State<AgentPanel> {
                         itemCount:
                             messages.length +
                             extraInteractions.length +
+                            (activity.isEmpty ? 0 : 1) +
                             (controller.hasEarlierMessages ? 1 : 0) +
                             (controller.hasMoreInteractions ? 1 : 0),
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: FloeSpace.base),
                         itemBuilder: (context, index) {
                           final offset = controller.hasEarlierMessages ? 1 : 0;
-                          if (offset == 1 && index == 0)
+                          if (offset == 1 && index == 0) {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 FloeButton.text(
-                                  onPressed:
-                                      controller.loadingEarlier ||
-                                          controller.busy
+                                  onPressed: controller.loadingEarlier
                                       ? null
                                       : _loadEarlier,
                                   child: Text(
@@ -310,35 +343,47 @@ class _AgentPanelState extends State<AgentPanel> {
                                   Text(failure),
                               ],
                             );
+                          }
                           final contentIndex = index - offset;
-                          if (contentIndex ==
-                              messages.length + extraInteractions.length) {
-                            return FloeButton.text(
-                              onPressed:
-                                  controller.busy ||
-                                      controller.loadingInteractions
-                                  ? null
-                                  : controller.loadMoreInteractions,
-                              child: const Text('Load more interactions'),
+                          if (contentIndex < messages.length) {
+                            return _surfaceMessage(
+                              strings,
+                              messages[contentIndex],
                             );
                           }
-                          if (contentIndex < messages.length) {
-                            return _message(strings, messages[contentIndex]);
-                          }
-                          return AgentInteractionCard(
-                            key: ValueKey(
-                              extraInteractions[contentIndex - messages.length]
-                                  .id,
-                            ),
-                            controller: controller,
-                            interactionId:
+                          if (contentIndex <
+                              messages.length + extraInteractions.length) {
+                            final interaction =
                                 extraInteractions[contentIndex -
-                                        messages.length]
-                                    .id,
-                            onOpenSourceReview: widget.onOpenSourceReview,
-                            onOpenConnections: widget.onOpenConnections,
-                            onOpenAssistantFeatureSettings:
-                                widget.onOpenAssistantFeatureSettings,
+                                    messages.length];
+                            return AgentInteractionCard(
+                              key: ValueKey(interaction.id),
+                              controller: controller,
+                              interactionId: interaction.id,
+                              onOpenSourceReview: widget.onOpenSourceReview,
+                              onOpenConnections: widget.onOpenConnections,
+                              onOpenAssistantFeatureSettings:
+                                  widget.onOpenAssistantFeatureSettings,
+                            );
+                          }
+                          if (activity.isNotEmpty &&
+                              contentIndex ==
+                                  messages.length + extraInteractions.length) {
+                            return ExpansionTile(
+                              title: const Text('Execution details'),
+                              children: activity
+                                  .map(
+                                    (message) =>
+                                        _activityMessage(strings, message),
+                                  )
+                                  .toList(),
+                            );
+                          }
+                          return FloeButton.text(
+                            onPressed: controller.loadingInteractions
+                                ? null
+                                : controller.loadMoreInteractions,
+                            child: const Text('Load more interactions'),
                           );
                         },
                       );
@@ -368,69 +413,167 @@ class _AgentPanelState extends State<AgentPanel> {
     ),
   );
 
-  Widget _message(
-    AppLocalizations strings,
-    AgentMessage message,
-  ) => switch (message) {
-    AgentTextMessage(:final kind, :final text) => FloeSquircle(
-      size: FloeSquircleSize.md,
-      fill: kind != AgentMessageKind.user
-          ? FloePalette.primary50
-          : FloePalette.neutral50,
-      borderWidth: 0,
-      padding: const EdgeInsets.all(FloeSpace.md),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            kind != AgentMessageKind.user ? 'Floe' : strings.agentYou,
-            style: FloeType.label,
-          ),
-          const SizedBox(height: FloeSpace.sm),
-          if (kind != AgentMessageKind.user)
-            _AgentMarkdown(data: text)
-          else
-            SelectableText(text, style: FloeType.body),
-        ],
-      ),
-    ),
-    AgentInteractionMessage(:final interactionId) => AgentInteractionCard(
-      key: ValueKey(interactionId),
-      controller: widget.controller,
-      interactionId: interactionId,
-      onOpenSourceReview: widget.onOpenSourceReview,
-      onOpenConnections: widget.onOpenConnections,
-      onOpenAssistantFeatureSettings: widget.onOpenAssistantFeatureSettings,
-    ),
-    AgentCapabilityMessage() => ExpansionTile(
-      tilePadding: EdgeInsets.zero,
-      childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
-      title: Text(
-        strings.agentConversationSource,
-        style: FloeType.controlLabel,
-      ),
-      subtitle: Text(
-        strings.agentConversationSourceDetails,
-        style: FloeType.bodySmall.copyWith(fontSize: 12),
-      ),
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: SelectableText(
-            _sourceText(strings, message),
-            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+  Widget _surfaceMessage(AppLocalizations strings, AppSurfaceMessage message) =>
+      switch (message) {
+        AppSurfaceInput(:final text) => _surfaceText(strings, text, user: true),
+        AppSurfaceResult(:final text, :final completeness) => _surfaceText(
+          strings,
+          text,
+          partial: completeness == AppSurfaceResultCompleteness.partial,
+        ),
+        AppSurfaceOutcome(:final state, :final issueMessage) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: FloeSpace.sm),
+          child: Text(
+            issueMessage ??
+                (state == AppSurfaceOutcomeState.blocked
+                    ? 'Review required'
+                    : strings.agentStopped),
+            style: FloeType.bodySmall,
           ),
         ),
-        if (message.hasArtifactMediaType(
-              'application/vnd.floe.actions.calendar-proposal+json;version=1',
-            ) &&
-            message.executionReceipt != null) ...[
-          const SizedBox(height: FloeSpace.md),
-          AgentProposalCard(controller: widget.controller, message: message),
-        ],
+        AppSurfaceCancellation() => const Padding(
+          padding: EdgeInsets.symmetric(vertical: FloeSpace.sm),
+          child: Text('Queued work cancelled'),
+        ),
+      };
+
+  Widget _surfaceText(
+    AppLocalizations strings,
+    String text, {
+    bool user = false,
+    bool partial = false,
+  }) => FloeSquircle(
+    size: FloeSquircleSize.md,
+    fill: user ? FloePalette.neutral50 : FloePalette.primary50,
+    borderWidth: 0,
+    padding: const EdgeInsets.all(FloeSpace.md),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(user ? strings.agentYou : 'Floe', style: FloeType.label),
+        if (partial)
+          Text(
+            'Partial result',
+            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+          ),
+        const SizedBox(height: FloeSpace.sm),
+        if (user)
+          SelectableText(text, style: FloeType.body)
+        else
+          _AgentMarkdown(data: text),
       ],
     ),
-  };
+  );
+
+  Widget _workStrip(
+    AppLocalizations strings,
+    ConversationController controller,
+  ) {
+    final queued = controller.workItems
+        .where((item) => item.state == AppSurfaceWorkState.queued)
+        .length;
+    final busy = controller.workItems
+        .where(
+          (item) =>
+              item.currentRunId != null &&
+              controller.workRuns[item.currentRunId]?.state.terminal == false,
+        )
+        .length;
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      title: Text(
+        'Recent work · $queued queued · $busy working',
+        style: FloeType.bodySmall,
+      ),
+      children: [
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final item in controller.workItems.reversed)
+                Builder(
+                  builder: (context) {
+                    final run = controller.workRuns[item.currentRunId];
+                    final label = switch (item.state) {
+                      AppSurfaceWorkState.queued => 'Queued',
+                      AppSurfaceWorkState.cancelled => 'Cancelled',
+                      AppSurfaceWorkState.linked =>
+                        run == null
+                            ? 'Checking status'
+                            : !run.state.terminal
+                            ? 'Working'
+                            : run.report?.execution ?? 'Finished',
+                    };
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(
+                        item.inputText,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: FloeType.bodySmall,
+                      ),
+                      subtitle: Text(label, style: FloeType.bodySmall),
+                      trailing: item.state == AppSurfaceWorkState.queued
+                          ? FloeButton.text(
+                              onPressed:
+                                  controller.cancellingWork(
+                                    item.receipt.commandId,
+                                  )
+                                  ? null
+                                  : () => controller.cancelQueuedWork(item),
+                              child: const Text('Cancel'),
+                            )
+                          : run != null && !run.state.terminal
+                          ? FloeButton.text(
+                              onPressed:
+                                  controller.cancellingWork(
+                                    item.receipt.commandId,
+                                  )
+                                  ? null
+                                  : () => controller.stopWork(item),
+                              child: Text(strings.agentStop),
+                            )
+                          : null,
+                    );
+                  },
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _activityMessage(
+    AppLocalizations strings,
+    AgentCapabilityMessage message,
+  ) => ExpansionTile(
+    tilePadding: EdgeInsets.zero,
+    childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
+    title: Text(strings.agentConversationSource, style: FloeType.controlLabel),
+    subtitle: Text(
+      strings.agentConversationSourceDetails,
+      style: FloeType.bodySmall.copyWith(fontSize: 12),
+    ),
+    children: [
+      Align(
+        alignment: Alignment.centerLeft,
+        child: SelectableText(
+          _sourceText(strings, message),
+          style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+        ),
+      ),
+      if (message.hasArtifactMediaType(
+            'application/vnd.floe.actions.calendar-proposal+json;version=1',
+          ) &&
+          message.executionReceipt != null) ...[
+        const SizedBox(height: FloeSpace.md),
+        AgentProposalCard(controller: widget.controller, message: message),
+      ],
+    ],
+  );
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {
     final output = message.output;
@@ -591,23 +734,16 @@ class _AgentPanelState extends State<AgentPanel> {
   }
 
   Future<void> _sendText(ConversationController controller) async {
-    final text = _composerText.text.trim();
+    final text = _composerText.text;
     if (!controller.canSend) return;
-    if (!controller.acceptsConversationText(text)) {
-      await controller.sendText(text);
-      return;
-    }
     final sessionId = controller.session?.id;
-    _composerText.clear();
-    setState(() {});
-    await controller.sendText(text);
-    if (mounted &&
+    final accepted = await controller.sendText(text);
+    if (accepted &&
+        mounted &&
         identical(controller, widget.controller) &&
-        sessionId != null &&
         sessionId == controller.session?.id &&
-        controller.failure != null &&
-        _composerText.text.isEmpty) {
-      _composerText.text = text;
+        _composerText.text == text) {
+      _composerText.clear();
       setState(() {});
     }
   }

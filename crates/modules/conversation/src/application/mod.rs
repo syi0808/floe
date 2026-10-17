@@ -68,7 +68,7 @@ pub use session::{
 };
 
 mod start;
-pub use start::{PreparedStartTurn, prepare_start_turn, read_session_snapshot};
+pub use start::{PreparedContinueTurn, prepare_continue_turn, read_session_snapshot};
 
 mod manager_policy;
 mod service;

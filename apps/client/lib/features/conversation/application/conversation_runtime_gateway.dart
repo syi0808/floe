@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'conversation_observation.dart';
 
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
+
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
@@ -24,6 +27,26 @@ final class ConversationTurnCompletion {
 
 abstract interface class ConversationRuntimeGateway {
   AppReadModel get readModel;
+
+  PreparedSurfaceWork? get pendingWorkAdmission;
+  Future<AppSurfaceWorkReceipt> submitTextWork({
+    required AppSurfaceAnchor expected,
+    required String text,
+    String? retryOf,
+  });
+
+  /// Explicit command recovery. Ordinary page polling never calls this.
+  Future<AppSurfaceWorkReceipt?> settlePendingWorkAdmission();
+  Future<AppSurfaceSnapshot> readSurface(
+    String sessionId, {
+    AppSurfaceAnchor? through,
+  });
+  Future<AppSurfaceWorkPage> listWork(
+    String sessionId, {
+    AppSurfaceWorkCursor? cursor,
+  });
+  Future<AppRunSnapshot> readWorkRun(String runId);
+  Future<void> cancelPendingWork(String workCommandId);
 
   Future<ActionProposalPreview> previewCalendarProposal({
     required Map<String, Object?> receipt,
@@ -50,8 +73,8 @@ abstract interface class ConversationRuntimeGateway {
     required ConversationObservation observation,
   });
 
-  Future<ConversationTurnCompletion> runConversationTurn(
-    AgentConversationTurnRequest request, {
+  Future<ConversationTurnCompletion> continueConversationTurn(
+    AgentContinuationRequest request, {
     required void Function(AppRunSnapshot run) onRun,
     required ConversationObservation observation,
   });
@@ -67,7 +90,7 @@ abstract interface class ConversationRuntimeGateway {
 
   /// Requests explicit cancellation and reports uncertainty when admission or
   /// a positive Start receipt cannot be established for this turn.
-  Future<void> cancelConversationTurn(AgentConversationTurnRequest request);
+  Future<void> cancelContinuation(AgentContinuationRequest request);
 
   /// Returns true only after a cancellation command for a known active Run
   /// receives and validates its positive receipt.
@@ -86,13 +109,13 @@ final class NativeConversationRuntimeGateway
     required AppReadModel readModel,
     required Future<AgentSession> Function(String personId, String sessionId)
     loadSession,
-    Future<void> Function()? beforeStartTurn,
-    Duration observationInterval = const Duration(milliseconds: 80),
+    Future<void> Function()? beforeAdmission,
+    Duration observationInterval = const Duration(milliseconds: 500),
   }) => NativeConversationRuntimeGateway._withFields(
     client,
     readModel,
     loadSession,
-    beforeStartTurn,
+    beforeAdmission,
     observationInterval,
   );
 
@@ -100,7 +123,7 @@ final class NativeConversationRuntimeGateway
     this._client,
     this.readModel,
     this._loadSession,
-    this._beforeStartTurn,
+    this._beforeAdmission,
     this._observationInterval,
   );
 
@@ -109,9 +132,117 @@ final class NativeConversationRuntimeGateway
   final AppReadModel readModel;
   final Future<AgentSession> Function(String personId, String sessionId)
   _loadSession;
-  final Future<void> Function()? _beforeStartTurn;
+  final Future<void> Function()? _beforeAdmission;
   final Duration _observationInterval;
   _ActiveConversationTurn? _active;
+  PreparedSurfaceWork? _pendingWork;
+  Future<AppSurfaceWorkReceipt>? _pendingWorkFuture;
+  bool _pendingWorkUncertain = false;
+  final Map<String, PreparedCancelPendingWork> _pendingCancellations = {};
+
+  @override
+  PreparedSurfaceWork? get pendingWorkAdmission => _pendingWork;
+
+  @override
+  Future<AppSurfaceWorkReceipt> submitTextWork({
+    required AppSurfaceAnchor expected,
+    required String text,
+    String? retryOf,
+  }) async {
+    if (_pendingWork != null) {
+      throw StateError('A Work admission is still unresolved.');
+    }
+    // Pin the immutable command before awaiting readiness or transport.
+    _pendingWork = _client.prepareSurfaceWork(
+      expected: expected,
+      text: text,
+      retryOf: retryOf,
+    );
+    _pendingWorkUncertain = false;
+    return _settleWork();
+  }
+
+  @override
+  Future<AppSurfaceWorkReceipt?> settlePendingWorkAdmission() async =>
+      _pendingWork == null ? null : await _settleWork();
+
+  Future<AppSurfaceWorkReceipt> _settleWork() {
+    if (_pendingWorkFuture != null) return _pendingWorkFuture!;
+    final command = _pendingWork!;
+    late final Future<AppSurfaceWorkReceipt> future;
+    future =
+        Future<AppSurfaceWorkReceipt>.sync(
+          () => _sendRetainedWork(command),
+        ).whenComplete(() {
+          if (identical(_pendingWorkFuture, future)) _pendingWorkFuture = null;
+        });
+    _pendingWorkFuture = future;
+    return future;
+  }
+
+  Future<AppSurfaceWorkReceipt> _sendRetainedWork(
+    PreparedSurfaceWork command,
+  ) async {
+    try {
+      await _beforeAdmission?.call();
+      if (_pendingWorkUncertain) {
+        final retained = await _client.getWork(command.commandId);
+        if (retained != null) {
+          _client.validateWorkReceipt(command, retained.receipt);
+          if (identical(_pendingWork, command)) _pendingWork = null;
+          return retained.receipt;
+        }
+      }
+      final receipt = await _client.submitSurfaceWork(command);
+      if (identical(_pendingWork, command)) _pendingWork = null;
+      return receipt;
+    } on Object catch (error) {
+      final disposition = switch (error) {
+        AppOwnerException() => error.commandOutcome,
+        AppWireTransportException() => error.commandOutcome,
+        _ => null,
+      };
+      if (disposition == CommandOutcome.notApplied ||
+          (!_pendingWorkUncertain &&
+              disposition == CommandOutcome.notAdmitted)) {
+        if (identical(_pendingWork, command)) _pendingWork = null;
+      } else {
+        _pendingWorkUncertain = true;
+      }
+      rethrow;
+    }
+  }
+
+  @override
+  Future<AppSurfaceSnapshot> readSurface(
+    String sessionId, {
+    AppSurfaceAnchor? through,
+  }) => _client.getSurface(sessionId, through: through);
+  @override
+  Future<AppSurfaceWorkPage> listWork(
+    String sessionId, {
+    AppSurfaceWorkCursor? cursor,
+  }) => _client.listWork(sessionId, cursor: cursor);
+  @override
+  Future<AppRunSnapshot> readWorkRun(String runId) async {
+    final run = await _client.getRun(runId);
+    if (!readModel.applyRunSnapshot(run)) {
+      throw const FormatException('Work Run epoch mismatch.');
+    }
+    return run;
+  }
+
+  @override
+  Future<void> cancelPendingWork(String workCommandId) async {
+    final command = _pendingCancellations.putIfAbsent(
+      workCommandId,
+      () => _client.prepareCancelPendingWork(workCommandId),
+    );
+    await _client.submitCancelPendingWork(command);
+    if (identical(_pendingCancellations[workCommandId], command)) {
+      _pendingCancellations.remove(workCommandId);
+    }
+  }
 
   @override
   Future<ActionProposalPreview> previewCalendarProposal({
@@ -156,13 +287,14 @@ final class NativeConversationRuntimeGateway
   }
 
   Future<_ActiveConversationTurn> _claim(
-    AgentConversationTurnRequest? request,
+    AgentContinuationRequest? request,
     ConversationObservation observation,
   ) async {
     await awaitStoppedObservation(observation: observation);
     observation.check();
-    if (_active != null)
+    if (_active != null) {
       throw StateError('A conversation turn is already active.');
+    }
     final active = _ActiveConversationTurn(request, observation);
     _active = active;
     return active;
@@ -195,8 +327,8 @@ final class NativeConversationRuntimeGateway
   }
 
   @override
-  Future<ConversationTurnCompletion> runConversationTurn(
-    AgentConversationTurnRequest request, {
+  Future<ConversationTurnCompletion> continueConversationTurn(
+    AgentContinuationRequest request, {
     required void Function(AppRunSnapshot run) onRun,
     required ConversationObservation observation,
   }) async {
@@ -205,17 +337,14 @@ final class NativeConversationRuntimeGateway
     try {
       await synchronizeConversation(request.session, observation: observation);
       observation.check();
-      await _beforeStartTurn?.call();
+      await _beforeAdmission?.call();
       observation.check();
       final continuation = await _continuationFor(request);
-      final retryOf = await _retryFor(request, observation);
       observation.check();
-      final command = _client.prepareStartTurn(
+      final command = _client.prepareContinueTurn(
         sessionId: request.session.id,
         expectedRevision: request.session.revision,
-        text: request.text,
         continuation: continuation,
-        retryOf: retryOf,
       );
       active.commandId = command.commandId;
       readModel.markCommandPending(command.commandId);
@@ -319,8 +448,9 @@ final class NativeConversationRuntimeGateway
     required ConversationObservation observation,
   }) async {
     final runId = session.activeTurn;
-    if (runId == null)
+    if (runId == null) {
       throw StateError('No detached session Run is available.');
+    }
     final active = await _claim(null, observation);
     try {
       await synchronizeConversation(session, observation: observation);
@@ -414,13 +544,8 @@ final class NativeConversationRuntimeGateway
             'Conversation terminal snapshot mismatch.',
           );
         }
-        if (reloaded.activeTurn case final linkedRunId?) {
-          runId = linkedRunId;
-          minimumSessionRevision = reloaded.revision;
-          receipt = null;
-          lastNotifiedRevision = 0;
-          continue;
-        }
+        // Another queued Work may already own Session.activeTurn. Observe
+        // only this explicit Run; current Work lineage comes from Work queries.
         return ConversationTurnCompletion(run: run, session: reloaded);
       }
       if (_observationInterval > Duration.zero) {
@@ -432,9 +557,7 @@ final class NativeConversationRuntimeGateway
   }
 
   @override
-  Future<void> cancelConversationTurn(
-    AgentConversationTurnRequest request,
-  ) async {
+  Future<void> cancelContinuation(AgentContinuationRequest request) async {
     final active = _active;
     if (active == null || !identical(active.request, request)) {
       throw StateError('Conversation turn admission is unresolved.');
@@ -485,40 +608,24 @@ final class NativeConversationRuntimeGateway
     }
   }
 
-  Future<AppCommandReceipt> _admit(PreparedStartTurn command) async {
+  Future<AppCommandReceipt> _admit(PreparedContinueTurn command) async {
     try {
-      return await _client.submitStartTurn(command);
+      return await _client.submitContinueTurn(command);
     } on Object {
       final recovered = await _client.getCommand(command.commandId);
       if (recovered != null) return recovered;
-      return _client.submitStartTurn(command);
+      return _client.submitContinueTurn(command);
     }
   }
 
-  Future<AppContinuationRef?> _continuationFor(
-    AgentConversationTurnRequest request,
+  Future<AppContinuationRef> _continuationFor(
+    AgentContinuationRequest request,
   ) async {
-    if (!request.continuation) return null;
     final reference = request.session.continuation;
     if (reference == null) {
       throw const FormatException('Conversation continuation unavailable.');
     }
     return AppContinuationRef(id: reference.id);
-  }
-
-  Future<String?> _retryFor(
-    AgentConversationTurnRequest request,
-    ConversationObservation observation,
-  ) async {
-    final retryOf = request.retryOf;
-    if (retryOf == null) return null;
-    final source = await observation.read(() => _client.getRun(retryOf));
-    observation.check();
-    if (source.sessionId != request.session.id ||
-        source.state != AppRunState.finished) {
-      throw const FormatException('Conversation retry mismatch.');
-    }
-    return source.runId;
   }
 
   Future<void> _bootstrapAt(
@@ -573,7 +680,7 @@ final class NativeConversationRuntimeGateway
 final class _ActiveConversationTurn {
   _ActiveConversationTurn(this.request, this.observation);
 
-  final AgentConversationTurnRequest? request;
+  final AgentContinuationRequest? request;
   final ConversationObservation observation;
   final Completer<void> finished = Completer<void>();
   final Completer<void> receiptReady = Completer<void>();

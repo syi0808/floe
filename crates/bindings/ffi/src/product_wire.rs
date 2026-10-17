@@ -40,7 +40,10 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
     Ok(match value {
         command @ (C::ConversationSessionStart { .. }
         | C::ConversationSetCalendarPolicy { .. }
-        | C::ConversationStartTurn { .. }
+        | C::ConversationWorkSubmitText { .. }
+        | C::ConversationWorkRetry { .. }
+        | C::ConversationWorkCancelPending { .. }
+        | C::ConversationContinueTurn { .. }
         | C::ConversationCalendarProposalSubmit { .. }
         | C::ConversationCancelRun { .. }
         | C::ConversationInteractionResolve { .. }
@@ -171,6 +174,9 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
         query @ (Q::ConversationSessionResume { .. }
         | Q::ConversationCalendarProposalPreview { .. }
         | Q::ConversationCalendarPolicy { .. }
+        | Q::ConversationSurfaceGet { .. }
+        | Q::ConversationWorkGet { .. }
+        | Q::ConversationWorkList { .. }
         | Q::ConversationSessionGet { .. }
         | Q::ConversationGetCommand { .. }
         | Q::ConversationGetRun { .. }

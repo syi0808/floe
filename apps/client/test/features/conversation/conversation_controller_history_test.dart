@@ -4,6 +4,8 @@ import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
 import 'dart:async';
 
+import 'package:floe_client/features/conversation/application/conversation_observation.dart';
+
 import '../../support/interaction_page_fixture.dart';
 
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
@@ -23,6 +25,127 @@ import 'package:floe_client/features/conversation/presentation/agent_panel.dart'
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  test('a synchronous readiness failure retains one Work intent and permits exact recovery', () async {
+    var attempts = 0;
+    final h = await _Harness.create(
+      beforeAdmission: () {
+        if (++attempts == 1) throw StateError('synthetic readiness failure');
+        return Future<void>.value();
+      },
+    );
+    addTearDown(h.dispose);
+    final accepted = await h.controller.sendText('retain this exact input');
+    expect(accepted, isFalse);
+    expect(h.controller.hasPendingWorkAdmission, isTrue);
+    expect(h.transport.commands, isEmpty);
+    final retainedId = h
+        .controller
+        .gateway
+        .conversationRuntime
+        .pendingWorkAdmission!
+        .commandId;
+    await h.controller.refreshSurface();
+    expect(attempts, 1, reason: 'Read-only polling never retries admission.');
+    expect(h.transport.commands, isEmpty);
+    h.transport.returnTerminalFailure = true;
+    h.transport.terminalSession = _session(
+      revision: 13,
+      messages: [_message(_m5), _message(_m6)],
+    );
+    await h.controller.retryPendingWorkAdmission();
+    expect(attempts, 2);
+    expect(h.controller.hasPendingWorkAdmission, isFalse);
+    expect(h.transport.commands, hasLength(1));
+    expect(h.transport.commandIds.single, retainedId);
+    expect(
+      h.transport.commands.single['kind'],
+      'conversation.work.submit_text',
+    );
+    expect(h.transport.commands.single['text'], 'retain this exact input');
+    expect(
+      h.controller.surfaceMessages.whereType<AppSurfaceInput>().last.text,
+      'retain this exact input',
+    );
+  });
+
+  test('a working Manager does not disable new text admission', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    h.transport.returnTerminalFailure = true;
+    h.transport.workingRun = true;
+    expect(await h.controller.sendText('a retained Work input'), isTrue);
+    expect(h.controller.running, isTrue);
+    expect(h.controller.hasPendingWorkAdmission, isFalse);
+    expect(h.controller.canSend, isTrue);
+    expect(h.controller.workItems.single.state, AppSurfaceWorkState.linked);
+    await h.controller.refreshSurface();
+    expect(
+      h.transport.commands,
+      hasLength(1),
+      reason: 'Status polling never dispatches Work.',
+    );
+  });
+
+  test(
+    'an explicit Run observer never follows an unrelated queued Work',
+    () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.transport.returnTerminalFailure = true;
+      h.transport.terminalSession = _session(
+        revision: 13,
+        messages: [_message(_m5), _message(_m6)],
+      )..['active_turn'] = _m4;
+      final completion = await h.controller.gateway.conversationRuntime
+          .observeConversationRun(
+            const AppCommandReceipt(
+              commandId: _m1,
+              runId: _terminalRunId,
+              sessionRevision: 12,
+              runtimeEpoch: 1,
+            ),
+            h.controller.session!,
+            onRun: (_) {},
+            observation: ConversationObservation(),
+          );
+      expect(completion.run.runId, _terminalRunId);
+      expect(completion.session.activeTurn, _m4);
+      expect(h.transport.runQueries, [_terminalRunId]);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  test('an older in-flight read cannot re-enable sending behind an admitted prefix', () async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    h.transport.returnTerminalFailure = true;
+    h.transport.workingRun = true;
+    final requested = Completer<void>();
+    final response = Completer<Map<String, dynamic>>();
+    h.transport.surfaceRead = (_) {
+      h.transport.surfaceRead = null;
+      requested.complete();
+      return response.future;
+    };
+    final reading = h.controller.refreshSurface();
+    await requested.future;
+    expect(
+      await h.controller.sendText('preserve the committed prefix'),
+      isTrue,
+    );
+    expect(h.controller.canSend, isFalse);
+    response.complete(_surfaceEnvelope(h.transport.initialSession, head: 4));
+    await reading;
+    expect(
+      h.controller.canSend,
+      isFalse,
+      reason: 'The committed Work is newer than this read.',
+    );
+    await h.controller.refreshSurface();
+    expect(h.controller.canSend, isTrue);
+    expect(h.transport.commands, hasLength(1));
+  });
+
   for (final invalidation in ['session', 'runtime', 'dispose']) {
     test('proposal observation fences $invalidation replacement', () async {
       final h = await _Harness.create();
@@ -450,7 +573,7 @@ void main() {
   test(
     'earlier pages prepend in order and advance the exclusive cursor',
     () async {
-      final harness = await _Harness.create();
+      final harness = await _Harness.create(surfaceSequence: 6);
       addTearDown(harness.dispose);
       harness.transport
         ..enqueuePage(
@@ -471,9 +594,9 @@ void main() {
       expect(harness.controller.earlierFailure, isNull);
       expect(
         harness.transport.historyQueries
-            .map((query) => query['before_message_id'])
+            .map((query) => (query['through'] as Map)['sequence'])
             .toList(),
-        [_m5, _m3],
+        [4, 2],
       );
     },
   );
@@ -507,7 +630,7 @@ void main() {
             .widget<TextFormField>(find.byType(TextFormField))
             .controller!
             .text,
-        isEmpty,
+        'old conversation draft',
       );
       await tester.pumpWidget(_panelApp(replacement.controller));
       await tester.pumpAndSettle();
@@ -565,7 +688,7 @@ void main() {
   });
 
   testWidgets(
-    'terminal same-session failure restores draft after newer snapshot',
+    'accepted Work failure does not restore an already submitted draft',
     (tester) async {
       _usePanelViewport(tester);
       final harness = await _Harness.create();
@@ -600,7 +723,7 @@ void main() {
             .widget<TextFormField>(find.byType(TextFormField))
             .controller!
             .text,
-        'keep terminal draft',
+        isEmpty,
       );
     },
   );
@@ -807,7 +930,7 @@ void main() {
       _session(id: _otherSessionId, messages: [_message(_m1)]),
     ),
     _RejectedPageScenario(
-      'wrong person identity',
+      'foreign-person metadata in a Surface response',
       _session(personId: _otherPersonId, messages: [_message(_m1)]),
     ),
   ]) {
@@ -964,7 +1087,11 @@ final class _Harness {
   bool _disposed = false;
   bool _controllerDisposed = false;
 
-  static Future<_Harness> create({String sessionId = _sessionId}) async {
+  static Future<_Harness> create({
+    String sessionId = _sessionId,
+    int surfaceSequence = 4,
+    Future<void> Function()? beforeAdmission,
+  }) async {
     final runtime = RuntimeController(
       gateway: _ReadyRuntimeGateway(),
       personId: _personId,
@@ -977,12 +1104,14 @@ final class _Harness {
         messages: [_message(_m5), _message(_m6)],
         hasEarlier: true,
       ),
+      surfaceSequence: surfaceSequence,
     );
     final client = AppWireConversationClient(transport, newId: _nextRequestId);
     final gateway = AppWireConversationGateway(
       transport,
       runtimeClient: client,
       readModel: readModel,
+      beforeConversationStart: beforeAdmission,
     );
     final controller = ConversationController(
       gateway: gateway,
@@ -1010,21 +1139,28 @@ final class _Harness {
 }
 
 final class _ConversationTransport implements AppWireTransport {
-  _ConversationTransport(this.initialSession);
+  _ConversationTransport(this.initialSession, {this.surfaceSequence = 4});
+  final int surfaceSequence;
+  Map<String, dynamic>? admittedWork;
+  String? admittedText;
 
   final Map<String, Object?> initialSession;
   Map<String, Object?>? replacementSession;
   final List<Map<String, dynamic>> proposalQueries = [];
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? proposalPreview;
+  Future<Map<String, dynamic>> Function(Map<String, dynamic>)? surfaceRead;
   final List<Map<String, dynamic>> historyQueries = [];
   final List<Map<String, dynamic>> interactionQueries = [];
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? interactionPage;
   Future<Map<String, dynamic>> Function(Map<String, dynamic>)? interactionGet;
   final List<Map<String, dynamic>> commands = [];
+  final List<String> commandIds = [];
+  final List<String> runQueries = [];
   final Completer<void> startTurnRequested = Completer<void>();
   final Completer<Map<String, dynamic>> pendingStartTurn =
       Completer<Map<String, dynamic>>();
   bool returnTerminalFailure = false;
+  bool workingRun = false;
   Map<String, Object?>? terminalSession;
   int _startTurnRequests = 0;
   final List<Future<Map<String, dynamic>> Function()> _historyReplies = [];
@@ -1053,24 +1189,75 @@ final class _ConversationTransport implements AppWireTransport {
       case 'conversation.calendar_proposal.preview':
         proposalQueries.add(query);
         return proposalPreview!(query);
+      case 'conversation.surface.get':
+        if (surfaceRead case final read?) { return read(query); }
+        if (query['through'] != null) {
+          historyQueries.add(query);
+          if (_historyReplies.isEmpty) {
+            throw StateError('No synthetic Surface page was queued.');
+          }
+          final result = await _historyReplies.removeAt(0)();
+          return _surfaceEnvelope(
+            Map<String, Object?>.from(result['session'] as Map),
+            through: Map<String, dynamic>.from(query['through'] as Map),
+          );
+        }
+        final selected =
+            replacementSession != null &&
+                replacementSession!['id'] == query['session_id']
+            ? replacementSession!
+            : initialSession;
+        final fixture = Map<String, Object?>.from(selected);
+        var head = selected['has_earlier_messages'] == true
+            ? surfaceSequence
+            : (selected['messages'] as List).length;
+        if (admittedWork != null &&
+            (admittedWork!['anchor'] as Map)['session_id'] ==
+                query['session_id']) {
+          fixture['messages'] = [
+            ...(selected['messages'] as List),
+            {
+              'kind': 'user',
+              'message_id': admittedWork!['input_id'],
+              'text': admittedText,
+            },
+          ];
+          head++;
+        }
+        return _surfaceEnvelope(fixture, head: head);
+      case 'conversation.work.list':
+        return {
+          'kind': 'conversation.work.page',
+          'page': {
+            'items': admittedWork == null ? [] : [_workSnapshot()],
+            'next': null,
+          },
+        };
+      case 'conversation.work.get':
+        return {
+          'kind': 'conversation.work',
+          'snapshot': admittedWork?['command_id'] == query['command_id']
+              ? _workSnapshot()
+              : null,
+        };
       case 'conversation.session.resume':
         return _sessionEnvelope(initialSession);
       case 'conversation.session.get':
-        if (query['before_message_id'] is String) {
-          historyQueries.add(query);
-          if (_historyReplies.isEmpty) {
-            throw StateError('No synthetic history page was queued.');
-          }
-          return _historyReplies.removeAt(0)();
-        }
         if (terminalSession != null &&
             query['session_id'] == terminalSession!['id']) {
           return _sessionEnvelope(terminalSession!);
         }
         throw StateError('Unexpected Conversation session query: $query');
       case 'conversation.get_run':
+        runQueries.add(query['run_id'] as String);
         if (returnTerminalFailure && query['run_id'] == _terminalRunId) {
-          return _failedRunEnvelope(query['run_id'] as String);
+          final run = _failedRunEnvelope(query['run_id'] as String);
+          if (workingRun) {
+            run['state'] = 'executing';
+            run['progress'] = 'model';
+            run['report'] = null;
+          }
+          return run;
         }
         throw StateError('Unexpected Conversation Run query: $query');
       case 'conversation.interaction.get':
@@ -1119,21 +1306,29 @@ final class _ConversationTransport implements AppWireTransport {
   }) async {
     final command = Map<String, dynamic>.from(request['command'] as Map);
     commands.add(command);
+    commandIds.add(request['command_id'] as String);
     if (command['kind'] == 'conversation.session.start') {
       return _sessionEnvelope(replacementSession ?? initialSession);
     }
-    if (command['kind'] == 'conversation.start_turn') {
+    if (command['kind'] == 'conversation.work.submit_text') {
       _startTurnRequests++;
       if (returnTerminalFailure) {
-        startTurnRequested.complete();
-        return {
-          'kind': 'command_receipt',
+        if (!startTurnRequested.isCompleted) startTurnRequested.complete();
+        final expected = Map<String, dynamic>.from(command['expected'] as Map);
+        admittedText = command['text'] as String;
+        admittedWork = {
           'command_id': request['command_id'],
+          'work_id': _m4,
+          'execution_command_id': _turnId,
+          'input_id': request['command_id'],
+          'anchor': _surfaceAnchor(
+            expected['session_id'] as String,
+            (expected['sequence'] as int) + 1,
+          ),
+          'origin': {'kind': 'text'},
           'runtime_epoch': 1,
-          'admission': 'accepted',
-          'run_id': _terminalRunId,
-          'session_revision': terminalSession?['revision'],
         };
+        return {'kind': 'conversation.work.receipt', 'receipt': admittedWork};
       }
       if (_startTurnRequests == 1) {
         startTurnRequested.complete();
@@ -1147,6 +1342,13 @@ final class _ConversationTransport implements AppWireTransport {
     }
     throw StateError('Unexpected Conversation command: $command');
   }
+
+  Map<String, dynamic> _workSnapshot() => {
+    'receipt': admittedWork,
+    'input_text': admittedText,
+    'state': {'kind': 'linked', 'run_id': _terminalRunId},
+    'current_run_id': _terminalRunId,
+  };
 
   @override
   Future<void> close() async {}
@@ -1183,7 +1385,47 @@ final class _RejectedPageScenario {
 }
 
 List<String> _messageIds(ConversationController controller) =>
-    controller.messages.map((message) => message.messageId).toList();
+    controller.surfaceMessages.map((message) => message.messageId).toList();
+
+// Synthetic codec boundaries only; Rust/Vault tests establish actual chain hashes.
+Map<String, Object?> _surfaceAnchor(String session, int sequence) => {
+  'session_id': session,
+  'sequence': sequence,
+  'digest': sequence.toRadixString(16).padLeft(64, '0'),
+};
+Map<String, dynamic> _surfaceEnvelope(
+  Map<String, Object?> session, {
+  Map<String, dynamic>? through,
+  int? head,
+}) {
+  final entries = (session['messages'] as List).cast<Map<String, Object?>>();
+  final sessionId = session['id'] as String;
+  final sequence = through?['sequence'] as int? ?? head ?? entries.length;
+  final first = sequence - entries.length;
+  return {
+    'kind': 'conversation.surface',
+    'snapshot': {
+      'through': _surfaceAnchor(sessionId, sequence),
+      'older': session['has_earlier_messages'] == true
+          ? _surfaceAnchor(sessionId, first)
+          : null,
+      if (session['person_id'] != _personId) 'person_id': session['person_id'],
+      'messages': [
+        for (var i = 0; i < entries.length; i++)
+          {
+            'message_id': entries[i]['message_id'],
+            'before': _surfaceAnchor(sessionId, first + i),
+            'through': _surfaceAnchor(sessionId, first + i + 1),
+            'content': {
+              'kind': 'input',
+              'text': entries[i]['text'],
+              'origin': 'text',
+            },
+          },
+      ],
+    },
+  };
+}
 
 Map<String, dynamic> _sessionEnvelope(Map<String, Object?> session) => {
   'kind': 'conversation_session',

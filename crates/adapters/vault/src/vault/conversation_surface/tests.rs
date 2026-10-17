@@ -103,7 +103,7 @@ fn execution(
         expected_revision: revision,
         text: text.into(),
         mode: TurnMode::New,
-        retry_of: None,
+        retry_of: receipt.origin.retry_of(),
     };
     TurnAdmissionRequest {
         expert_environment: floe_experts::RunExpertEnvironmentIdentity {
@@ -118,7 +118,7 @@ fn execution(
         device_id: f.actor.device_id.clone(),
         request_digest: intent.digest(&f.actor.person_id.to_string()).unwrap(),
         mode: TurnMode::New,
-        retry_of: None,
+        retry_of: receipt.origin.retry_of(),
         input: TurnInput::NewMessage(floe_agent_contract::AgentMessage {
             message_id: receipt.execution_command_id().as_uuid(),
             role: floe_agent_contract::MessageRole::User,
@@ -780,6 +780,7 @@ async fn text_input_and_work_are_atomic_and_exact_on_lost_ack_retry() {
     for n in 0..=MAX_PENDING_SURFACE_WORK {
         let expected = vault.surface_head(&f.actor, f.session).await.unwrap();
         let request = floe_conversation::SubmitTextWork {
+            retry_of: None,
             command_id: CommandId::new(),
             expected,
             text: format!("queued {n}"),
@@ -824,6 +825,12 @@ async fn text_input_and_work_are_atomic_and_exact_on_lost_ack_retry() {
             .await
             .unwrap(),
         receipt
+    );
+    let mut invalid = request.clone();
+    invalid.text.clear();
+    assert_eq!(
+        vault.submit_text_work(&f.actor, invalid).await,
+        Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     );
     let mut changed = request.clone();
     changed.text = "changed".into();
@@ -1587,12 +1594,28 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
             settled
         );
         assert_eq!(vault.surface_head(&f.actor, f.session).await.unwrap(), head);
-        let snapshot_request = floe_conversation::SurfaceReadRequest { session_id: f.session, through: Some(head), limit: 128 };
-        let snapshot = vault.read_surface(&f.actor, snapshot_request.clone()).await.unwrap();
+        let snapshot_request = floe_conversation::SurfaceReadRequest {
+            session_id: f.session,
+            through: Some(head),
+            limit: 128,
+        };
+        let snapshot = vault
+            .read_surface(&f.actor, snapshot_request.clone())
+            .await
+            .unwrap();
         let mut writer_connection = vault.connection().unwrap();
-        let unrelated_writer = writer_connection.transaction_with_behavior(TransactionBehavior::Immediate).await.unwrap();
-        assert_eq!(vault.read_surface(&f.actor, snapshot_request.clone()).await.unwrap(), snapshot,
-            "canonical result/status joins are read-only too");
+        let unrelated_writer = writer_connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .unwrap();
+        assert_eq!(
+            vault
+                .read_surface(&f.actor, snapshot_request.clone())
+                .await
+                .unwrap(),
+            snapshot,
+            "canonical result/status joins are read-only too"
+        );
         unrelated_writer.rollback().await.unwrap();
         drop(writer_connection);
         assert_eq!(snapshot.messages.len(), entries.len());
@@ -1615,7 +1638,13 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
                 .unwrap(),
             entries
         );
-        assert_eq!(reopened.read_surface(&f.actor, snapshot_request.clone()).await.unwrap(), snapshot);
+        assert_eq!(
+            reopened
+                .read_surface(&f.actor, snapshot_request.clone())
+                .await
+                .unwrap(),
+            snapshot
+        );
         if partial {
             let connection = reopened.connection().unwrap();
             connection
@@ -1632,8 +1661,13 @@ async fn terminal_outcome_and_partial_body_publish_atomically_and_reopen() {
                     .is_err(),
                 "a valid terminal Run alone cannot prove Surface publication custody"
             );
-            assert!(reopened.read_surface(&f.actor, snapshot_request.clone()).await.is_err(),
-                "a safe body projection must retain the Work lineage proof");
+            assert!(
+                reopened
+                    .read_surface(&f.actor, snapshot_request.clone())
+                    .await
+                    .is_err(),
+                "a safe body projection must retain the Work lineage proof"
+            );
             drop(connection);
             drop(reopened);
             assert!(
@@ -1707,6 +1741,7 @@ async fn work_pages_pin_membership_but_observe_current_custody_without_writer() 
                 .submit_text_work(
                     &f.actor,
                     floe_conversation::SubmitTextWork {
+                        retry_of: None,
                         command_id: CommandId::new(),
                         expected,
                         text: format!("Retained request {index}"),
@@ -1736,6 +1771,7 @@ async fn work_pages_pin_membership_but_observe_current_custody_without_writer() 
         .submit_text_work(
             &f.actor,
             floe_conversation::SubmitTextWork {
+                retry_of: None,
                 command_id: CommandId::new(),
                 expected,
                 text: "Admitted after the first page".into(),
@@ -1848,45 +1884,137 @@ async fn work_pages_pin_membership_but_observe_current_custody_without_writer() 
 
 #[tokio::test]
 async fn surface_snapshot_pages_are_original_pinned_read_only_and_verified_on_reopen() {
-    use floe_conversation::{SurfaceReadRequest, SurfaceMessageContent, SurfaceInputKind};
+    use floe_conversation::{SurfaceInputKind, SurfaceMessageContent, SurfaceReadRequest};
     let (f, vault) = fixture().await;
-    let query = SurfaceReadRequest { session_id:f.session, through:None, limit:2 };
-    assert!(vault.read_surface(&f.actor,query.clone()).await.unwrap().messages.is_empty());
-    let first = vault.append_surface_input(&f.actor, request(&f,&vault,"one").await).await.unwrap();
+    let query = SurfaceReadRequest {
+        session_id: f.session,
+        through: None,
+        limit: 2,
+    };
+    assert!(
+        vault
+            .read_surface(&f.actor, query.clone())
+            .await
+            .unwrap()
+            .messages
+            .is_empty()
+    );
+    let first = vault
+        .append_surface_input(&f.actor, request(&f, &vault, "one").await)
+        .await
+        .unwrap();
     let voice = Uuid::new_v4();
-    let mut second_request = request(&f,&vault,"two spoken words").await;
-    second_request.input.origin = SurfaceInputOrigin::Voice { voice_session_id:voice, utterance_id:"opaque-provider-utterance".into() };
-    let second = vault.append_surface_input(&f.actor,second_request).await.unwrap();
-    let third = vault.append_surface_input(&f.actor,request(&f,&vault,"three").await).await.unwrap();
-    let page = vault.read_surface(&f.actor,query.clone()).await.unwrap();
-    assert_eq!(page.through,third.through);
-    assert_eq!(page.older,Some(first.through));
-    assert_eq!(page.messages.len(),2);
-    assert_eq!(page.messages[0].content,SurfaceMessageContent::Input {text:"two spoken words".into(),origin:SurfaceInputKind::Voice});
-    let encoded=serde_json::to_string(&page).unwrap();
+    let mut second_request = request(&f, &vault, "two spoken words").await;
+    second_request.input.origin = SurfaceInputOrigin::Voice {
+        voice_session_id: voice,
+        utterance_id: "opaque-provider-utterance".into(),
+    };
+    let second = vault
+        .append_surface_input(&f.actor, second_request)
+        .await
+        .unwrap();
+    let third = vault
+        .append_surface_input(&f.actor, request(&f, &vault, "three").await)
+        .await
+        .unwrap();
+    let page = vault.read_surface(&f.actor, query.clone()).await.unwrap();
+    assert_eq!(page.through, third.through);
+    assert_eq!(page.older, Some(first.through));
+    assert_eq!(page.messages.len(), 2);
+    assert_eq!(
+        page.messages[0].content,
+        SurfaceMessageContent::Input {
+            text: "two spoken words".into(),
+            origin: SurfaceInputKind::Voice
+        }
+    );
+    let encoded = serde_json::to_string(&page).unwrap();
     assert!(!encoded.contains("opaque-provider-utterance"));
     assert!(!encoded.contains(&voice.to_string()));
-    let pinned=SurfaceReadRequest {through:Some(page.through),..query.clone()};
-    let mut writer_connection=vault.connection().unwrap();
-    let writer=writer_connection.transaction_with_behavior(TransactionBehavior::Immediate).await.unwrap();
-    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
-    writer.rollback().await.unwrap(); drop(writer_connection);
-    vault.append_surface_input(&f.actor,request(&f,&vault,"later arrival").await).await.unwrap();
-    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
-    let previous=vault.read_surface(&f.actor,SurfaceReadRequest {through:page.older,..query.clone()}).await.unwrap();
-    assert_eq!(previous.messages.len(),1); assert!(previous.older.is_none());
-    assert_eq!(previous.messages[0].message_id,first.input.message_id);
-    let wrong_actor=OwnerActor {person_id:PersonId::new(),..f.actor.clone()};
-    assert_eq!(vault.read_surface(&wrong_actor,query.clone()).await,Err(AgentFailure::PolicyDenied));
-    let mut forged=page.through; forged.digest[0]^=1;
-    assert!(vault.read_surface(&f.actor,SurfaceReadRequest {through:Some(forged),..query.clone()}).await.is_err());
+    let pinned = SurfaceReadRequest {
+        through: Some(page.through),
+        ..query.clone()
+    };
+    let mut writer_connection = vault.connection().unwrap();
+    let writer = writer_connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.read_surface(&f.actor, pinned.clone()).await.unwrap(),
+        page
+    );
+    writer.rollback().await.unwrap();
+    drop(writer_connection);
+    vault
+        .append_surface_input(&f.actor, request(&f, &vault, "later arrival").await)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.read_surface(&f.actor, pinned.clone()).await.unwrap(),
+        page
+    );
+    let previous = vault
+        .read_surface(
+            &f.actor,
+            SurfaceReadRequest {
+                through: page.older,
+                ..query.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(previous.messages.len(), 1);
+    assert!(previous.older.is_none());
+    assert_eq!(previous.messages[0].message_id, first.input.message_id);
+    let wrong_actor = OwnerActor {
+        person_id: PersonId::new(),
+        ..f.actor.clone()
+    };
+    assert_eq!(
+        vault.read_surface(&wrong_actor, query.clone()).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    let mut forged = page.through;
+    forged.digest[0] ^= 1;
+    assert!(
+        vault
+            .read_surface(
+                &f.actor,
+                SurfaceReadRequest {
+                    through: Some(forged),
+                    ..query.clone()
+                }
+            )
+            .await
+            .is_err()
+    );
     drop(vault);
-    let vault=EncryptedAgentVault::open(&f.root,f.actor.person_id,f.keys.clone()).await.unwrap();
-    assert_eq!(vault.read_surface(&f.actor,pinned.clone()).await.unwrap(),page);
-    let mut corrupted=second.clone(); corrupted.input.text="altered original".into();
-    vault.connection().unwrap().execute("UPDATE agent_surface_entries SET payload = ? WHERE command_id = ?",
-        (encode(&SurfaceEntryReceipt::Input(corrupted)).unwrap(),second.command_id.as_uuid().to_string())).await.unwrap();
-    assert!(vault.read_surface(&f.actor,pinned).await.is_err(),"safe display must still verify original custody");
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        vault.read_surface(&f.actor, pinned.clone()).await.unwrap(),
+        page
+    );
+    let mut corrupted = second.clone();
+    corrupted.input.text = "altered original".into();
+    vault
+        .connection()
+        .unwrap()
+        .execute(
+            "UPDATE agent_surface_entries SET payload = ? WHERE command_id = ?",
+            (
+                encode(&SurfaceEntryReceipt::Input(corrupted)).unwrap(),
+                second.command_id.as_uuid().to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(
+        vault.read_surface(&f.actor, pinned).await.is_err(),
+        "safe display must still verify original custody"
+    );
 }
 
 #[tokio::test]
@@ -2059,5 +2187,171 @@ async fn work_observes_current_continue_child_without_rewriting_claim_or_missing
         EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn retry_work_keeps_original_input_and_survives_intervening_claim_and_reopen() {
+    use floe_conversation::SubmitTextWork;
+    let (f, vault) = fixture().await;
+    vault.activate_conversation_executor().await.unwrap();
+    let identity = floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+    let original = SubmitTextWork {
+        command_id: CommandId::new(),
+        retry_of: None,
+        expected: vault.surface_head(&f.actor, f.session).await.unwrap(),
+        text: "original request".into(),
+    };
+    let first = vault
+        .submit_text_work(&f.actor, original.clone())
+        .await
+        .unwrap();
+    let first_execution = execution(&f, &first, &original.text, 0);
+    let source_run = first_execution.run_id;
+    vault
+        .claim_manager_surface_work(first.clone(), first_execution, identity.clone())
+        .await
+        .unwrap();
+    let mut retry = SubmitTextWork {
+        command_id: CommandId::new(),
+        retry_of: Some(source_run),
+        expected: vault.surface_head(&f.actor, f.session).await.unwrap(),
+        text: original.text.clone(),
+    };
+    assert_eq!(
+        vault.submit_text_work(&f.actor, retry.clone()).await,
+        Err(CommandFailure::NotApplied(AgentFailure::Conflict))
+    );
+    assert_eq!(
+        vault.surface_head(&f.actor, f.session).await.unwrap(),
+        retry.expected
+    );
+    vault
+        .settle_manager_conversation_run(
+            source_run,
+            1,
+            floe_conversation::RunTerminal::from_failure(AgentFailure::Cancelled),
+        )
+        .await
+        .unwrap();
+
+    let other = SubmitTextWork {
+        command_id: CommandId::new(),
+        retry_of: None,
+        expected: vault.surface_head(&f.actor, f.session).await.unwrap(),
+        text: "intervening work".into(),
+    };
+    let intervening = vault
+        .submit_text_work(&f.actor, other.clone())
+        .await
+        .unwrap();
+    retry.expected = vault.surface_head(&f.actor, f.session).await.unwrap();
+    let mut changed_text = retry.clone();
+    changed_text.text = "replacement request".into();
+    assert_eq!(
+        vault.submit_text_work(&f.actor, changed_text).await,
+        Err(CommandFailure::NotApplied(AgentFailure::Conflict))
+    );
+    assert_eq!(
+        vault.surface_head(&f.actor, f.session).await.unwrap(),
+        retry.expected
+    );
+    let mut foreign = f.actor.clone();
+    foreign.device_id = "other-device".into();
+    assert!(
+        vault
+            .submit_text_work(&foreign, retry.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        vault.surface_head(&f.actor, f.session).await.unwrap(),
+        retry.expected
+    );
+    let retried = vault
+        .submit_text_work(&f.actor, retry.clone())
+        .await
+        .unwrap();
+    assert_ne!(retried.input_id, first.input_id);
+    assert_eq!(retried.origin.retry_of(), Some(source_run));
+    let revision = vault
+        .load(f.actor.person_id, f.session)
+        .await
+        .unwrap()
+        .revision;
+    let other_execution = execution(&f, &intervening, &other.text, revision);
+    let other_run = other_execution.run_id;
+    vault
+        .claim_manager_surface_work(intervening, other_execution, identity.clone())
+        .await
+        .unwrap();
+    vault
+        .settle_manager_conversation_run(
+            other_run,
+            1,
+            floe_conversation::RunTerminal::from_failure(AgentFailure::Cancelled),
+        )
+        .await
+        .unwrap();
+    let moved_revision = vault
+        .load(f.actor.person_id, f.session)
+        .await
+        .unwrap()
+        .revision;
+    assert!(moved_revision > revision);
+    let retry_execution = execution(&f, &retried, &retry.text, moved_revision);
+    let retry_run = retry_execution.run_id;
+    vault
+        .claim_manager_surface_work(retried.clone(), retry_execution.clone(), identity.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .conversation_run(retry_run)
+            .await
+            .unwrap()
+            .unwrap()
+            .retry_of,
+        Some(source_run)
+    );
+    // Exact admission observation remains read-only while another writer holds
+    // a reservation. Neither head/revision rebasing nor a new command is needed.
+    let mut writer = vault.connection().unwrap();
+    let held = writer
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .submit_text_work(&f.actor, retry.clone())
+            .await
+            .unwrap(),
+        retried
+    );
+    held.rollback().await.unwrap();
+    drop(writer);
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        vault
+            .submit_text_work(&f.actor, retry.clone())
+            .await
+            .unwrap(),
+        retried
+    );
+    assert!(matches!(
+        vault
+            .claim_manager_surface_work(retried.clone(), retry_execution, identity)
+            .await
+            .unwrap(),
+        super::super::VaultManagerConversationAdmission::Existing(_)
+    ));
+    let mut retargeted = retry;
+    retargeted.retry_of = Some(other_run);
+    assert_eq!(
+        vault.submit_text_work(&f.actor, retargeted).await,
+        Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     );
 }

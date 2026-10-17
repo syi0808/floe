@@ -20,7 +20,7 @@ final class AppWireConversationGateway implements AgentConversationGateway {
       client: runtimeClient,
       readModel: readModel,
       loadSession: loadConversation,
-      beforeStartTurn: beforeConversationStart,
+      beforeAdmission: beforeConversationStart,
     );
     _interactionGateway = NativeAgentInteractionGateway(runtimeClient);
   }

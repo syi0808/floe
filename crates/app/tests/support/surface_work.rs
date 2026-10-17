@@ -27,6 +27,7 @@ fn submit_text(
                     .surface_head(&actor, session_id, &scope)
                     .await?;
                 let request = SubmitTextWork {
+                    retry_of: None,
                     command_id,
                     expected,
                     text,
@@ -110,7 +111,6 @@ fn entries(
             .expect("read the actual ordered Surface prefix")
     })
 }
-
 
 fn visible_surface(
     host: &AppHost<AppComposition>,
@@ -249,13 +249,22 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     let display = visible_surface(&host, session_id, None, 128);
     assert_eq!(display.messages.len(), 7);
     let display_json = serde_json::to_string(&display).unwrap();
-    assert!(!display_json.contains("future-u1"), "provider utterance identifiers are not product display data");
+    assert!(
+        !display_json.contains("future-u1"),
+        "provider utterance identifiers are not product display data"
+    );
     let last_page = visible_surface(&host, session_id, Some(display.through), 2);
     assert_eq!(last_page.messages, display.messages[5..]);
     let earlier_page = visible_surface(&host, session_id, last_page.older, 128);
     assert_eq!(earlier_page.messages, display.messages[..5]);
-    assert_eq!(snapshot(&host, first.command_id).current_run_id, Some(first_run));
-    assert_eq!(snapshot(&host, second.command_id).current_run_id, Some(second_run));
+    assert_eq!(
+        snapshot(&host, first.command_id).current_run_id,
+        Some(first_run)
+    );
+    assert_eq!(
+        snapshot(&host, second.command_id).current_run_id,
+        Some(second_run)
+    );
     assert_eq!(snapshot(&host, cancelled.command_id).current_run_id, None);
     let published = entries(&host, session_id, None);
     assert_eq!(
@@ -283,7 +292,10 @@ fn owner_queue_keeps_listening_and_serially_dispatches_with_original_anchor() {
     drop(host);
     let host = profile.open(&model);
     assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
-    assert_eq!(visible_surface(&host, session_id, Some(display.through), 128), display);
+    assert_eq!(
+        visible_surface(&host, session_id, Some(display.through), 128),
+        display
+    );
     assert_eq!(
         snapshot(&host, second.command_id).state,
         SurfaceWorkState::Linked(second_run)

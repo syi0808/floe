@@ -102,8 +102,8 @@ External Product and Runtime control command envelopes require UUID-v4 nonces so
 they cannot collide with internally derived command identities. NativeHost command
 envelopes and other query references retain their existing contracts; Runtime
 preparation-history references also require UUID-v4. The generic CommandId type
-retains its existing contract. Conversation stored family format 10 removes the
-obsolete Session recovery-command table; older family
+retains its existing contract. Conversation stored family format 16 retains typed Surface/Work custody and
+Retry origin, with no obsolete Session recovery-command table. Older family
 formats fail closed and require an explicitly selected fresh development profile,
 not an automatic reset, key replacement or migration.
 
@@ -116,22 +116,31 @@ Unresolved settlement stops the operation rather than silently resuming another
 Session or replacing the pending identity.
 
 There is no separate business Session Recover command. The executor-owned recovery
-driver reconciles Runs; the screen re-reads the exact Session and observes its Run.
-Client adoption epochs and monotonic Session revisions prevent obsolete responses
-from replacing current state. Stopping an observation or disposing a screen does
-not cancel a Run. Already handed-off bounded turn admission settles with its original
-identity; a replacement load waits for this handshake before reading. A user Stop
-is a separate explicit owner command: for a newly submitted Start, unresolved
-admission cannot claim cancellation, so Cancel waits for a positive Start receipt.
-An already-admitted Run can be cancelled directly. If the observation stopped, an
-explicit Stop already requested is honored after that receipt, the shared read model
-is sealed before releasing the activity slot, and the receipt is never adopted into
-a newer epoch. Re-observation can Stop the Session's activeTurn before the first Run
-event arrives. A cancellation transport failure does not abandon an admitted Run's
-active observation; the Stop caller gets the failure. For a Run owned by an active
-turn admission, an explicit retry retains that Cancel identity. A Stop for a Run
-that is no longer known active sends no command and restores the UI's non-stopping
-state. Detached query completions cannot publish stale client state.
+driver reconciles Runs; the screen reads the Session, immutable Surface prefix and
+Work descendants. Client adoption epochs and monotonic Session revisions prevent
+obsolete responses from replacing current state. Stopping observation, detaching
+or disposing a screen does not cancel admitted work. Polling is read-only and
+never resubmits an uncertain command.
+
+New text and Retry atomically admit an original Surface input and FIFO Work.
+The app-lifetime client retains the exact command, text, expected prefix and Retry
+source until settlement. Uncertainty requires explicit exact recovery; a later
+NotAdmitted response cannot erase an earlier uncertain submission. Positive Work
+admission clears the submitted draft, even if the eventual Run fails. The receipt's
+prefix is a lower bound for the next send: an older in-flight read cannot enable
+submission against a stale pre-admission head. The client does not invent a head,
+rebase unknown intent, or treat a Surface input ID as a Core turn ID.
+
+Pending Work cancellation and active Run Stop are distinct explicit commands.
+Cancellation retains its command identity for exact retry; a lost race to claim
+cannot be presented as successful pending cancellation. Continue accepts only an
+owner-issued reference to the original input and preserves cumulative accounting;
+it cannot introduce another User message. Its immutable command receipt retains
+the admission revision even after Run settlement changes the current revision.
+An explicit Run observer ends with its target; a different active Session Run is
+not implicitly followed. Work's canonical descendant relation determines later
+Run association. Cancellation transport failure does not terminate the independent
+Run observation, and detached results cannot publish into a newer client epoch.
 
 ## Completed model output and bounded correction
 

@@ -29,7 +29,7 @@ pub use source_review::{
 };
 
 pub use intent::{
-    AdmittedExecution, CanonicalTurnIntent, ContinuationToken, MAX_TURN_TEXT_BYTES, StartTurn,
+    AdmittedExecution, CanonicalTurnIntent, ContinuationToken, ContinueTurn, MAX_TURN_TEXT_BYTES,
     normalize_turn_text,
 };
 pub use interaction::{
@@ -412,8 +412,10 @@ mod surface_work_page;
 pub use surface_work_page::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};
 
 mod surface_projection;
-pub use surface_projection::{MAX_SURFACE_SNAPSHOT_BYTES, SurfaceReadRequest, SurfaceInputKind,
-    SurfaceMessageContent, SurfaceMessage, SurfaceSnapshot};
+pub use surface_projection::{
+    MAX_SURFACE_SNAPSHOT_BYTES, SurfaceInputKind, SurfaceMessage, SurfaceMessageContent,
+    SurfaceReadRequest, SurfaceSnapshot,
+};
 
 mod run_successor;
-pub use run_successor::{RunSuccessorKind, MAX_RUN_LINEAGE_RECORDS, validate_run_successor};
+pub use run_successor::{MAX_RUN_LINEAGE_RECORDS, RunSuccessorKind, validate_run_successor};

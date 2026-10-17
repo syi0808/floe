@@ -104,9 +104,10 @@ remain Conversation-owned; shape validation does not authenticate a reference.
 Voice input and delegation identities include the
 exact live-session identity; matching a model role is not sufficient.
 
-The implemented internal Surface/Work path is shown below. The public App/FFI/
-Flutter text cutover and live Voice provider/native path remain pending; this
-is not a diagram of an already-working voice client.
+The Surface/Work path below is also the public text admission path. App/FFI
+project safe history and Work values; Flutter keeps the Person timeline separate
+from Core execution details. Live Voice provider/native integration is separate;
+this is not a diagram of an already-working voice client.
 
 ```mermaid
 flowchart LR
@@ -221,17 +222,38 @@ hydration. Completed compaction replay is also read-only before reserving a
 writer; first installation still atomically commits checkpoint, coverage and
 execution receipt under the existing journal fence. Startup validates both the
 execution records and checkpoint index and never repairs corrupted custody.
-The stored meaning uses Conversation schema 15 and an explicitly selected fresh
+The stored meaning uses Conversation schema 16 and an explicitly selected fresh
 development profile; no automatic reset or old-data reinterpretation is added.
 
-This is an internal owner integration checkpoint. The existing Flutter StartTurn
-path still invokes the Manager directly; shared text/protocol projection, audio
-presentation evidence and the Voice provider/native/UI cutover remain execution-plan
-gates. The old New entry is bounded to that pending product cutover, not a
-second long-term user path. No public voice feature or busy-input UI relaxation
-is enabled by these contracts alone. Core recording and external-effect
-ownership are unchanged. [ADR 0036](../decisions/0036-live-surface-and-manager-work.md) records
-the target and the reasons for the remaining cutover.
+Text enters through `conversation.work.submit_text`. An explicit
+`conversation.work.retry` retains a new input and Work while binding its source
+to the original canonical input of a terminal Run from the same Person, device
+and Session. Queue claim may occur after other Work advances the Session;
+source identity and text do not change. Receipt observation precedes validation
+of a reused request body, so an invalid reuse cannot make an occupied command
+identity appear disposable. Pending cancellation remains a distinct command.
+
+`conversation.continue_turn` accepts only the owner-issued reference and expected
+Session revision. Conversation retrieves the original input itself; Continue
+cannot append replacement text, become a Retry, or reset cumulative accounting.
+Its command receipt carries the immutable admission revision derived from the
+Run record, while Run observation retains the current execution revision.
+Replaying after terminal settlement returns the original admission stamp.
+An explicit Run observer stops at that Run's terminal state; it cannot follow
+`Session.activeTurn` into unrelated queued Work. Only the Conversation-owned
+Work descendant projection identifies continuation of a particular Work.
+
+Flutter polls Surface and bounded Work snapshots through pure queries. A retained
+immutable Work command survives uncertain transport and controller replacement;
+only explicit admission recovery can resubmit it. A running Manager does not
+block new text admission. Core messages are used for execution detail cards,
+not as the Person timeline or as fabricated Surface turn IDs. An accepted input
+is never restored into the composer merely because its later Run failed.
+
+Voice provider/media/control adapters remain separate execution-plan gates.
+Core recording, authority, external-effect ownership and budget limits are
+unchanged. [ADR 0036](../decisions/0036-live-surface-and-manager-work.md) records
+the target and the reasons for this cutover.
 
 ### Production Manager conversation custody
 
@@ -488,7 +510,7 @@ The client AppRuntime owns one shared RuntimeController over AppWire `runtime.re
 
 Flutter Expert Calendar policy settings retain one unresolved immutable policy command per gateway identity. Its UUID, target mode and original revision survive controller recreation and current-value reloads. Reload is a query and never resolves or rebases pending intent; Settings exposes an explicit exact retry and prevents another policy change until resolution. The shared AppWire disposition predicate retires NotApplied or first-submission NotAdmitted only, with a latest-submission fence against overlapping late failures. Validated historical receipts settle correlation without regressing a newer observed policy revision. This correlation does not own or widen Access policy; the owner still validates revisions and applies changes.
 
-`ExpertsService.activate` owns shipped-bundle reconciliation and Directory publication. Existing binding and enable configuration survive reopen, including empty or unavailable selections; activation does not silently rebind them. An intentionally empty Directory remains valid. Conversation Start/Resume/Get/Recover own Session semantics, while each admitted Run retains one Experts-owned environment for discovery and delegation. The public `StartTurn` intent contains session/revision, text and optional continuation or retry references. App supplies the verified actor separately; the caller does not choose a model profile or credential source.
+`ExpertsService.activate` owns shipped-bundle reconciliation and Directory publication. Existing binding and enable configuration survive reopen, including empty or unavailable selections; activation does not silently rebind them. An intentionally empty Directory remains valid. Conversation Start/Resume/Get/Recover own Session semantics, while each admitted Run retains one Experts-owned environment for discovery and delegation. The public `ContinueTurn` intent contains session/revision and the required owner-issued continuation reference; fresh text and explicit retry enter through Work. App supplies the verified actor separately; the caller does not choose a model profile or credential source.
 
 `SourceServices` constructs one `GatewayCredentialStore` over the encrypted Vault's trust reader for each ready generation. Shared clones feed pairing, integration and cleanup adapters, the default `CompositeModelProvider`, Inference admission and the product Gateway lease registry. The registry publishes that reader and the Vault authorization signer under an exact generation; each remote source operation prepares and retains its own verified credential binding. Readiness does not require a configured Gateway. Only verified credential absence produces `None`; locked, unreadable, malformed, staged or foreign identity remains a failure. Private credentials stay inside provider/storage adapters, and source catalogs are observed only by their owning operations.
 

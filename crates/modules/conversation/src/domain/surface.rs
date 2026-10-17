@@ -169,15 +169,28 @@ impl WorkId {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkOrigin {
     Text,
+    Retry {
+        source_run_id: floe_kernel::RunId,
+    },
     Voice {
         voice_session_id: Uuid,
         delegation_id: String,
     },
 }
 impl WorkOrigin {
+    pub fn retry_of(&self) -> Option<floe_kernel::RunId> {
+        match self {
+            Self::Retry { source_run_id } => Some(*source_run_id),
+            _ => None,
+        }
+    }
     fn validate(&self) -> Result<(), AgentFailure> {
         match self {
             Self::Text => Ok(()),
+            Self::Retry { source_run_id } => source_run_id
+                .is_valid()
+                .then_some(())
+                .ok_or(AgentFailure::InvalidInput),
             Self::Voice {
                 voice_session_id,
                 delegation_id,
@@ -307,6 +320,37 @@ pub(super) fn digest(domain: &[u8], value: &impl Serialize) -> Result<[u8; 32], 
 mod tests {
     use super::*;
     #[test]
+    fn retry_is_a_new_input_and_work_with_exact_source_identity() {
+        let actor = actor();
+        let original = SubmitTextWork {
+            command_id: CommandId::new(),
+            expected: SurfaceAnchor::empty(Uuid::new_v4()).unwrap(),
+            text: "original request".into(),
+            retry_of: None,
+        };
+        let (first_input, first_work) = original.prepare(&actor).unwrap();
+        let source = floe_kernel::RunId::new();
+        let retry = SubmitTextWork {
+            command_id: CommandId::new(),
+            expected: first_input.through,
+            text: original.text.clone(),
+            retry_of: Some(source),
+        };
+        let (input, work) = retry.prepare(&actor).unwrap();
+        assert_ne!(input.input.message_id, first_input.input.message_id);
+        assert_ne!(work.work_id, first_work.work_id);
+        assert_eq!(work.origin.retry_of(), Some(source));
+        assert_eq!(input.input.text, first_input.input.text);
+        assert_eq!(retry.prepare(&actor).unwrap(), (input, work.clone()));
+        let mut retargeted = retry;
+        retargeted.retry_of = Some(floe_kernel::RunId::new());
+        assert_ne!(
+            retargeted.prepare(&actor).unwrap().1.request_digest,
+            work.request_digest
+        );
+    }
+
+    #[test]
     fn shared_reference_keeps_owner_chain_encoding_and_bounds() {
         let anchor =
             SurfaceAnchor::empty(Uuid::parse_str("00112233-4455-6677-8899-aabbccddeeff").unwrap())
@@ -434,6 +478,9 @@ pub enum SurfaceWorkState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SurfaceWorkSnapshot {
     pub receipt: SurfaceWorkReceipt,
+    /// Read-only canonical input body for the Work label and explicit retry.
+    /// This is projected from Surface custody, never persisted on Work.
+    pub input_text: String,
     pub state: SurfaceWorkState,
     /// Latest canonical Continue/Resume descendant, observed without rewriting
     /// the immutable initial claim link. Progress remains owned by this Run.
@@ -445,6 +492,7 @@ pub struct SurfaceWorkSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubmitTextWork {
     pub command_id: CommandId,
+    pub retry_of: Option<floe_kernel::RunId>,
     pub expected: SurfaceAnchor,
     pub text: String,
 }
@@ -475,7 +523,10 @@ impl SubmitTextWork {
             command_id: self.command_id,
             anchor: input.through,
             input_id: input.input.message_id,
-            origin: WorkOrigin::Text,
+            origin: match self.retry_of {
+                Some(source_run_id) => WorkOrigin::Retry { source_run_id },
+                None => WorkOrigin::Text,
+            },
         }
         .admit(actor)?;
         Ok((input, work))

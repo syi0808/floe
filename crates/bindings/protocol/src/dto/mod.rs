@@ -85,3 +85,6 @@ pub use queries::{
     AppQueryResultDto, AppReplyStatusDto, AppRunSnapshotDto, AppRunStateDto, AppTurnExecutionDto,
     AppTurnReportDto, RuntimeQueryDto,
 };
+
+mod surface;
+pub use surface::*;

@@ -335,7 +335,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             if source.session_id != request.session_id
                 || source.person_id != self.person_id
                 || !source.state.is_terminal()
-                || source.session_revision != request.expected_session_revision
+                || source.device_id != request.device_id
             {
                 return Err(AgentFailure::Conflict);
             }
@@ -418,7 +418,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             continuation_level: continuation.as_ref().map_or(0, |value| value.level),
             retry_of: request.retry_of,
             resume_of: resume.as_ref().map(|value| value.origin_run_id),
-            resume_lineage: resume.as_ref().map_or(inherited_resume_lineage, |value| value.lineage),
+            resume_lineage: resume
+                .as_ref()
+                .map_or(inherited_resume_lineage, |value| value.lineage),
         };
         record.validate(self.person_id)?;
         transaction
@@ -437,11 +439,15 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(database_failure)?;
         if let Some(parent_id) = record.continuation_of.or(record.resume_of) {
-            let parent = self.conversation_run_on(transaction, parent_id).await?
+            let parent = self
+                .conversation_run_on(transaction, parent_id)
+                .await?
                 .ok_or(AgentFailure::StorageUnavailable)?;
             let (kind, name) = if record.continuation_of.is_some() {
                 (floe_conversation::RunSuccessorKind::Continue, "continue")
-            } else { (floe_conversation::RunSuccessorKind::Resume, "resume") };
+            } else {
+                (floe_conversation::RunSuccessorKind::Resume, "resume")
+            };
             floe_conversation::validate_run_successor(&parent, &record, kind)
                 .map_err(|_| AgentFailure::Conflict)?;
             transaction.execute(
@@ -1306,7 +1312,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             command_id.as_uuid().to_string(),
         )
         .await?;
-        if let Some(record) = &record { self.validate_run_backlink_on(connection, record).await?; }
+        if let Some(record) = &record {
+            self.validate_run_backlink_on(connection, record).await?;
+        }
         Ok(record)
     }
 
@@ -1322,7 +1330,9 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             run_id.as_uuid().to_string(),
         )
         .await?;
-        if let Some(record) = &record { self.validate_run_backlink_on(connection, record).await?; }
+        if let Some(record) = &record {
+            self.validate_run_backlink_on(connection, record).await?;
+        }
         Ok(record)
     }
 
@@ -1332,10 +1342,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         transaction: &Transaction<'_>,
         origin_run_id: RunId,
     ) -> Result<Option<RunId>, AgentFailure> {
-        let parent = self.conversation_run_on(transaction, origin_run_id).await?
+        let parent = self
+            .conversation_run_on(transaction, origin_run_id)
+            .await?
             .ok_or(AgentFailure::StorageUnavailable)?;
-        let Some(child) = self.run_successor_on(transaction, &parent).await? else { return Ok(None); };
-        if child.resume_of != Some(origin_run_id) { return Err(AgentFailure::StorageUnavailable); }
+        let Some(child) = self.run_successor_on(transaction, &parent).await? else {
+            return Ok(None);
+        };
+        if child.resume_of != Some(origin_run_id) {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         Ok(Some(child.run_id))
     }
 

@@ -27,17 +27,58 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
-    async fn drive_surface_work(self: &Arc<Self>, actor: &OwnerActor, session_id: Uuid, scope: &ExecutionScope) -> Result<bool, AgentFailure> {
+    async fn drive_surface_work(
+        self: &Arc<Self>,
+        actor: &OwnerActor,
+        session_id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<bool, AgentFailure> {
         self.check(actor)?;
-        let pending = scope.run(self.dependencies.repository.pending_surface_work(actor, session_id)).await?;
-        let Some(work) = pending.into_iter().next() else { return Ok(false); };
-        if work.device_id != actor.device_id { return Err(AgentFailure::PolicyDenied); }
+        let pending = scope
+            .run(
+                self.dependencies
+                    .repository
+                    .pending_surface_work(actor, session_id),
+            )
+            .await?;
+        let Some(work) = pending.into_iter().next() else {
+            return Ok(false);
+        };
+        if work.device_id != actor.device_id {
+            return Err(AgentFailure::PolicyDenied);
+        }
         let _command = self.lock_command(work.execution_command_id()).await?;
-        let session = scope.run(self.dependencies.sessions.load(actor.person_id, session_id)).await?;
-        if session.active_turn.is_some() { return Ok(true); }
-        let input = scope.run(self.dependencies.repository.surface_work_input(actor, &work)).await?;
-        let intent = CanonicalTurnIntent { session_id, expected_revision: session.revision, text: input.input.text, mode: TurnMode::New, retry_of: None };
-        match self.submit(actor, work.execution_command_id(), intent, session, scope, Some(work)).await {
+        let session = scope
+            .run(self.dependencies.sessions.load(actor.person_id, session_id))
+            .await?;
+        if session.active_turn.is_some() {
+            return Ok(true);
+        }
+        let input = scope
+            .run(
+                self.dependencies
+                    .repository
+                    .surface_work_input(actor, &work),
+            )
+            .await?;
+        let intent = CanonicalTurnIntent {
+            session_id,
+            expected_revision: session.revision,
+            text: input.input.text,
+            mode: TurnMode::New,
+            retry_of: work.origin.retry_of(),
+        };
+        match self
+            .submit(
+                actor,
+                work.execution_command_id(),
+                intent,
+                session,
+                scope,
+                Some(work),
+            )
+            .await
+        {
             Ok(_) => Ok(true),
             Err(CommandFailure::NotApplied(AgentFailure::Conflict)) => Ok(true),
             Err(failure) => Err(failure.into_failure()),
@@ -105,7 +146,8 @@ where
             let mut resumes_done = false;
             let mut compactions_done = false;
             let mut reobserve = false;
-            while !(runs_done && interactions_done && resumes_done && compactions_done && work_done) {
+            while !(runs_done && interactions_done && resumes_done && compactions_done && work_done)
+            {
                 if self.closing.load(Ordering::Acquire) || self.shutdown.is_cancelled() {
                     return;
                 }
@@ -245,18 +287,32 @@ where
                 }
                 if !work_done {
                     let scope = self.recovery_scope();
-                    match scope.run(self.dependencies.repository.queued_surface_sessions(&actor, work_after, PAGE_SIZE)).await {
+                    match scope
+                        .run(
+                            self.dependencies
+                                .repository
+                                .queued_surface_sessions(&actor, work_after, PAGE_SIZE),
+                        )
+                        .await
+                    {
                         Ok(page) => {
                             work_after = page.next_cursor;
                             work_done = work_after.is_none();
                             for session_id in page.items {
                                 match self.drive_surface_work(&actor, session_id, &scope).await {
                                     Ok(pending) => reobserve |= pending,
-                                    Err(failure) => { reobserve = true; report(failure); }
+                                    Err(failure) => {
+                                        reobserve = true;
+                                        report(failure);
+                                    }
                                 }
                             }
                         }
-                        Err(failure) => { work_done = true; reobserve = true; report(failure); }
+                        Err(failure) => {
+                            work_done = true;
+                            reobserve = true;
+                            report(failure);
+                        }
                     }
                 }
                 tokio::task::yield_now().await;
@@ -487,7 +543,14 @@ where
         let child_command_id = resume_command_id(origin)?;
         let _command = self.lock_command(child_command_id).await?;
         match self
-            .submit(actor, child_command_id, intent, prepared.session, scope, None)
+            .submit(
+                actor,
+                child_command_id,
+                intent,
+                prepared.session,
+                scope,
+                None,
+            )
             .await
         {
             Ok(_) => Ok(false),

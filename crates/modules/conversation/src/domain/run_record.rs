@@ -133,6 +133,8 @@ pub struct RunReceipt {
     pub issue: Option<AgentFailure>,
     pub blocked: Option<RunBlockRecord>,
     pub session_revision: u64,
+    /// Immutable admission stamp, derived from the canonical Run record.
+    pub admission_session_revision: u64,
     pub aggregate_revision: u64,
     pub executor_generation: u64,
     pub continuation_of: Option<RunId>,
@@ -163,6 +165,8 @@ impl RunReceipt {
             || self.device_id.len() > 256
             || self.user_message_id.is_nil()
             || self.request_digest == [0; 32]
+            || self.admission_session_revision == 0
+            || self.admission_session_revision > self.session_revision
             || self.session_revision == 0
             || self.aggregate_revision == 0
             || self.executor_generation == 0
@@ -602,10 +606,11 @@ impl RunRecord {
                 == continuation.map(|value| value.executor_generation)
             && self.continuation_level == continuation.map_or(0, |value| value.level)
             && self.resume_of == resume.map(|value| value.origin_run_id)
-            && self.resume_lineage == resume.map_or_else(
-                || continuation.map_or(0, |value| value.resume_lineage),
-                |value| value.lineage,
-            )
+            && self.resume_lineage
+                == resume.map_or_else(
+                    || continuation.map_or(0, |value| value.resume_lineage),
+                    |value| value.lineage,
+                )
     }
 }
 

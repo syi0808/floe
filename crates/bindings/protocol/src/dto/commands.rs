@@ -172,15 +172,24 @@ pub enum AppProductCommandDto {
         mode: super::OperationPolicyModeDto,
         expected_revision: u64,
     },
-    #[serde(rename = "conversation.start_turn")]
-    ConversationStartTurn {
+    #[serde(rename = "conversation.work.submit_text")]
+    ConversationWorkSubmitText {
+        expected: super::SurfaceAnchorDto,
+        text: String,
+    },
+    #[serde(rename = "conversation.work.retry")]
+    ConversationWorkRetry {
+        expected: super::SurfaceAnchorDto,
+        text: String,
+        source_run_id: RunRefDto,
+    },
+    #[serde(rename = "conversation.work.cancel_pending")]
+    ConversationWorkCancelPending { work_command_id: CommandIdDto },
+    #[serde(rename = "conversation.continue_turn")]
+    ConversationContinueTurn {
         session_id: SessionRefDto,
         expected_revision: u64,
-        text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        continuation_ref: Option<ContinuationRefDto>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        retry_of: Option<RunRefDto>,
+        continuation_ref: ContinuationRefDto,
     },
     #[serde(rename = "conversation.calendar_proposal.submit")]
     ConversationCalendarProposalSubmit {
@@ -330,21 +339,13 @@ impl AppProductCommandDto {
             Self::ConversationSetCalendarPolicy {
                 expected_revision, ..
             } => validate_revision(*expected_revision),
-            Self::ConversationStartTurn {
-                expected_revision,
-                text,
-                continuation_ref,
-                retry_of,
-                ..
-            } => {
-                // The first turn compares against the valid persisted revision 0.
-                // Other owners and post-admission commands retain positive revisions.
-                if *expected_revision > i64::MAX as u64 {
-                    return Err("expected_revision");
-                }
-                if retry_of.is_some() && continuation_ref.is_some() {
-                    return Err("command.retry_of");
-                }
+            Self::ConversationContinueTurn {
+                expected_revision, ..
+            } => validate_revision(*expected_revision),
+            Self::ConversationWorkCancelPending { .. } => Ok(()),
+            Self::ConversationWorkSubmitText { expected, text }
+            | Self::ConversationWorkRetry { expected, text, .. } => {
+                expected.validate()?;
                 let normalized = text.trim();
                 if text.len() > MAX_TURN_PAYLOAD_BYTES
                     || normalized.is_empty()
@@ -577,6 +578,14 @@ pub enum AppCommandResultDto {
     #[serde(rename = "conversation.assistant_features.source_review")]
     AssistantFeatureSourceReview {
         review: super::AssistantFeatureSourceReviewDto,
+    },
+    #[serde(rename = "conversation.work.receipt")]
+    ConversationWorkReceipt {
+        receipt: super::SurfaceWorkReceiptDto,
+    },
+    #[serde(rename = "conversation.work.cancelled")]
+    ConversationWorkCancelled {
+        receipt: super::PendingWorkCancellationReceiptDto,
     },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,

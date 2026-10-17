@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import '../domain/conversation_surface.dart';
+export '../domain/conversation_surface.dart';
+
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
@@ -10,22 +13,48 @@ import 'package:floe_client/features/actions/domain/calendar_action.dart';
 const _maxTurnTextBytes = 8 * 1024;
 const _maxTurnPayloadBytes = 64 * 1024;
 
-final class PreparedStartTurn {
-  const PreparedStartTurn({
+final class PreparedSurfaceWork {
+  const PreparedSurfaceWork({
+    required this.commandId,
+    required this.expected,
+    required this.text,
+    this.retryOf,
+  });
+  final String commandId;
+  final AppSurfaceAnchor expected;
+  final String text;
+  final String? retryOf;
+}
+
+final class PreparedContinueTurn {
+  const PreparedContinueTurn({
     required this.commandId,
     required this.sessionId,
     required this.expectedRevision,
-    required this.text,
-    this.continuation,
-    this.retryOf,
+    required this.continuation,
   });
-
-  final String commandId;
-  final String sessionId;
+  final String commandId, sessionId;
   final int expectedRevision;
-  final String text;
-  final AppContinuationRef? continuation;
-  final String? retryOf;
+  final AppContinuationRef continuation;
+}
+
+final class PreparedCancelPendingWork {
+  const PreparedCancelPendingWork({
+    required this.commandId,
+    required this.workCommandId,
+  });
+  final String commandId, workCommandId;
+}
+
+final class AppPendingWorkCancellationReceipt {
+  const AppPendingWorkCancellationReceipt({
+    required this.commandId,
+    required this.workCommandId,
+    required this.workId,
+    required this.runtimeEpoch,
+  });
+  final String commandId, workCommandId, workId;
+  final int runtimeEpoch;
 }
 
 final class AppContinuationRef {
@@ -250,64 +279,274 @@ final class AppWireConversationClient {
   final Map<String, Completer<dynamic>> _pending = {};
   bool _closed = false;
 
-  PreparedStartTurn prepareStartTurn({
-    required String sessionId,
-    required int expectedRevision,
+  PreparedSurfaceWork prepareSurfaceWork({
+    required AppSurfaceAnchor expected,
     required String text,
-    AppContinuationRef? continuation,
     String? retryOf,
   }) {
-    if (_closed)
-      throw StateError('AppWireConversationClient is already closed.');
-    final normalizedText = _normalizeTurnText(text);
-    if (sessionId.isEmpty ||
-        expectedRevision < 0 ||
-        continuation != null && continuation.id.isEmpty) {
-      throw const FormatException('Invalid conversation turn.');
+    if (_closed) throw StateError('AppWireConversationClient is closed.');
+    if (retryOf != null && !_wireId(retryOf)) {
+      throw const FormatException('Invalid retry source.');
     }
-    if (retryOf != null && (retryOf.isEmpty || continuation != null)) {
-      throw const FormatException('Invalid conversation retry.');
-    }
-    return PreparedStartTurn(
+    return PreparedSurfaceWork(
       commandId: _newId(),
-      sessionId: sessionId,
-      expectedRevision: expectedRevision,
-      text: normalizedText,
-      continuation: continuation,
+      expected: expected,
+      text: _normalizeTurnText(text),
       retryOf: retryOf,
     );
   }
 
-  Future<AppCommandReceipt> submitStartTurn(
-    PreparedStartTurn command, {
+  Future<AppSurfaceWorkReceipt> submitSurfaceWork(
+    PreparedSurfaceWork command, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
-      return Future.error(StateError('AppWireConversationClient is closed.'));
     final requestId = _newId();
     return _correlate(requestId, () async {
-      final normalizedText = _normalizeTurnText(command.text);
+      if (_normalizeTurnText(command.text) != command.text) {
+        throw const FormatException('Prepared text changed.');
+      }
       final result = await _transport.commandV2({
         'schema_version': appWireProtocolVersion,
         'request_id': requestId,
         'command_id': command.commandId,
         'command': {
-          'kind': 'conversation.start_turn',
+          'kind': command.retryOf == null
+              ? 'conversation.work.submit_text'
+              : 'conversation.work.retry',
+          'expected': command.expected.toJson(),
+          'text': command.text,
+          if (command.retryOf != null) 'source_run_id': command.retryOf,
+        },
+      }, timeout: timeout);
+      _wireFields(result, {'kind', 'receipt'});
+      if (result['kind'] != 'conversation.work.receipt') {
+        throw const FormatException('Invalid Work receipt.');
+      }
+      final receipt = AppSurfaceWorkReceipt.fromJson(_map(result['receipt']));
+      validateWorkReceipt(command, receipt);
+      return receipt;
+    });
+  }
+
+  void validateWorkReceipt(
+    PreparedSurfaceWork command,
+    AppSurfaceWorkReceipt receipt,
+  ) {
+    if (receipt.commandId != command.commandId ||
+        receipt.anchor.sessionId != command.expected.sessionId ||
+        receipt.anchor.sequence != command.expected.sequence + 1 ||
+        receipt.sourceRunId != command.retryOf ||
+        receipt.origin !=
+            (command.retryOf == null
+                ? AppSurfaceWorkOrigin.text
+                : AppSurfaceWorkOrigin.retry)) {
+      throw const FormatException('Work receipt scope mismatch.');
+    }
+  }
+
+  PreparedContinueTurn prepareContinueTurn({
+    required String sessionId,
+    required int expectedRevision,
+    required AppContinuationRef continuation,
+  }) {
+    if (_closed) throw StateError('AppWireConversationClient is closed.');
+    if (!_wireId(sessionId) ||
+        expectedRevision <= 0 ||
+        !_wireId(continuation.id)) {
+      throw const FormatException('Invalid continuation.');
+    }
+    return PreparedContinueTurn(
+      commandId: _newId(),
+      sessionId: sessionId,
+      expectedRevision: expectedRevision,
+      continuation: continuation,
+    );
+  }
+
+  Future<AppCommandReceipt> submitContinueTurn(
+    PreparedContinueTurn command, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.continue_turn',
           'session_id': command.sessionId,
           'expected_revision': command.expectedRevision,
-          'text': normalizedText,
-          if (command.continuation case final continuation?)
-            'continuation_ref': {'id': continuation.id},
-          'retry_of': ?command.retryOf,
+          'continuation_ref': {'id': command.continuation.id},
         },
       }, timeout: timeout);
       return _commandReceipt(result, expectedCommandId: command.commandId);
     });
   }
 
+  Future<AppSurfaceSnapshot> getSurface(
+    String sessionId, {
+    AppSurfaceAnchor? through,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (!_wireId(sessionId) ||
+        limit < 1 ||
+        limit > 128 ||
+        (through != null && through.sessionId != sessionId)) {
+      return Future.error(const FormatException('Invalid Surface request.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {
+          'kind': 'conversation.surface.get',
+          'session_id': sessionId,
+          'through': through?.toJson(),
+          'limit': limit,
+        },
+      }, timeout: timeout);
+      _wireFields(result, {'kind', 'snapshot'});
+      if (result['kind'] != 'conversation.surface') {
+        throw const FormatException('Invalid Surface response.');
+      }
+      final snapshot = AppSurfaceSnapshot.fromJson(_map(result['snapshot']));
+      if (snapshot.through.sessionId != sessionId ||
+          (through != null && snapshot.through != through)) {
+        throw const FormatException('Surface scope mismatch.');
+      }
+      return snapshot;
+    });
+  }
+
+  Future<AppSurfaceWorkSnapshot?> getWork(
+    String commandId, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (!_wireId(commandId)) {
+      return Future.error(const FormatException('Invalid Work identity.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {'kind': 'conversation.work.get', 'command_id': commandId},
+      }, timeout: timeout);
+      _wireFields(result, {'kind', 'snapshot'});
+      if (result['kind'] != 'conversation.work') {
+        throw const FormatException('Invalid Work response.');
+      }
+      if (result['snapshot'] == null) return null;
+      final snapshot = AppSurfaceWorkSnapshot.fromJson(
+        _map(result['snapshot']),
+      );
+      if (snapshot.receipt.commandId != commandId) {
+        throw const FormatException('Work scope mismatch.');
+      }
+      return snapshot;
+    });
+  }
+
+  Future<AppSurfaceWorkPage> listWork(
+    String sessionId, {
+    AppSurfaceWorkCursor? cursor,
+    int limit = 64,
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    if (!_wireId(sessionId) || limit < 1 || limit > 128) {
+      return Future.error(const FormatException('Invalid Work page.'));
+    }
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.queryV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'query': {
+          'kind': 'conversation.work.list',
+          'session_id': sessionId,
+          'cursor': cursor?.toJson(),
+          'limit': limit,
+        },
+      }, timeout: timeout);
+      _wireFields(result, {'kind', 'page'});
+      if (result['kind'] != 'conversation.work.page') {
+        throw const FormatException('Invalid Work page response.');
+      }
+      final page = AppSurfaceWorkPage.fromJson(_map(result['page']));
+      if (page.items.length > limit ||
+          page.items.any(
+            (item) => item.receipt.anchor.sessionId != sessionId,
+          ) ||
+          (cursor != null &&
+              page.next != null &&
+              (page.next!.through != cursor.through ||
+                  page.next!.before == cursor.before))) {
+        throw const FormatException('Work page scope mismatch.');
+      }
+      return page;
+    });
+  }
+
+  PreparedCancelPendingWork prepareCancelPendingWork(String workCommandId) {
+    if (_closed) throw StateError('AppWireConversationClient is closed.');
+    if (!_wireId(workCommandId)) {
+      throw const FormatException('Invalid Work identity.');
+    }
+    return PreparedCancelPendingWork(
+      commandId: _newId(),
+      workCommandId: workCommandId,
+    );
+  }
+
+  Future<AppPendingWorkCancellationReceipt> submitCancelPendingWork(
+    PreparedCancelPendingWork command, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    final requestId = _newId();
+    return _correlate(requestId, () async {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': requestId,
+        'command_id': command.commandId,
+        'command': {
+          'kind': 'conversation.work.cancel_pending',
+          'work_command_id': command.workCommandId,
+        },
+      }, timeout: timeout);
+      _wireFields(result, {'kind', 'receipt'});
+      if (result['kind'] != 'conversation.work.cancelled') {
+        throw const FormatException('Invalid pending cancellation.');
+      }
+      final receipt = _map(result['receipt']);
+      _wireFields(receipt, {
+        'command_id',
+        'work_command_id',
+        'work_id',
+        'runtime_epoch',
+      });
+      if (receipt['command_id'] != command.commandId ||
+          receipt['work_command_id'] != command.workCommandId ||
+          !_wireId(receipt['work_id']) ||
+          receipt['runtime_epoch'] is! int ||
+          (receipt['runtime_epoch']! as int) <= 0) {
+        throw const FormatException('Pending cancellation scope mismatch.');
+      }
+      return AppPendingWorkCancellationReceipt(
+        commandId: command.commandId,
+        workCommandId: command.workCommandId,
+        workId: receipt['work_id']! as String,
+        runtimeEpoch: receipt['runtime_epoch']! as int,
+      );
+    });
+  }
+
   PreparedCancelRun prepareCancelRun(String runId) {
-    if (_closed)
+    if (_closed) {
       throw StateError('AppWireConversationClient is already closed.');
+    }
     if (runId.isEmpty) throw const FormatException('Invalid Run ID.');
     return PreparedCancelRun(commandId: _newId(), runId: runId);
   }
@@ -316,8 +555,9 @@ final class AppWireConversationClient {
     PreparedCancelRun command, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -457,8 +697,9 @@ final class AppWireConversationClient {
     String commandId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -478,8 +719,9 @@ final class AppWireConversationClient {
     String runId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -495,8 +737,9 @@ final class AppWireConversationClient {
     String messageId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.queryV2({
@@ -525,8 +768,9 @@ final class AppWireConversationClient {
     required AgentInteractionDecision decision,
     required String targetDigest,
   }) {
-    if (_closed)
+    if (_closed) {
       throw StateError('AppWireConversationClient is already closed.');
+    }
     if (interactionId.isEmpty ||
         sessionId.isEmpty ||
         expectedRevision <= 0 ||
@@ -547,8 +791,9 @@ final class AppWireConversationClient {
     PreparedInteractionResolve command, {
     Duration timeout = const Duration(seconds: 15),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -581,8 +826,9 @@ final class AppWireConversationClient {
     required String sessionId,
     required int expectedRevision,
   }) {
-    if (_closed)
+    if (_closed) {
       throw StateError('AppWireConversationClient is already closed.');
+    }
     if (interactionId.isEmpty || sessionId.isEmpty || expectedRevision <= 0) {
       throw const FormatException('Invalid interaction refresh.');
     }
@@ -598,8 +844,9 @@ final class AppWireConversationClient {
     PreparedInteractionRefresh command, {
     Duration timeout = const Duration(seconds: 15),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     final requestId = _newId();
     return _correlate(requestId, () async {
       final result = await _transport.commandV2({
@@ -625,8 +872,9 @@ final class AppWireConversationClient {
     String interactionId, {
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     if (interactionId.isEmpty) {
       return Future.error(const FormatException('Invalid interaction ID.'));
     }
@@ -645,8 +893,9 @@ final class AppWireConversationClient {
           payload['interaction_id'] == interactionId) {
         return null;
       }
-      if (payload['kind'] != 'interaction')
+      if (payload['kind'] != 'interaction') {
         throw const FormatException('Invalid interaction result kind.');
+      }
       final snapshot = AgentInteractionSnapshot.parse(
         Map<String, dynamic>.from(payload)..remove('kind'),
       );
@@ -662,8 +911,9 @@ final class AppWireConversationClient {
     AgentInteractionCursor? after,
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     if (sessionId.isEmpty) {
       return Future.error(const FormatException('Invalid session ID.'));
     }
@@ -714,8 +964,9 @@ final class AppWireConversationClient {
     int limit = 64,
     Duration timeout = const Duration(seconds: 3),
   }) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     if (limit <= 0 ||
         limit > 256 ||
         (after != null && (after.runtimeEpoch <= 0 || after.cursor < 0))) {
@@ -829,8 +1080,9 @@ final class AppWireConversationClient {
   }
 
   Future<T> _correlate<T>(String requestId, Future<T> Function() invoke) {
-    if (_closed)
+    if (_closed) {
       return Future.error(StateError('AppWireConversationClient is closed.'));
+    }
     if (_pending.containsKey(requestId)) {
       return Future.error(StateError('Duplicate app request ID.'));
     }

@@ -105,7 +105,7 @@ impl ConversationEventBuffer {
             EventPayload::CommandUpdated {
                 command_id: receipt.command_id,
                 run_id: receipt.run_id,
-                session_revision: receipt.session_revision,
+                session_revision: receipt.admission_session_revision,
             },
         )
     }

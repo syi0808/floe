@@ -114,9 +114,13 @@ impl<
         actor.validate().map_err(CommandFailure::NotAdmitted)?;
         if let Some(work) = work.as_ref() {
             work.validate().map_err(CommandFailure::NotAdmitted)?;
-            if work.person_id != actor.person_id || work.device_id != actor.device_id
-                || work.anchor.session_id != request.session_id || work.execution_command_id() != request.command_id
-                || request.mode != TurnMode::New || request.retry_of.is_some() {
+            if work.person_id != actor.person_id
+                || work.device_id != actor.device_id
+                || work.anchor.session_id != request.session_id
+                || work.execution_command_id() != request.command_id
+                || request.mode != TurnMode::New
+                || request.retry_of != work.origin.retry_of()
+            {
                 return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
             }
         }
@@ -144,7 +148,14 @@ impl<
             verify_existing(&request, request_digest, &receipt)
                 .map_err(CommandFailure::Indeterminate)?;
             if let Some(expected) = work.as_ref() {
-                if self.repository.surface_work_for_run(receipt.run_id).await.map_err(CommandFailure::Indeterminate)?.as_ref() != Some(expected) {
+                if self
+                    .repository
+                    .surface_work_for_run(receipt.run_id)
+                    .await
+                    .map_err(CommandFailure::Indeterminate)?
+                    .as_ref()
+                    != Some(expected)
+                {
                     return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
                 }
             }
@@ -208,7 +219,7 @@ impl<
                 if source.principal != request.principal
                     || source.session_id != request.session_id
                     || !source.state.is_terminal()
-                    || source.session_revision != request.expected_session_revision
+                    || source.device_id != request.device_id
                 {
                     return Err(AgentFailure::Conflict);
                 }
@@ -269,7 +280,11 @@ impl<
                     .map_err(CommandFailure::Indeterminate)?
             }
             _ => match work {
-                Some(work) => self.repository.admit_surface_turn(work, admission_request).await?,
+                Some(work) => {
+                    self.repository
+                        .admit_surface_turn(work, admission_request)
+                        .await?
+                }
                 None => self.repository.admit_turn(admission_request).await?,
             },
         };
@@ -644,7 +659,6 @@ impl<
         };
         if matches!(result, Err(AgentFailure::ModelInputCapacityExceeded))
             && matches!(turn_context.mode, TurnMode::New)
-            && turn_context.retry_of.is_none()
             && engine_request.resume.is_none()
             && engine_request.replay.is_empty()
         {
@@ -1005,7 +1019,8 @@ pub async fn continuation<Repository: ConversationRepository>(
             || parent.session_id != current.session_id
             || child.continuation_executor_generation != Some(parent.executor_generation)
             || parent.continuation().as_ref().is_none_or(|reference| {
-                reference.run_id != parent_run_id || reference.level != child.continuation_level
+                reference.run_id != parent_run_id
+                    || reference.level != child.continuation_level
                     || reference.resume_lineage != child.resume_lineage
             })
         {

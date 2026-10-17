@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "request_id": "00000000-0000-0000-0000-000000000001",
+  "command_id": "00000000-0000-0000-0000-000000000002",
+  "command": {
+    "kind": "conversation.work.submit_text",
+    "expected": {
+      "session_id": "00000000-0000-0000-0000-000000000003",
+      "sequence": 0,
+      "digest": "c29472fa6b496633a5c8d1daade9e2cdd8866295320dcd97c9244a91fd9c7497"
+    },
+    "text": "오늘 할 일의 우선순위를 같이 정리해줘"
+  }
+}

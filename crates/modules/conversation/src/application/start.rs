@@ -5,33 +5,29 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    AgentSession, CanonicalTurnIntent, CommandQuery, ContinuationToken, ConversationRepository,
-    RunReceipt, SessionStore, StartTurn, TurnMode,
+    AgentSession, CanonicalTurnIntent, CommandQuery, ContinuationToken, ContinueTurn,
+    ConversationRepository, RunReceipt, SessionStore, TurnMode,
 };
 
 use super::session_projection::{SessionSnapshot, project_session_snapshot};
 
-pub struct PreparedStartTurn {
+pub struct PreparedContinueTurn {
     pub session: Option<AgentSession>,
     pub intent: CanonicalTurnIntent,
     pub existing: Option<RunReceipt>,
 }
 
-pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionStore>(
+pub async fn prepare_continue_turn<R: ConversationRepository + ?Sized, S: SessionStore>(
     repository: &R,
     sessions: &S,
     actor: &OwnerActor,
-    request: &StartTurn,
+    request: &ContinueTurn,
     scope: &ExecutionScope,
-) -> Result<PreparedStartTurn, CommandFailure<AgentFailure>> {
+) -> Result<PreparedContinueTurn, CommandFailure<AgentFailure>> {
     actor.validate().map_err(CommandFailure::NotAdmitted)?;
-    if !request.command_id.is_valid() {
-        return Err(CommandFailure::NotApplied(AgentFailure::InvalidInput));
-    }
-
-    // The command receipt is the replay boundary. Read it before loading or
-    // validating mutable Session state so a lost-ACK retry can recover after
-    // the Session has advanced.
+    request.validate().map_err(CommandFailure::NotApplied)?;
+    // Exact receipt lookup precedes mutable Session checks. A later Run or
+    // semantic compaction cannot invalidate recovery of a lost positive ACK.
     let existing = scope
         .run(repository.find_command(CommandQuery {
             principal: actor.person_id.to_string(),
@@ -41,66 +37,59 @@ pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionSt
         .map_err(CommandFailure::Indeterminate)?;
     if let Some(receipt) = existing {
         let intent = async {
+            receipt.validate()?;
             if receipt.principal != actor.person_id.to_string()
                 || receipt.device_id != actor.device_id
                 || receipt.session_id != request.session_id
                 || receipt.resume_of.is_some()
+                || receipt.retry_of.is_some()
             {
                 return Err(AgentFailure::Conflict);
             }
-            receipt.validate()?;
-            let text = crate::normalize_turn_text(&request.text)?;
-            let mode = match (&request.continuation_ref, receipt.continuation_of) {
-                (Some(token), Some(source_run_id)) => {
-                    let source = scope
-                        .run(repository.load_receipt(source_run_id))
-                        .await?
-                        .ok_or(AgentFailure::StorageUnavailable)?;
-                    if source.session_id != request.session_id
-                        || issue_continuation(actor, &source)? != Some(token.clone())
-                    {
-                        return Err(AgentFailure::Conflict);
-                    }
-                    TurnMode::Continue(
-                        source
-                            .continuation()
-                            .ok_or(AgentFailure::StorageUnavailable)?,
-                    )
-                }
-                (None, None) => TurnMode::New,
-                _ => return Err(AgentFailure::Conflict),
-            };
+            let parent = receipt.continuation_of.ok_or(AgentFailure::Conflict)?;
+            let source = scope
+                .run(repository.load_receipt(parent))
+                .await?
+                .ok_or(AgentFailure::Conflict)?;
+            if issue_continuation(actor, &source)?.as_ref() != Some(&request.continuation_ref) {
+                return Err(AgentFailure::Conflict);
+            }
+            let text = original_text(
+                repository,
+                request.session_id,
+                receipt.user_message_id,
+                scope,
+            )
+            .await?;
             let intent = CanonicalTurnIntent {
                 session_id: request.session_id,
                 expected_revision: request.expected_revision,
                 text,
-                mode,
-                retry_of: request.retry_of,
+                mode: TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?),
+                retry_of: None,
             };
-            if receipt.request_digest != intent.digest(&actor.person_id.to_string())? {
+            if intent.digest(&actor.person_id.to_string())? != receipt.request_digest {
                 return Err(AgentFailure::Conflict);
             }
             Ok(intent)
         }
         .await
         .map_err(CommandFailure::Indeterminate)?;
-        return Ok(PreparedStartTurn {
+        return Ok(PreparedContinueTurn {
             session: None,
             intent,
             existing: Some(receipt),
         });
     }
-
-    let occupant = scope
+    if scope
         .run(repository.command_occupant(request.command_id))
         .await
-        .map_err(CommandFailure::Indeterminate)?;
-    if occupant.is_some() {
+        .map_err(CommandFailure::Indeterminate)?
+        .is_some()
+    {
         return Err(CommandFailure::Indeterminate(AgentFailure::Conflict));
     }
-
-    request.validate().map_err(CommandFailure::NotApplied)?;
-    let prepared = async {
+    async {
         let session = scope
             .run(sessions.load(actor.person_id, request.session_id))
             .await?;
@@ -108,54 +97,58 @@ pub async fn prepare_start_turn<R: ConversationRepository + ?Sized, S: SessionSt
         if session.revision != request.expected_revision {
             return Err(AgentFailure::Conflict);
         }
-        let text = crate::normalize_turn_text(&request.text)?;
-        let mode = if let Some(reference) = &request.continuation_ref {
-            let run_id = current_continuation_run(&session).ok_or(AgentFailure::Conflict)?;
-            let source = scope
-                .run(repository.load_receipt(run_id))
-                .await?
-                .ok_or(AgentFailure::NotFound)?;
-            let expected = issue_continuation(actor, &source)?.ok_or(AgentFailure::Conflict)?;
-            if expected != *reference
-                || source.session_id != request.session_id
-                || source.session_revision != session.revision
-            {
-                return Err(AgentFailure::Conflict);
-            }
-            let original = scope
-                .run(
-                    repository
-                        .read_session_user_message(request.session_id, source.user_message_id),
-                )
-                .await?
-                .and_then(|entry| match entry.message {
-                    crate::AgentMessage::User { text, .. } => Some(text),
-                    _ => None,
-                })
-                .ok_or(AgentFailure::Conflict)?;
-            if original != text {
-                return Err(AgentFailure::Conflict);
-            }
-            TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?)
-        } else {
-            TurnMode::New
-        };
+        let run_id = current_continuation_run(&session).ok_or(AgentFailure::Conflict)?;
+        let source = scope
+            .run(repository.load_receipt(run_id))
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if issue_continuation(actor, &source)?.as_ref() != Some(&request.continuation_ref)
+            || source.session_id != request.session_id
+            || source.session_revision != session.revision
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let text = original_text(
+            repository,
+            request.session_id,
+            source.user_message_id,
+            scope,
+        )
+        .await?;
         let intent = CanonicalTurnIntent {
             session_id: request.session_id,
             expected_revision: request.expected_revision,
             text,
-            mode,
-            retry_of: request.retry_of,
+            mode: TurnMode::Continue(source.continuation().ok_or(AgentFailure::Conflict)?),
+            retry_of: None,
         };
-        Ok::<_, AgentFailure>(PreparedStartTurn {
+        Ok(PreparedContinueTurn {
             session: Some(session),
             intent,
             existing: None,
         })
     }
     .await
-    .map_err(CommandFailure::NotApplied)?;
-    Ok(prepared)
+    .map_err(CommandFailure::NotApplied)
+}
+
+async fn original_text<R: ConversationRepository + ?Sized>(
+    repository: &R,
+    session_id: Uuid,
+    message_id: Uuid,
+    scope: &ExecutionScope,
+) -> Result<String, AgentFailure> {
+    let entry = scope
+        .run(repository.read_session_user_message(session_id, message_id))
+        .await?
+        .ok_or(AgentFailure::Conflict)?;
+    let crate::AgentMessage::User { text, .. } = entry.message else {
+        return Err(AgentFailure::Conflict);
+    };
+    if crate::normalize_turn_text(&text)? != text {
+        return Err(AgentFailure::StorageUnavailable);
+    }
+    Ok(text)
 }
 
 pub async fn read_session_snapshot<R: ConversationRepository + ?Sized, S: SessionStore>(

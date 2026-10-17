@@ -29,22 +29,22 @@ pub use domain::{
     AdmittedExecution, AdmittedTurn, BlockedInteractionLink, COMPACTION_MIN_RETAIN_ENTRIES,
     COMPACTION_PREFERRED_RETAIN_ENTRIES, COMPACTION_TRIGGER_BYTES, COMPACTION_TRIGGER_MESSAGES,
     CommandQuery, CompactionAuthority, CompactionReceipt, CompactionSource, ContinuationRef,
-    ContinuationSnapshot, ContinuationToken, ConversationInteraction, DecisionAdmission,
-    ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS, InteractionDecision,
-    InteractionDecisionKind, InteractionListCursor, InteractionOrigin, InteractionPage,
-    InteractionRefresh, InteractionRequirement, InteractionResolution, InteractionResolutionCause,
-    InteractionResolutionReceipt, InteractionResumeRef, InteractionState, JournalEntry,
-    MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES, MAX_INTERACTIONS_PER_PAGE,
-    MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES, MAX_REVIEWED_PURPOSE_BYTES,
-    MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES, MAX_STORED_INTERACTIONS_PER_RUN,
-    MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES, NavigationDestination, NavigationOnlyTarget,
-    PendingRunTerminal, PriorExhaustion, ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery,
-    RunReceipt, RunRecord, RunState, RunTerminal, SessionHistoryMessage, SessionHistoryPage,
-    SessionReadRequest, SessionReceipt, SessionRequest, StartSessionRequest, StartTurn,
-    SupersedeInteraction, TurnAdmission, TurnAdmissionRequest, TurnMode, UnresolvedModelAttempt,
-    canonical_requirement_digest, canonical_target_digest, compaction_summary_id,
-    decision_owner_command_id, interaction_publication_id, next_state_after_decision,
-    resume_command_id, state_after_resolution,
+    ContinuationSnapshot, ContinuationToken, ContinueTurn, ConversationInteraction,
+    DecisionAdmission, ExpireInteraction, ExpireOutcome, INTERACTION_PENDING_LIFETIME_MS,
+    InteractionDecision, InteractionDecisionKind, InteractionListCursor, InteractionOrigin,
+    InteractionPage, InteractionRefresh, InteractionRequirement, InteractionResolution,
+    InteractionResolutionCause, InteractionResolutionReceipt, InteractionResumeRef,
+    InteractionState, JournalEntry, MAX_ACTIVE_INTERACTIONS_PER_RUN, MAX_COMPACTION_SUMMARY_BYTES,
+    MAX_INTERACTIONS_PER_PAGE, MAX_RESUME_LINEAGE, MAX_REVIEWED_IDENTIFIER_BYTES,
+    MAX_REVIEWED_PURPOSE_BYTES, MAX_REVIEWED_SOURCE_BYTES, MAX_REVIEWED_TARGET_BYTES,
+    MAX_STORED_INTERACTIONS_PER_RUN, MAX_TARGET_BUNDLE_MEMBERS, MAX_TURN_TEXT_BYTES,
+    NavigationDestination, NavigationOnlyTarget, PendingRunTerminal, PriorExhaustion,
+    ReviewedTarget, RunBlockOrigin, RunBlockRecord, RunQuery, RunReceipt, RunRecord, RunState,
+    RunTerminal, SessionHistoryMessage, SessionHistoryPage, SessionReadRequest, SessionReceipt,
+    SessionRequest, StartSessionRequest, SupersedeInteraction, TurnAdmission, TurnAdmissionRequest,
+    TurnMode, UnresolvedModelAttempt, canonical_requirement_digest, canonical_target_digest,
+    compaction_summary_id, decision_owner_command_id, interaction_publication_id,
+    next_state_after_decision, resume_command_id, state_after_resolution,
 };
 pub use domain::{
     CONVERSATION_CONSUMER, CONVERSATION_PURPOSE, CanonicalTurnIntent, normalize_turn_text,
@@ -89,7 +89,7 @@ pub use application::{
 };
 
 pub use application::{
-    PreparedStartTurn, SessionSnapshot, prepare_start_turn, read_session_snapshot,
+    PreparedContinueTurn, SessionSnapshot, prepare_continue_turn, read_session_snapshot,
 };
 
 pub use application::{
@@ -159,7 +159,9 @@ pub use domain::{SurfaceOutcomeReceipt, SurfaceOutcomeReference, SurfaceResultCo
 
 pub use domain::{SurfaceWorkCursor, SurfaceWorkPage, SurfaceWorkPageRequest};
 
-pub use domain::{MAX_SURFACE_SNAPSHOT_BYTES, SurfaceReadRequest, SurfaceInputKind,
-    SurfaceMessageContent, SurfaceMessage, SurfaceSnapshot};
+pub use domain::{
+    MAX_SURFACE_SNAPSHOT_BYTES, SurfaceInputKind, SurfaceMessage, SurfaceMessageContent,
+    SurfaceReadRequest, SurfaceSnapshot,
+};
 
-pub use domain::{RunSuccessorKind, MAX_RUN_LINEAGE_RECORDS, validate_run_successor};
+pub use domain::{MAX_RUN_LINEAGE_RECORDS, RunSuccessorKind, validate_run_successor};

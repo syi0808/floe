@@ -106,6 +106,20 @@ pub enum AppProductQueryDto {
     AssistantFeatureSourceReviewInspect {
         review_ref: super::AssistantFeatureSourceReviewRefDto,
     },
+    #[serde(rename = "conversation.surface.get")]
+    ConversationSurfaceGet {
+        session_id: SessionRefDto,
+        through: Option<super::SurfaceAnchorDto>,
+        limit: u16,
+    },
+    #[serde(rename = "conversation.work.get")]
+    ConversationWorkGet { command_id: CommandIdDto },
+    #[serde(rename = "conversation.work.list")]
+    ConversationWorkList {
+        session_id: SessionRefDto,
+        cursor: Option<super::SurfaceWorkCursorDto>,
+        limit: u16,
+    },
     #[serde(rename = "conversation.session.get")]
     ConversationSessionGet {
         session_id: SessionRefDto,
@@ -162,6 +176,30 @@ impl AppProductQueryDto {
             Self::AssistantFeatureSnapshot {} => return Ok(()),
             Self::AssistantFeatureSourceReviewInspect { review_ref } => {
                 return review_ref.validate();
+            }
+            Self::ConversationSurfaceGet {
+                session_id,
+                through,
+                limit,
+            } => {
+                if !(1..=128).contains(limit) {
+                    return Err("query.limit");
+                }
+                if let Some(anchor) = through {
+                    anchor.validate()?;
+                    if anchor.session_id != *session_id {
+                        return Err("query.through");
+                    }
+                }
+                return Ok(());
+            }
+            Self::ConversationWorkGet { .. } => return Ok(()),
+            Self::ConversationWorkList { limit, .. } => {
+                return if (1..=128).contains(limit) {
+                    Ok(())
+                } else {
+                    Err("query.limit")
+                };
             }
             Self::ConversationSessionGet { .. } => return Ok(()),
             Self::ConversationSessionResume {} => return Ok(()),
@@ -269,6 +307,18 @@ pub enum AppQueryResultDto {
     #[serde(rename = "conversation.assistant_features.source_review")]
     AssistantFeatureSourceReview {
         review: super::AssistantFeatureSourceReviewDto,
+    },
+    #[serde(rename = "conversation.surface")]
+    ConversationSurface {
+        snapshot: super::SurfaceSnapshotDto,
+    },
+    #[serde(rename = "conversation.work")]
+    ConversationWork {
+        snapshot: Option<super::SurfaceWorkSnapshotDto>,
+    },
+    #[serde(rename = "conversation.work.page")]
+    ConversationWorkPage {
+        page: super::SurfaceWorkPageDto,
     },
     ConversationSession {
         session: super::ConversationSessionSnapshotDto,

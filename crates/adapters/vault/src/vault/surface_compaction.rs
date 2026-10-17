@@ -171,7 +171,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         message.validate()?;
         Ok(message)
     }
-    async fn surface_work_input_on(
+    pub(super) async fn surface_work_input_on(
         &self,
         connection: &Connection,
         work: &SurfaceWorkReceipt,
@@ -285,7 +285,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || selected.through != prefix.protected_input
                     || run.continuation_of.is_some()
                     || run.resume_of.is_some()
-                    || run.retry_of.is_some()
                 {
                     return Err(AgentFailure::StorageUnavailable);
                 }

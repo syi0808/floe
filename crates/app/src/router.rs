@@ -176,31 +176,78 @@ fn route_command(
                             })?;
                         ConversationCommandOutcome::Session(session)
                     }
-                    ConversationCommand::StartTurn {
+                    ConversationCommand::SubmitTextWork { expected, text } => service
+                        .submit_text_work(
+                            &actor,
+                            floe_conversation::SubmitTextWork {
+                                command_id,
+                                expected,
+                                text,
+                                retry_of: None,
+                            },
+                            &scope,
+                        )
+                        .await
+                        .map(ConversationCommandOutcome::Work)
+                        .map_err(|failure| {
+                            owner_command_failure(failure, ProductFailure::Conversation)
+                        })?,
+                    ConversationCommand::RetryWork {
+                        expected,
+                        text,
+                        source_run_id,
+                    } => service
+                        .submit_text_work(
+                            &actor,
+                            floe_conversation::SubmitTextWork {
+                                command_id,
+                                expected,
+                                text,
+                                retry_of: Some(source_run_id),
+                            },
+                            &scope,
+                        )
+                        .await
+                        .map(ConversationCommandOutcome::Work)
+                        .map_err(|failure| {
+                            owner_command_failure(failure, ProductFailure::Conversation)
+                        })?,
+                    ConversationCommand::CancelPendingWork { work_command_id } => service
+                        .cancel_pending_work(
+                            &actor,
+                            floe_conversation::CancelPendingWork {
+                                command_id,
+                                work_command_id,
+                            },
+                            &scope,
+                        )
+                        .await
+                        .map(ConversationCommandOutcome::PendingWorkCancelled)
+                        .map_err(|failure| {
+                            owner_command_failure(failure, ProductFailure::Conversation)
+                        })?,
+                    ConversationCommand::ContinueTurn {
                         session_id,
                         expected_revision,
-                        text,
                         continuation_id,
-                        retry_of,
-                    } => {
-                        let turn = floe_conversation::StartTurn {
-                            command_id,
-                            session_id,
-                            expected_revision,
-                            text,
-                            continuation_ref: continuation_id
-                                .map(|id| floe_conversation::ContinuationToken { id }),
-                            retry_of,
-                        };
-                        let receipt =
-                            service
-                                .start_turn(&actor, turn, &scope)
-                                .await
-                                .map_err(|failure| {
-                                    owner_command_failure(failure, ProductFailure::Conversation)
-                                })?;
-                        ConversationCommandOutcome::Turn(receipt)
-                    }
+                    } => service
+                        .continue_turn(
+                            &actor,
+                            floe_conversation::ContinueTurn {
+                                command_id,
+                                session_id,
+                                expected_revision,
+                                continuation_ref: floe_conversation::ContinuationToken {
+                                    id: continuation_id,
+                                },
+                            },
+                            &scope,
+                        )
+                        .await
+                        .map(ConversationCommandOutcome::Turn)
+                        .map_err(|failure| {
+                            owner_command_failure(failure, ProductFailure::Conversation)
+                        })?,
                     ConversationCommand::SubmitCalendarProposal {
                         session_id,
                         origin_run_id,
@@ -633,6 +680,18 @@ fn route_query(
                         .resume_session(&actor, &scope)
                         .await
                         .map(ConversationQueryOutcome::Session),
+                    ConversationQuery::Surface(request) => service
+                        .read_surface(&actor, request, &scope)
+                        .await
+                        .map(ConversationQueryOutcome::Surface),
+                    ConversationQuery::Work { command_id } => service
+                        .read_surface_work(&actor, command_id, &scope)
+                        .await
+                        .map(ConversationQueryOutcome::Work),
+                    ConversationQuery::WorkPage(request) => service
+                        .list_surface_work(&actor, request, &scope)
+                        .await
+                        .map(ConversationQueryOutcome::WorkPage),
                     ConversationQuery::GetSession {
                         session_id,
                         before_message_id,

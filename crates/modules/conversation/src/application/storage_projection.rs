@@ -22,6 +22,10 @@ pub fn project_run_receipt(record: crate::RunRecord) -> Result<RunReceipt, Agent
         issue: record.issue,
         blocked: record.blocked,
         session_revision: record.session_revision,
+        admission_session_revision: record
+            .initial_session_revision
+            .checked_add(1)
+            .ok_or(AgentFailure::StorageUnavailable)?,
         aggregate_revision: record.aggregate_revision,
         executor_generation: record.executor_generation,
         continuation_of: record.continuation_of,

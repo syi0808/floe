@@ -12,36 +12,19 @@ pub struct ContinuationToken {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StartTurn {
+pub struct ContinueTurn {
     pub command_id: CommandId,
     pub session_id: Uuid,
     pub expected_revision: u64,
-    pub text: String,
-    pub continuation_ref: Option<ContinuationToken>,
-    pub retry_of: Option<RunId>,
+    pub continuation_ref: ContinuationToken,
 }
-
-impl StartTurn {
-    pub fn normalize_text(&mut self) -> Result<(), AgentFailure> {
-        self.text = normalize_turn_text(&self.text)?;
-        Ok(())
-    }
-
+impl ContinueTurn {
     pub fn validate(&self) -> Result<(), AgentFailure> {
-        self.validate_fields()?;
-        normalize_turn_text(&self.text)?;
-        Ok(())
-    }
-
-    fn validate_fields(&self) -> Result<(), AgentFailure> {
         if !self.command_id.is_valid()
             || self.session_id.is_nil()
-            || self.retry_of.is_some_and(|run_id| !run_id.is_valid())
-            || self.retry_of.is_some() && self.continuation_ref.is_some()
-            || self
-                .continuation_ref
-                .as_ref()
-                .is_some_and(|reference| reference.id.is_nil())
+            || self.expected_revision == 0
+            || self.expected_revision > i64::MAX as u64
+            || self.continuation_ref.id.is_nil()
         {
             return Err(AgentFailure::InvalidInput);
         }

@@ -671,7 +671,6 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     || run.pending_terminal.is_some()
                     || run.continuation_of.is_some()
                     || run.resume_of.is_some()
-                    || run.retry_of.is_some()
                     || run.executor_generation
                         != self
                             .active_conversation_executor_generation(transaction)

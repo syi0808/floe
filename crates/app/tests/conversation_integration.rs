@@ -519,11 +519,14 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
             // Keep the exact command ID: if admission committed before the
             // transient storage error, the repository returns its durable
             // receipt instead of scheduling a second Resume.
-            Err(floe_kernel::CommandFailure::Indeterminate(
-                floe_agent_contract::AgentFailure::StorageBusy,
-            ) | floe_kernel::CommandFailure::Admitted(
-                floe_agent_contract::AgentFailure::StorageBusy,
-            )) if Instant::now() < deadline => {
+            Err(
+                floe_kernel::CommandFailure::Indeterminate(
+                    floe_agent_contract::AgentFailure::StorageBusy,
+                )
+                | floe_kernel::CommandFailure::Admitted(
+                    floe_agent_contract::AgentFailure::StorageBusy,
+                ),
+            ) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
                 continue;
             }
@@ -553,6 +556,50 @@ fn linked_resume_reuses_original_user_input_in_normalized_manager_history() {
     );
     assert_eq!(resumed.resume_of, Some(origin.run_id));
     assert_eq!(resumed.user_message_id, original_user_message_id);
+
+    let surface = host
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_query(ProductQuery::Conversation(ConversationQuery::Surface(
+            floe_conversation::SurfaceReadRequest {
+                session_id,
+                through: None,
+                limit: 128,
+            },
+        )))
+        .expect("read the original Work's product Surface after Resume");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Surface(surface)) = surface
+    else {
+        panic!("unexpected Surface projection");
+    };
+    assert_eq!(
+        surface
+            .messages
+            .iter()
+            .filter(|entry| matches!(
+                entry.content,
+                floe_conversation::SurfaceMessageContent::Input { .. }
+            ))
+            .count(),
+        1,
+        "Resume must not manufacture another Surface input"
+    );
+    let work = host
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_query(ProductQuery::Conversation(ConversationQuery::WorkPage(
+            floe_conversation::SurfaceWorkPageRequest {
+                session_id,
+                cursor: None,
+                limit: 128,
+            },
+        )))
+        .expect("resolve the original Work's current descendant");
+    let ProductQueryOutcome::Conversation(ConversationQueryOutcome::WorkPage(work)) = work else {
+        panic!("unexpected Work projection");
+    };
+    assert_eq!(work.items.len(), 1, "Resume does not enqueue another Work");
+    assert_eq!(work.items[0].current_run_id, Some(resumed.run_id));
 
     let history = read_session(&host, session_id);
     assert_eq!(
@@ -625,23 +672,21 @@ fn typed_product_router_keeps_command_identity_and_observer_drop_does_not_cancel
     let result = turn
         .product_command(ProductCommandRequest {
             command_id: turn_id,
-            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
-                session_id: session.id,
-                expected_revision: session.revision,
+            command: ProductCommand::Conversation(ConversationCommand::SubmitTextWork {
+                expected: support::surface_head(&host, session.id),
                 text: USER_TEXT.into(),
-                continuation_id: None,
-                retry_of: None,
             }),
         })
         .expect("route turn command");
-    let ConversationCommandOutcome::Turn(receipt) = (match result {
+    let ConversationCommandOutcome::Work(work) = (match result {
         ProductCommandOutcome::Conversation(value) => value,
         _ => panic!("unexpected product result"),
     }) else {
         panic!("turn command returned another Conversation result")
     };
-    assert_eq!(receipt.command_id, turn_id);
+    assert_eq!(work.command_id, turn_id);
     drop(turn);
+    let receipt = support::wait_work_run(&host, work);
     entered
         .recv_timeout(WAIT_TIMEOUT)
         .expect("scripted model reached the in-flight dispatch barrier");
@@ -710,51 +755,48 @@ fn conversation_retry_replays_receipt_before_session_validation_and_preserves_un
     );
     let (_profile, host) = create_ready_app(&model);
     let session_id = start_session(&host);
-    let before = read_session(&host, session_id);
+    let before = support::surface_head(&host, session_id);
     let command_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
 
-    let send_turn = |command_id, expected_revision, text: &str| {
+    let send_turn = |command_id, expected, text: &str| {
         host.request(Uuid::new_v4())
             .expect("admit Conversation product request")
             .product_command(ProductCommandRequest {
                 command_id,
-                command: ProductCommand::Conversation(ConversationCommand::StartTurn {
-                    session_id,
-                    expected_revision,
+                command: ProductCommand::Conversation(ConversationCommand::SubmitTextWork {
+                    expected,
                     text: text.into(),
-                    continuation_id: None,
-                    retry_of: None,
                 }),
             })
     };
 
     // Ignore the first response to model an ACK lost after durable admission.
     drop(
-        send_turn(command_id, before.revision, USER_TEXT)
-            .expect("durably admit the first turn submission"),
+        send_turn(command_id, before, USER_TEXT).expect("durably admit the first turn submission"),
     );
     entered
         .recv_timeout(WAIT_TIMEOUT)
         .expect("the admitted run reached its in-flight model barrier");
 
-    let replay = send_turn(command_id, before.revision, USER_TEXT)
+    let replay = send_turn(command_id, before, USER_TEXT)
         .expect("replay the exact durable turn after its ACK was lost");
-    let ConversationCommandOutcome::Turn(receipt) = (match replay {
+    let ConversationCommandOutcome::Work(work) = (match replay {
         ProductCommandOutcome::Conversation(value) => value,
         _ => panic!("turn retry returned another product outcome"),
     }) else {
         panic!("turn retry returned another Conversation result")
     };
-    assert_eq!(receipt.command_id, command_id);
+    assert_eq!(work.command_id, command_id);
+    let receipt = support::wait_work_run(&host, work);
 
-    let invalid_reuse = send_turn(command_id, before.revision, "")
+    let invalid_reuse = send_turn(command_id, before, "")
         .expect_err("later validation cannot make an occupied id disposable");
     assert_eq!(
         invalid_reuse.disposition,
         ProductCommandDisposition::Indeterminate
     );
 
-    let mismatch = send_turn(command_id, before.revision, "A changed request body")
+    let mismatch = send_turn(command_id, before, "A changed request body")
         .expect_err("an occupied command id cannot be assigned a new body");
     assert_eq!(
         mismatch.disposition,
@@ -763,10 +805,10 @@ fn conversation_retry_replays_receipt_before_session_validation_and_preserves_un
 
     let stale = send_turn(
         floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap(),
-        before.revision,
+        before,
         USER_TEXT,
     )
-    .expect_err("a different command with a stale session revision is rejected");
+    .expect_err("a different command with a stale Surface anchor is rejected");
     assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
 
     cancel_run(&host, receipt.run_id);
@@ -781,33 +823,30 @@ fn definitive_conversation_conflict_allows_a_corrected_new_command_id() {
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let (_profile, host) = create_ready_app(&model);
     let session_id = start_session(&host);
-    let before = read_session(&host, session_id);
+    let before = support::surface_head(&host, session_id);
     let stale_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
     let stale = host
         .request(Uuid::new_v4())
         .expect("admit stale Conversation request")
         .product_command(ProductCommandRequest {
             command_id: stale_id,
-            command: ProductCommand::Conversation(ConversationCommand::StartTurn {
-                session_id,
-                expected_revision: before.revision + 1,
+            command: ProductCommand::Conversation(ConversationCommand::SubmitTextWork {
+                expected: floe_conversation::SurfaceAnchor {
+                    sequence: before.sequence + 1,
+                    ..before
+                },
                 text: USER_TEXT.into(),
-                continuation_id: None,
-                retry_of: None,
             }),
         })
-        .expect_err("stale revision is a definitive pre-admission conflict");
+        .expect_err("stale anchor is a definitive pre-admission conflict");
     assert_eq!(stale.disposition, ProductCommandDisposition::NotApplied);
 
     let corrected_id = floe_kernel::CommandId::from_uuid(Uuid::new_v4()).unwrap();
     let corrected_request = ProductCommandRequest {
         command_id: corrected_id,
-        command: ProductCommand::Conversation(ConversationCommand::StartTurn {
-            session_id,
-            expected_revision: before.revision,
+        command: ProductCommand::Conversation(ConversationCommand::SubmitTextWork {
+            expected: before,
             text: USER_TEXT.into(),
-            continuation_id: None,
-            retry_of: None,
         }),
     };
     let mut retries = 0;
@@ -827,13 +866,14 @@ fn definitive_conversation_conflict_allows_a_corrected_new_command_id() {
         }
         break result.expect("a new id can carry the corrected intent after NotApplied");
     };
-    let ConversationCommandOutcome::Turn(receipt) = (match corrected {
+    let ConversationCommandOutcome::Work(work) = (match corrected {
         ProductCommandOutcome::Conversation(value) => value,
         _ => panic!("corrected turn returned another product outcome"),
     }) else {
         panic!("corrected command returned another Conversation result")
     };
-    assert_eq!(receipt.command_id, corrected_id);
+    assert_eq!(work.command_id, corrected_id);
+    let receipt = support::wait_work_run(&host, work);
     assert_eq!(
         wait_terminal_run(&host, receipt.run_id).state,
         RunState::Completed
@@ -1813,7 +1853,9 @@ fn conversation_operation_approval_consumes_the_exact_review_once_and_resumes() 
     // Keep the approved effect undispatched beyond the old four-retry window.
     // Recovery must recheck its durable Approved state, then dispatch only once.
     support::with_ready(&host, |_services, _caller, owners| {
-        owners.calendar_operations.qa_busy_next_dispatch_admissions(5);
+        owners
+            .calendar_operations
+            .qa_busy_next_dispatch_admissions(5);
     });
     let resolved = decide(&host, floe_conversation::InteractionDecisionKind::Approve)
         .expect("approve via Conversation and consume Access decision receipt");
@@ -3590,4 +3632,196 @@ mod surface_work;
 #[test]
 fn surface_capacity_compacts_exact_work_prefix_while_listening_continues() {
     support::compaction::run_surface_capacity_compaction_case();
+}
+
+#[test]
+fn continue_product_preserves_original_input_and_exhausted_budget_on_replay() {
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::FailFirstThenAnswer(AgentFailure::BudgetExceeded),
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let initial = start_turn(&host, session_id, USER_TEXT);
+    let source = wait_terminal_run(&host, initial.run_id);
+    assert_eq!(source.state, RunState::Failed);
+    assert_eq!(source.issue, Some(AgentFailure::BudgetExceeded));
+    let session = read_session(&host, session_id);
+    let continuation = session
+        .continuation_ref
+        .clone()
+        .expect("settled budget failure offers an owner-issued continuation");
+    let source_dispatches = recorder.snapshot().generated.len();
+    let source_usage = session.usage.clone();
+    let before = support::surface_head(&host, session_id);
+    let request = ProductCommandRequest {
+        command_id: floe_kernel::CommandId::new(),
+        command: ProductCommand::Conversation(ConversationCommand::ContinueTurn {
+            session_id,
+            expected_revision: session.revision,
+            continuation_id: continuation.id,
+        }),
+    };
+    let result = submit_fixture_product(&host, request.clone()).unwrap();
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Turn(receipt)) = result
+    else {
+        panic!("expected canonical Continue receipt");
+    };
+    let completed = wait_terminal_run(&host, receipt.run_id);
+    // The scripted provider failed after dispatch without usage. Continue must
+    // retain that conservative charge, not acquire a fresh Work budget.
+    assert_eq!(source_dispatches, 1);
+    assert_eq!(source_usage.unknown_token_attempts, 1);
+    assert_eq!(completed.state, RunState::Failed);
+    assert_eq!(completed.issue, Some(AgentFailure::BudgetExceeded));
+    assert_eq!(completed.continuation_of, Some(initial.run_id));
+    assert_eq!(completed.user_message_id, source.user_message_id);
+    assert_eq!(completed.retry_of, None);
+    let replay = submit_fixture_product(&host, request.clone()).unwrap();
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Turn(replayed)) = replay
+    else {
+        panic!("expected exact replay");
+    };
+    assert_eq!(replayed, receipt);
+    let saved = read_session(&host, session_id);
+    assert_eq!(
+        saved
+            .messages
+            .iter()
+            .filter(|m| matches!(m, SessionMessage::User { .. }))
+            .count(),
+        1
+    );
+    let head = support::surface_head(&host, session_id);
+    assert!(head.sequence > before.sequence);
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let scope = host_scope(
+            Uuid::new_v4(),
+            floe_execution::Cancellation::new(),
+            Duration::from_secs(15),
+        );
+        let entries = services
+            .execute_owner(async move {
+                owners
+                    .conversation
+                    .surface_entries(&actor, head, 0, 128, &scope)
+                    .await
+            })
+            .unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(entry, floe_conversation::SurfaceEntryReceipt::Input(_)))
+                .count(),
+            1
+        );
+    });
+    let script = assert_script_clean(&recorder);
+    assert_eq!(
+        script.generated.len(),
+        2,
+        "exact Continue replay cannot dispatch another model"
+    );
+    assert_eq!(
+        saved.usage.unknown_token_attempts,
+        source_usage.unknown_token_attempts
+    );
+    assert_eq!(
+        saved.usage.unknown_cost_attempts,
+        source_usage.unknown_cost_attempts
+    );
+    assert_eq!(saved.usage.model_attempts, source_usage.model_attempts + 1);
+    assert_eq!(saved.usage.tokens, source_usage.tokens + 19);
+    assert_eq!(saved.usage.cost_micros, source_usage.cost_micros + 23);
+}
+
+#[test]
+fn typed_work_admission_queues_during_execution_and_cancels_only_pending_work() {
+    let (barrier, entered, release) = GenerateBarrier::new();
+    let model = ScriptedModel::new(
+        PrimaryBehavior::NoGateway,
+        USER_TEXT,
+        ModelOutput::WaitFirstThenAnswer(barrier),
+    );
+    let recorder = model.recorder();
+    let (_profile, host) = create_ready_app(&model);
+    let session_id = start_session(&host);
+    let submit = || {
+        let request = ProductCommandRequest {
+            command_id: floe_kernel::CommandId::new(),
+            command: ProductCommand::Conversation(ConversationCommand::SubmitTextWork {
+                expected: support::surface_head(&host, session_id),
+                text: USER_TEXT.into(),
+            }),
+        };
+        let ProductCommandOutcome::Conversation(ConversationCommandOutcome::Work(work)) =
+            submit_fixture_product(&host, request).unwrap()
+        else {
+            panic!("expected durable Work admission");
+        };
+        work
+    };
+    let first = submit();
+    entered.recv_timeout(WAIT_TIMEOUT).unwrap();
+    let second = submit();
+    let third = submit();
+    let query_work = |command_id| {
+        let value = host
+            .request(Uuid::new_v4())
+            .unwrap()
+            .product_query(ProductQuery::Conversation(ConversationQuery::Work {
+                command_id,
+            }))
+            .unwrap();
+        let ProductQueryOutcome::Conversation(ConversationQueryOutcome::Work(Some(work))) = value
+        else {
+            panic!("expected canonical Work snapshot");
+        };
+        work
+    };
+    assert_eq!(
+        query_work(second.command_id).state,
+        floe_conversation::SurfaceWorkState::Queued
+    );
+    assert_eq!(query_work(second.command_id).input_text, USER_TEXT);
+    let cancellation = ProductCommandRequest {
+        command_id: floe_kernel::CommandId::new(),
+        command: ProductCommand::Conversation(ConversationCommand::CancelPendingWork {
+            work_command_id: third.command_id,
+        }),
+    };
+    let ProductCommandOutcome::Conversation(ConversationCommandOutcome::PendingWorkCancelled(
+        cancelled,
+    )) = submit_fixture_product(&host, cancellation).unwrap()
+    else {
+        panic!("expected pending cancellation");
+    };
+    assert_eq!(cancelled.work_id, third.work_id);
+    assert_eq!(
+        query_work(third.command_id).state,
+        floe_conversation::SurfaceWorkState::Cancelled
+    );
+    assert!(query_work(third.command_id).current_run_id.is_none());
+    assert_eq!(
+        recorder.snapshot().generated.len(),
+        1,
+        "queued Work cannot bypass the active Core recorder"
+    );
+    release.send(()).unwrap();
+    let first_run = support::wait_work_run(&host, first);
+    assert_eq!(
+        wait_terminal_run(&host, first_run.run_id).state,
+        RunState::Completed
+    );
+    let second_run = support::wait_work_run(&host, second);
+    assert_eq!(
+        wait_terminal_run(&host, second_run.run_id).state,
+        RunState::Completed
+    );
+    assert_ne!(first_run.run_id, second_run.run_id);
+    assert_eq!(assert_script_clean(&recorder).generated.len(), 2);
+    assert!(query_work(third.command_id).current_run_id.is_none());
 }

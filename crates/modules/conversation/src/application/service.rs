@@ -27,7 +27,7 @@ impl From<&RunReceipt> for CommandReceipt {
         Self {
             command_id: run.command_id,
             run_id: run.run_id,
-            session_revision: run.session_revision,
+            session_revision: run.admission_session_revision,
         }
     }
 }
@@ -81,28 +81,66 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
-    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceReadRequest, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>>;
+    fn read_surface<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceReadRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>>;
 
-    fn list_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceWorkPageRequest, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>>;
+    fn list_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceWorkPageRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>>;
 
-    fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>>;
+    fn cancel_pending_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::CancelPendingWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>>;
 
-    fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>>;
+    fn surface_entries<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        through: SurfaceAnchor,
+        after: u64,
+        limit: usize,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>>;
 
-    fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>>;
-    fn append_surface_input<'a>(&'a self, actor: &'a OwnerActor, request: AppendSurfaceInput, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>>;
-    fn submit_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitSurfaceWork, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
-    fn submit_text_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitTextWork, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
-    fn read_surface_work<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope)
-        -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>>;
+    fn surface_head<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        session_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>>;
+    fn append_surface_input<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: AppendSurfaceInput,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>>;
+    fn submit_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: SubmitSurfaceWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
+    fn submit_text_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: SubmitTextWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>>;
+    fn read_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>>;
     /// Immediate lifetime fence for Drop/panic paths; shutdown also drains.
     fn close_admission(&self);
     #[cfg(feature = "qa-fixtures")]
@@ -157,10 +195,10 @@ pub trait ConversationOwner: Send + Sync {
         before_message_id: Option<Uuid>,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<SessionSnapshot, AgentFailure>>;
-    fn start_turn<'a>(
+    fn continue_turn<'a>(
         &'a self,
         actor: &'a OwnerActor,
-        request: StartTurn,
+        request: ContinueTurn,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<CommandReceipt, CommandFailure<AgentFailure>>>;
     fn submit_calendar_proposal<'a>(
@@ -395,6 +433,13 @@ where
     ) -> Result<CommandReceipt, CommandFailure<AgentFailure>> {
         let _admission = self.admission.read().await;
         self.check(actor).map_err(CommandFailure::NotAdmitted)?;
+        // Fresh inputs must arrive through Work. Continue and the owner-only
+        // interaction Resume both retain an existing input and must not create
+        // another Work. Do not confuse removing public Start with disabling
+        // the recovery driver's admitted Resume path.
+        if work.is_some() != matches!(&intent.mode, TurnMode::New) {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::InvalidInput));
+        }
         let environment = Arc::new(
             self.dependencies
                 .experts
@@ -419,7 +464,12 @@ where
             now_unix_ms: chrono::Utc::now().timestamp_millis(),
         };
         let prepared = match scope
-            .run(async { Ok(self.coordinator.prepare_run(actor, &request, scope, work).await) })
+            .run(async {
+                Ok(self
+                    .coordinator
+                    .prepare_run(actor, &request, scope, work)
+                    .await)
+            })
             .await
             .map_err(CommandFailure::Indeterminate)?
             .map_err(|failure| failure)?
@@ -634,55 +684,218 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
-    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceReadRequest, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>> {
-        Box::pin(async move { self.inner.check(actor)?; request.validate()?; scope.run(self.inner.dependencies.repository.read_surface(actor, request)).await })
-    }
-    fn cancel_pending_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::CancelPendingWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>> {
+    fn read_surface<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceReadRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::SurfaceSnapshot, AgentFailure>> {
         Box::pin(async move {
-            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            self.inner.check(actor)?;
+            request.validate()?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .read_surface(actor, request),
+                )
+                .await
+        })
+    }
+    fn cancel_pending_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::CancelPendingWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::PendingWorkCancellationReceipt, CommandFailure<AgentFailure>>>
+    {
+        Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(request.command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
             let _admission = self.inner.admission.read().await;
-            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
-            scope.run(async { Ok(self.inner.dependencies.repository.cancel_pending_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+            scope
+                .run(async {
+                    Ok(self
+                        .inner
+                        .dependencies
+                        .repository
+                        .cancel_pending_work(actor, request)
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)?
         })
     }
-    fn surface_entries<'a>(&'a self, actor: &'a OwnerActor, through: SurfaceAnchor, after: u64, limit: usize, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>> {
-        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_entries(actor, through, after, limit)).await })
-    }
-    fn surface_head<'a>(&'a self, actor: &'a OwnerActor, session_id: Uuid, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>> {
-        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.surface_head(actor, session_id)).await })
-    }
-    fn append_surface_input<'a>(&'a self, actor: &'a OwnerActor, request: AppendSurfaceInput, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>> {
+    fn surface_entries<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        through: SurfaceAnchor,
+        after: u64,
+        limit: usize,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Vec<crate::SurfaceEntryReceipt>, AgentFailure>> {
         Box::pin(async move {
-            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
-            let _admission = self.inner.admission.read().await;
-            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
-            scope.run(async { Ok(self.inner.dependencies.repository.append_surface_input(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+            self.inner.check(actor)?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .surface_entries(actor, through, after, limit),
+                )
+                .await
         })
     }
-    fn submit_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitSurfaceWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
+    fn surface_head<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        session_id: Uuid,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceAnchor, AgentFailure>> {
         Box::pin(async move {
-            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            self.inner.check(actor)?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .surface_head(actor, session_id),
+                )
+                .await
+        })
+    }
+    fn append_surface_input<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: AppendSurfaceInput,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceInputReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(request.command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
             let _admission = self.inner.admission.read().await;
-            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
+            scope
+                .run(async {
+                    Ok(self
+                        .inner
+                        .dependencies
+                        .repository
+                        .append_surface_input(actor, request)
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)?
+        })
+    }
+    fn submit_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: SubmitSurfaceWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
+        Box::pin(async move {
+            let _command = self
+                .inner
+                .lock_command(request.command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
+            let _admission = self.inner.admission.read().await;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
-            scope.run(async { Ok(self.inner.dependencies.repository.submit_surface_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+            scope
+                .run(async {
+                    Ok(self
+                        .inner
+                        .dependencies
+                        .repository
+                        .submit_surface_work(actor, request)
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)?
         })
     }
-    fn submit_text_work<'a>(&'a self, actor: &'a OwnerActor, request: SubmitTextWork, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
+    fn submit_text_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: SubmitTextWork,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            let _command = self.inner.lock_command(request.command_id).await.map_err(CommandFailure::NotAdmitted)?;
+            let _command = self
+                .inner
+                .lock_command(request.command_id)
+                .await
+                .map_err(CommandFailure::NotAdmitted)?;
             let _admission = self.inner.admission.read().await;
-            self.inner.check(actor).map_err(CommandFailure::NotAdmitted)?;
+            self.inner
+                .check(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let _wake = recovery_driver::WakeOnDrop(&self.inner.recovery_wake);
-            scope.run(async { Ok(self.inner.dependencies.repository.submit_text_work(actor, request).await) }).await.map_err(CommandFailure::Indeterminate)?
+            scope
+                .run(async {
+                    Ok(self
+                        .inner
+                        .dependencies
+                        .repository
+                        .submit_text_work(actor, request)
+                        .await)
+                })
+                .await
+                .map_err(CommandFailure::Indeterminate)?
         })
     }
-    fn list_surface_work<'a>(&'a self, actor: &'a OwnerActor, request: crate::SurfaceWorkPageRequest, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>> {
-        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.list_surface_work(actor, request)).await })
+    fn list_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: crate::SurfaceWorkPageRequest,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<crate::SurfaceWorkPage, AgentFailure>> {
+        Box::pin(async move {
+            self.inner.check(actor)?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .list_surface_work(actor, request),
+                )
+                .await
+        })
     }
-    fn read_surface_work<'a>(&'a self, actor: &'a OwnerActor, command_id: CommandId, scope: &'a ExecutionScope) -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>> {
-        Box::pin(async move { self.inner.check(actor)?; scope.run(self.inner.dependencies.repository.read_surface_work(actor, command_id)).await })
+    fn read_surface_work<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: CommandId,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<Option<SurfaceWorkSnapshot>, AgentFailure>> {
+        Box::pin(async move {
+            self.inner.check(actor)?;
+            scope
+                .run(
+                    self.inner
+                        .dependencies
+                        .repository
+                        .read_surface_work(actor, command_id),
+                )
+                .await
+        })
     }
     fn close_admission(&self) {
         self.inner.closing.store(true, Ordering::Release);
@@ -873,10 +1086,10 @@ where
             .await
         })
     }
-    fn start_turn<'a>(
+    fn continue_turn<'a>(
         &'a self,
         actor: &'a OwnerActor,
-        request: StartTurn,
+        request: ContinueTurn,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<CommandReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
@@ -888,7 +1101,7 @@ where
             self.inner
                 .check(actor)
                 .map_err(CommandFailure::NotAdmitted)?;
-            let prepared = prepare_start_turn(
+            let prepared = prepare_continue_turn(
                 self.inner.dependencies.repository.as_ref(),
                 self.inner.dependencies.sessions.as_ref(),
                 actor,
@@ -903,7 +1116,14 @@ where
                 AgentFailure::StorageUnavailable,
             ))?;
             self.inner
-                .submit(actor, request.command_id, prepared.intent, session, scope, None)
+                .submit(
+                    actor,
+                    request.command_id,
+                    prepared.intent,
+                    session,
+                    scope,
+                    None,
+                )
                 .await
         })
     }

@@ -417,6 +417,7 @@ fn admit_surface_test_work(
                     .surface_head(&actor, session_id, &scope)
                     .await?;
                 let request = floe_conversation::SubmitTextWork {
+                    retry_of: None,
                     command_id: floe_kernel::CommandId::new(),
                     expected,
                     text,

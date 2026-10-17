@@ -52,7 +52,6 @@ final class ConversationController extends ChangeNotifier {
       );
     }
     runtimeController = runtime..addListener(_runtimeChanged);
-    _conversationRuntime.readModel.addListener(_notify);
   }
 
   final AgentConversationGateway gateway;
@@ -61,12 +60,27 @@ final class ConversationController extends ChangeNotifier {
   final Duration loadTimeout;
   AgentSession? session;
   List<AgentMessage> messages = [];
+  List<AppSurfaceMessage> surfaceMessages = [];
+  List<AppSurfaceWorkSnapshot> workItems = [];
+  final Map<String, AppRunSnapshot> workRuns = {};
+  AppSurfaceAnchor? _surfaceThrough, _surfaceOlder;
+  int _minimumSurfaceSequence = 0;
+  Timer? _surfaceTimer;
+  Object? _surfaceReadToken;
+  bool _inputBusy = false;
+  String? surfaceFailure;
+  String? _lastMetadataRunId;
+  bool _interactionRefreshPending = false;
+  final Set<String> _cancellingWork = {};
+  bool get hasPendingWorkAdmission =>
+      _conversationRuntime.pendingWorkAdmission != null;
+  bool get inputBusy => _inputBusy;
+  bool cancellingWork(String id) => _cancellingWork.contains(id);
+
   bool loadingEarlier = false;
   String? earlierFailure;
-  bool? _historyHasEarlier;
   int _historyGeneration = 0;
-  bool get hasEarlierMessages =>
-      _historyHasEarlier ?? session?.hasEarlierMessages ?? false;
+  bool get hasEarlierMessages => _surfaceOlder != null;
 
   AgentProgress progress = AgentProgress.idle;
   String? failure;
@@ -80,13 +94,13 @@ final class ConversationController extends ChangeNotifier {
   bool needsReload = false;
   bool _busy = false;
   bool _disposed = false;
-  bool _viewAttached = true;
+  bool _viewAttached = false;
   bool _stopRequested = false;
   AgentSession? _runSession;
   String? _lastConversationText;
   String? _lastConversationRunId;
   String? _observedRunId;
-  AgentConversationTurnRequest? _conversationRun;
+  AgentContinuationRequest? _conversationRun;
   int _runUiGeneration = 0;
   late final RuntimeController runtimeController;
   bool _sealed = false;
@@ -104,6 +118,9 @@ final class ConversationController extends ChangeNotifier {
     _observation = ConversationObservation();
     _adoptionEpoch++;
     _historyGeneration++;
+    _surfaceTimer?.cancel();
+    _surfaceTimer = null;
+    _surfaceReadToken = null;
     loadingEarlier = false;
     _interactionPageLoading = false;
     _interactionPageFailure = null;
@@ -579,18 +596,24 @@ final class ConversationController extends ChangeNotifier {
   ConversationRuntimeGateway get _conversationRuntime =>
       gateway.conversationRuntime;
   bool get _conversationBusy => _busy || !runtimeController.ready;
-  bool get canStartConversation => !_conversationBusy && !_disposed && !running;
+  bool get canStartConversation =>
+      !_conversationBusy && !_disposed && !running && !hasPendingWorkAdmission;
   bool get canSend =>
-      !_conversationBusy &&
+      runtimeController.ready &&
       !_disposed &&
       !_sealed &&
       !needsReload &&
-      !needsRecovery &&
       session != null &&
-      isGeneralConversation &&
-      _conversationRuntime.readModel.conversation.canSend(session!.id);
+      _surfaceThrough != null &&
+      _surfaceThrough!.sequence >= _minimumSurfaceSequence &&
+      surfaceFailure == null &&
+      !_inputBusy &&
+      !(busy && progress == AgentProgress.loading) &&
+      !hasPendingWorkAdmission;
   bool get canContinue =>
       canSend &&
+      !running &&
+      !_busy &&
       session?.continuation != null &&
       isGeneralConversation &&
       _lastConversationText != null;
@@ -648,7 +671,6 @@ final class ConversationController extends ChangeNotifier {
       }
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _clearRunUi();
         _end();
         progress = AgentProgress.idle;
         _notify();
@@ -671,23 +693,8 @@ final class ConversationController extends ChangeNotifier {
     needsReload = false;
     if (accepted.activeTurn != null) {
       _trackRunUi(accepted, runId: accepted.activeTurn);
-      _notify();
-      final completion = await _conversationRuntime.observeSessionRun(
-        accepted,
-        observation: observation,
-        onRun: (run) {
-          if (!_acceptsEpoch(epoch)) return;
-          _trackRunUi(accepted, runId: run.runId, state: run.state);
-          _notify();
-        },
-      );
-      if (_acceptsEpoch(epoch) &&
-          session?.id == accepted.id &&
-          completion.session.id == accepted.id) {
-        _recordTerminalIssue(completion.run, accepted.id);
-        _acceptSession(completion.session);
-      }
     }
+    await refreshSurface();
   }
 
   /// Re-observe owner recovery; no business Recover command or implicit Start.
@@ -719,7 +726,6 @@ final class ConversationController extends ChangeNotifier {
       }
     } finally {
       if (!_disposed && epoch == _adoptionEpoch) {
-        _clearRunUi();
         _end();
         progress = AgentProgress.idle;
         _notify();
@@ -737,7 +743,16 @@ final class ConversationController extends ChangeNotifier {
 
   Future<void> continueTurn() async {
     if (!canContinue) return;
-    await _sendConversationText(_lastConversationText!, continuation: true);
+    final original = session!;
+    final request = AgentContinuationRequest(session: original);
+    _conversationRun = request;
+    _trackRunUi(original, runId: null, newTurn: true);
+    _begin();
+    _clearFailure();
+    progress = AgentProgress.model;
+    _notify();
+    await _runConversationCommand(_conversationRuntime, original, request);
+    await refreshSurface();
   }
 
   bool acceptsConversationText(String text) {
@@ -745,54 +760,264 @@ final class ConversationController extends ChangeNotifier {
     return normalized.isNotEmpty && utf8.encode(normalized).length <= 8192;
   }
 
-  Future<void> sendText(String text) async {
+  Future<bool> sendText(String text) async {
     if (!acceptsConversationText(text)) {
       failure = 'invalid_input';
       needsReload = false;
       _notify();
-      return;
+      return false;
     }
-    await _sendConversationText(text);
+    return _sendConversationText(text);
   }
 
-  Future<void> _sendConversationText(
-    String text, {
-    bool continuation = false,
-    String? retryOf,
-  }) async {
-    final normalized = text.trim();
-    if (!canSend ||
-        _disposed ||
-        !isGeneralConversation ||
-        !acceptsConversationText(normalized)) {
+  Future<bool> _sendConversationText(String text, {String? retryOf}) async {
+    if (!canSend || !acceptsConversationText(text)) return false;
+    final original = session!;
+    final epoch = _adoptionEpoch;
+    final expected = _surfaceThrough!;
+    _inputBusy = true;
+    _clearFailure();
+    _notify();
+    var accepted = false;
+    try {
+      final receipt = await _conversationRuntime.submitTextWork(
+        expected: expected,
+        text: text,
+        retryOf: retryOf,
+      );
+      if (_acceptsEpoch(epoch) && session?.id == receipt.anchor.sessionId) {
+        _minimumSurfaceSequence =
+            receipt.anchor.sequence > _minimumSurfaceSequence
+            ? receipt.anchor.sequence
+            : _minimumSurfaceSequence;
+      }
+      accepted = true;
+    } on Object catch (error, stackTrace) {
+      if (_acceptsEpoch(epoch) && session?.id == original.id) {
+        _recordError(
+          'work_admission',
+          error,
+          stackTrace,
+          sessionId: original.id,
+        );
+        _failFromError(error, 'transport_unavailable');
+      }
+    } finally {
+      _inputBusy = false;
+      if (_acceptsEpoch(epoch) && session?.id == original.id) {
+        _notify();
+        await refreshSurface();
+      }
+    }
+    return accepted;
+  }
+
+  Future<void> retryPendingWorkAdmission() async {
+    if (_inputBusy || !runtimeController.ready || !hasPendingWorkAdmission) {
       return;
     }
-    final original = session!;
-    final request = AgentConversationTurnRequest(
-      session: original,
-      text: normalized,
-      continuation: continuation,
-      retryOf: retryOf,
-    );
-    _conversationRun = request;
-    _trackRunUi(original, runId: null, newTurn: true);
-    _lastConversationText = normalized;
-    _begin();
-    _clearFailure();
-    progress = AgentProgress.model;
+    final epoch = _adoptionEpoch;
+    _inputBusy = true;
     _notify();
-    await _runConversationCommand(_conversationRuntime, original, request);
+    try {
+      final receipt = await _conversationRuntime.settlePendingWorkAdmission();
+      if (receipt != null &&
+          _acceptsEpoch(epoch) &&
+          session?.id == receipt.anchor.sessionId) {
+        _minimumSurfaceSequence =
+            receipt.anchor.sequence > _minimumSurfaceSequence
+            ? receipt.anchor.sequence
+            : _minimumSurfaceSequence;
+      }
+      if (_acceptsEpoch(epoch)) {
+        needsReload = false;
+        _clearFailure();
+      }
+    } on Object catch (error, stackTrace) {
+      if (_acceptsEpoch(epoch)) {
+        _recordError('work_admission_recovery', error, stackTrace);
+        _failFromError(error, 'transport_unavailable');
+      }
+    } finally {
+      _inputBusy = false;
+      if (_acceptsEpoch(epoch)) {
+        _notify();
+        await refreshSurface();
+      }
+    }
+  }
+
+  Future<void> cancelQueuedWork(AppSurfaceWorkSnapshot item) async {
+    final id = item.receipt.commandId;
+    if (item.state != AppSurfaceWorkState.queued || !_cancellingWork.add(id)) {
+      return;
+    }
+    final epoch = _adoptionEpoch;
+    _notify();
+    try {
+      await _conversationRuntime.cancelPendingWork(id);
+    } on Object catch (error) {
+      if (_acceptsEpoch(epoch)) _failFromError(error, 'transport_unavailable');
+    } finally {
+      _cancellingWork.remove(id);
+      if (_acceptsEpoch(epoch)) {
+        _notify();
+        await refreshSurface();
+      }
+    }
+  }
+
+  Future<void> stopWork(AppSurfaceWorkSnapshot item) async {
+    final runId = item.currentRunId;
+    if (runId == null || !_cancellingWork.add(item.receipt.commandId)) return;
+    final epoch = _adoptionEpoch;
+    _notify();
+    try {
+      await _conversationRuntime.cancelObservedRun(runId);
+    } on Object catch (error) {
+      if (_acceptsEpoch(epoch)) _failFromError(error, 'transport_unavailable');
+    } finally {
+      _cancellingWork.remove(item.receipt.commandId);
+      if (_acceptsEpoch(epoch)) {
+        _notify();
+        await refreshSurface();
+      }
+    }
+  }
+
+  Future<void> refreshSurface() async {
+    final current = session;
+    if (_disposed ||
+        _sealed ||
+        !runtimeController.ready ||
+        current == null ||
+        _surfaceReadToken != null) {
+      return;
+    }
+    final epoch = _adoptionEpoch;
+    final token = Object();
+    _surfaceReadToken = token;
+    _surfaceTimer?.cancel();
+    try {
+      final surface = await _conversationRuntime.readSurface(current.id);
+      final work = await _conversationRuntime.listWork(current.id);
+      if (!_acceptsEpoch(epoch) || session?.id != current.id) return;
+      if (_surfaceThrough case final previous?) {
+        if (surface.through.sequence < previous.sequence) return;
+        if (surface.through.sequence == previous.sequence &&
+            surface.through != previous) {
+          throw const FormatException('Surface prefix changed.');
+        }
+      }
+      final first = surface.messages.firstOrNull;
+      final overlap = first == null
+          ? -1
+          : surfaceMessages.indexWhere((m) => m.messageId == first.messageId);
+      final prefix = overlap >= 0
+          ? surfaceMessages.take(overlap).toList()
+          : (first != null &&
+                    surfaceMessages.isNotEmpty &&
+                    surfaceMessages.last.through == first.before
+                ? List<AppSurfaceMessage>.of(surfaceMessages)
+                : <AppSurfaceMessage>[]);
+      if (overlap >= 0 && surfaceMessages[overlap].through != first!.through) {
+        throw const FormatException('Surface entry changed.');
+      }
+      final merged = [...prefix, ...surface.messages];
+      if (merged.map((m) => m.messageId).toSet().length != merged.length) {
+        throw const FormatException('Surface history overlaps.');
+      }
+      surfaceMessages = merged;
+      if (_surfaceThrough != null && _surfaceThrough != surface.through) {
+        _interactionRefreshPending = true;
+      }
+      _surfaceThrough = surface.through;
+      if (prefix.isEmpty) _surfaceOlder = surface.older;
+      workItems = work.items;
+      surfaceFailure = null;
+      final ids = <String>{
+        ?current.activeTurn,
+        ...work.items.map((w) => w.currentRunId).whereType<String>(),
+      };
+      final observed = await Future.wait(
+        ids
+            .where(
+              (id) => workRuns[id] == null || !workRuns[id]!.state.terminal,
+            )
+            .take(8)
+            .map(_conversationRuntime.readWorkRun),
+      );
+      if (!_acceptsEpoch(epoch) || session?.id != current.id) return;
+      for (final run in observed) {
+        if (run.sessionId != current.id) {
+          throw const FormatException('Work Run session mismatch.');
+        }
+        workRuns[run.runId] = run;
+      }
+      final active = workRuns.values
+          .where((r) => ids.contains(r.runId) && !r.state.terminal)
+          .firstOrNull;
+      if (active != null) {
+        _trackRunUi(current, runId: active.runId, state: active.state);
+      } else if (_conversationRun == null) {
+        _clearRunUi();
+      }
+      final latest = work.items.lastOrNull;
+      final latestRun = latest?.currentRunId == null
+          ? null
+          : workRuns[latest!.currentRunId];
+      if (latest != null &&
+          latestRun != null &&
+          latestRun.state.terminal &&
+          _lastMetadataRunId != latestRun.runId) {
+        final saved = await gateway.loadConversation(personId, current.id);
+        if (!_acceptsEpoch(epoch) || session?.id != current.id) return;
+        _acceptSession(saved);
+        _lastMetadataRunId = latestRun.runId;
+        _lastConversationRunId = latestRun.runId;
+        _lastConversationText = latest.inputText;
+        _recordTerminalIssue(latestRun, current.id);
+        if (latestRun.report?.issues.firstOrNull case final issue?) {
+          _acceptConversationIssue(issue);
+        }
+      }
+      if (_interactionRefreshPending && !_busy && !_interactionPageLoading) {
+        await refreshInteractions();
+        if (_acceptsEpoch(epoch) && _interactionPageFailure == null) {
+          _interactionRefreshPending = false;
+        }
+      }
+    } on Object catch (error) {
+      if (_acceptsEpoch(epoch)) {
+        surfaceFailure = 'Conversation history could not be refreshed.';
+        final owner = _ownerFailure(error);
+        if (owner != null && (owner.reloadRequired || owner.sealSession)) {
+          _applyOwnerFailure(owner);
+        }
+      }
+    } finally {
+      if (identical(_surfaceReadToken, token)) _surfaceReadToken = null;
+      if (_acceptsEpoch(epoch) && session?.id == current.id) {
+        _notify();
+        if (_viewAttached) {
+          _surfaceTimer = Timer(
+            const Duration(milliseconds: 500),
+            () => unawaited(refreshSurface()),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _runConversationCommand(
     ConversationRuntimeGateway runtime,
     AgentSession original,
-    AgentConversationTurnRequest request,
+    AgentContinuationRequest request,
   ) async {
     final epoch = _adoptionEpoch;
     final observation = _observation;
     try {
-      final completion = await runtime.runConversationTurn(
+      final completion = await runtime.continueConversationTurn(
         request,
         observation: observation,
         onRun: (run) {
@@ -854,7 +1079,7 @@ final class ConversationController extends ChangeNotifier {
           _notify();
         }
       } else if (request != null) {
-        await _conversationRuntime.cancelConversationTurn(request);
+        await _conversationRuntime.cancelContinuation(request);
       }
     } on Object {
       if (!_ownsStopOperation(epoch, generation)) return;
@@ -868,54 +1093,41 @@ final class ConversationController extends ChangeNotifier {
 
   Future<void> loadEarlierMessages() async {
     final current = session;
+    final before = _surfaceOlder;
+    final generation = _historyGeneration;
     if (_disposed ||
         _sealed ||
         !runtimeController.ready ||
-        busy ||
         loadingEarlier ||
         current == null ||
-        messages.isEmpty ||
-        !hasEarlierMessages) {
+        before == null) {
       return;
     }
-    final before = messages.first.messageId;
-    final generation = _historyGeneration;
     loadingEarlier = true;
     earlierFailure = null;
     _notify();
     try {
-      final page = await gateway.loadEarlierConversation(
-        personId,
+      final page = await _conversationRuntime.readSurface(
         current.id,
-        before,
+        through: before,
       );
       if (_disposed ||
           _sealed ||
-          !runtimeController.ready ||
           generation != _historyGeneration ||
           session?.id != current.id ||
-          messages.isEmpty ||
-          messages.first.messageId != before) {
+          _surfaceOlder != before) {
         return;
       }
-      final existing = messages.map((message) => message.messageId).toSet();
-      if (page.id != current.id ||
-          page.personId != personId ||
-          page.revision < current.revision) {
-        throw const FormatException('Invalid Conversation history page.');
+      final ids = surfaceMessages.map((m) => m.messageId).toSet();
+      if (page.through != before ||
+          page.messages.isEmpty ||
+          page.messages.any((m) => ids.contains(m.messageId)) ||
+          (surfaceMessages.isNotEmpty &&
+              surfaceMessages.first.before != before)) {
+        throw const FormatException('Surface history cursor mismatch.');
       }
-      if (page.messages.any(
-        (message) => existing.contains(message.messageId),
-      )) {
-        throw const FormatException(
-          'Conversation history page overlaps the current window.',
-        );
-      }
-      if (page.messages.isEmpty && page.hasEarlierMessages) {
-        throw const FormatException('History cursor did not advance.');
-      }
-      messages = [...page.messages, ...messages];
-      _historyHasEarlier = page.hasEarlierMessages;
+      surfaceMessages = [...page.messages, ...surfaceMessages];
+      _surfaceOlder = page.older;
     } on Object catch (error) {
       if (!_disposed && generation == _historyGeneration) {
         earlierFailure = 'Earlier messages could not be loaded. Try again.';
@@ -934,7 +1146,6 @@ final class ConversationController extends ChangeNotifier {
 
   void _resetHistory() {
     _historyGeneration++;
-    _historyHasEarlier = null;
     loadingEarlier = false;
     earlierFailure = null;
   }
@@ -952,17 +1163,20 @@ final class ConversationController extends ChangeNotifier {
         return current;
       }
     }
-    _clearInteractions();
-    final first = saved.messages.firstOrNull?.messageId;
-    final prefixEnd = session?.id == saved.id && first != null
-        ? messages.indexWhere((message) => message.messageId == first)
-        : -1;
-    final earlier = prefixEnd >= 0
-        ? messages.take(prefixEnd).toList()
-        : <AgentMessage>[];
-    if (prefixEnd < 0) _resetHistory();
+    if (session?.id != saved.id) {
+      _clearInteractions();
+      _interactionRefreshPending = false;
+      _resetHistory();
+      surfaceMessages = [];
+      workItems = [];
+      workRuns.clear();
+      _surfaceThrough = null;
+      _surfaceOlder = null;
+      _minimumSurfaceSequence = 0;
+      _lastMetadataRunId = null;
+    }
     session = saved;
-    messages = [...earlier, ...saved.messages];
+    messages = List.of(saved.messages);
     _applySessionOutcome(saved);
     final lastUser = messages
         .whereType<AgentTextMessage>()
@@ -1000,6 +1214,12 @@ final class ConversationController extends ChangeNotifier {
       _clearInteractions();
       session = null;
       messages = [];
+      surfaceMessages = [];
+      workItems = [];
+      workRuns.clear();
+      _surfaceThrough = null;
+      _surfaceOlder = null;
+      _minimumSurfaceSequence = 0;
       _resetHistory();
     }
     _notify();
@@ -1008,6 +1228,8 @@ final class ConversationController extends ChangeNotifier {
   void detachView() {
     if (!_viewAttached) return;
     _viewAttached = false;
+    _surfaceTimer?.cancel();
+    _surfaceTimer = null;
     _conversationRuntime.readModel.removeListener(_notify);
   }
 
@@ -1015,6 +1237,7 @@ final class ConversationController extends ChangeNotifier {
     if (_disposed || _viewAttached) return;
     _viewAttached = true;
     _conversationRuntime.readModel.addListener(_notify);
+    unawaited(refreshSurface());
     _notify();
   }
 
@@ -1120,6 +1343,12 @@ final class ConversationController extends ChangeNotifier {
       _sealed = true;
       session = null;
       messages = [];
+      surfaceMessages = [];
+      workItems = [];
+      workRuns.clear();
+      _surfaceThrough = null;
+      _surfaceOlder = null;
+      _minimumSurfaceSequence = 0;
       _resetHistory();
     }
   }

@@ -19,22 +19,36 @@ pub(crate) fn command_in(value: AppProductCommandDto) -> AppWireResult<Conversat
             mode: crate::calendar_operations_wire::authority_mode_in(mode),
             expected_revision,
         },
-        AppProductCommandDto::ConversationStartTurn {
+        AppProductCommandDto::ConversationWorkSubmitText { expected, text } => {
+            ConversationCommand::SubmitTextWork {
+                expected: crate::surface_wire::anchor_in(expected)?,
+                text,
+            }
+        }
+        AppProductCommandDto::ConversationWorkRetry {
+            expected,
+            text,
+            source_run_id,
+        } => ConversationCommand::RetryWork {
+            expected: crate::surface_wire::anchor_in(expected)?,
+            text,
+            source_run_id: RunId::from_uuid(source_run_id.get())
+                .ok_or_else(|| validation("command.source_run_id"))?,
+        },
+        AppProductCommandDto::ConversationWorkCancelPending { work_command_id } => {
+            ConversationCommand::CancelPendingWork {
+                work_command_id: CommandId::from_uuid(work_command_id.get())
+                    .ok_or_else(|| validation("command.work_command_id"))?,
+            }
+        }
+        AppProductCommandDto::ConversationContinueTurn {
             session_id,
             expected_revision,
-            text,
             continuation_ref,
-            retry_of,
-        } => ConversationCommand::StartTurn {
+        } => ConversationCommand::ContinueTurn {
             session_id: session_id.get(),
             expected_revision,
-            text,
-            continuation_id: continuation_ref.map(|reference| reference.id.get()),
-            retry_of: retry_of
-                .map(|reference| {
-                    RunId::from_uuid(reference.get()).ok_or_else(|| validation("command.retry_of"))
-                })
-                .transpose()?,
+            continuation_id: continuation_ref.id.get(),
         },
         AppProductCommandDto::ConversationCalendarProposalSubmit {
             session_id,
@@ -120,7 +134,31 @@ pub(crate) fn command_out(
         ) => {
             return crate::assistant_feature_wire::command_out(command, value);
         }
-        (ConversationCommand::StartTurn { .. }, ConversationCommandOutcome::Turn(receipt)) => {
+        (
+            ConversationCommand::SubmitTextWork { .. } | ConversationCommand::RetryWork { .. },
+            ConversationCommandOutcome::Work(receipt),
+        ) => {
+            if receipt.command_id.as_uuid() != command_id {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::ConversationWorkReceipt {
+                receipt: crate::surface_wire::receipt_out(receipt, caller)?,
+            }
+        }
+        (
+            ConversationCommand::CancelPendingWork { work_command_id },
+            ConversationCommandOutcome::PendingWorkCancelled(receipt),
+        ) => {
+            if receipt.command_id.as_uuid() != command_id
+                || receipt.work_command_id != *work_command_id
+            {
+                return Err(internal_error());
+            }
+            AppCommandResultDto::ConversationWorkCancelled {
+                receipt: crate::surface_wire::cancellation_out(receipt, caller)?,
+            }
+        }
+        (ConversationCommand::ContinueTurn { .. }, ConversationCommandOutcome::Turn(receipt)) => {
             if receipt.command_id.as_uuid() != command_id {
                 return Err(internal_error());
             }
@@ -218,6 +256,37 @@ pub(crate) fn query_in(value: AppProductQueryDto) -> AppWireResult<ConversationQ
         | AppProductQueryDto::AssistantFeatureSourceReviewInspect { .. }) => {
             ConversationQuery::AssistantFeature(crate::assistant_feature_wire::query_in(query)?)
         }
+        AppProductQueryDto::ConversationSurfaceGet {
+            session_id,
+            through,
+            limit,
+        } => ConversationQuery::Surface(floe_conversation::SurfaceReadRequest {
+            session_id: session_id.get(),
+            through: through.map(crate::surface_wire::anchor_in).transpose()?,
+            limit: usize::from(limit),
+        }),
+        AppProductQueryDto::ConversationWorkGet { command_id } => ConversationQuery::Work {
+            command_id: CommandId::from_uuid(command_id.get())
+                .ok_or_else(|| validation("query.command_id"))?,
+        },
+        AppProductQueryDto::ConversationWorkList {
+            session_id,
+            cursor,
+            limit,
+        } => ConversationQuery::WorkPage(floe_conversation::SurfaceWorkPageRequest {
+            session_id: session_id.get(),
+            limit: usize::from(limit),
+            cursor: cursor
+                .map(|c| {
+                    Ok(floe_conversation::SurfaceWorkCursor {
+                        through: CommandId::from_uuid(c.through.get())
+                            .ok_or_else(|| validation("query.cursor.through"))?,
+                        before: CommandId::from_uuid(c.before.get())
+                            .ok_or_else(|| validation("query.cursor.before"))?,
+                    })
+                })
+                .transpose()?,
+        }),
         AppProductQueryDto::ConversationSessionGet {
             session_id,
             before_message_id,
@@ -281,6 +350,39 @@ pub(crate) fn query_out(
             ConversationQueryOutcome::AssistantFeature(value),
         ) => {
             return crate::assistant_feature_wire::query_out(query, value);
+        }
+        (ConversationQuery::Surface(request), ConversationQueryOutcome::Surface(value)) => {
+            if value.through.session_id != request.session_id {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::ConversationSurface {
+                snapshot: crate::surface_wire::surface_out(value)?,
+            }
+        }
+        (ConversationQuery::Work { command_id }, ConversationQueryOutcome::Work(value)) => {
+            if value
+                .as_ref()
+                .is_some_and(|v| v.receipt.command_id != *command_id)
+            {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::ConversationWork {
+                snapshot: value
+                    .map(|v| crate::surface_wire::work_out(v, caller))
+                    .transpose()?,
+            }
+        }
+        (ConversationQuery::WorkPage(request), ConversationQueryOutcome::WorkPage(value)) => {
+            if value
+                .items
+                .iter()
+                .any(|v| v.receipt.anchor.session_id != request.session_id)
+            {
+                return Err(internal_error());
+            }
+            AppQueryResultDto::ConversationWorkPage {
+                page: crate::surface_wire::page_out(value, caller)?,
+            }
         }
         (ConversationQuery::ResumeSession, ConversationQueryOutcome::Session(Some(session))) => {
             if session.person_id.0 != caller.person_id() {
@@ -415,7 +517,7 @@ fn command_receipt(
         issue: None,
     })
 }
-fn digest_bytes(digest: &DigestHex64Dto) -> AppWireResult<[u8; 32]> {
+pub(crate) fn digest_bytes(digest: &DigestHex64Dto) -> AppWireResult<[u8; 32]> {
     let bytes = digest.as_str().as_bytes();
     let mut result = [0; 32];
     for (index, chunk) in bytes.chunks_exact(2).enumerate() {

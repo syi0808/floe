@@ -37,6 +37,11 @@ fn input_origin(receipt: &SurfaceInputReceipt) -> String {
 fn work_origin(receipt: &SurfaceWorkReceipt) -> String {
     match &receipt.origin {
         WorkOrigin::Text => format!("text:{}", receipt.input_id.as_uuid()),
+        WorkOrigin::Retry { source_run_id } => format!(
+            "retry:{}:{}",
+            source_run_id.as_uuid(),
+            receipt.input_id.as_uuid()
+        ),
         WorkOrigin::Voice {
             voice_session_id,
             delegation_id,
@@ -405,6 +410,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || run.person_id != receipt.person_id
             || run.session_id != receipt.anchor.session_id
             || run.device_id != receipt.device_id
+            || run.retry_of != receipt.origin.retry_of()
         {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -484,11 +490,19 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             _ => return Err(AgentFailure::StorageUnavailable),
         };
         let current_run_id = match &state {
-            floe_conversation::SurfaceWorkState::Linked(root) => Some(self.current_run_descendant_on(connection, *root).await?),
+            floe_conversation::SurfaceWorkState::Linked(root) => {
+                Some(self.current_run_descendant_on(connection, *root).await?)
+            }
             _ => None,
         };
+        let input_text = self
+            .surface_work_input_on(connection, &receipt)
+            .await?
+            .input
+            .text;
         Ok(Some(floe_conversation::SurfaceWorkSnapshot {
             receipt,
+            input_text,
             state,
             current_run_id,
         }))
@@ -512,7 +526,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 }
 
 impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault<Keys> {
-    fn read_surface<'a>(&'a self, actor: &'a OwnerActor, request: floe_conversation::SurfaceReadRequest) -> BoxFuture<'a, Result<floe_conversation::SurfaceSnapshot, AgentFailure>> {
+    fn read_surface<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: floe_conversation::SurfaceReadRequest,
+    ) -> BoxFuture<'a, Result<floe_conversation::SurfaceSnapshot, AgentFailure>> {
         Box::pin(self.surface_snapshot(actor, request))
     }
 
@@ -613,22 +631,28 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
         request: floe_conversation::SubmitTextWork,
     ) -> BoxFuture<'a, Result<SurfaceWorkReceipt, CommandFailure<AgentFailure>>> {
         Box::pin(async move {
-            let (input, expected) = request
-                .prepare(actor)
-                .map_err(CommandFailure::NotAdmitted)?;
+            actor.validate().map_err(CommandFailure::NotAdmitted)?;
+            if actor.person_id != self.person_id {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied));
+            }
+            if !request.command_id.is_valid() {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::InvalidInput));
+            }
             let mut connection = self.connection().map_err(CommandFailure::Indeterminate)?;
             let read = connection
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .await
                 .map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
-            self.surface_session_on(&read, actor, expected.anchor.session_id)
-                .await
-                .map_err(CommandFailure::NotAdmitted)?;
             if let Some(existing) = self
-                .surface_work_command_on(&read, expected.command_id)
+                .surface_work_command_on(&read, request.command_id)
                 .await
                 .map_err(CommandFailure::Indeterminate)?
             {
+                // Invalid reuse is still an occupied identity, never permission
+                // to discard the original request and send a fresh command.
+                let (input, expected) = request
+                    .prepare(actor)
+                    .map_err(|_| CommandFailure::Indeterminate(AgentFailure::Conflict))?;
                 let retained = self
                     .surface_input_command_on(&read, input.command_id)
                     .await
@@ -642,9 +666,15 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
                 self.check_access().map_err(CommandFailure::Indeterminate)?;
                 return Ok(existing);
             }
+            self.surface_command_free_on(&read, request.command_id)
+                .await
+                .map_err(CommandFailure::Indeterminate)?;
             read.commit()
                 .await
                 .map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
+            let (input, expected) = request
+                .prepare(actor)
+                .map_err(CommandFailure::NotAdmitted)?;
             let tx = connection
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .await
@@ -841,7 +871,13 @@ impl<Keys: VaultKeyProvider + 'static> SurfaceRepository for EncryptedAgentVault
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    pub(super) async fn surface_entries_on(&self, connection: &Connection, through: SurfaceAnchor, after: u64, limit: usize) -> Result<Vec<SurfaceEntryReceipt>, AgentFailure> {
+    pub(super) async fn surface_entries_on(
+        &self,
+        connection: &Connection,
+        through: SurfaceAnchor,
+        after: u64,
+        limit: usize,
+    ) -> Result<Vec<SurfaceEntryReceipt>, AgentFailure> {
         if limit == 0 || limit > MAX_SURFACE_PAGE_ITEMS || after > through.sequence {
             return Err(AgentFailure::InvalidInput);
         }
@@ -956,6 +992,10 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                         if inputs.next().await.map_err(database_failure)?.is_none() {
                             return Err(AgentFailure::StorageUnavailable);
                         }
+                        if receipt.origin.retry_of().is_some() {
+                            let input = self.surface_work_input_on(&tx, &receipt).await?;
+                            self.validate_retry_work_on(&tx, &receipt, &input).await?;
+                        }
                         (receipt.anchor.session_id, receipt.device_id)
                     } else {
                         let receipt = self
@@ -1018,7 +1058,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             || request.principal != work.person_id.to_string()
             || request.device_id != work.device_id
             || request.mode != floe_conversation::TurnMode::New
-            || request.retry_of.is_some()
+            || request.retry_of != work.origin.retry_of()
         {
             return Err(AgentFailure::Conflict);
         }
@@ -1037,6 +1077,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .surface_input_command_on(connection, command)
             .await?
             .ok_or(AgentFailure::NotFound)?;
+        self.validate_retry_work_on(connection, work, &input)
+            .await?;
         match &request.input {
             floe_conversation::TurnInput::NewMessage(message)
                 if message.text == input.input.text => {}
@@ -1149,6 +1191,47 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         tx.execute("INSERT INTO agent_surface_heads (session_id, person_id, sequence, digest) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET sequence = excluded.sequence, digest = excluded.digest", (head.session_id.to_string(), self.person_id.to_string(), expected.through.sequence as i64, expected.through.digest.to_vec())).await.map_err(|e| CommandFailure::Indeterminate(database_failure(e)))?;
         Ok(expected)
     }
+    /// Retry binds a new Person input to one canonical terminal source. This
+    /// does not copy source authority, revive a recorder or follow a latest head.
+    async fn validate_retry_work_on(
+        &self,
+        tx: &Connection,
+        work: &SurfaceWorkReceipt,
+        input: &SurfaceInputReceipt,
+    ) -> Result<(), AgentFailure> {
+        let Some(source_run_id) = work.origin.retry_of() else {
+            return Ok(());
+        };
+        let source = self
+            .conversation_run_on(tx, source_run_id)
+            .await?
+            .ok_or(AgentFailure::NotFound)?;
+        if source.person_id != work.person_id
+            || source.device_id != work.device_id
+            || source.session_id != work.anchor.session_id
+            || !source.state.is_terminal()
+            || input.person_id != work.person_id
+            || input.device_id != work.device_id
+            || input.through != work.anchor
+            || input.input.origin != SurfaceInputOrigin::Text
+            || input.input.message_id != work.input_id
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        let source_work = self
+            .surface_work_for_run_on(tx, source_run_id)
+            .await?
+            .ok_or(AgentFailure::Conflict)?;
+        if source_work.anchor.sequence >= input.through.sequence {
+            return Err(AgentFailure::Conflict);
+        }
+        let original = self.surface_work_input_on(tx, &source_work).await?;
+        if original.input.text != input.input.text {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(())
+    }
+
     async fn submit_surface_work_on(
         &self,
         tx: &Connection,
@@ -1199,6 +1282,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             ))?;
         match (&expected.origin, &input.input.origin) {
             (WorkOrigin::Text, SurfaceInputOrigin::Text) => {}
+            (WorkOrigin::Retry { .. }, SurfaceInputOrigin::Text) => {
+                self.validate_retry_work_on(tx, &expected, &input)
+                    .await
+                    .map_err(CommandFailure::NotApplied)?;
+            }
             (
                 WorkOrigin::Voice {
                     voice_session_id: a,

@@ -2,18 +2,9 @@ import 'package:floe_client/features/conversation/application/conversation_runti
 import 'package:floe_client/features/conversation/application/agent_interaction_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 
-final class AgentConversationTurnRequest {
-  const AgentConversationTurnRequest({
-    required this.session,
-    required this.text,
-    this.continuation = false,
-    this.retryOf,
-  }) : assert(!continuation || retryOf == null);
-
+final class AgentContinuationRequest {
+  const AgentContinuationRequest({required this.session});
   final AgentSession session;
-  final String text;
-  final bool continuation;
-  final String? retryOf;
 }
 
 abstract interface class AgentConversationGateway {

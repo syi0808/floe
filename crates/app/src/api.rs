@@ -84,12 +84,22 @@ pub enum ConversationCommand {
         mode: OperationPolicyMode,
         expected_revision: u64,
     },
-    StartTurn {
+    SubmitTextWork {
+        expected: floe_conversation::SurfaceAnchor,
+        text: String,
+    },
+    RetryWork {
+        expected: floe_conversation::SurfaceAnchor,
+        text: String,
+        source_run_id: floe_kernel::RunId,
+    },
+    CancelPendingWork {
+        work_command_id: floe_kernel::CommandId,
+    },
+    ContinueTurn {
         session_id: Uuid,
         expected_revision: u64,
-        text: String,
-        continuation_id: Option<Uuid>,
-        retry_of: Option<floe_kernel::RunId>,
+        continuation_id: Uuid,
     },
     SubmitCalendarProposal {
         session_id: Uuid,
@@ -213,6 +223,11 @@ pub enum ProductQuery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQuery {
+    Surface(floe_conversation::SurfaceReadRequest),
+    Work {
+        command_id: floe_kernel::CommandId,
+    },
+    WorkPage(floe_conversation::SurfaceWorkPageRequest),
     CalendarProposalPreview {
         receipt: floe_agent_contract::TaskExecutionReceiptRef,
         artifact_id: Uuid,
@@ -284,6 +299,8 @@ pub enum MemoryCommandOutcome {
 
 #[derive(Clone, Debug)]
 pub enum ConversationCommandOutcome {
+    Work(floe_conversation::SurfaceWorkReceipt),
+    PendingWorkCancelled(floe_conversation::PendingWorkCancellationReceipt),
     Session(floe_conversation::SessionSnapshot),
     CalendarOperationPolicy(OperationAuthorizationPolicy),
     AssistantFeature(AssistantFeatureCommandResult),
@@ -325,6 +342,9 @@ pub enum ProductQueryOutcome {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversationQueryOutcome {
+    Surface(floe_conversation::SurfaceSnapshot),
+    Work(Option<floe_conversation::SurfaceWorkSnapshot>),
+    WorkPage(floe_conversation::SurfaceWorkPage),
     CalendarProposalPreview(floe_calendar_operations::ActionProposalPreview),
     CalendarOperationPolicy(OperationAuthorizationPolicy),
     AssistantFeature(AssistantFeatureQueryResult),

@@ -238,8 +238,8 @@ pub(super) const CONVERSATION: &[SchemaObject] = &[
     ),
     SchemaObject::marker(
         "agent_conversation_schema",
-        15,
-        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 15))",
+        16,
+        "CREATE TABLE agent_conversation_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 16))",
     ),
     SchemaObject::index(
         "agent_surface_work_pending",

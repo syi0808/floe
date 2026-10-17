@@ -7,7 +7,7 @@ use std::{
 
 use chrono::Utc;
 use floe_app::{AppComposition, AppHost, ReadyOwners, RuntimeReadinessState};
-use floe_conversation::{CommandReceipt, RunState, StartTurn};
+use floe_conversation::{RunState, SubmitTextWork};
 use floe_execution::{BoxFuture, Cancellation, ExecutionScope};
 use floe_kernel::{AgentFailure, CommandId, OwnerActor};
 use serde_json::{Value, json};
@@ -173,38 +173,59 @@ fn exercise(host: &Host, with_expiry: bool) -> Result<Value, AgentFailure> {
         "Please remember for later: fictional Alex prefers afternoon meetings. Acknowledge this request without reading any external source."
     };
     let command_id = CommandId::new();
-    let command = StartTurn {
+    let expected = owner_call(host, move |owners, actor, scope| {
+        owners
+            .conversation
+            .surface_head(actor, session.session_id, scope)
+    })?;
+    let command = SubmitTextWork {
         command_id,
-        session_id: session.session_id,
-        expected_revision: session.session_revision,
+        expected,
         text: text.into(),
-        continuation_ref: None,
         retry_of: None,
     };
-    let admitted = match owner_call(host, move |owners, actor, scope| {
+    match owner_call(host, move |owners, actor, scope| {
         Box::pin(async move {
             owners
                 .conversation
-                .start_turn(actor, command, scope)
+                .submit_text_work(actor, command, scope)
                 .await
                 .map_err(floe_kernel::CommandFailure::into_failure)
         })
     }) {
-        Ok(receipt) => receipt,
-        Err(AgentFailure::StorageUnavailable) => owner_call(host, move |owners, actor, scope| {
-            owners.conversation.read_command(actor, command_id, scope)
-        })?
-        .map(|receipt| CommandReceipt::from(&receipt))
-        .ok_or(AgentFailure::StorageUnavailable)?,
+        Ok(_) => {}
+        Err(AgentFailure::StorageUnavailable) => {
+            owner_call(host, move |owners, actor, scope| {
+                owners
+                    .conversation
+                    .read_surface_work(actor, command_id, scope)
+            })?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        }
         Err(error) => return Err(error),
-    };
+    }
     let deadline = Instant::now() + Duration::from_secs(120);
     let run = loop {
-        let run_id = admitted.run_id;
-        let receipt = owner_call(host, move |owners, actor, scope| {
-            owners.conversation.read_run(actor, run_id, scope)
-        })?
-        .ok_or(AgentFailure::StorageUnavailable)?;
+        let observed = owner_call(host, move |owners, actor, scope| {
+            Box::pin(async move {
+                let work = owners
+                    .conversation
+                    .read_surface_work(actor, command_id, scope)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                match work.current_run_id {
+                    Some(run_id) => owners.conversation.read_run(actor, run_id, scope).await,
+                    None => Ok(None),
+                }
+            })
+        })?;
+        let Some(receipt) = observed else {
+            if Instant::now() >= deadline {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
         if receipt.state.is_terminal() {
             break receipt;
         }
