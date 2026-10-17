@@ -1096,3 +1096,9 @@ impl SourceGrant {
         matches!(self, Self::Granted)
     }
 }
+
+mod projection_review;
+pub use projection_review::SourceProjectionReview;
+
+mod live_projection;
+pub use live_projection::{LiveContextProjection, LiveProjectionSource};

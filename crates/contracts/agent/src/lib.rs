@@ -94,7 +94,6 @@ pub use ports::{
 pub use projection::{
     AuthorizedModelProjection, MAX_CORRECTION_BYTES, MAX_INPUT_DATA_CLASSES, MODEL_CORRECTION_TEXT,
     ModelCorrection, ModelProjectionOutcome, ModelProjectionRequest, ProjectionRef,
-    SourceProjectionReview,
 };
 pub use replay::{AttemptId, InvocationKey, ReplayReceipt, input_digest};
 pub use task_execution::{
@@ -123,3 +122,5 @@ pub use model_plan::{
 pub use floe_model_contract::{ModelOutputFormat, ModelSchema, strict_json as strict_model_json};
 
 pub use floe_model_contract::{ModelBindingDigest, ModelSelectionCommitment, ProcessingBoundary};
+
+pub use floe_context_contract::SourceProjectionReview;

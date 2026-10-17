@@ -7,7 +7,7 @@ use floe_agent_contract::{AgentFailure, ProcessingBoundary};
 use floe_execution::ExecutionScope;
 use floe_model_contract::LiveModelPlan;
 #[cfg(test)]
-use floe_model_contract::{LiveModelCapabilities, LiveModelLimits};
+use floe_model_contract::{LiveModelCapabilities, LiveTransportLimits};
 use uuid::Uuid;
 
 /// Non-clone and privately constructed. Inspection is not a dispatch token.
@@ -165,10 +165,10 @@ mod tests {
                 purpose: LIVE_PRESENTATION_PURPOSE.into(),
                 consumer: LIVE_PRESENTATION_CONSUMER.into(),
                 capabilities: LiveModelCapabilities::conversational(),
-                limits: LiveModelLimits {
+                limits: LiveTransportLimits {
                     initial_context_bytes: 16_384,
                     append_bytes: 500,
-                    session_duration_ms: 60_000,
+                    local_session_duration_ms: 60_000,
                 },
                 boundary,
                 binding_digest: ModelBindingDigest(if self.primary {

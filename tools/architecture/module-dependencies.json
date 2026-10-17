@@ -27,6 +27,8 @@
       "responsibility": "Source view/coverage values and Health transformation proofs",
       "group": "contracts",
       "allowed_internal_dependencies": [
+        "model_contract",
+        "conversation_contract",
         "kernel"
       ]
     },

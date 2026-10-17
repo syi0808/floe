@@ -805,7 +805,9 @@ name = "floe-context-contract"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "floe-conversation-contract",
  "floe-kernel",
+ "floe-model-contract",
  "serde",
  "serde_json",
  "sha2",

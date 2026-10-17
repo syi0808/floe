@@ -5,7 +5,7 @@ use floe_agent_contract::{
     ProcessingBoundary,
 };
 use floe_execution::ExecutionScope;
-use floe_model_contract::{LiveModelCapabilities, LiveModelLimits};
+use floe_model_contract::{LiveModelCapabilities, LiveTransportLimits};
 
 pub const LIVE_PRESENTATION_PURPOSE: &str = "voice_presentation";
 pub const LIVE_PRESENTATION_CONSUMER: &str = "floe.voice";
@@ -29,7 +29,7 @@ pub struct ObservedLiveModelCapability {
     pub purpose: String,
     pub consumer: String,
     pub capabilities: LiveModelCapabilities,
-    pub limits: LiveModelLimits,
+    pub limits: LiveTransportLimits,
     pub boundary: ProcessingBoundary,
     pub binding_digest: ModelBindingDigest,
     pub selection_commitment: ModelSelectionCommitment,

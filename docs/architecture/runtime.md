@@ -1063,8 +1063,9 @@ private-root checks and key-loss access fence. No model or provider is called.
 ### Live model planning boundary
 
 Inference's live preparation uses the same Primary-valid-absence selection rule
-as generation while retaining separate live capabilities and confirmed byte/time
-limits from the neutral model contract. The privately constructed non-clone
+as generation while retaining separate live capabilities and explicit adapter-enforced byte/local-time
+bounds from the neutral model contract. These are not provider context-window,
+remote-expiry or billing guarantees. The privately constructed non-clone
 selection pins Person/device/epoch, model binding, selection commitment and its
 preparation lifetime. Invalid available Primary capability, identity, purpose or
 limits fail closed; they do not enable fallback. This planning handle grants no

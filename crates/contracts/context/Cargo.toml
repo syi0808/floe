@@ -6,6 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-model-contract = { path = "../model" }
+floe-conversation-contract = { path = "../conversation" }
 chrono.workspace = true
 floe-kernel = { path = "../kernel" }
 serde.workspace = true

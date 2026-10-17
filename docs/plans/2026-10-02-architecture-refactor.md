@@ -2563,3 +2563,105 @@ No Flutter/Go/native source changed or new platform/provider run was performed.
 Voice startup/event custody, Context live projection and native/control/App
 composition remain the next separate work; this correction preserves known
 results for those future asynchronous flows too.
+
+### Next Voice integration slice: prepared model to durable events
+
+This is the next implementation sequence, not a claim that a production voice
+call can be opened. The live foundation is published; Context/ingress/startup
+composition is still being built by the root.
+
+```mermaid
+flowchart TD
+    Host[App admitted start / native muted lease] --> Inference[Inference live preparation and processing fence]
+    Context[Context authorized bounded Surface projection] --> Inference
+    Inference --> Intent[Voice-owned encrypted startup intent]
+    Intent --> Dispatch[Fresh dispatch transition only]
+    Dispatch --> Transport[Long-lived provider transport]
+    Transport --> Ingress[Owned normalized event reader]
+    Ingress --> Custody[Voice event identity + Conversation Surface custody]
+    Custody --> Work[Existing durable Manager Work]
+    Work --> Result[Canonical Run result and provenance]
+    Result --> Context
+    Context --> Delivery[Exact provider append / separate playback evidence]
+    Voice[Voice lifecycle and correlation] --> Native[Native lease / command-generation control]
+    Voice --> Ingress
+    Voice --> Delivery
+    Stop[Hangup or authority loss] --> Native
+    Stop --> Transport
+    Stop -. does not cancel .-> Work
+```
+
+- Provider-neutral live I/O contracts belong beside Inference's live planning,
+  with pure event/limit values in model contracts. Voice consumes the normalized
+  session and owns its lifecycle/correlation; it does not select another model
+  or add a generate-loop exception. This avoids an Inference↔Voice dependency
+  cycle. Provider/Go/native adapters retain wire and credential details.
+- Context owns the projection and source-processing review. The existing review
+  value has moved to the Context contract, and generation's static processing
+  checks have been extracted for actual reuse rather than a second Voice policy.
+  Focused Agent/Context checks pass 13/21 on that in-progress extraction. A live
+  projection, its canonical source reader and production dispatch are not yet
+  implemented or covered by those checks.
+- Startup must persist immutable actor/plan/context/media-binding intent before
+  provider handoff. Only a fresh Applied dispatch transition consumes a prepared
+  transport. Lost response/restart cannot create the call again. A known startup
+  result that encounters local Busy is retained for exact local settlement,
+  applying the same phase distinction established by the Calendar correction.
+- A continuously owned reader retains an event until encrypted local custody;
+  screen polling/cancellation does not own this reader. Real utterance/delegation
+  identity is scoped to its voice session. Partial captions never become durable
+  User input. Ambiguous metadata cannot manufacture another User message.
+- Final input and delegation must join the existing Surface/Work admission path.
+  Durable work outlives hangup and keeps its original anchor. A provider event
+  cannot decide source reviews or external action approvals. Cancellation of
+  selected work remains an explicit separate Conversation command.
+- Manager-result delivery point-reads the canonical result and current provenance
+  before projection. A known append result retries local custody only; unknown
+  transport acceptance is not a reason to resend. Provider acceptance, native
+  playback and unknown delivery remain different observations. No transcript or
+  internal Source proof should be serialized wholesale as a provider payload.
+- Authority revalidation, input ingress and result delivery must progress
+  independently. Revocation stops native capture without waiting for stalled
+  append/poll I/O. An unconfirmed native stop retains its lease fence; remote
+  finalization uncertainty stays in durable history/accounting rather than
+  pretending the microphone is still active or final usage is zero.
+
+Next acceptance is a real encrypted Conversation/Work fixture with a fake live
+provider and fake native boundary, covering duplicate/changed event, concurrent
+input while Manager works, ambiguous delegation, local Busy/lost ACK, authority
+loss, hangup, and later result availability. It must not be described as actual
+WebRTC, microphone, platform permission, account or paid-provider validation.
+
+- The normalized live event/append contract now distinguishes ephemeral captions
+  and activity from final-utterance/delegation identities. Metadata-only delegation
+  is valid; it does not synthesize User text. IDs remain session-scoped, whole
+  logical appends retain host correlation, and no idempotent provider resend or
+  playback proof is implied. Debug formatting omits transcripts, hints and IDs.
+- Clarified the formerly named LiveModelLimits as LiveTransportLimits. These are
+  explicit prepared adapter/host bounds, including local session duration, not
+  claims about undocumented provider context capacity, remote expiry or billing.
+  Real provider capacity can remain unknown; a transport bound is not a model
+  token-window estimate. No persisted or public AppWire shape used this new type.
+
+- Live context binding now records the exact actor/epoch, selected plan/binding,
+  Voice session, immutable Surface prefix or result identity, source coverage and
+  memory revisions. Its correlation digest includes the exact payload, but never
+  grants processing or microphone authority. Provider-facing text is bounded and
+  separately held; the complete provenance object is not serializable. Focused
+  Context-contract 4 and Model-contract 10 tests passed. Canonical live source
+  reads, projection assembly and production transport dispatch are still pending.
+
+#### Live contract slice qualification (2026-10-17)
+
+The exact 601 Rust/Cargo input snapshot passes workspace tests including
+doctests (492 passed, 0 failed), App QA-feature tests (79 passed, 0 failed,
+one intentional process-kill driver ignore), production Linux FFI build,
+and architecture boundaries (27 nodes, 144 edges). Whitespace checks pass.
+The extra edges are Context contracts depending on the neutral Model and
+Conversation identity contracts; no module cycle or Voice dispatch authority
+is introduced. Existing compiler warnings remain.
+
+This qualifies normalized live values and Context binding/review extraction.
+It does not qualify production live source assembly, streaming transport,
+encrypted Voice event custody, WebRTC, microphone permission or Apple UI.
+No Flutter/Go/native source or persisted schema changed in this slice.

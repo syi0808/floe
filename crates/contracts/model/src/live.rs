@@ -42,21 +42,22 @@ impl LiveModelCapabilities {
     }
 }
 
-/// Confirmed provider limits, not an inferred context window or billing policy.
-/// Unknown/unsupported capacity must not be represented as an unlimited zero.
+/// Effective bounds enforced by the prepared adapter/host, not a claim about
+/// the provider model's context window, remote expiry or billing policy.
+/// Zero never means unlimited. Provider capacity may remain unknown separately.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct LiveModelLimits {
+pub struct LiveTransportLimits {
     pub initial_context_bytes: u64,
     pub append_bytes: u64,
-    pub session_duration_ms: u64,
+    pub local_session_duration_ms: u64,
 }
-impl LiveModelLimits {
+impl LiveTransportLimits {
     pub fn validate(&self) -> Result<(), ModelContractError> {
         if [
             self.initial_context_bytes,
             self.append_bytes,
-            self.session_duration_ms,
+            self.local_session_duration_ms,
         ]
         .iter()
         .any(|value| *value == 0 || *value > 9_007_199_254_740_991)
@@ -103,17 +104,17 @@ mod tests {
     }
     #[test]
     fn unknown_limits_are_not_unlimited_and_wire_rejects_provider_fields() {
-        let mut limits = LiveModelLimits {
+        let mut limits = LiveTransportLimits {
             initial_context_bytes: 16_384,
             append_bytes: 500,
-            session_duration_ms: 60_000,
+            local_session_duration_ms: 60_000,
         };
         limits.validate().unwrap();
         limits.append_bytes = 0;
         assert_eq!(limits.validate(), Err(ModelContractError::Bounds));
         limits.append_bytes = u64::MAX;
         assert_eq!(limits.validate(), Err(ModelContractError::Bounds));
-        assert!(serde_json::from_str::<LiveModelLimits>(r#"{"initial_context_bytes":1,"append_bytes":1,"session_duration_ms":1,"token":"not-an-owner-field"}"#).is_err());
+        assert!(serde_json::from_str::<LiveTransportLimits>(r#"{"initial_context_bytes":1,"append_bytes":1,"local_session_duration_ms":1,"token":"not-an-owner-field"}"#).is_err());
     }
 }
 
@@ -123,7 +124,7 @@ pub struct LiveModelPlan {
     pub operation_id: Uuid,
     pub actor: OwnerActor,
     pub capabilities: LiveModelCapabilities,
-    pub limits: LiveModelLimits,
+    pub limits: LiveTransportLimits,
     pub boundary: ProcessingBoundary,
     pub binding_digest: ModelBindingDigest,
     pub selection_commitment: ModelSelectionCommitment,
@@ -142,5 +143,35 @@ impl LiveModelPlan {
             .validate()
             .map_err(|_| floe_kernel::AgentFailure::InvalidInput)?;
         self.selection_commitment.validate()
+    }
+}
+
+/// Bounded provider-facing context text. Authorization/provenance is carried
+/// separately and must never be serialized wholesale to the provider.
+#[derive(Clone, Eq, PartialEq)]
+pub struct LiveContextPayload(String);
+pub const MAX_LIVE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
+impl LiveContextPayload {
+    pub fn new(value: String) -> Result<Self, ModelContractError> {
+        if value.trim().is_empty() {
+            return Err(ModelContractError::Invalid);
+        }
+        if value.len() > MAX_LIVE_CONTEXT_BYTES {
+            return Err(ModelContractError::Bounds);
+        }
+        Ok(Self(value))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+}
+impl std::fmt::Debug for LiveContextPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveContextPayload")
+            .field("bytes", &self.0.len())
+            .finish_non_exhaustive()
     }
 }

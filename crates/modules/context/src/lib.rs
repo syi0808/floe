@@ -21,6 +21,7 @@ mod application {
     pub mod observations;
     pub mod personal_lineage;
     pub mod personal_sources;
+    mod processing_projection;
     pub mod projection;
     pub mod remote_sources;
     pub mod remote_views;

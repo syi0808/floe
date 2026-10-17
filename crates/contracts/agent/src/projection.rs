@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::{
     AgentFailure, AllowedCatalog, ContextEnvelope, DataClass, DependencyCoverage, MAX_OUTPUT_BYTES,
-    ModelConversation, RoleSpec,
+    ModelConversation, RoleSpec, SourceProjectionReview,
 };
 
 /// Canonical host correction for one invalid structured model output.
@@ -140,23 +140,4 @@ impl AuthorizedModelProjection {
 pub enum ModelProjectionOutcome {
     Ready(AuthorizedModelProjection),
     NeedsSourceReview(SourceProjectionReview),
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceProjectionReview {
-    pub projection_operation_id: Uuid,
-    pub target_digest: [u8; 32],
-    pub blockers: floe_context_contract::SourceAccessBlockers,
-}
-
-impl SourceProjectionReview {
-    pub fn validate(&self) -> Result<(), AgentFailure> {
-        if self.projection_operation_id.is_nil() || self.target_digest == [0; 32] {
-            return Err(AgentFailure::InvalidInput);
-        }
-        self.blockers
-            .validate()
-            .map_err(|_| AgentFailure::InvalidInput)
-    }
 }

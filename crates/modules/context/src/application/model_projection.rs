@@ -146,45 +146,13 @@ pub fn assemble_context_projection(
             }
         }
     }
-    let mut blockers = Vec::new();
-    match &coverage {
-        DependencyCoverage::Unknown
-            if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway =>
-        {
-            return Err(AgentFailure::PolicyDenied);
-        }
-        DependencyCoverage::Dependent { dependencies } => {
-            for dependency in dependencies {
-                if dependency.person_id().to_string() != input.plan.principal
-                    || dependency.expires_at() <= chrono::Utc::now()
-                {
-                    return Err(AgentFailure::PolicyDenied);
-                }
-                if dependency.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR {
-                    dependency
-                        .validate_health_transform(&input.plan.device_id, chrono::Utc::now())?;
-                    if !input_data_classes.contains(&DataClass::HighlySensitive) {
-                        return Err(AgentFailure::PolicyDenied);
-                    }
-                }
-                if input.plan.boundary == floe_agent_contract::ProcessingBoundary::Gateway
-                    && !dependency
-                        .processing()
-                        .admits_gateway(dependency.categories())
-                {
-                    let blocker =
-                        floe_context_contract::SourceAccessRequirement::from_processing_dependency(
-                            dependency,
-                        )
-                        .map_err(|_| AgentFailure::InvalidInput)?;
-                    if !blockers.contains(&blocker) {
-                        blockers.push(blocker);
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
+    let blockers = super::processing_projection::source_processing_requirements(
+        &input.plan.principal,
+        &input.plan.device_id,
+        input.plan.boundary,
+        &coverage,
+        &input_data_classes,
+    )?;
     if !blockers.is_empty() {
         use sha2::Digest;
         let blockers = floe_context_contract::SourceAccessBlockers::try_new(blockers)
