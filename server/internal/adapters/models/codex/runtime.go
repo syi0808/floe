@@ -60,17 +60,20 @@ type loginFlow struct {
 }
 
 type Runtime struct {
-	credentialReadError          error
-	credentialGeneration         uint64
-	credentialMutation           bool
-	operation                    sync.Mutex
-	mu                           sync.RWMutex
-	store                        Store
-	client                       *http.Client
-	tokens                       *tokenBundle
-	flow                         *loginFlow
-	authURL, tokenURL, endpoint  string
-	redirectURI, callbackAddress string
+	closed                         bool
+	liveEndpoint, liveSidebandBase string
+	liveCalls                      map[*LiveCall]struct{}
+	credentialReadError            error
+	credentialGeneration           uint64
+	credentialMutation             bool
+	operation                      sync.Mutex
+	mu                             sync.RWMutex
+	store                          Store
+	client                         *http.Client
+	tokens                         *tokenBundle
+	flow                           *loginFlow
+	authURL, tokenURL, endpoint    string
+	redirectURI, callbackAddress   string
 }
 
 func New(store Store) *Runtime {
@@ -83,6 +86,7 @@ func New(store Store) *Runtime {
 		IdleConnTimeout:     30 * time.Second,
 	}
 	return &Runtime{
+		liveEndpoint: codexLiveEndpoint, liveSidebandBase: codexLiveSidebandBase,
 		store: store,
 		client: &http.Client{
 			Transport:     transport,
@@ -585,6 +589,14 @@ func readResponse(reader io.Reader) (string, error) {
 func (runtime *Runtime) Close() {
 	runtime.operation.Lock()
 	defer runtime.operation.Unlock()
+	runtime.mu.Lock()
+	runtime.closed = true
+	calls := runtime.liveCalls
+	runtime.liveCalls = nil
+	runtime.mu.Unlock()
+	for call := range calls {
+		call.CloseLocal()
+	}
 	runtime.cancelLogin()
 }
 
@@ -608,7 +620,12 @@ func (runtime *Runtime) beginCredentialMutation() {
 	runtime.credentialMutation = true
 	runtime.tokens = nil
 	runtime.credentialReadError = unavailable
+	calls := runtime.liveCalls
+	runtime.liveCalls = nil
 	runtime.mu.Unlock()
+	for call := range calls {
+		call.CloseLocal()
+	}
 }
 
 func (runtime *Runtime) endCredentialMutation() {

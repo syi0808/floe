@@ -2849,3 +2849,27 @@ provider acceptance and actual playback. It must connect the prepared Inference
 selection with source revalidation/budget reservation and exact non-repeatable
 start custody. The present journal records ordering/reservation metadata only;
 it does not start or reconstruct a provider transport or settle live usage.
+
+
+### Codex live transport edge in progress
+
+The next concrete adapter now implements source-pinned Codex call creation,
+separate sideband join, preserved final turn IDs, normalized delegation metadata,
+UTF-8 append batching, one-shot writes and explicit local close uncertainty.
+Credential mutation/shutdown fences active and pending transport operations.
+Known call identity is retained after a malformed answer, without enabling media
+or repeating create. No arbitrary Location is followed. The official paid Live
+API is not a fallback and its token-based append limit is not applied to Codex's
+source-verified 500-byte framing.
+
+Local HTTP/WebSocket fixture tests under the race detector pass, as does a shared
+Go/Rust normalized-event fixture. Final qualification pins 798 inputs (613
+Rust/Cargo, 184 Go/module and one shared fixture): workspace/doctests 526 passed,
+App QA 84 passed plus one intentional ignore, Linux FFI built, Go full race tests
+passed in 17 tested packages, go vet and architecture/whitespace checks passed.
+Fourteen focused live-adapter test groups cover the transport edge. All remote
+behavior was a local synthetic HTTP/WebSocket fixture; no actual account or audio
+was used. This is an adapter foundation: live-purpose selection, source/budget fences, per-client Gateway
+control handles and retained delivery, Rust control/Inference ownership and native
+WebRTC/Flutter still need composition. No new public HTTP route is exposed by this
+slice. The existing server credential owner remains the only credential holder.

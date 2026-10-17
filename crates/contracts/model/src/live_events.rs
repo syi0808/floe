@@ -237,6 +237,34 @@ impl fmt::Debug for LiveAppendPayload {
 mod tests {
     use super::*;
     #[test]
+    fn codex_adapter_fixture_decodes_to_neutral_live_values() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/live-model/codex-normalized-events.json"
+        ))
+        .unwrap();
+        for case in cases.as_array().unwrap() {
+            let normalized = &case["normalized"];
+            if normalized.is_null() {
+                continue;
+            }
+            let event: LiveProviderEvent = serde_json::from_value(normalized.clone()).unwrap();
+            event.validate().unwrap();
+            if case["name"] == "partial-is-not-final-id" {
+                assert!(event.durable_key().is_none());
+            }
+            if matches!(event, LiveProviderEvent::DelegationRequested { .. }) {
+                assert!(matches!(
+                    event,
+                    LiveProviderEvent::DelegationRequested {
+                        utterance_ref: None,
+                        ..
+                    }
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn metadata_only_delegation_is_valid_and_does_not_invent_a_user_message() {
         let event = LiveProviderEvent::DelegationRequested {
             delegation_id: "d-1".into(),

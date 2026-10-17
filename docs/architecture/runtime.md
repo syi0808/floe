@@ -1140,3 +1140,27 @@ transport, source revalidation at dispatch, accounting/append settlement and
 Flutter/native call controls remain explicit integration gates. New stored-layout
 families require an explicitly selected fresh development profile; no automatic
 migration, database deletion or key replacement occurs.
+
+
+### Experimental Codex live transport edge
+
+The Go Codex adapter has a credential-generation-bound one-shot call capability,
+initial-context create, separate exact-call sideband attachment, continuous event
+reader and whole-batch append preflight. Provider URL/SDP/headers remain adapter
+values; no bearer is returned to Rust/native. The normalized event fixture is
+shared with the Rust Model contract. Final IDs come from the actual provider turn;
+delegation hints never manufacture utterance references. The adapter has an
+explicit eight-call host resource bound, independent of model context capacity.
+
+Call-create POST and a consumed append batch are never blindly repeated. A known
+call ID survives a malformed answer as uncertain startup custody; a closed or
+revoked call cannot release a usable SDP answer. Append writes and session.close
+writes do not claim provider acceptance, playback, remote termination or usage.
+Credential rotation, logout and shutdown close local sidebands; native capture
+Stop still belongs to the client driver and cannot be inferred from that close.
+
+These transport operations are not exposed through a public Gateway route yet.
+Live Inference selection/source/budget admission, per-client control ownership,
+retained event acknowledgement and Rust/native composition are the remaining
+production gates. The fixture uses local HTTP/WebSocket servers and synthetic
+credentials only; no actual account or microphone qualification is implied.

@@ -2,7 +2,10 @@
 
 The Go Gateway is a single-operator service bound to a literal loopback address. It owns paired-client trust, source integrations, signed read admission/release, and operator-configured inference. Rust owns source-processing permission, model planning and tool execution. No Go Actions or provider-write API is exposed.
 
-The server has no third-party Go dependencies. Run on macOS with Go 1.25+ and Xcode command-line tools for the Security.framework Keychain adapter:
+The server uses the pinned `github.com/coder/websocket` transport for experimental
+Codex live sideband connections. `go.sum` verifies the dependency; initial builds
+need access to the Go module registry or a prepopulated module cache. Run on macOS
+with Go 1.25+ and Xcode command-line tools for the Security.framework Keychain adapter:
 
 ```sh
 cd server
@@ -222,3 +225,34 @@ are refused as `profile_invalid`. Fresh creation keeps
 its `initializing` marker through the first durable Trust identity/token/state write.
 Only then does composition publish Ready. An interrupted bootstrap reports
 `creation_incomplete` and preserves its key and files for deliberate local recovery.
+
+
+## Experimental Codex live transport foundation
+
+The Codex adapter now prepares an account-generation-bound one-shot WebRTC call
+create, then explicitly joins that exact call's sideband. Initial instructions
+and bounded quoted context accompany creation. It never follows a provider
+Location as a destination, retries call creation, returns OAuth credentials, or
+falls back to a paid API. Failed signaling preserves a known call ID as uncertain
+custody while refusing media use. Credential rotation/logout and Runtime close
+fence pending creates and active control sockets.
+
+The bounded continuous reader normalizes final turn IDs and delegation hints;
+raw audio and unsupported provider events are not domain records. A hint is not
+an authoritative utterance reference. Whole append batches are validated before
+UTF-8 framing at the source-verified Codex 500-byte bound. A consumed prepared
+batch is not sent again; transport write completion is neither provider acceptance
+nor playback. Instruction appends fail before sending because no equivalent
+Codex mapping was verified. Local socket close remains remote-termination/usage
+uncertainty; a session.close write is not a provider-final receipt.
+
+This adapter is not exposed by a public Gateway route or the product yet.
+Inference live purpose/selection, source and budget fences, per-client control
+ownership, retained event delivery/acknowledgement, Rust control and native media
+composition remain required. No running account or microphone was used in the
+fixture tests. The paid public GPT-Live API and the experimental Codex subscription
+wire are distinct providers; their event names and limits are not interchangeable.
+
+Protocol references: [pinned Codex call create](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_call.rs),
+[pinned sideband parser](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_websocket/protocol_frameless_bidi.rs),
+and [pinned append framing](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_websocket/methods_frameless_bidi.rs).

@@ -1,0 +1,9 @@
+[
+  {"name":"ready","wire":{"type":"session.started","session":{"id":"synthetic-session"}},"normalized":{"kind":"ready"}},
+  {"name":"partial-is-not-final-id","wire":{"type":"input_transcript.added","item":{"id":"caption-only","text":"partial"}},"normalized":{"kind":"transcript_delta","speaker":"person","text":"partial"}},
+  {"name":"person-final","wire":{"type":"turn.done","turn":{"id":"turn-person","role":"user","transcript":"Synthetic request."}},"normalized":{"kind":"person_utterance_final","utterance_id":"turn-person","text":"Synthetic request."}},
+  {"name":"assistant-final","wire":{"type":"turn.done","turn":{"id":"turn-assistant","role":"assistant","transcript":"Synthetic filler."}},"normalized":{"kind":"assistant_utterance_final","utterance_id":"turn-assistant","text":"Synthetic filler."}},
+  {"name":"hint-does-not-invent-utterance-ref","wire":{"type":"delegation.created","item":{"id":"delegation-a","type":"delegation","target":"client","content":[{"type":"input_text","text":"Synthetic request."}]}},"normalized":{"kind":"delegation_requested","delegation_id":"delegation-a","input_hint":"Synthetic request."}},
+  {"name":"metadata-only","wire":{"type":"delegation.created","item":{"id":"delegation-b","type":"delegation","target":"client"}},"normalized":{"kind":"delegation_requested","delegation_id":"delegation-b"}},
+  {"name":"audio-never-domain","wire":{"type":"output_audio.delta","audio":"synthetic-only"},"normalized":null}
+]
