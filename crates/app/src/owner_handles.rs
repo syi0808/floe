@@ -17,6 +17,7 @@ pub struct ReadyOwners {
     actor: OwnerActor,
     available: AtomicBool,
     pub connections: Arc<floe_connections::ConnectionsService>,
+    pub voice: Arc<floe_voice::VoiceService>,
     pub conversation: Arc<dyn floe_conversation::ConversationOwner>,
     pub experts: Arc<dyn floe_experts::ExpertsOwner>,
     pub knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
@@ -27,6 +28,7 @@ impl ReadyOwners {
         actor: OwnerActor,
         connections: Arc<floe_connections::ConnectionsService>,
         conversation: Arc<dyn floe_conversation::ConversationOwner>,
+        voice: Arc<floe_voice::VoiceService>,
         experts: Arc<dyn floe_experts::ExpertsOwner>,
         knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
         calendar_operations: Arc<floe_calendar_operations::CalendarOperationsService>,
@@ -36,6 +38,7 @@ impl ReadyOwners {
             available: AtomicBool::new(true),
             connections,
             conversation,
+            voice,
             experts,
             knowledge,
             calendar_operations,
@@ -54,12 +57,14 @@ impl ReadyOwners {
     pub(crate) fn close_admission(&self) -> Result<(), AgentFailure> {
         self.available.store(false, Ordering::Release);
         // Every owner is fenced even when a different close hook panics.
+        let voice = close_owner(|| self.voice.close_admission());
         let conversation = close_owner(|| self.conversation.close_admission());
         let experts = close_owner(|| self.experts.close_admission());
         let knowledge = close_owner(|| self.knowledge.close_admission());
         let calendar_operations = close_owner(|| self.calendar_operations.shutdown());
         let connections = close_owner(|| self.connections.shutdown());
-        conversation
+        voice
+            .and(conversation)
             .and(experts)
             .and(knowledge)
             .and(calendar_operations)

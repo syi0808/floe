@@ -312,7 +312,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         }
         Ok(Some(receipt))
     }
-    async fn surface_input_command_on(
+    pub(super) async fn surface_input_command_on(
         &self,
         connection: &Connection,
         command: floe_kernel::CommandId,
@@ -1143,7 +1143,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
 }
 
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    async fn append_surface_input_on(
+    pub(super) async fn append_surface_input_on(
         &self,
         tx: &Connection,
         actor: &OwnerActor,
@@ -1232,7 +1232,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         Ok(())
     }
 
-    async fn submit_surface_work_on(
+    pub(super) async fn submit_surface_work_on(
         &self,
         tx: &Connection,
         actor: &OwnerActor,

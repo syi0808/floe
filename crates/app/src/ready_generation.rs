@@ -232,10 +232,16 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
                 .with_finalization_reserve(1024, 10_000.min(budget.max_cost_micros)),
             },
         )?);
+        let voice = Arc::new(floe_voice::VoiceService::new(
+            actor.clone(),
+            vault.clone(),
+            conversation.clone(),
+        )?);
         let owners = Arc::new(ReadyOwners::new(
             actor.clone(),
             sources.connections.clone(),
             conversation,
+            voice,
             experts.clone(),
             knowledge.clone(),
             calendar_operations,
@@ -296,7 +302,8 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         let close = self.owners.close_admission();
         let gateway = isolate_sync(|| self.core.product_gateway.retire(self.generation));
         let scope = crate::host_scope(operation_id, Cancellation::new(), Duration::from_secs(34));
-        let (conversation, connections, calendar_operations, experts, knowledge) = tokio::join!(
+        let (voice, conversation, connections, calendar_operations, experts, knowledge) = tokio::join!(
+            drain_owner(|| self.owners.voice.shutdown_and_drain(&scope)),
             drain_owner(|| self.owners.conversation.shutdown(&scope)),
             drain_owner(|| self.owners.connections.shutdown_and_drain(&scope)),
             drain_owner(|| self.owners.calendar_operations.shutdown_and_drain(&scope)),
@@ -306,6 +313,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
         self.vault.seal();
         let result = close
             .and(gateway)
+            .and(voice)
             .and(conversation)
             .and(connections)
             .and(calendar_operations)

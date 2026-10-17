@@ -81,6 +81,9 @@ pub struct MessageSnapshot {
 
 /// An object-safe owner handle exposed by a ready Vault generation.
 pub trait ConversationOwner: Send + Sync {
+    /// Wake durable queue discovery after a cross-owner atomic admission.
+    /// This is only a hint: the canonical queue, not this call, grants execution.
+    fn notify_surface_work(&self, actor: &OwnerActor) -> Result<(), AgentFailure>;
     fn read_surface<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -684,6 +687,12 @@ where
     S: SessionStore + Send + Sync + 'static,
     T: floe_experts::TaskRepository + 'static,
 {
+    fn notify_surface_work(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
+        self.inner.check(actor)?;
+        self.inner.recovery_wake.notify_one();
+        Ok(())
+    }
+
     fn read_surface<'a>(
         &'a self,
         actor: &'a OwnerActor,

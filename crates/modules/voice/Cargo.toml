@@ -6,5 +6,14 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-conversation = { path = "../conversation" }
+floe-conversation-contract = { path = "../../contracts/conversation" }
+floe-model-contract = { path = "../../contracts/model" }
+floe-context-contract = { path = "../../contracts/context" }
+floe-execution = { path = "../../runtime/execution" }
+sha2.workspace = true
+serde_json.workspace = true
+serde.workspace = true
 floe-kernel = { path = "../../contracts/kernel" }
 uuid.workspace = true
+tokio.workspace = true

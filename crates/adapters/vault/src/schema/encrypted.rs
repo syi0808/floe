@@ -569,3 +569,18 @@ pub(super) const CONVERSATION_COMPACTION_V1: &[SchemaObject] = &[
         "CREATE INDEX agent_conversation_compactions_recovery_v1 ON agent_conversation_compactions_v1(person_id, state, execution_id)",
     ),
 ];
+
+pub(super) const VOICE: &[SchemaObject] = &[
+    SchemaObject::marker("voice_session_schema", 1,
+        "CREATE TABLE voice_session_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))"),
+    SchemaObject::table("voice_sessions",
+        "CREATE TABLE voice_sessions (voice_session_id TEXT PRIMARY KEY CHECK (length(voice_session_id) = 36), person_id TEXT NOT NULL CHECK (length(person_id) = 36), device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256), surface_session_id TEXT NOT NULL CHECK (length(surface_session_id) = 36), media_lease_id TEXT NOT NULL UNIQUE CHECK (length(media_lease_id) = 36), intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), revision INTEGER NOT NULL CHECK (revision > 0), lease_held INTEGER NOT NULL CHECK (lease_held IN (0,1)), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 65536), FOREIGN KEY (surface_session_id) REFERENCES agent_sessions(id))"),
+    SchemaObject::index("voice_one_local_media_lease",
+        "CREATE UNIQUE INDEX voice_one_local_media_lease ON voice_sessions(person_id, device_id) WHERE lease_held = 1"),
+    SchemaObject::table("voice_session_commands",
+        "CREATE TABLE voice_session_commands (voice_session_id TEXT NOT NULL, command_id TEXT NOT NULL CHECK (length(command_id) = 36), request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), revision INTEGER NOT NULL CHECK (revision >= 2), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 65536), PRIMARY KEY (voice_session_id, command_id), UNIQUE (voice_session_id, revision), FOREIGN KEY (voice_session_id) REFERENCES voice_sessions(voice_session_id))"),
+    SchemaObject::table("voice_events",
+        "CREATE TABLE voice_events (voice_session_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('person_final','assistant_final','delegation')), event_id TEXT NOT NULL CHECK (length(CAST(event_id AS BLOB)) BETWEEN 1 AND 256), sequence INTEGER NOT NULL CHECK (sequence > 0), admitted_revision INTEGER NOT NULL CHECK (admitted_revision > 0), state_digest TEXT NOT NULL CHECK (length(state_digest) = 64), event_digest TEXT NOT NULL CHECK (length(event_digest) = 64), input_command_id TEXT, input_lookup_digest TEXT, work_command_id TEXT, payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 524288), PRIMARY KEY (voice_session_id, kind, event_id), UNIQUE (voice_session_id, sequence), FOREIGN KEY (voice_session_id) REFERENCES voice_sessions(voice_session_id), FOREIGN KEY (input_command_id) REFERENCES agent_surface_entries(command_id), FOREIGN KEY (work_command_id) REFERENCES agent_surface_work(command_id))"),
+    SchemaObject::index("voice_input_lookup",
+        "CREATE INDEX voice_input_lookup ON voice_events(voice_session_id, input_lookup_digest, sequence) WHERE input_lookup_digest IS NOT NULL"),
+];

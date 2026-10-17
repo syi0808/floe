@@ -38,6 +38,7 @@ floe-inference = { path = "../modules/inference" }
 floe-kernel = { path = "../contracts/kernel" }
 floe-knowledge = { path = "../modules/knowledge" }
 floe-provider-adapters = { path = "../adapters/providers" }
+floe-voice = { path = "../modules/voice" }
 floe-vault = { path = "../adapters/vault", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
@@ -51,6 +52,7 @@ uuid.workspace = true
 libc = "0.2.177"
 
 [dev-dependencies]
+floe-model-contract = { path = "../contracts/model" }
 floe-conversation-contract = { path = "../contracts/conversation" }
 tempfile = "3.23.0"
 # The keyring smoke example drives this host against a real Keychain.

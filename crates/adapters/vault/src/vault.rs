@@ -44,6 +44,8 @@ mod owner_transcript_reads;
 mod surface_compaction;
 mod surface_work_page;
 mod surface_projection;
+mod voice_journal;
+mod voice_ingress;
 mod live_result_projection;
 mod run_successors;
 pub(crate) use owner_transcript_reads::ManagerHistoryView;
@@ -116,6 +118,8 @@ pub struct EncryptedAgentVault<Keys> {
     task_executor_generation: AtomicU64,
     #[cfg(test)]
     registry_transaction_ack_loss: AtomicBool,
+    #[cfg(test)]
+    voice_fault_after_state_write: AtomicBool,
     #[cfg(test)]
     conversation_core_ack_loss: AtomicBool,
     #[cfg(test)]
@@ -256,6 +260,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             #[cfg(test)]
             registry_transaction_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
+            voice_fault_after_state_write: AtomicBool::new(false),
+            #[cfg(test)]
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_failure_before_pending: AtomicBool::new(false),
@@ -335,6 +341,8 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             #[cfg(test)]
             registry_transaction_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
+            voice_fault_after_state_write: AtomicBool::new(false),
+            #[cfg(test)]
             conversation_core_ack_loss: AtomicBool::new(false),
             #[cfg(test)]
             conversation_core_failure_before_pending: AtomicBool::new(false),
@@ -392,6 +400,11 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 
     async fn validate_stored_records(&self) -> Result<(), AgentFailure> {
+        self.validate_voice_journal().await.map_err(|failure| match failure {
+            AgentFailure::StorageUnavailable | AgentFailure::InvalidInput
+            | AgentFailure::Conflict | AgentFailure::PolicyDenied | AgentFailure::NotFound => AgentFailure::VaultUnavailable,
+            other => other,
+        })?;
         self.validate_session_records().await?;
         self.validate_run_successor_store().await.map_err(|failure| {
             // Startup rejects corrupt stored lineage as an unavailable Vault;

@@ -143,7 +143,12 @@
       "path": "crates/modules/voice",
       "responsibility": "Live session lifecycle, native intent correlation and presentation ownership; no OS or provider wire",
       "group": "modules",
-      "allowed_internal_dependencies": ["kernel"]
+      "allowed_internal_dependencies": [
+        "conversation",
+        "conversation_contract",
+        "model_contract",
+        "context_contract",
+        "execution","kernel"]
     },
     {
       "id": "inference",
@@ -318,6 +323,8 @@
       "group": "adapters",
       "adapter_note": "context is allowed for implementing Context-defined repository ports only; owning a CoverageRegistry, calling project_coverage, filtering or replaying messages and running Context use cases are not.",
       "allowed_internal_dependencies": [
+        "model_contract",
+        "voice",
         "kernel",
         "agent_contract",
         "context_contract",
@@ -342,6 +349,7 @@
       "responsibility": "Composition root and typed service handles only",
       "group": "composition",
       "allowed_internal_dependencies": [
+        "voice",
         "kernel",
         "agent_contract",
         "context_contract",

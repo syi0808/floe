@@ -1,8 +1,11 @@
 use floe_kernel::{AgentFailure, OwnerActor};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VoiceBinding {
+    #[serde(with = "actor_wire")]
     pub actor: OwnerActor,
     pub surface_session_id: Uuid,
     pub voice_session_id: Uuid,
@@ -26,27 +29,31 @@ impl VoiceBinding {
         Ok(())
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MediaCommandKind {
     PrepareMuted,
     Unmute,
     Mute,
     Stop,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MediaCommand {
     pub binding: VoiceBinding,
     pub generation: u64,
     pub kind: MediaCommandKind,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MediaState {
     Preparing,
     Muted,
     Capturing,
     Stopped,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RemoteState {
     NotStarted,
     Dispatching,
@@ -58,6 +65,8 @@ pub enum RemoteState {
 
 /// One live local media lease. Unknown remote finalization does not become a
 /// claim of local capture, playback, remote usage settlement or zero charge.
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(try_from = "StoredVoiceSession", into = "StoredVoiceSession")]
 pub struct VoiceSession {
     binding: VoiceBinding,
     media: MediaState,
@@ -65,10 +74,151 @@ pub struct VoiceSession {
     command: MediaCommand,
     command_confirmed: bool,
     stop_requested: bool,
+    capture_started: bool,
     input_active: bool,
     output_active: bool,
 }
+// Persistence representation only. Activity is ephemeral and is never restored
+// as evidence that a microphone or speaker is currently active after restart.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredVoiceSession {
+    binding: VoiceBinding,
+    media: MediaState,
+    remote: RemoteState,
+    command: MediaCommand,
+    command_confirmed: bool,
+    stop_requested: bool,
+    capture_started: bool,
+}
+impl From<VoiceSession> for StoredVoiceSession {
+    fn from(value: VoiceSession) -> Self {
+        Self {
+            binding: value.binding,
+            media: value.media,
+            remote: value.remote,
+            command: value.command,
+            command_confirmed: value.command_confirmed,
+            stop_requested: value.stop_requested,
+            capture_started: value.capture_started,
+        }
+    }
+}
+impl TryFrom<StoredVoiceSession> for VoiceSession {
+    type Error = &'static str;
+    fn try_from(value: StoredVoiceSession) -> Result<Self, Self::Error> {
+        let session = Self {
+            binding: value.binding,
+            media: value.media,
+            remote: value.remote,
+            command: value.command,
+            command_confirmed: value.command_confirmed,
+            stop_requested: value.stop_requested,
+            capture_started: value.capture_started,
+            input_active: false,
+            output_active: false,
+        };
+        session
+            .validate()
+            .map_err(|_| "invalid stored voice lifecycle")?;
+        Ok(session)
+    }
+}
+mod actor_wire {
+    use super::*;
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        person_id: floe_kernel::PersonId,
+        device_id: String,
+        runtime_epoch: u64,
+    }
+    pub fn serialize<S: serde::Serializer>(actor: &OwnerActor, s: S) -> Result<S::Ok, S::Error> {
+        Fields {
+            person_id: actor.person_id,
+            device_id: actor.device_id.clone(),
+            runtime_epoch: actor.runtime_epoch,
+        }
+        .serialize(s)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OwnerActor, D::Error> {
+        let fields = Fields::deserialize(d)?;
+        let actor = OwnerActor {
+            person_id: fields.person_id,
+            device_id: fields.device_id,
+            runtime_epoch: fields.runtime_epoch,
+        };
+        actor
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid stored voice actor"))?;
+        Ok(actor)
+    }
+}
 impl VoiceSession {
+    /// Validate reachable persisted policy state, not current native readiness.
+    /// Reopening a valid row never restores permission, an active driver or a
+    /// live media receipt in a different runtime epoch.
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.binding.validate()?;
+        if self.command.binding != self.binding
+            || self.command.generation == 0
+            || (self.stop_requested != (self.command.kind == MediaCommandKind::Stop))
+            || (self.stop_requested
+                && matches!(
+                    self.remote,
+                    RemoteState::Dispatching | RemoteState::Connected
+                ))
+            || (matches!(
+                self.remote,
+                RemoteState::CloseRequested | RemoteState::Closed | RemoteState::Unknown
+            ) && !self.stop_requested)
+            || (self.media == MediaState::Capturing
+                && matches!(
+                    self.remote,
+                    RemoteState::NotStarted | RemoteState::Dispatching
+                ))
+            || (self.media == MediaState::Preparing
+                && (self.command_confirmed
+                    || self.remote != RemoteState::NotStarted
+                    || !matches!(
+                        self.command.kind,
+                        MediaCommandKind::PrepareMuted | MediaCommandKind::Stop
+                    )))
+            || (self.media == MediaState::Stopped
+                && (!self.stop_requested || !self.command_confirmed))
+            || (self.command.kind == MediaCommandKind::PrepareMuted && self.command.generation != 1)
+            || (self.command.kind == MediaCommandKind::Unmute
+                && (self.remote != RemoteState::Connected || self.stop_requested))
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if self.command_confirmed {
+            let expected = match self.command.kind {
+                MediaCommandKind::PrepareMuted | MediaCommandKind::Mute => MediaState::Muted,
+                MediaCommandKind::Unmute => MediaState::Capturing,
+                MediaCommandKind::Stop => MediaState::Stopped,
+            };
+            if self.media != expected {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
+        if (self.media == MediaState::Capturing && !self.capture_started)
+            || (self.capture_started
+                && matches!(
+                    self.remote,
+                    RemoteState::NotStarted | RemoteState::Dispatching
+                ))
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if (self.input_active && self.media != MediaState::Capturing)
+            || (self.output_active
+                && matches!(self.media, MediaState::Preparing | MediaState::Stopped))
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
     pub fn new(binding: VoiceBinding) -> Result<Self, AgentFailure> {
         binding.validate()?;
         let command = MediaCommand {
@@ -83,6 +233,7 @@ impl VoiceSession {
             command,
             command_confirmed: false,
             stop_requested: false,
+            capture_started: false,
             input_active: false,
             output_active: false,
         })
@@ -108,11 +259,20 @@ impl VoiceSession {
     pub fn local_lease_released(&self) -> bool {
         self.media == MediaState::Stopped && self.command_confirmed
     }
+    pub fn capture_started(&self) -> bool {
+        self.capture_started
+    }
+
+    pub(crate) fn command_generation(&self) -> u64 {
+        self.command.generation
+    }
+
     pub fn stop_requested(&self) -> bool {
         self.stop_requested
     }
 
     fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
+        self.validate()?;
         actor.validate()?;
         if actor != &self.binding.actor {
             return Err(AgentFailure::PolicyDenied);
@@ -143,6 +303,7 @@ impl VoiceSession {
         command: &MediaCommand,
         state: MediaState,
     ) -> Result<(), AgentFailure> {
+        self.validate()?;
         if command != &self.command {
             return Err(AgentFailure::Conflict);
         }
@@ -155,6 +316,9 @@ impl VoiceSession {
             return Err(AgentFailure::Conflict);
         }
         self.media = state;
+        if state == MediaState::Capturing {
+            self.capture_started = true;
+        }
         self.command_confirmed = true;
         if state != MediaState::Capturing {
             self.input_active = false;
@@ -179,6 +343,7 @@ impl VoiceSession {
         Ok(())
     }
     pub fn observe_remote_ready(&mut self, binding: &VoiceBinding) -> Result<(), AgentFailure> {
+        self.validate()?;
         if binding != &self.binding
             || self.stop_requested
             || !matches!(
@@ -241,6 +406,7 @@ impl VoiceSession {
         binding: &VoiceBinding,
         confirmed: bool,
     ) -> Result<MediaCommand, AgentFailure> {
+        self.validate()?;
         if binding != &self.binding || self.remote == RemoteState::NotStarted {
             return Err(AgentFailure::Conflict);
         }
@@ -263,6 +429,7 @@ impl VoiceSession {
         input: bool,
         output: bool,
     ) -> Result<(), AgentFailure> {
+        self.validate()?;
         if binding != &self.binding
             || self.local_lease_released()
             || self.remote != RemoteState::Connected
@@ -448,5 +615,71 @@ mod tests {
             s.observe_activity(&s.binding.clone(), false, true),
             Err(AgentFailure::Conflict)
         );
+    }
+    fn roundtrip(value: &VoiceSession) -> VoiceSession {
+        value.validate().unwrap();
+        let json = serde_json::to_value(value).unwrap();
+        assert!(json.get("input_active").is_none() && json.get("output_active").is_none());
+        let restored: VoiceSession = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.binding, value.binding);
+        assert_eq!(restored.media, value.media);
+        assert_eq!(restored.remote, value.remote);
+        assert_eq!(restored.command, value.command);
+        assert_eq!(restored.command_confirmed, value.command_confirmed);
+        assert_eq!(restored.stop_requested, value.stop_requested);
+        assert!(!restored.input_active && !restored.output_active);
+        restored
+    }
+    #[test]
+    fn stored_lifecycle_preserves_stop_uncertainty_without_restoring_activity_or_new_epoch_authority()
+     {
+        let mut s = session();
+        roundtrip(&s);
+        connect(&mut s);
+        roundtrip(&s);
+        let actor = s.binding.actor.clone();
+        let unmute = s.request_unmute(&actor).unwrap();
+        roundtrip(&s);
+        s.observe_media(&unmute, MediaState::Capturing).unwrap();
+        s.observe_activity(&s.binding.clone(), true, true).unwrap();
+        roundtrip(&s);
+        let stop = s.observe_remote_end(&s.binding.clone(), false).unwrap();
+        let mut pending = roundtrip(&s);
+        assert!(!pending.local_lease_released());
+        assert_eq!(pending.media(), MediaState::Capturing);
+        let mut next_epoch = actor.clone();
+        next_epoch.runtime_epoch += 1;
+        assert_eq!(
+            pending.request_unmute(&next_epoch),
+            Err(AgentFailure::PolicyDenied)
+        );
+        pending.observe_media(&stop, MediaState::Stopped).unwrap();
+        let stopped = roundtrip(&pending);
+        assert!(stopped.local_lease_released());
+        assert_eq!(stopped.remote(), RemoteState::Unknown);
+    }
+    #[test]
+    fn malformed_persisted_lifecycle_cannot_claim_capture_stop_or_foreign_command_receipts() {
+        let original = serde_json::to_value(session()).unwrap();
+        for variation in 0..8 {
+            let mut altered = original.clone();
+            match variation {
+                0 => altered["media"] = serde_json::json!("capturing"),
+                1 => altered["remote"] = serde_json::json!("connected"),
+                2 => altered["stop_requested"] = serde_json::json!(true),
+                3 => altered["command"]["generation"] = serde_json::json!(0),
+                4 => {
+                    altered["command"]["binding"]["actor"]["person_id"] =
+                        serde_json::json!(PersonId::new())
+                }
+                5 => altered["command"]["generation"] = serde_json::json!(2),
+                6 => altered["media"] = serde_json::json!("stopped"),
+                _ => altered["input_active"] = serde_json::json!(true),
+            }
+            assert!(
+                serde_json::from_value::<VoiceSession>(altered).is_err(),
+                "malformed variation {variation}"
+            );
+        }
     }
 }

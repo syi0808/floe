@@ -1074,6 +1074,23 @@ its existing bounded `generate` path. No production live dispatch/runtime path
 is present yet; its current implementation sequence belongs to the active plan.
 
 
+### Context preparation for live presentation
+
+Context owns separate live startup-prefix and canonical-result readers. Vault
+verifies Surface anchors, publication/Run bindings and existing semantic
+checkpoints in one Deferred snapshot. Startup uses actual Surface identities and
+can represent an empty prefix without inventing a current generation turn.
+The Work reader retains its protected-input checkpoint constraint.
+
+Startup Context reports incomplete/over-budget history as a compaction requirement,
+not a silently truncated ready payload. It distinguishes summaries from speech,
+applies current derived-history coverage authorization and keeps internal source
+proof apart from provider-facing text. Result projection point-reads the original
+published body/completeness and cannot substitute a UI cache or a newer active
+Run. Source-processing review is shared with generation; prepared live context is
+not dispatch, microphone, playback or action authority. Live-host compaction and
+provider/media composition remain execution-plan work.
+
 ### Voice local-media versus remote-finalization state
 
 The Voice lifecycle policy tracks one exact Person/device/epoch/conversation/
@@ -1085,5 +1102,41 @@ activity can coexist. A remote end/loss records a stop intent without pretending
 that the local microphone has already stopped. Only the exact native Stop receipt
 releases the local lease. Remote Unknown remains distinct from Closed; neither
 implies playback or final usage/zero cost. There is no Manager cancellation in
-this lifecycle module. This pure policy currently has no production App/native/
-control driver or encrypted journal; the active plan owns that integration work.
+this lifecycle module.
+
+The encrypted Vault now stores the Voice-owned call intent, validated lifecycle,
+immutable command receipts and normalized final-event custody. A unique live
+Person/device lease is released only by the exact native Stop receipt; unknown
+remote closure does not block a new confirmed-local-safe call. New runtime epochs
+may retire an old lease (Stop, Stop acknowledgement, remote-end observation), but
+cannot revive capture or dispatch. Persisted activity flags are not restored.
+Call reservation metadata is not a live usage ledger or proof of provider billing.
+
+Final Person events atomically compose Voice custody with Conversation's existing
+Surface admission. Delegations bind to an already settled explicit utterance, or
+an exact unique normalized hint match within that call at admission time. Missing
+or ambiguous hints remain clarification outcomes, not fabricated User inputs.
+One canonical Work per input is reused by delegation aliases. Work is anchored to
+the bound input prefix, never a later current head. The existing Conversation
+8 KiB input bound is preserved: rejected larger/control-invalid text is retained
+as a rejected Voice event without silent truncation. Partial captions remain
+outside the durable journal; Assistant finals remain Voice presentation custody,
+not Manager answers or new User messages. Queue-full decisions are immutable;
+a new delegation identity can request admission after capacity becomes available.
+
+Stop allows late received finals to drain but blocks new Manager Work. Already
+admitted Work remains readable and executable; explicit ingress closure ends new
+event admission. Exact event replay remains read-only. Startup validates paged
+command/event history against each event's original lifecycle revision and
+canonical Conversation receipts, without imposing a lifetime event-count cap.
+
+App composes one VoiceService with the same Conversation owner and encrypted
+Vault. It retains bounded custody tasks independently of caller observation
+scope, then wakes canonical Work discovery after actual storage completion.
+Retirement fences new custody and drains the owned tasks. These are storage and
+queue lifetimes, not a provider reader, native media driver, or permission grant.
+Actual native privacy Stop must occur independently of storage latency. Live
+transport, source revalidation at dispatch, accounting/append settlement and
+Flutter/native call controls remain explicit integration gates. New stored-layout
+families require an explicitly selected fresh development profile; no automatic
+migration, database deletion or key replacement occurs.

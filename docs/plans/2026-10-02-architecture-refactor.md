@@ -2788,3 +2788,64 @@ credentials inherited. This is a server regression check, not a live-provider
 or audio test. Flutter, native audio and Apple behavior were not rerun here.
 Live-host compaction scheduling, provider startup, durable Voice event/delivery
 custody and native/App composition remain pending.
+
+### Next durable Voice owner slice
+
+The next target is one Voice-owned journal in the encrypted Vault, not a second
+Conversation/Core or provider wire store. Voice owns call lifecycle, native-lease
+custody and normalized event/delegation correlation. Conversation still owns
+Surface input and Work; Inference still owns selected planning and live source
+processing fences. The physical adapter may atomically compose these owners'
+existing admission functions, as other cross-owner Vault transactions do.
+
+- Persist immutable actor/epoch/Surface/media-lease/plan/context binding before
+  provider handoff. Only a fresh Dispatching transition may consume a prepared
+  transport; replay and restart cannot create another remote call.
+- Retain the existing VoiceSession as the single lifecycle policy. Its storage
+  representation validates reachable state and exact native command identity.
+  Reopening state does not restore microphone permission or a live driver.
+  Input/output activity remains ephemeral and is not restored as current fact.
+- Native Stop confirmation releases only the local lease. Remote uncertainty and
+  unknown usage remain separate durable facts. The unfinished reader may drain
+  already received events into custody without becoming permission for new work
+  after a stop request. Host/native recovery must fence a different runtime epoch.
+- Final Person utterances retain their exact voice-session/provider identity;
+  changed duplicates conflict. Original input custody uses Conversation Surface,
+  with no fabricated Core turn or provider hint promoted to User text.
+- Delegation correlates to an exact admitted input. Ambiguous/missing hints need
+  clarification. Repeated delegation of the same settled input rejoins its
+  existing Manager Work rather than executing the whole utterance twice.
+- Partial captions and raw audio stay outside the durable domain journal.
+  Provider acceptance, actual playback, interruption and unknown delivery remain
+  distinct. Source-processing and external-action reviews retain their owners.
+
+The bounded first gate is fake provider/native behavior through the real encrypted
+Voice/Conversation owners: exact replay, changed/foreign identity, concurrent
+input during Manager work, rollback/lost ACK, Busy, reopen, stopping and preserved
+Manager Work. Stored-layout additions require a same-snapshot fresh explicit test
+profile; no existing profile/key is reset or migrated automatically.
+
+The lifecycle storage consumer and event admission now exist in the encrypted
+Vault. Eighteen physical journal/ingress tests pass, including cleanup-only
+new-epoch recovery and historical event replay. Ten pure lifecycle tests pass.
+VoiceService and App composition now retain custody independently of observation
+cancellation and notify the existing Conversation owner after storage finishes.
+Two real App integration tests pass: the same Manager FIFO completes admitted
+Voice Work after hangup while new input remains possible; caller cancellation
+does not abandon owned custody, and retirement waits for it. Duplicate/alias
+delegations never create another Run.
+
+The final same-source gate covers 613 Rust/Cargo inputs: workspace tests and
+doctests 525 passed; App QA 84 passed with one intentional ignored process-kill
+case; Linux FFI built; architecture boundaries passed with 27 nodes/153 edges;
+whitespace checks passed. These are synthetic owner/transport tests, not real
+microphone, WebRTC, account or Apple qualification. Go and Flutter source was not
+changed in this slice. No existing profile or key was reset. Actual live media,
+provider start, append delivery and usage settlement remain unfinished.
+
+The next transport slice must keep native privacy Stop independent of DB writes,
+retain one provider reader across UI timeouts, and distinguish append write,
+provider acceptance and actual playback. It must connect the prepared Inference
+selection with source revalidation/budget reservation and exact non-repeatable
+start custody. The present journal records ordering/reservation metadata only;
+it does not start or reconstruct a provider transport or settle live usage.

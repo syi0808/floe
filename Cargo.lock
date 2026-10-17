@@ -723,8 +723,10 @@ dependencies = [
  "floe-inference",
  "floe-kernel",
  "floe-knowledge",
+ "floe-model-contract",
  "floe-provider-adapters",
  "floe-vault",
+ "floe-voice",
  "keyring-core",
  "libc",
  "serde",
@@ -1095,6 +1097,7 @@ dependencies = [
  "floe-kernel",
  "floe-knowledge",
  "floe-model-contract",
+ "floe-voice",
  "getrandom 0.3.4",
  "keyring-core",
  "libc",
@@ -1114,7 +1117,16 @@ dependencies = [
 name = "floe-voice"
 version = "0.1.0"
 dependencies = [
+ "floe-context-contract",
+ "floe-conversation",
+ "floe-conversation-contract",
+ "floe-execution",
  "floe-kernel",
+ "floe-model-contract",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
  "uuid",
 ]
 

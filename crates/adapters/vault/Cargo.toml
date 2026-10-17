@@ -12,6 +12,8 @@ development-storage = []
 qa-fixtures = ["development-storage"]
 
 [dependencies]
+floe-model-contract = { path = "../../contracts/model" }
+floe-voice = { path = "../../modules/voice" }
 base64 = "0.22.1"
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 chrono.workspace = true
@@ -43,7 +45,6 @@ uuid.workspace = true
 zeroize = "1.9.0"
 
 [dev-dependencies]
-floe-model-contract = { path = "../../contracts/model" }
 floe-agent-runtime = { path = "../../runtime/agent" }
 floe-experts-builtin = { path = "../../experts/builtin" }
 

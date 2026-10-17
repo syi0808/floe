@@ -3825,3 +3825,6 @@ fn typed_work_admission_queues_during_execution_and_cancels_only_pending_work() 
     assert_eq!(assert_script_clean(&recorder).generated.len(), 2);
     assert!(query_work(third.command_id).current_run_id.is_none());
 }
+
+#[path = "support/voice_work.rs"]
+mod voice_work;
