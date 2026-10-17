@@ -1324,6 +1324,18 @@ async fn surface_checkpoint_preserves_old_work_prefix_and_archive_after_lost_ack
         .submit_surface_work(&f.actor, work(selected))
         .await
         .unwrap();
+    let live_source = floe_context_contract::LiveProjectionSource::SurfacePrefix {
+        through: work.anchor,
+    };
+    let before_summary =
+        floe_context::LivePrefixReader::read_live_prefix(&vault, &f.actor, &live_source)
+            .await
+            .unwrap();
+    assert!(
+        !before_summary.complete,
+        "a bounded suffix is not a complete voice startup context"
+    );
+    assert_eq!(before_summary.messages.len(), 128);
     let execution = execution(&f, &work, &selected.input.text, 0);
     vault
         .claim_manager_surface_work(
@@ -1428,6 +1440,22 @@ async fn surface_checkpoint_preserves_old_work_prefix_and_archive_after_lost_ack
     writer.rollback().await.unwrap();
     drop(unrelated);
 
+    let live = floe_context::LivePrefixReader::read_live_prefix(&vault, &f.actor, &live_source)
+        .await
+        .unwrap();
+    assert!(live.complete);
+    assert_eq!(live.messages.len(), 35);
+    assert_eq!(live.summary_message_id, Some(receipt.summary.message_id));
+    assert_eq!(live.messages[0], receipt.summary);
+    assert_eq!(
+        live.messages.last().unwrap().message_id,
+        selected.input.message_id.as_uuid()
+    );
+    assert!(
+        !serde_json::to_string(&live.messages)
+            .unwrap()
+            .contains("FUTURE_AFTER_ADMITTED_COMPACTION")
+    );
     let (history, incomplete) = vault
         .surface_model_history_for_work(&work, execution.command_id.as_uuid())
         .await
@@ -2361,6 +2389,13 @@ async fn live_result_point_read_preserves_exact_publication_scope_and_reopen() {
     use floe_context::LiveResultReader;
     use floe_context_contract::LiveProjectionSource;
     let (f, vault) = fixture().await;
+    let empty_source = floe_context_contract::LiveProjectionSource::SurfacePrefix {
+        through: vault.surface_head(&f.actor, f.session).await.unwrap(),
+    };
+    let empty = floe_context::LivePrefixReader::read_live_prefix(&vault, &f.actor, &empty_source)
+        .await
+        .unwrap();
+    assert!(empty.complete && empty.messages.is_empty() && empty.summary_message_id.is_none());
     vault.activate_conversation_executor().await.unwrap();
     let input = vault
         .append_surface_input(&f.actor, request(&f, &vault, "voice work").await)
@@ -2394,6 +2429,20 @@ async fn live_result_point_read_preserves_exact_publication_scope_and_reopen() {
         through,
         surface_message_id: message_id,
     };
+    let prefix_source = floe_context_contract::LiveProjectionSource::SurfacePrefix { through };
+    let prefix = floe_context::LivePrefixReader::read_live_prefix(&vault, &f.actor, &prefix_source)
+        .await
+        .unwrap();
+    assert!(prefix.complete);
+    assert_eq!(prefix.messages.len(), 2);
+    assert_eq!(
+        prefix.messages.last().unwrap().message_id,
+        message_id.as_uuid()
+    );
+    assert_ne!(
+        prefix.messages.last().unwrap().message_id,
+        run.run_id.as_uuid()
+    );
     let result = vault.read_live_result(&f.actor, &source).await.unwrap();
     assert_eq!(result.text, "Synthetic surface result");
     assert!(!result.partial);
@@ -2428,6 +2477,31 @@ async fn live_result_point_read_preserves_exact_publication_scope_and_reopen() {
         floe_kernel::TraceContext::new(Uuid::new_v4()),
     );
     let voice_session_id = Uuid::new_v4();
+    for (source, expected_messages) in [(&empty_source, 0), (&prefix_source, 2)] {
+        let floe_context::LiveProjectionOutcome::Ready(startup) =
+            floe_context::prepare_live_prefix_projection(
+                &vault,
+                floe_context::LivePrefixProjectionRequest {
+                    plan: &plan,
+                    voice_session_id,
+                    surface_session_id: f.session,
+                    projection_id: Uuid::new_v4(),
+                    source,
+                    instructions: "Synthetic trusted live presentation instructions",
+                },
+                &scope,
+                |_| async { panic!("Independent prefix has no source dependency") },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("ready startup prefix")
+        };
+        let body: serde_json::Value = serde_json::from_str(startup.payload.as_str()).unwrap();
+        assert_eq!(body["history"].as_array().unwrap().len(), expected_messages);
+        assert_eq!(&startup.source, source);
+        assert!(!startup.payload.as_str().contains(&run.run_id.to_string()));
+    }
     let floe_context::LiveProjectionOutcome::Ready(projection) =
         floe_context::prepare_live_result_projection(
             &vault,

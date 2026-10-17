@@ -14,6 +14,7 @@ mod application {
     pub mod history;
     pub mod learner_projection;
     pub mod leases;
+    pub mod live_prefix;
     pub mod live_projection;
     pub mod model_coverage;
     pub mod model_projection;
@@ -44,6 +45,7 @@ mod ports {
     pub mod day_context_evidence;
     pub mod evidence_reader;
     pub mod expert_execution;
+    pub mod live_prefix;
     pub mod live_result;
     pub mod personal_source;
     pub mod source_metadata;
@@ -179,3 +181,7 @@ pub use ports::live_result::{LiveResultReader, LiveResultSnapshot};
 pub use application::live_projection::{
     LiveProjectionOutcome, LiveResultProjectionRequest, prepare_live_result_projection,
 };
+
+pub use ports::live_prefix::{LivePrefixReader, LivePrefixSnapshot};
+
+pub use application::live_prefix::{LivePrefixProjectionRequest, prepare_live_prefix_projection};

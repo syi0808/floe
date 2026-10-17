@@ -25,6 +25,11 @@ pub struct LiveResultProjectionRequest<'a> {
 pub enum LiveProjectionOutcome {
     Ready(LiveContextProjection),
     NeedsSourceReview(SourceProjectionReview),
+    /// No bounded suffix is sent as if it were a complete startup history.
+    NeedsCompaction {
+        source: LiveProjectionSource,
+        max_payload_bytes: u64,
+    },
 }
 
 /// `authorize` is the current Context source resolver, with the same error
@@ -61,15 +66,7 @@ where
             if snapshot.coverage == DependencyCoverage::Unknown {
                 return Err(AgentFailure::PolicyDenied);
             }
-            let mut classes = vec![DataClass::Personal];
-            if let DependencyCoverage::Dependent { dependencies } = &snapshot.coverage {
-                if dependencies
-                    .iter()
-                    .any(|d| d.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR)
-                {
-                    classes.push(DataClass::HighlySensitive);
-                }
-            }
+            let classes = live_coverage_classes(&snapshot.coverage);
             // Serialize only presentable content. Internal actor/Run/Source proof,
             // provider credentials and tool execution frames never enter this text.
             let payload = LiveContextPayload::new(
@@ -103,22 +100,7 @@ where
                 request.voice_session_id,
                 request.surface_session_id,
             )?;
-            let blockers = super::processing_projection::source_processing_requirements(
-                &request.plan.actor.person_id.to_string(),
-                &request.plan.actor.device_id,
-                request.plan.boundary,
-                &projection.coverage,
-                &projection.input_data_classes,
-            )?;
-            if !blockers.is_empty() {
-                let blockers = SourceAccessBlockers::try_new(blockers)
-                    .map_err(|_| AgentFailure::InvalidInput)?;
-                let review = SourceProjectionReview {
-                    projection_operation_id: request.projection_id,
-                    target_digest: projection.digest()?,
-                    blockers,
-                };
-                review.validate()?;
+            if let Some(review) = review_live_processing(request.plan, &projection)? {
                 return Ok(LiveProjectionOutcome::NeedsSourceReview(review));
             }
             let admitted = project_coverage(&projection.coverage, &mut authorize).await?;
@@ -128,6 +110,42 @@ where
             Ok(LiveProjectionOutcome::Ready(projection))
         })
         .await
+}
+
+pub(super) fn live_coverage_classes(coverage: &DependencyCoverage) -> Vec<DataClass> {
+    let mut classes = vec![DataClass::Personal];
+    if let DependencyCoverage::Dependent { dependencies } = coverage {
+        if dependencies
+            .iter()
+            .any(|d| d.source().connector().as_str() == floe_access::WELLBEING_CONNECTOR)
+        {
+            classes.push(DataClass::HighlySensitive);
+        }
+    }
+    classes
+}
+pub(super) fn review_live_processing(
+    plan: &LiveModelPlan,
+    projection: &LiveContextProjection,
+) -> Result<Option<SourceProjectionReview>, AgentFailure> {
+    let blockers = super::processing_projection::source_processing_requirements(
+        &plan.actor.person_id.to_string(),
+        &plan.actor.device_id,
+        plan.boundary,
+        &projection.coverage,
+        &projection.input_data_classes,
+    )?;
+    if blockers.is_empty() {
+        return Ok(None);
+    }
+    let review = SourceProjectionReview {
+        projection_operation_id: projection.projection_id,
+        target_digest: projection.digest()?,
+        blockers: SourceAccessBlockers::try_new(blockers)
+            .map_err(|_| AgentFailure::InvalidInput)?,
+    };
+    review.validate()?;
+    Ok(Some(review))
 }
 
 #[cfg(test)]

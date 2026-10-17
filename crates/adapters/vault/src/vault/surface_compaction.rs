@@ -342,7 +342,24 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         head: SurfaceAnchor,
         protected_input: SurfaceAnchor,
     ) -> Result<Option<(SurfaceCheckpointRef, AgentMessage)>, AgentFailure> {
-        let mut rows = connection.query("SELECT execution_id, through_sequence, through_digest FROM agent_surface_checkpoints WHERE person_id = ? AND session_id = ? AND through_sequence < ? AND through_sequence <= ? ORDER BY through_sequence DESC LIMIT 1", (self.person_id.to_string(), head.session_id.to_string(), protected_input.sequence as i64, head.sequence as i64)).await.map_err(database_failure)?;
+        self.latest_surface_checkpoint_through_on(
+            connection,
+            head,
+            head.sequence
+                .min(protected_input.sequence.saturating_sub(1)),
+        )
+        .await
+    }
+    async fn latest_surface_checkpoint_through_on(
+        &self,
+        connection: &Connection,
+        head: SurfaceAnchor,
+        maximum_sequence: u64,
+    ) -> Result<Option<(SurfaceCheckpointRef, AgentMessage)>, AgentFailure> {
+        if maximum_sequence > head.sequence {
+            return Err(AgentFailure::InvalidInput);
+        }
+        let mut rows = connection.query("SELECT execution_id, through_sequence, through_digest FROM agent_surface_checkpoints WHERE person_id = ? AND session_id = ? AND through_sequence <= ? ORDER BY through_sequence DESC LIMIT 1", (self.person_id.to_string(), head.session_id.to_string(), maximum_sequence as i64)).await.map_err(database_failure)?;
         let Some(row) = rows.next().await.map_err(database_failure)? else {
             return Ok(None);
         };
@@ -371,6 +388,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         };
         Ok(Some((reference, receipt.summary)))
     }
+
     pub(super) async fn prepare_surface_compaction_source_on(
         &self,
         connection: &Connection,
@@ -625,5 +643,62 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         tx.commit().await.map_err(database_failure)?;
         self.check_access()?;
         Ok((messages, incomplete))
+    }
+}
+
+impl<Keys: VaultKeyProvider> floe_context::LivePrefixReader for EncryptedAgentVault<Keys> {
+    fn read_live_prefix<'a>(
+        &'a self,
+        actor: &'a floe_kernel::OwnerActor,
+        source: &'a floe_context_contract::LiveProjectionSource,
+    ) -> floe_execution::BoxFuture<'a, Result<floe_context::LivePrefixSnapshot, AgentFailure>> {
+        Box::pin(async move {
+            actor.validate()?;
+            source.validate()?;
+            let floe_context_contract::LiveProjectionSource::SurfacePrefix { through } = source
+            else {
+                return Err(AgentFailure::InvalidInput);
+            };
+            let mut connection = self.connection()?;
+            let tx = connection
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .await
+                .map_err(database_failure)?;
+            self.surface_session_on(&tx, actor, through.session_id)
+                .await?;
+            self.surface_anchor_on(&tx, *through).await?;
+            let checkpoint = self
+                .latest_surface_checkpoint_through_on(&tx, *through, through.sequence)
+                .await?;
+            let start = checkpoint
+                .as_ref()
+                .map_or(0, |(reference, _)| reference.through.sequence);
+            let limit =
+                floe_conversation::MAX_SURFACE_PAGE_ITEMS - usize::from(checkpoint.is_some());
+            let after = start.max(through.sequence.saturating_sub(limit as u64));
+            let mut messages = Vec::new();
+            let summary_message_id = checkpoint.as_ref().map(|(_, summary)| summary.message_id);
+            if let Some((_, summary)) = checkpoint {
+                messages.push(summary);
+            }
+            let entries = self.surface_entries_on(&tx, *through, after, limit).await?;
+            for entry in entries {
+                let mut message = self.surface_message_on(&tx, &entry).await?;
+                // The actual Surface identity, not a substituted Core Run ID.
+                message.message_id = entry.message_id().as_uuid();
+                messages.push(message);
+            }
+            let snapshot = floe_context::LivePrefixSnapshot {
+                person_id: actor.person_id,
+                source: source.clone(),
+                messages,
+                summary_message_id,
+                complete: after == start,
+            };
+            snapshot.validate_for(actor, source)?;
+            tx.commit().await.map_err(database_failure)?;
+            self.check_access()?;
+            Ok(snapshot)
+        })
     }
 }

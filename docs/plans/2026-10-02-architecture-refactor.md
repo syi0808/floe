@@ -2740,3 +2740,51 @@ removed. This qualifies the canonical live-result projection and the two local
 admission-contention corrections. Voice startup-prefix projection, durable live
 event/delivery custody, provider/native transport and actual Apple/audio QA remain
 open. No Flutter/Go/native source, persisted schema or existing profile changed.
+
+### Live startup-prefix Context preparation (in progress)
+
+Live startup now has a separate canonical prefix reader. It verifies the exact
+Surface anchor in one Deferred snapshot, reuses only a verified existing semantic
+checkpoint within that prefix, and preserves actual Surface message identities.
+It never fabricates a current User/Core turn to satisfy generation-only types.
+The original Work reader retains its protected-input checkpoint constraint; the
+shared lookup now accepts an explicit maximum checkpoint sequence.
+
+A bounded read explicitly reports an incomplete prefix. Context returns a typed
+NeedsCompaction outcome for incompleteness or payload pressure, rather than
+silently sending a suffix. An empty original prefix is valid and stays empty,
+even after later conversation activity. A trusted role-owner instruction frame
+that cannot fit the selected adapter/host startup byte limit fails capacity
+rather than requesting impossible history compaction.
+
+The startup payload distinguishes user, assistant, status and summary text,
+keeps source proof/identities separate, and reports omitted unknown or currently
+unauthorized derived blocks. Existing source coverage projection and processing
+review policy are shared with other Context paths. Original archived/product
+history is not mutated; this path does not acquire new saved memories.
+
+Focused tests cover empty history, bounded/oversized input, host byte pressure,
+unknown derived text, summary labeling, malformed/foreign snapshots and the
+existing result-projection checks. Real encrypted fixtures also exercise a
+130-entry prefix before/after checkpoint installation and reopen, excluding a
+later input and preserving the original Surface identity. The startup Context
+path is being joined to the real reader in the result fixture. Aggregate gates
+are pending. NeedsCompaction is a preparation requirement, not an implementation
+of the pending live-host compaction scheduling, provider start or media path.
+
+#### Startup-prefix slice qualification
+
+The exact 606 Rust/Cargo input snapshot passes workspace 505 tests including
+doctests, App QA 82 passed plus one intentional process-kill driver ignore,
+production Linux FFI and architecture boundaries (27 nodes, 145 edges). The
+real encrypted fixture now drives both the empty original prefix and a published
+User/result prefix through Context startup projection. Checkpoint reopen and
+late-input exclusion pass in the aggregate suite too. No assertions were relaxed.
+
+The cloud Go compiler was restored from the official Go 1.27.2 Linux archive,
+with its release-list SHA-256 verified. The unchanged server passes go test ./...
+(17 tested packages) under an isolated environment/cache with no account
+credentials inherited. This is a server regression check, not a live-provider
+or audio test. Flutter, native audio and Apple behavior were not rerun here.
+Live-host compaction scheduling, provider startup, durable Voice event/delivery
+custody and native/App composition remain pending.

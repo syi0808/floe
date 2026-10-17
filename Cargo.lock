@@ -787,6 +787,7 @@ dependencies = [
  "floe-agent-contract",
  "floe-connections",
  "floe-context-contract",
+ "floe-conversation-contract",
  "floe-day",
  "floe-execution",
  "floe-experts",
