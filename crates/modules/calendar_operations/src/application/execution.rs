@@ -128,7 +128,14 @@ impl CalendarOperationsService {
         let mut delay = Duration::from_millis(20);
         loop {
             match self.drive_once(id, scope).await {
-                Ok(()) => return Ok(()),
+                Ok(None) => return Ok(()),
+                Ok(Some(pending)) => {
+                    // A received outcome must not be replaced by another provider
+                    // lookup merely because its local custody was busy.
+                    return self
+                        .settle(&pending.intent, pending.revision, pending.outcome, scope)
+                        .await;
+                }
                 Err(AgentFailure::StorageBusy) => {
                     // Observe the durable fence before deciding whether another
                     // preflight is allowed. A Busy read proves neither absence
@@ -203,17 +210,27 @@ impl CalendarOperationsService {
         }
     }
 
-    async fn drive_once(&self, id: Uuid, scope: &ExecutionScope) -> Result<(), AgentFailure> {
+    async fn drive_once(
+        &self,
+        id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<Option<PendingSettlement>, AgentFailure> {
         let actor = &self.actor;
         let record = self.record(actor, id).await?;
         if record.state != ActionState::Approved {
-            return Ok(());
+            return Ok(None);
         }
         if self.closed.load(Ordering::Acquire) || scope.cancellation().is_cancelled() {
-            return self.stop(&record, PreDispatchState::Cancelled).await;
+            return self
+                .stop(&record, PreDispatchState::Cancelled)
+                .await
+                .map(|_| None);
         }
         if self.clock.now() >= record.expires_at {
-            return self.stop(&record, PreDispatchState::Expired).await;
+            return self
+                .stop(&record, PreDispatchState::Expired)
+                .await
+                .map(|_| None);
         }
         if Instant::now() >= scope.deadline() {
             return self
@@ -223,7 +240,8 @@ impl CalendarOperationsService {
                         reason: ActionBlockedReason::ExecutorUnavailable,
                     },
                 )
-                .await;
+                .await
+                .map(|_| None);
         }
         let dependencies = match self.prepare_dependency_sources(actor, &record, scope).await {
             Ok(value) => value,
@@ -236,7 +254,8 @@ impl CalendarOperationsService {
                             reason: ActionBlockedReason::SourceChanged,
                         },
                     )
-                    .await;
+                    .await
+                    .map(|_| None);
             }
         };
         let source = match self.observe_source(actor, &record.effect).await {
@@ -250,7 +269,8 @@ impl CalendarOperationsService {
                             reason: ActionBlockedReason::SourceChanged,
                         },
                     )
-                    .await;
+                    .await
+                    .map(|_| None);
             }
         };
         let events = match self.current_events(actor, &record.effect, scope).await {
@@ -264,7 +284,8 @@ impl CalendarOperationsService {
                             reason: ActionBlockedReason::SourceChanged,
                         },
                     )
-                    .await;
+                    .await
+                    .map(|_| None);
             }
         };
         let prepared = match self
@@ -276,11 +297,15 @@ impl CalendarOperationsService {
             Err(reason) => {
                 return self
                     .stop(&record, PreDispatchState::Blocked { reason })
-                    .await;
+                    .await
+                    .map(|_| None);
             }
         };
         if self.closed.load(Ordering::Acquire) || scope.cancellation().is_cancelled() {
-            return self.stop(&record, PreDispatchState::Cancelled).await;
+            return self
+                .stop(&record, PreDispatchState::Cancelled)
+                .await
+                .map(|_| None);
         }
         if Instant::now() >= scope.deadline() {
             return self
@@ -290,7 +315,8 @@ impl CalendarOperationsService {
                         reason: ActionBlockedReason::ExecutorUnavailable,
                     },
                 )
-                .await;
+                .await
+                .map(|_| None);
         }
         let unchanged_source = observation_matches(
             self.observe_source(actor, &record.effect).await,
@@ -308,7 +334,10 @@ impl CalendarOperationsService {
         // These asynchronous observations may overlap shutdown or expiry.
         // Fence the actual owner/job again before durable dispatch admission.
         if self.closed.load(Ordering::Acquire) || scope.cancellation().is_cancelled() {
-            return self.stop(&record, PreDispatchState::Cancelled).await;
+            return self
+                .stop(&record, PreDispatchState::Cancelled)
+                .await
+                .map(|_| None);
         }
         if Instant::now() >= scope.deadline() {
             return self
@@ -318,7 +347,8 @@ impl CalendarOperationsService {
                         reason: ActionBlockedReason::ExecutorUnavailable,
                     },
                 )
-                .await;
+                .await
+                .map(|_| None);
         }
         if !unchanged_source || !unchanged_events || !unchanged_dependencies {
             return self
@@ -328,10 +358,14 @@ impl CalendarOperationsService {
                         reason: ActionBlockedReason::SourceChanged,
                     },
                 )
-                .await;
+                .await
+                .map(|_| None);
         }
         if self.clock.now() >= record.expires_at {
-            return self.stop(&record, PreDispatchState::Expired).await;
+            return self
+                .stop(&record, PreDispatchState::Expired)
+                .await
+                .map(|_| None);
         }
         #[cfg(feature = "qa-fixtures")]
         if self
@@ -362,12 +396,16 @@ impl CalendarOperationsService {
             })
             .await?;
         if !admission.dispatch_required {
-            return Ok(());
+            return Ok(None);
         }
         let intent = admission.intent.clone();
         let revision = admission.record_revision;
         let outcome = prepared.dispatch(admission, scope.clone()).await;
-        self.settle(&intent, revision, outcome, scope).await
+        Ok(Some(PendingSettlement {
+            intent,
+            revision,
+            outcome,
+        }))
     }
 
     /// A worker error is reconciled against the durable operation state before
@@ -473,21 +511,81 @@ impl CalendarOperationsService {
                 reason: ActionUnknownReason::InvalidReceipt,
             }
         };
-        let record = self
-            .repository
-            .settle_execution(ExecutionSettlement {
-                person_id: intent.person_id,
-                execution_id: intent.execution_id,
-                effect_digest: intent.effect_digest,
-                expected_revision: revision,
-                outcome,
-            })
-            .await?;
+        let settlement = ExecutionSettlement {
+            person_id: intent.person_id,
+            execution_id: intent.execution_id,
+            effect_digest: intent.effect_digest,
+            expected_revision: revision,
+            outcome,
+        };
+        let record = self.persist_known_settlement(settlement, scope).await?;
         if matches!(record.state, ActionState::Succeeded { .. }) {
             self.collect(&record, scope).await?;
         }
         Ok(())
     }
+    async fn persist_known_settlement(
+        &self,
+        settlement: ExecutionSettlement,
+        scope: &ExecutionScope,
+    ) -> Result<ActionRecord, AgentFailure> {
+        // Keep the already observed receipt for this owner's existing bounded
+        // lifetime. Only local Busy is retried; no scope/deadline is extended.
+        let mut delay = Duration::from_millis(20);
+        loop {
+            match self.settle_receipt_once(settlement.clone()).await {
+                Ok(record) => return Ok(record),
+                Err(CalendarOperationStoreError::StorageBusy) => {
+                    if self.closed.load(Ordering::Acquire)
+                        || scope.cancellation().is_cancelled()
+                        || Instant::now() >= scope.deadline()
+                    {
+                        return Err(AgentFailure::StorageBusy);
+                    }
+                    let wake = (Instant::now() + delay).min(scope.deadline());
+                    tokio::select! {
+                        biased;
+                        _ = scope.cancellation().cancelled() => return Err(AgentFailure::StorageBusy),
+                        _ = tokio::time::sleep_until(wake) => {},
+                    }
+                    if Instant::now() >= scope.deadline() {
+                        return Err(AgentFailure::StorageBusy);
+                    }
+                    delay = (delay * 2).min(Duration::from_millis(100));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    async fn settle_receipt_once(
+        &self,
+        settlement: ExecutionSettlement,
+    ) -> Result<ActionRecord, CalendarOperationStoreError> {
+        #[cfg(feature = "qa-fixtures")]
+        self.receipt_settlement_attempts
+            .fetch_add(1, Ordering::AcqRel);
+        #[cfg(feature = "qa-fixtures")]
+        if self
+            .busy_receipt_settlements
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(CalendarOperationStoreError::StorageBusy);
+        }
+        let record = self.repository.settle_execution(settlement).await?;
+        #[cfg(feature = "qa-fixtures")]
+        if self
+            .lose_receipt_settlement_ack
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(CalendarOperationStoreError::StorageBusy);
+        }
+        Ok(record)
+    }
+
     async fn collect(
         &self,
         record: &ActionRecord,
@@ -572,6 +670,13 @@ impl CalendarOperationsService {
             .await?;
         Ok(())
     }
+}
+
+/// A received external outcome has a separate local custody phase.
+struct PendingSettlement {
+    intent: ExecutionIntent,
+    revision: u64,
+    outcome: CalendarEffectOutcome,
 }
 
 struct ActionJobLease {

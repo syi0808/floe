@@ -2491,3 +2491,75 @@ journal, Context live projection, App composition or Apple bundle is qualified.
 The foundation is neutral model identity/capability/selection plus pure Voice
 lifecycle policy. Next integrate Context and exact encrypted startup/event
 custody before exposing a provider start or microphone command in the product.
+
+### Calendar known-outcome custody follow-up (in progress)
+
+The earlier intermittent-storage item is separate from the fixed Conversation
+Resume admission regression. A root-run App/Conversation/Calendar/Vault fixture
+now reproduces a concrete receipt-loss path: after the synthetic provider returns
+Committed, injecting one local settlement StorageBusy produces Unknown /
+NativeReceiptUnavailable. The driver discarded its already-known outcome and
+entered external receipt lookup. The original failure log is retained; no test
+wait or production deadline was increased to make it pass.
+
+The driver now separates pre-dispatch errors from a received outcome. Once a
+provider returns, only the exact immutable local settlement is retried on Busy,
+with bounded backoff inside the existing owner scope/cancellation. Non-Busy errors
+are not retried, and custody failure cannot fall back into preflight or provider
+lookup. Explicit later recovery of genuinely unresolved persisted intent retains
+its existing semantics. Shutdown leaves uncertainty rather than fabricating
+success, cancellation or absence of an external effect.
+
+Three real App/Vault-backed synthetic-provider regressions pass: transient local
+Busy without lookup; a lost local commit ACK followed by exact replay and Day
+collection; and sustained Busy interrupted by owner shutdown with one external
+fixture effect and no lookup/redispatch. The known-receipt retry remains scoped,
+not an infinite task. A separate encrypted-store test is being added for exact
+settlement replay while an unrelated writer is held, including reopen, later
+collection revision and changed/foreign request rejection. Whole-snapshot gates
+remain pending. No real Calendar account or Apple-native effect was exercised.
+
+- The physical encrypted-store regression also failed before correction:
+  replaying an already committed settlement while another writer was held
+  returned StorageBusy. Settlement now follows the existing two-phase receipt
+  pattern: read/validate exact custody first, then recheck under the writer only
+  for a genuinely missing receipt. The test passes after encrypted reopen and
+  later Day collection, and rejects changed outcome/foreign Person while the
+  writer remains held. No schema, key, wire, permission or deadline changes.
+- An executor restart interrupted the first attempted store test; it had no
+  terminal result. Files/toolchains survived and were checked before resuming.
+  A default-feature filtered command selected zero tests because these fixtures
+  require development-storage; it is not counted as a pass. The corrected
+  no-default-features/qa-fixtures command selected one test and reproduced then
+  passed the exact failure. Compiler concurrency is now one as a resource
+  precaution; no OOM diagnosis, profile/RUSTFLAGS change or timeout relaxation
+  is claimed. Full final gates are pending on the now-frozen corrected source.
+
+
+### Calendar known-outcome custody qualification
+
+The corrected frozen snapshot passes:
+
+- `CARGO_INCREMENTAL=0 cargo test -p floe-vault --no-default-features --features
+  qa-fixtures --lib vault::calendar_operations_store::admission_tests`: 10 passed,
+  including physical writer contention, exact positive/negative custody, changed
+  request rejection, and encrypted reopen. This is the selected store suite,
+  not a claim that all 235 feature-gated Vault tests were executed.
+- `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`: 483 passed,
+  including doctests, 0 failed.
+- `CARGO_INCREMENTAL=0 cargo test -p floe-app --no-default-features --features
+  qa-fixtures --tests --no-fail-fast`: 79 passed, 0 failed, one intentional
+  process-kill driver ignore. All three new received-outcome regressions pass
+  in the aggregate run as well as the focused run.
+- Production Linux `cargo build -p floe-ffi`, architecture boundaries (27 nodes,
+  142 edges) and whitespace checks pass. Changed code is formatted; the edited
+  store function was formatted without churning unrelated existing code.
+
+This closes the two reproduced local-contention defects: loss of an already-known
+Calendar outcome through provider re-lookup, and writer contention during exact
+settlement receipt replay. It does not certify every possible Storage error,
+real native Calendar behavior, or the user's historical reset/run-local failure.
+No Flutter/Go/native source changed or new platform/provider run was performed.
+Voice startup/event custody, Context live projection and native/control/App
+composition remain the next separate work; this correction preserves known
+results for those future asynchronous flows too.

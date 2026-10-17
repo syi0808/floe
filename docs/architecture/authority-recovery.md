@@ -325,6 +325,24 @@ never writes a negative receipt from contention. Already-known admission remains
 admitted. A Busy observation does not retire the Vault; semantic Conflict and
 commit/rollback uncertainty retain their separate recovery behavior.
 
+Calendar Operations separates failures before an external outcome from local
+custody after an outcome is received. A known provider receipt is retained as one
+immutable ExecutionSettlement; only local StorageBusy is retried with bounded
+backoff under the existing owner scope and cancellation. No new authority or
+extended deadline is created. A local settlement failure cannot re-enter external
+receipt lookup or dispatch and replace the known outcome with weaker evidence.
+Later explicit/startup recovery of genuinely unresolved durable intent remains
+separate. If storage never becomes available before shutdown/deadline, uncertainty
+is preserved rather than reporting success, cancellation or non-execution.
+
+Exact Calendar settlement replay uses a Deferred snapshot to validate Person,
+execution/revision key, effect digest and complete outcome digest before returning
+the current canonical operation. It requires no writer, even after collection
+advances the operation revision. Proven receipt absence releases that snapshot
+and repeats all proof/CAS checks in the ordinary Immediate transaction before a
+new write. Changed/foreign replay cannot become a fresh settlement. Commit or
+rollback uncertainty retains the existing Vault retirement/recovery semantics.
+
 Connections product-record insertion first observes exact positive/negative
 command custody in one Deferred snapshot, validating stored metadata and payload
 before returning an existing publication. Fresh insertion repeats that proof

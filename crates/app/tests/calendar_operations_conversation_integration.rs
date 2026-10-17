@@ -59,14 +59,22 @@ mod qa {
         };
         let result = support::exact_recovery::observe_exact_request_sync(
             request,
-            |exact| host.request(Uuid::new_v4())
-                .expect("observe exact Conversation policy command")
-                .product_command(exact),
-            |failure| matches!(
-                failure.disposition,
-                ProductCommandDisposition::Admitted | ProductCommandDisposition::Indeterminate
-            ) && matches!(failure.failure, ProductFailure::Conversation(AgentFailure::StorageBusy)),
-        ).expect("update Access operation policy through Conversation");
+            |exact| {
+                host.request(Uuid::new_v4())
+                    .expect("observe exact Conversation policy command")
+                    .product_command(exact)
+            },
+            |failure| {
+                matches!(
+                    failure.disposition,
+                    ProductCommandDisposition::Admitted | ProductCommandDisposition::Indeterminate
+                ) && matches!(
+                    failure.failure,
+                    ProductFailure::Conversation(AgentFailure::StorageBusy)
+                )
+            },
+        )
+        .expect("update Access operation policy through Conversation");
         let ProductCommandOutcome::Conversation(
             ConversationCommandOutcome::CalendarOperationPolicy(updated),
         ) = result
@@ -74,7 +82,11 @@ mod qa {
             panic!("Conversation returned a different policy command result")
         };
         assert_eq!(updated.calendar_create, mode);
-        assert_eq!(updated.revision, policy.revision + 1, "exact response recovery must not apply the policy twice");
+        assert_eq!(
+            updated.revision,
+            policy.revision + 1,
+            "exact response recovery must not apply the policy twice"
+        );
     }
 
     fn prepare_scenario(mode: OperationPolicyMode, script: CalendarExecutorScript) -> Scenario {
@@ -719,6 +731,146 @@ mod qa {
             }
         ));
         assert_eq!(stale_source.executor.snapshot().dispatch_attempts, 0);
+    }
+
+    #[test]
+    fn known_provider_receipt_retries_local_contention_without_external_lookup() {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        support::with_ready(&scenario.host, |_, _, owners| {
+            owners
+                .calendar_operations
+                .qa_busy_next_receipt_settlements(1);
+        });
+        let interaction = scenario.proposal.interaction.as_ref().unwrap();
+        decide(
+            &scenario.host,
+            scenario.session_id,
+            interaction,
+            floe_conversation::InteractionDecisionKind::Approve,
+            interaction.target_digest,
+        )
+        .expect("approve the exact reviewed operation");
+        let settled = wait_for_status(
+            &scenario.host,
+            scenario.proposal.operation.action_ref,
+            |status| {
+                matches!(
+                    status,
+                    floe_calendar_operations::ActionStatus::Succeeded { .. }
+                )
+            },
+        );
+        assert!(matches!(
+            settled.status,
+            floe_calendar_operations::ActionStatus::Succeeded { .. }
+        ));
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(
+            effects.lookups, 0,
+            "local receipt contention must not discard the known provider receipt and replace it with lookup"
+        );
+    }
+
+    #[test]
+    fn known_provider_receipt_replays_a_lost_local_commit_ack_without_lookup() {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            owners
+                .calendar_operations
+                .qa_lose_next_receipt_settlement_ack();
+            owners.calendar_operations.clone()
+        });
+        let interaction = scenario.proposal.interaction.as_ref().unwrap();
+        decide(
+            &scenario.host,
+            scenario.session_id,
+            interaction,
+            floe_conversation::InteractionDecisionKind::Approve,
+            interaction.target_digest,
+        )
+        .expect("approve the exact reviewed operation");
+        // Success may be visible before the lost-ACK retry completes, so wait
+        // for the exact replay attempt, then observe the final stored receipt.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while owner.qa_receipt_settlement_attempts() < 2 {
+            assert!(Instant::now() < deadline, "lost local ACK was not retried");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let settled = wait_for_status(
+            &scenario.host,
+            scenario.proposal.operation.action_ref,
+            |status| {
+                matches!(
+                    status,
+                    floe_calendar_operations::ActionStatus::Succeeded {
+                        collection: floe_calendar_operations::ActionCollectionStatus::Collected
+                    }
+                )
+            },
+        );
+        assert!(matches!(
+            settled.status,
+            floe_calendar_operations::ActionStatus::Succeeded {
+                collection: floe_calendar_operations::ActionCollectionStatus::Collected
+            }
+        ));
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(effects.lookups, 0);
+    }
+
+    #[test]
+    fn known_provider_receipt_contention_shutdown_never_enters_provider_recovery() {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            owners
+                .calendar_operations
+                .qa_busy_next_receipt_settlements(255);
+            owners.calendar_operations.clone()
+        });
+        let interaction = scenario.proposal.interaction.as_ref().unwrap();
+        decide(
+            &scenario.host,
+            scenario.session_id,
+            interaction,
+            floe_conversation::InteractionDecisionKind::Approve,
+            interaction.target_digest,
+        )
+        .expect("approve the exact reviewed operation");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while owner.qa_receipt_settlement_attempts() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "known outcome never reached local custody retry"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        support::with_ready(&scenario.host, |services, _, _| {
+            let owner = owner.clone();
+            services.execute_owner(async move {
+                let scope = floe_app::host_scope(
+                    Uuid::new_v4(),
+                    floe_execution::Cancellation::new(),
+                    Duration::from_secs(2),
+                );
+                owner.shutdown_and_drain(&scope).await
+            })
+        })
+        .expect("local retry must promptly honor owner shutdown");
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(
+            effects.lookups, 0,
+            "known receipt failure cannot fall into external recovery"
+        );
+        assert!(
+            owner.qa_receipt_settlement_attempts() < 255,
+            "the Busy fixture was not exhausted into synthetic success"
+        );
     }
 
     #[test]

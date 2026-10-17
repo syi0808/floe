@@ -43,6 +43,12 @@ pub struct CalendarOperationsService {
     lose_next_access_decision_ack: Arc<AtomicBool>,
     #[cfg(feature = "qa-fixtures")]
     pub(super) busy_dispatch_admissions: Arc<AtomicU8>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) busy_receipt_settlements: Arc<AtomicU8>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) lose_receipt_settlement_ack: Arc<AtomicBool>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) receipt_settlement_attempts: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CalendarOperationsService {
@@ -67,7 +73,31 @@ impl CalendarOperationsService {
             lose_next_access_decision_ack: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "qa-fixtures")]
             busy_dispatch_admissions: Arc::new(AtomicU8::new(0)),
+            #[cfg(feature = "qa-fixtures")]
+            busy_receipt_settlements: Arc::new(AtomicU8::new(0)),
+            #[cfg(feature = "qa-fixtures")]
+            lose_receipt_settlement_ack: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "qa-fixtures")]
+            receipt_settlement_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
+    }
+
+    /// Synthetic local contention after a provider outcome is already known.
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_busy_next_receipt_settlements(&self, count: u8) {
+        self.busy_receipt_settlements
+            .store(count, Ordering::Release);
+    }
+
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_lose_next_receipt_settlement_ack(&self) {
+        self.lose_receipt_settlement_ack
+            .store(true, Ordering::Release);
+    }
+
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_receipt_settlement_attempts(&self) -> usize {
+        self.receipt_settlement_attempts.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "qa-fixtures")]
@@ -79,7 +109,8 @@ impl CalendarOperationsService {
     /// Synthetic pre-CAS contention only; never injects after external dispatch.
     #[cfg(feature = "qa-fixtures")]
     pub fn qa_busy_next_dispatch_admissions(&self, count: u8) {
-        self.busy_dispatch_admissions.store(count, Ordering::Release);
+        self.busy_dispatch_admissions
+            .store(count, Ordering::Release);
     }
 
     /// Serialize Calendar Operations command families by the shared immutable

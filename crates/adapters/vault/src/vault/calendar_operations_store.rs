@@ -2066,58 +2066,74 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         settlement: ExecutionSettlement,
     ) -> Result<ActionRecord, CalendarOperationStoreError> {
         let mut connection = self.connection().map_err(access_error)?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .await
-            .map_err(sql_error)?;
-        let result = async {
-            self.ensure_actions_schema(&transaction).await?;
-            if settlement.person_id != self.person_id {
-                return Err(CalendarOperationStoreError::NotFound);
-            }
-            let outcome_digest = command_digest(b"floe.actions.settlement.v1\0", &settlement)?;
-            if let Some(receipt) = self
-                .settlement_receipt(
-                    &transaction,
-                    self.person_id,
-                    settlement.execution_id,
-                    settlement.expected_revision,
-                )
-                .await?
-            {
-                if receipt.effect_digest != digest_hex(&settlement.effect_digest)
-                    || receipt.outcome_digest != digest_hex(&outcome_digest)
+        // A known settlement is an immutable receipt lookup. Do not compete
+        // with another writer merely to acknowledge an already committed fact.
+        // Absence in this read is not admission: recheck under the normal writer.
+        for read_only in [true, false] {
+            let behavior = if read_only {
+                TransactionBehavior::Deferred
+            } else {
+                TransactionBehavior::Immediate
+            };
+            let transaction = connection
+                .transaction_with_behavior(behavior)
+                .await
+                .map_err(sql_error)?;
+            let result = async {
+                self.ensure_actions_schema(&transaction).await?;
+                if settlement.person_id != self.person_id {
+                    return Err(CalendarOperationStoreError::NotFound);
+                }
+                let outcome_digest = command_digest(b"floe.actions.settlement.v1\0", &settlement)?;
+                if let Some(receipt) = self
+                    .settlement_receipt(
+                        &transaction,
+                        self.person_id,
+                        settlement.execution_id,
+                        settlement.expected_revision,
+                    )
+                    .await?
                 {
+                    if receipt.effect_digest != digest_hex(&settlement.effect_digest)
+                        || receipt.outcome_digest != digest_hex(&outcome_digest)
+                    {
+                        return Err(CalendarOperationStoreError::Conflict);
+                    }
+                    let action_id = parse_canonical_uuid(&receipt.action_id)?;
+                    let current = self
+                        .action_by_id(&transaction, self.person_id, action_id)
+                        .await?
+                        .ok_or(CalendarOperationStoreError::CorruptRecord)?;
+                    if current.record.execution_id != settlement.execution_id
+                        || current.record.effect_digest != settlement.effect_digest
+                    {
+                        return Err(CalendarOperationStoreError::CorruptRecord);
+                    }
+                    return Ok(Some(current.record));
+                }
+                if read_only {
+                    return Ok(None);
+                }
+                let current = self
+                    .action_by_execution(&transaction, self.person_id, settlement.execution_id)
+                    .await?
+                    .ok_or(CalendarOperationStoreError::NotFound)?;
+                if current.record.effect_digest != settlement.effect_digest {
                     return Err(CalendarOperationStoreError::Conflict);
                 }
-                let action_id = parse_canonical_uuid(&receipt.action_id)?;
-                let current = self
-                    .action_by_id(&transaction, self.person_id, action_id)
-                    .await?
-                    .ok_or(CalendarOperationStoreError::CorruptRecord)?;
-                if current.record.execution_id != settlement.execution_id
-                    || current.record.effect_digest != settlement.effect_digest
-                {
-                    return Err(CalendarOperationStoreError::CorruptRecord);
-                }
-                return Ok(current.record);
+                let next = settle_action(&current.record, &settlement).map_err(invalid_record)?;
+                self.update_action(&transaction, &current, &next, current.dispatch_revision)
+                    .await?;
+                self.insert_settlement_receipt(&transaction, &settlement, next.id, &outcome_digest)
+                    .await?;
+                Ok(Some(next))
             }
-            let current = self
-                .action_by_execution(&transaction, self.person_id, settlement.execution_id)
-                .await?
-                .ok_or(CalendarOperationStoreError::NotFound)?;
-            if current.record.effect_digest != settlement.effect_digest {
-                return Err(CalendarOperationStoreError::Conflict);
+            .await;
+            if let Some(record) = self.finish_actions_transaction(transaction, result).await? {
+                return Ok(record);
             }
-            let next = settle_action(&current.record, &settlement).map_err(invalid_record)?;
-            self.update_action(&transaction, &current, &next, current.dispatch_revision)
-                .await?;
-            self.insert_settlement_receipt(&transaction, &settlement, next.id, &outcome_digest)
-                .await?;
-            Ok(next)
         }
-        .await;
-        self.finish_actions_transaction(transaction, result).await
+        Err(CalendarOperationStoreError::Unavailable)
     }
 
     pub(crate) async fn actions_pending_recovery(

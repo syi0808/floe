@@ -640,3 +640,113 @@ async fn reconciliation_read_replay_validates_identity_digest_and_reopens() {
         record
     );
 }
+
+#[tokio::test]
+async fn known_calendar_settlement_replay_is_read_only_and_survives_reopen() {
+    let root = Root::new();
+    let keys = Keys::default();
+    let person = PersonId::new();
+    let vault = create(&root, person, &keys).await;
+    let record = uncertain_operation(&vault, person).await;
+    let intent = record.execution.as_ref().unwrap();
+    let CalendarEffect::Create {
+        title, schedule, ..
+    } = &intent.effect
+    else {
+        unreachable!()
+    };
+    let receipt = CalendarEffectReceipt {
+        identity: intent.identity(),
+        effect: CommittedCalendarEffect::Created {
+            event: CalendarWriteResult {
+                external_id: "synthetic-settlement-event".into(),
+                external_revision: floe_day::CalendarExternalRevision::ObservationFingerprint(
+                    [9; 32],
+                ),
+                title: title.clone(),
+                schedule: schedule.clone(),
+                can_modify: true,
+            },
+        },
+        evidence: CalendarReceiptEvidence::NativeAcknowledgement {
+            host_epoch: Uuid::new_v4(),
+            receipt_id: Uuid::new_v4(),
+        },
+        committed_at: Utc::now(),
+    };
+    receipt.validate_for(intent).unwrap();
+    let settlement = ExecutionSettlement {
+        person_id: person,
+        execution_id: record.execution_id,
+        effect_digest: record.effect_digest,
+        expected_revision: record.revision,
+        outcome: CalendarEffectOutcome::Committed { receipt },
+    };
+    let first = vault
+        .actions_settle_execution(settlement.clone())
+        .await
+        .unwrap();
+    let ticket = first.collection.as_ref().unwrap();
+    vault
+        .actions_ack_collection(CollectionAck {
+            person_id: person,
+            execution_id: record.execution_id,
+            receipt_digest: ticket.receipt_digest,
+            expected_ticket_revision: ticket.revision,
+            day_projection_ref: "synthetic-day-projection".into(),
+        })
+        .await
+        .unwrap();
+    let current = vault
+        .actions_settle_execution(settlement.clone())
+        .await
+        .unwrap();
+    assert!(current.revision > first.revision);
+    assert!(matches!(
+        current.state,
+        ActionState::Succeeded {
+            collection: ActionCollectionState::Collected { .. },
+            ..
+        }
+    ));
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&root.0, person, keys)
+        .await
+        .unwrap();
+    let mut connection = vault.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let replay = vault.actions_settle_execution(settlement.clone()).await;
+    writer.rollback().await.unwrap();
+    assert_eq!(
+        replay.expect("a committed receipt replay must not reserve the writer"),
+        current
+    );
+
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let mut changed = settlement.clone();
+    let CalendarEffectOutcome::Committed { receipt } = &mut changed.outcome else {
+        unreachable!()
+    };
+    receipt.committed_at += Duration::milliseconds(1);
+    assert_eq!(
+        vault.actions_settle_execution(changed).await,
+        Err(CalendarOperationStoreError::Conflict)
+    );
+    let mut foreign = settlement.clone();
+    foreign.person_id = PersonId::new();
+    assert_eq!(
+        vault.actions_settle_execution(foreign).await,
+        Err(CalendarOperationStoreError::NotFound)
+    );
+    writer.rollback().await.unwrap();
+    assert_eq!(
+        vault.actions_settle_execution(settlement).await.unwrap(),
+        current
+    );
+}
