@@ -2929,3 +2929,33 @@ Linux FFI built, dependency validation passed (27 nodes, 154 edges), and
 whitespace checks passed. The delayed-read regression failed before the fix
 (zero writes) and passes afterward with exactly one retained receipt. This does
 not qualify actual audio, native permissions or a provider account.
+
+
+### Generation-owned Voice driver registration
+
+The next controller prerequisite uses VoiceService's existing bounded owned-task
+set, with one active registration per exact saved Voice binding. Registration
+precedes invocation of the driver future and validates that the call has not
+started/stopped/settled. A borrowed, non-cloneable controller capability retains
+only exact-call accounting plus its child cancellation and identity; it does not
+reopen public admission after retirement or expose storage. The shared settlement
+function remains the single read/compare/mutate path. Driver return/drop fences
+its child lifetime and failed finalization remains visible to shutdown even when
+the observer is gone. Pending custody lock acquisition observes owner retirement.
+
+Focused fixtures cover duplicate/foreign registration, observer cancellation,
+late known usage after retirement, shutdown waiting for delayed custody, native
+Stop separation and failure visibility across repeated drain. The earlier
+already-admitted usage regression remains in the suite. Final qualification on
+622 frozen Rust/Cargo/architecture-tool inputs passes: workspace/doctests 542,
+App QA 88 plus one intentional ignore, Linux FFI, boundaries (27 nodes, 154 edges)
+and whitespace checks. Driver exit explicitly drops registration before reporting
+completion; the final gate was rerun after this ordering change. No concrete
+provider reader, append driver, Gateway route or native microphone has been added
+by this prerequisite.
+
+For cumulative live append, do not use a merged Unknown coverage to erase prior
+known dependency obligations: Device-local calls permit Unknown coverage, but
+must still revalidate all previously transmitted known sources and memory
+revisions. Conflicting revisions or exhausted provenance capacity must end or
+restart the call explicitly rather than silently dropping earlier obligations.

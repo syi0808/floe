@@ -24,4 +24,4 @@ pub use ingress::{
 };
 
 mod service;
-pub use service::{VoiceIngressResult, VoiceService};
+pub use service::{VoiceController, VoiceIngressResult, VoiceService};

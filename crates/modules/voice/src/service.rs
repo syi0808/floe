@@ -32,6 +32,8 @@ pub struct VoiceService {
     closing: AtomicBool,
     shutdown: Cancellation,
     tasks: Mutex<JoinSet<()>>,
+    controllers: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+    controller_failure: Arc<AtomicBool>,
 }
 #[derive(Clone, Debug)]
 pub struct VoiceIngressResult {
@@ -54,6 +56,8 @@ impl VoiceService {
             closing: AtomicBool::new(false),
             shutdown: Cancellation::new(),
             tasks: Mutex::new(JoinSet::new()),
+            controllers: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            controller_failure: Arc::new(AtomicBool::new(false)),
         })
     }
     fn check(&self, actor: &OwnerActor) -> Result<(), AgentFailure> {
@@ -74,7 +78,13 @@ impl VoiceService {
     ) -> Result<T, CommandFailure<AgentFailure>> {
         self.check(actor).map_err(CommandFailure::NotAdmitted)?;
         let mut tasks = scope
-            .run(async { Ok(self.tasks.lock().await) })
+            .run(async {
+                tokio::select! {
+                    biased;
+                    _ = self.shutdown.cancelled() => Err(AgentFailure::VaultUnavailable),
+                    tasks = self.tasks.lock() => Ok(tasks),
+                }
+            })
             .await
             .map_err(CommandFailure::NotAdmitted)?;
         self.check(actor).map_err(CommandFailure::NotAdmitted)?;
@@ -186,32 +196,65 @@ impl VoiceService {
         // leaving during the first read must not discard a known terminal bill,
         // and retirement must drain this task before sealing the journal.
         self.custody(actor, scope, async move {
-            let record = journal
-                .read_call(&owner, voice)
-                .await
-                .map_err(CommandFailure::Indeterminate)?
-                .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
-            if record.intent.binding.plan_id != receipt.attempt_id {
-                return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
-            }
-            if let Some(saved) = record.usage {
-                return if saved == receipt {
-                    Ok(saved)
-                } else {
-                    Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
-                };
-            }
-            let request = VoiceMutation {
-                voice_session_id: voice,
-                command_id: Uuid::new_v5(&voice, b"floe.voice.usage-settlement"),
-                expected_revision: record.revision,
-                kind: crate::VoiceMutationKind::SettleUsage { receipt },
-            };
-            let admission = journal.mutate(&owner, request).await?;
-            admission
-                .record
-                .usage
-                .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+            settle_usage(journal.as_ref(), &owner, voice, receipt).await
+        })
+        .await
+    }
+
+    /// Registers the call driver before it may start provider/native work. The
+    /// observer may leave, but the driver remains in this generation's drain.
+    /// Its borrowed capability allows exact-call accounting after admission is
+    /// closed, without reopening public commands or exposing the journal.
+    /// Return Ok only after required final custody. An error/panic remains a
+    /// drain failure even if the observer has already left.
+    pub async fn run_controller<D>(
+        &self,
+        binding: crate::VoiceBinding,
+        scope: &ExecutionScope,
+        driver: D,
+    ) -> Result<(), CommandFailure<AgentFailure>>
+    where
+        D: for<'a> FnOnce(
+                &'a VoiceController,
+            ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>>
+            + Send
+            + 'static,
+    {
+        binding.validate().map_err(CommandFailure::NotAdmitted)?;
+        self.check(&binding.actor)
+            .map_err(CommandFailure::NotAdmitted)?;
+        let record = self
+            .read_call(&binding.actor, binding.voice_session_id, scope)
+            .await
+            .map_err(CommandFailure::NotAdmitted)?
+            .ok_or(CommandFailure::NotAdmitted(AgentFailure::NotFound))?;
+        if record.intent.binding != binding
+            || record.session.remote() != crate::RemoteState::NotStarted
+            || record.session.stop_requested()
+            || record.usage.is_some()
+        {
+            return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
+        }
+        let lease = ControllerLease::claim(
+            self.controllers.clone(),
+            self.controller_failure.clone(),
+            binding.voice_session_id,
+        )
+        .map_err(CommandFailure::NotAdmitted)?;
+        let actor = binding.actor.clone();
+        let mut controller = VoiceController {
+            binding,
+            shutdown: self.shutdown.child_scope(),
+            journal: self.journal.clone(),
+            _lease: lease,
+        };
+        self.custody(&actor, scope, async move {
+            controller._lease.started = true;
+            let result = driver(&controller).await;
+            controller._lease.completed = result.is_ok();
+            // Release registration and fence the child before reporting completion.
+            drop(controller);
+            result.map_err(CommandFailure::Admitted)
         })
         .await
     }
@@ -230,7 +273,7 @@ impl VoiceService {
                 while let Some(result) = tasks.join_next().await {
                     failed |= result.is_err();
                 }
-                if failed {
+                if failed || self.controller_failure.load(Ordering::Acquire) {
                     Err(AgentFailure::Interrupted)
                 } else {
                     Ok(())
@@ -293,5 +336,137 @@ impl floe_inference::LiveDispatchCustody for VoiceService {
                 .map_err(CommandFailure::into_failure)?;
             Ok(admission.fresh_remote_dispatch())
         })
+    }
+}
+
+/// A generation-owned driver borrows this capability only for its owned task.
+/// It cannot start another call or admit new input after retirement. Accounting
+/// remains valid during drain; it is never a native Stop acknowledgement.
+pub struct VoiceController {
+    binding: crate::VoiceBinding,
+    shutdown: Cancellation,
+    journal: Arc<dyn VoiceIngressJournal>,
+    _lease: ControllerLease,
+}
+impl VoiceController {
+    pub fn binding(&self) -> &crate::VoiceBinding {
+        &self.binding
+    }
+    pub fn cancellation(&self) -> &Cancellation {
+        &self.shutdown
+    }
+    pub async fn settle_usage(
+        &self,
+        receipt: floe_execution::budget::ModelAttemptReceipt,
+    ) -> Result<floe_execution::budget::ModelAttemptReceipt, CommandFailure<AgentFailure>> {
+        settle_usage(
+            self.journal.as_ref(),
+            &self.binding.actor,
+            self.binding.voice_session_id,
+            receipt,
+        )
+        .await
+    }
+}
+impl Drop for VoiceController {
+    fn drop(&mut self) {
+        self.shutdown
+            .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
+    }
+}
+struct ControllerLease {
+    failure: Arc<AtomicBool>,
+    started: bool,
+    completed: bool,
+    registry: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+    voice: Uuid,
+}
+impl ControllerLease {
+    fn claim(
+        registry: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+        failure: Arc<AtomicBool>,
+        voice: Uuid,
+    ) -> Result<Self, AgentFailure> {
+        if !registry.lock().unwrap().insert(voice) {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(Self {
+            registry,
+            voice,
+            failure,
+            started: false,
+            completed: false,
+        })
+    }
+}
+impl Drop for ControllerLease {
+    fn drop(&mut self) {
+        if self.started && !self.completed {
+            self.failure.store(true, Ordering::Release);
+        }
+        self.registry.lock().unwrap().remove(&self.voice);
+    }
+}
+async fn settle_usage(
+    journal: &dyn VoiceIngressJournal,
+    owner: &OwnerActor,
+    voice: Uuid,
+    receipt: floe_execution::budget::ModelAttemptReceipt,
+) -> Result<floe_execution::budget::ModelAttemptReceipt, CommandFailure<AgentFailure>> {
+    receipt.validate().map_err(CommandFailure::Indeterminate)?;
+    let record = journal
+        .read_call(owner, voice)
+        .await
+        .map_err(CommandFailure::Indeterminate)?
+        .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+    if record.intent.binding.plan_id != receipt.attempt_id {
+        return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
+    }
+    if let Some(saved) = record.usage {
+        return if saved == receipt {
+            Ok(saved)
+        } else {
+            Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
+        };
+    }
+    let request = VoiceMutation {
+        voice_session_id: voice,
+        command_id: Uuid::new_v5(&voice, b"floe.voice.usage-settlement"),
+        expected_revision: record.revision,
+        kind: crate::VoiceMutationKind::SettleUsage { receipt },
+    };
+    journal
+        .mutate(owner, request)
+        .await?
+        .record
+        .usage
+        .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+}
+
+#[cfg(test)]
+mod controller_tests {
+    use super::*;
+    #[test]
+    fn registration_drop_releases_identity_and_only_started_unfinished_drivers_fail_drain() {
+        for (started, completed, failed) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let registry = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+            let failure = Arc::new(AtomicBool::new(false));
+            let voice = Uuid::new_v4();
+            let mut lease =
+                ControllerLease::claim(registry.clone(), failure.clone(), voice).unwrap();
+            assert!(matches!(
+                ControllerLease::claim(registry.clone(), failure.clone(), voice),
+                Err(AgentFailure::Conflict)
+            ));
+            lease.started = started;
+            lease.completed = completed;
+            drop(lease);
+            assert!(registry.lock().unwrap().is_empty());
+            assert_eq!(failure.load(Ordering::Acquire), failed);
+        }
     }
 }

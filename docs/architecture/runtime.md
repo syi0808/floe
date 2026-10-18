@@ -1220,7 +1220,24 @@ saved ceiling after retiring old ingress, never invent observed zero usage or
 revive capture. Source/layout changes remain same-snapshot development data;
 there is no automatic profile or key reset.
 
-This startup/accounting guard is not yet the production event/append controller.
-Continuous guarded delivery, cumulative append provenance, controller registration
-and late settlement during generation shutdown, authenticated Gateway selection
-and native/Flutter composition remain explicit integration work.
+VoiceService registers one active driver per exact saved call binding before
+invoking its driver future. Registration rejects retired owners, mismatched
+leases, already-dispatched/stopped calls and duplicate active drivers. The driver
+is one of the generation-owned bounded tasks; caller cancellation only detaches
+its observer. Its borrowed VoiceController capability exposes the exact binding,
+a child cancellation scope and exact-call terminal accounting, never the raw
+journal or new input admission. Closing public admission signals that child but
+still drains late accounting from registered drivers. Driver exit cancels the
+child scope; failure/panic remains a drain failure even after observer loss.
+Pending task-registration lock waits observe owner shutdown so they cannot wait
+behind a drain that is itself waiting for their controller. A rejected
+registration performs no driver I/O. Provider start still requires the canonical
+Inference/Access/budget and durable dispatch claim; registration is not permission
+to bypass those gates or reuse a remote call after restart.
+
+This registration and startup/accounting path is not yet the production
+event/append controller. Continuous guarded delivery, cumulative append
+provenance, authenticated Gateway selection and native/Flutter composition remain
+explicit integration work. The concrete driver must carry the registered child
+lifetime into its bounded Inference execution scope and finish required custody
+before returning success; synthetic driver tests do not qualify real audio.

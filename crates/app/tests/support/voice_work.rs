@@ -454,6 +454,7 @@ fn voice_custody_outlives_observer_cancellation_and_retirement_drains_it() {
 /// A delayed read before the accounting mutation must already belong to the
 /// admitted custody task, rather than the UI observer's cancellable future.
 struct DelayedSettlementJournal {
+    pause_reads: std::sync::atomic::AtomicBool,
     record: std::sync::Mutex<VoiceCallRecord>,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
@@ -476,8 +477,10 @@ impl floe_voice::VoiceJournal for DelayedSettlementJournal {
         _: Uuid,
     ) -> floe_execution::BoxFuture<'a, Result<Option<VoiceCallRecord>, AgentFailure>> {
         Box::pin(async move {
-            self.entered.notify_one();
-            self.release.notified().await;
+            if self.pause_reads.load(std::sync::atomic::Ordering::SeqCst) {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
             Ok(Some(self.record.lock().unwrap().clone()))
         })
     }
@@ -559,6 +562,7 @@ fn admitted_voice_usage_settlement_survives_cancel_during_read_and_shutdown() {
         let actor = caller.owner_actor();
         services.execute_owner(async move {
             let journal = Arc::new(DelayedSettlementJournal {
+                pause_reads: std::sync::atomic::AtomicBool::new(true),
                 record: std::sync::Mutex::new(call),
                 entered: Default::default(),
                 release: Default::default(),
@@ -609,6 +613,176 @@ fn admitted_voice_usage_settlement_survives_cancel_during_read_and_shutdown() {
             assert_eq!(record.usage, Some(receipt));
             assert!(record.session.stop_requested());
             assert_ne!(record.session.media(), MediaState::Stopped);
+        });
+    });
+}
+
+#[test]
+fn registered_voice_controller_outlives_observer_and_settles_after_retirement() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    let call = VoiceCallRecord::prepare(capturing(&host, surface).intent).unwrap();
+    let binding = call.intent.binding.clone();
+    let receipt = floe_execution::budget::ModelAttemptReceipt {
+        attempt_id: binding.plan_id,
+        charged_tokens: 7,
+        charged_cost_micros: 3,
+        accounting: floe_execution::budget::ModelAccounting {
+            observed_tokens: Some(7),
+            observed_cost_micros: Some(3),
+            unknown_tokens: false,
+            unknown_cost: false,
+        },
+        dispatched: true,
+    };
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let journal = Arc::new(DelayedSettlementJournal {
+                pause_reads: AtomicBool::new(false),
+                record: std::sync::Mutex::new(call),
+                entered: Default::default(),
+                release: Default::default(),
+                writes: Default::default(),
+            });
+            let voice = Arc::new(
+                floe_voice::VoiceService::new(
+                    actor.clone(),
+                    journal.clone(),
+                    owners.conversation.clone(),
+                )
+                .unwrap(),
+            );
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let driver_entered = entered.clone();
+            let cancellation = Cancellation::new();
+            let scope = host_scope(Uuid::new_v4(), cancellation.clone(), WAIT_TIMEOUT);
+            let child = voice.clone();
+            let driver_binding = binding.clone();
+            let observer = tokio::spawn(async move {
+                child
+                    .run_controller(driver_binding, &scope, move |controller| {
+                        Box::pin(async move {
+                            driver_entered.notify_one();
+                            controller.cancellation().cancelled().await;
+                            assert_eq!(
+                                controller
+                                    .settle_usage(receipt)
+                                    .await
+                                    .map_err(CommandFailure::into_failure)?,
+                                receipt
+                            );
+                            Ok(())
+                        })
+                    })
+                    .await
+            });
+            tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
+                .await
+                .unwrap();
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            assert!(matches!(
+                voice
+                    .run_controller(binding.clone(), &scope, |_| Box::pin(async {
+                        panic!("duplicate driver must not start")
+                    }))
+                    .await,
+                Err(CommandFailure::NotAdmitted(AgentFailure::Conflict))
+            ));
+            cancellation.cancel();
+            assert!(matches!(
+                observer.await.unwrap(),
+                Err(CommandFailure::Indeterminate(AgentFailure::Cancelled))
+            ));
+            journal.pause_reads.store(true, Ordering::SeqCst);
+            voice.close_admission();
+            assert!(matches!(
+                voice
+                    .run_controller(binding, &scope, |_| Box::pin(async {
+                        panic!("retired owner must not start another driver")
+                    }))
+                    .await,
+                Err(CommandFailure::NotAdmitted(AgentFailure::VaultUnavailable))
+            ));
+            tokio::time::timeout(WAIT_TIMEOUT, journal.entered.notified())
+                .await
+                .unwrap();
+            let child = voice.clone();
+            let drain = tokio::spawn(async move { child.shutdown_and_drain(&scope).await });
+            tokio::task::yield_now().await;
+            assert!(!drain.is_finished());
+            journal.release.notify_one();
+            tokio::time::timeout(WAIT_TIMEOUT, drain)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(journal.writes.load(Ordering::SeqCst), 1);
+            let record = journal.record.lock().unwrap();
+            assert_eq!(record.usage, Some(receipt));
+            assert_ne!(record.session.media(), MediaState::Stopped);
+        });
+    });
+}
+
+#[test]
+fn voice_controller_failure_is_not_hidden_by_observer_delivery_or_later_drain() {
+    use std::sync::{Arc, atomic::AtomicBool};
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    let call = VoiceCallRecord::prepare(capturing(&host, surface).intent).unwrap();
+    let binding = call.intent.binding.clone();
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let journal = Arc::new(DelayedSettlementJournal {
+                pause_reads: AtomicBool::new(false),
+                record: std::sync::Mutex::new(call),
+                entered: Default::default(),
+                release: Default::default(),
+                writes: Default::default(),
+            });
+            let voice =
+                floe_voice::VoiceService::new(actor, journal, owners.conversation.clone()).unwrap();
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            let mut foreign = binding.clone();
+            foreign.media_lease_id = Uuid::new_v4();
+            assert!(matches!(
+                voice
+                    .run_controller(foreign, &scope, |_| Box::pin(async {
+                        panic!("mismatched lease cannot enter a driver")
+                    }))
+                    .await,
+                Err(CommandFailure::NotAdmitted(AgentFailure::Conflict))
+            ));
+            let (send, receive) = tokio::sync::oneshot::channel();
+            assert!(matches!(
+                voice
+                    .run_controller(binding, &scope, move |controller| Box::pin(async move {
+                        send.send(controller.cancellation().clone()).unwrap();
+                        Err(AgentFailure::StorageUnavailable)
+                    }))
+                    .await,
+                Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+            ));
+            assert!(
+                receive.await.unwrap().is_cancelled(),
+                "driver exit fences its child lifetime"
+            );
+            assert_eq!(
+                voice.shutdown_and_drain(&scope).await,
+                Err(AgentFailure::Interrupted)
+            );
+            assert_eq!(
+                voice.shutdown_and_drain(&scope).await,
+                Err(AgentFailure::Interrupted)
+            );
         });
     });
 }
