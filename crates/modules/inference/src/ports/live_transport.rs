@@ -109,7 +109,7 @@ impl LiveDelivery {
 /// observation returns the same head. ACK is exact, ordered and replay-safe even
 /// after response loss. One continuously owned adapter reader supplies it; UI
 /// request cancellation cannot cancel that reader or consume a pending event.
-pub trait LiveEventTransport: LiveSessionControl {
+pub trait LiveEventTransport: LiveSessionControl + Send + Sync {
     fn observe<'a>(
         &'a self,
         scope: &'a ExecutionScope,

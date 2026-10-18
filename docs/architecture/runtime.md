@@ -1280,3 +1280,56 @@ request against the Vault receipt; it never repeats Day collection, provider
 execution or external receipt lookup. Owner retirement/cancellation/deadline
 still bounds retries, and other failures remain visible as pending recovery.
 This does not reclassify generic Day storage failures as retryable Busy.
+
+
+### Concrete Voice retained-event consumer
+
+A registered VoiceController consumes one opaque Inference-authorized live
+session, checking its exact actor and plan binding. Resolver/Gateway generic
+parameters stay private inside Inference's type-erased Access fence; Voice does
+not gain an Access dependency or a parallel authorization policy.
+
+```mermaid
+flowchart TD
+    Register[Registered Voice controller] --> Guard[Opaque admitted Inference call]
+    Guard --> Receive[Source-checked retained delivery]
+    Receive --> Ready[Ready: record remote readiness only]
+    Receive --> Final[Final utterance / delegation]
+    Final --> Custody[Encrypted Voice + canonical Surface custody]
+    Custody --> Work[Existing Manager Work queue]
+    Custody --> Ack[Exact retained-delivery ACK]
+    Ready --> Ack
+    Receive --> Ephemeral[Partial caption / activity: no durable User input]
+    Ephemeral --> Ack
+    Receive --> End[Terminal or interrupted stream]
+    End --> Fence[Immediate local transport/media fence]
+    Fence --> Ledger[Execution settlement including observed overrun]
+    Ledger --> Stored[Voice usage receipt + remote-end / Stop intent]
+    Stored --> TerminalAck[ACK only after local custody]
+    Work --> Result[Canonical Surface result]
+    Result -. pending guarded append .-> Guard
+```
+
+Final Person/Assistant/delegation events use the same ingress and Conversation
+wake helper as admitted owner commands. Assistant presentation is not a Manager
+answer, and partial captions/activity cannot manufacture User input. Ready never
+unmutes. Native User controls and actual Stop acknowledgements remain separate.
+
+Transient ACK loss retries the identical sequence within a bounded observation
+window, without repeating journal admission or creating another model call.
+Unresolved transport failure ends the call conservatively while retaining admitted
+Manager Work. Local storage retry uses the same immutable request and retries only
+completed Busy results; an in-flight SQL future is not dropped to meet that retry
+window. Generation shutdown retains its independent bounded drain.
+
+Inference can settle its ledger while retaining the guard solely for custody ACK;
+settled calls cannot release more events. Voice then persists usage and remote-end
+facts before terminal ACK. Over-budget observations carry their actual receipt
+alongside BudgetExceeded, never an artificial refund or zero bill. Native fencing
+is not a native Stop acknowledgement. Finalization errors remain driver failures;
+settled transport/budget failures are explicit completion outcomes.
+
+The concrete consumer is exercised with the real encrypted Vault, Conversation
+queue and Manager runtime, but synthetic retained transport and native receipts.
+Production Gateway/native wiring, UI caption/activity subscribers and cumulative
+source-authorized result append are still separate integration work.

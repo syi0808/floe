@@ -26,7 +26,7 @@ Conversation  Experts               Agent Runtime
 Context       Access                Execution
 Inference     Connections
 Calendar Ops  Knowledge
-Day
+Day           Voice
         |
         v
 Adapters / platform

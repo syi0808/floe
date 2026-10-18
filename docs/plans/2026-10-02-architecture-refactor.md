@@ -3026,3 +3026,32 @@ inputs: workspace and doctests 550, App QA 91 plus one intentional ignore, Linux
 FFI, boundary validation (27 nodes, 154 edges), and whitespace checks. The 186
 Go/module inputs are unchanged from the qualified continuous-reader checkpoint.
 Generic Day storage error classification is not changed by this fix.
+
+
+### Concrete registered Voice stream to canonical Manager Work
+
+VoiceController now consumes the opaque admitted Inference call, retaining final
+utterances/delegations through the existing encrypted journal/Surface ingress and
+Manager wake path before ACK. Ready records remote readiness without Unmute;
+partial captions/activity are not durable User inputs. Inference erases only its
+private transport/Access generic types, so Voice does not import source-policy
+ports or create another authority layer.
+
+The driver retries exact transient ACKs without reprocessing ingress. Persistent
+ACK failure closes conservatively while retaining canonical Work and unknown
+usage. Terminal accounting, including observed budget overrun, is persisted before
+terminal ACK; actual native Stop is never inferred. A shared Voice-local retry
+helper preserves failure classification and immutable CAS requests for completed
+Busy results, without cancelling in-flight custody at the retry-window boundary.
+
+Five focused App dispatch cases pass: the prior startup case plus normal retained
+stream, lost ACK replay, observed overrun, and unavailable ACK. They use real
+Vault/Conversation/Manager owners with synthetic provider/native edges and assert
+one Manager Work, no extra User input from partial/filler events, no call recreation,
+and no invented native Stop. Inference/Voice unit tests pass. Final aggregate
+qualification passes on 624 frozen Rust/Cargo/validation inputs: workspace and
+doctests 552, App QA 95 plus one intentional ignore, Linux FFI, boundaries
+(27 nodes, 154 edges), and whitespace checks. The 186 Go/module inputs remain
+unchanged from their qualified default/development race and vet snapshot. No real
+account, microphone or public live route was used; result append, authenticated
+Gateway and native/Flutter composition remain open.

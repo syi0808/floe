@@ -818,3 +818,38 @@ async fn observer_drop_after_remote_ack_keeps_local_head_and_owner_alive() {
     call.acknowledge(1).await.unwrap();
     assert_eq!(call.receive().await.unwrap(), delivery(2));
 }
+
+#[tokio::test]
+async fn settled_live_call_can_ack_custody_but_cannot_release_more_events() {
+    let state = State::new();
+    state
+        .events
+        .lock()
+        .unwrap()
+        .extend([delivery(1), delivery(2)]);
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    call.receive().await.unwrap();
+    let settled = call
+        .settle_usage(LiveUsageObservation {
+            tokens: Some(41),
+            cost_micros: Some(61),
+        })
+        .unwrap();
+    assert_eq!(settled.failure, Some(AgentFailure::BudgetExceeded));
+    assert_eq!(settled.receipt.accounting.observed_tokens, Some(41));
+    assert!(state.fenced.load(Ordering::SeqCst));
+    assert_eq!(call.receive().await, Err(AgentFailure::Conflict));
+    call.acknowledge(1).await.unwrap();
+    assert_eq!(state.acknowledged.load(Ordering::SeqCst), 1);
+    assert_eq!(state.observations.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        call.settle_usage(LiveUsageObservation::default()),
+        Err(AgentFailure::Conflict)
+    ));
+}

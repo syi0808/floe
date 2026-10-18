@@ -1,5 +1,5 @@
 //! Generation-owned custody tasks survive a caller's observation timeout. The
-//! service contains no media or provider driver; native privacy Stop must not
+//! media/provider I/O stays behind its ports; native privacy Stop must not
 //! wait for these storage operations. Conversation retains all Work execution.
 use crate::{
     VoiceCallRecord, VoiceIngressAdmission, VoiceIngressJournal, VoiceMutation,
@@ -142,18 +142,14 @@ impl VoiceService {
         let owner = actor.clone();
         let conversation = self.conversation.clone();
         self.custody(actor, scope, async move {
-            let result = journal.ingest(&owner, voice, event).await;
-            // Even uncertain custody can have committed Work. Wake only after
-            // the actual storage future finishes, not when its observer leaves.
-            let wake_failure = if result.as_ref().map_or(true, |v| v.work.is_some()) {
-                conversation.notify_surface_work(&owner).err()
-            } else {
-                None
-            };
-            result.map(|admission| VoiceIngressResult {
-                admission,
-                wake_failure,
-            })
+            ingest_owned(
+                journal.as_ref(),
+                conversation.as_ref(),
+                &owner,
+                voice,
+                event,
+            )
+            .await
         })
         .await
     }
@@ -246,6 +242,7 @@ impl VoiceService {
             binding,
             shutdown: self.shutdown.child_scope(),
             journal: self.journal.clone(),
+            conversation: self.conversation.clone(),
             _lease: lease,
         };
         self.custody(&actor, scope, async move {
@@ -343,9 +340,10 @@ impl floe_inference::LiveDispatchCustody for VoiceService {
 /// It cannot start another call or admit new input after retirement. Accounting
 /// remains valid during drain; it is never a native Stop acknowledgement.
 pub struct VoiceController {
-    binding: crate::VoiceBinding,
-    shutdown: Cancellation,
-    journal: Arc<dyn VoiceIngressJournal>,
+    pub(crate) binding: crate::VoiceBinding,
+    pub(crate) shutdown: Cancellation,
+    pub(crate) journal: Arc<dyn VoiceIngressJournal>,
+    pub(crate) conversation: Arc<dyn ConversationOwner>,
     _lease: ControllerLease,
 }
 impl VoiceController {
@@ -414,11 +412,11 @@ async fn settle_usage(
     receipt: floe_execution::budget::ModelAttemptReceipt,
 ) -> Result<floe_execution::budget::ModelAttemptReceipt, CommandFailure<AgentFailure>> {
     receipt.validate().map_err(CommandFailure::Indeterminate)?;
-    let record = journal
-        .read_call(owner, voice)
-        .await
-        .map_err(CommandFailure::Indeterminate)?
-        .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+    let record =
+        crate::custody::retry_local(|| journal.read_call(owner, voice), crate::custody::busy)
+            .await
+            .map_err(CommandFailure::Indeterminate)?
+            .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
     if record.intent.binding.plan_id != receipt.attempt_id {
         return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
     }
@@ -435,12 +433,14 @@ async fn settle_usage(
         expected_revision: record.revision,
         kind: crate::VoiceMutationKind::SettleUsage { receipt },
     };
-    journal
-        .mutate(owner, request)
-        .await?
-        .record
-        .usage
-        .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+    crate::custody::retry_local(
+        || journal.mutate(owner, request.clone()),
+        crate::custody::command_busy,
+    )
+    .await?
+    .record
+    .usage
+    .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
 }
 
 #[cfg(test)]
@@ -469,4 +469,24 @@ mod controller_tests {
             assert_eq!(failure.load(Ordering::Acquire), failed);
         }
     }
+}
+
+pub(crate) async fn ingest_owned(
+    journal: &dyn VoiceIngressJournal,
+    conversation: &dyn ConversationOwner,
+    owner: &OwnerActor,
+    voice: Uuid,
+    event: LiveProviderEvent,
+) -> Result<VoiceIngressResult, CommandFailure<AgentFailure>> {
+    let result = journal.ingest(owner, voice, event).await;
+    // An uncertain local ACK can still have committed canonical Work.
+    let wake_failure = if result.as_ref().map_or(true, |v| v.work.is_some()) {
+        conversation.notify_surface_work(owner).err()
+    } else {
+        None
+    };
+    result.map(|admission| VoiceIngressResult {
+        admission,
+        wake_failure,
+    })
 }

@@ -1,10 +1,12 @@
 //! One selected live handoff using the same Access and budget owners as
 //! generation. Caller observation is separate from the bounded owner lifetime.
+#[cfg(test)]
+use crate::LiveSessionControl;
 use crate::{
     AdmittedDispatchTarget, CanonicalLiveStart, InferenceService, LIVE_PRESENTATION_CONSUMER,
     LIVE_PRESENTATION_PURPOSE, LiveDelivery, LiveDispatchCustody, LiveDispatchIntent,
-    LiveEventTransport, LiveModelProvider, LiveSessionControl, LiveStartRequest,
-    PreparedLiveSelection, PreparedLiveTransport,
+    LiveEventTransport, LiveModelProvider, LiveStartRequest, PreparedLiveSelection,
+    PreparedLiveTransport,
 };
 use floe_access::{
     DependencyResolver, GatewayAdmission, ModelDispatchFence, ModelDispatchRequest,
@@ -29,10 +31,10 @@ const REVALIDATE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Retains one fenced transport and budget reservation. No raw transport is
 /// exposed: event release is guarded and retained; append remains a separate
 /// integration gate with cumulative source provenance.
-pub struct AuthorizedLiveSession<Session: LiveSessionControl, Resolver, Authority> {
+pub struct AuthorizedLiveSession {
     plan: LiveModelPlan,
-    transport: Arc<Session>,
-    fence: Arc<ModelDispatchFence<Resolver, Authority>>,
+    transport: Arc<dyn LiveEventTransport>,
+    fence: Arc<dyn LiveSourceFence>,
     scope: ExecutionScope,
     preparation_cancellation: Cancellation,
     owner_cancellation: Cancellation,
@@ -43,7 +45,13 @@ pub struct AuthorizedLiveSession<Session: LiveSessionControl, Resolver, Authorit
     acknowledged_delivery: u64,
     terminal_usage: Option<LiveUsageObservation>,
 }
-impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
+/// Canonical ledger custody, including an overrun that must not erase usage.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveSettlement {
+    pub receipt: ModelAttemptReceipt,
+    pub failure: Option<AgentFailure>,
+}
+impl AuthorizedLiveSession {
     pub fn plan(&self) -> &LiveModelPlan {
         &self.plan
     }
@@ -58,10 +66,10 @@ impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
             .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
         self.transport.fence();
     }
-    pub fn finish(
-        mut self,
+    pub fn settle_usage(
+        &mut self,
         usage: LiveUsageObservation,
-    ) -> Result<ModelAttemptReceipt, AgentFailure> {
+    ) -> Result<LiveSettlement, AgentFailure> {
         // Accounting remains independent of source/result release permissions.
         self.transport.fence();
         self.monitor.abort();
@@ -73,15 +81,39 @@ impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
             },
             None => usage,
         };
-        self.attempt
+        let result = self
+            .attempt
             .take()
             .ok_or(AgentFailure::Conflict)?
-            .settle_observed(usage.tokens, usage.cost_micros)
+            .settle_observed(usage.tokens, usage.cost_micros);
+        match result {
+            Ok(receipt) => Ok(LiveSettlement {
+                receipt,
+                failure: None,
+            }),
+            Err(failure) => self
+                .scope
+                .budget()
+                .model_attempt_receipt(self.plan.operation_id)
+                .map(|receipt| LiveSettlement {
+                    receipt,
+                    failure: Some(failure),
+                })
+                .ok_or(failure),
+        }
+    }
+    pub fn finish(
+        mut self,
+        usage: LiveUsageObservation,
+    ) -> Result<ModelAttemptReceipt, AgentFailure> {
+        let settlement = self.settle_usage(usage)?;
+        match settlement.failure {
+            Some(failure) => Err(failure),
+            None => Ok(settlement.receipt),
+        }
     }
 }
-impl<S: LiveSessionControl, R: DependencyResolver, A: GatewayAdmission>
-    AuthorizedLiveSession<S, R, A>
-{
+impl AuthorizedLiveSession {
     pub async fn revalidate(&self) -> Result<(), AgentFailure> {
         if let Some(failure) = self.failure() {
             return Err(failure);
@@ -99,12 +131,13 @@ impl<S: LiveSessionControl, R: DependencyResolver, A: GatewayAdmission>
         result
     }
 }
-impl<S: LiveEventTransport, R: DependencyResolver, A: GatewayAdmission>
-    AuthorizedLiveSession<S, R, A>
-{
+impl AuthorizedLiveSession {
     /// Source-authorized observation, retained locally until the owner confirms
     /// custody. A dropped observer future never clears this pending delivery.
     pub async fn receive(&mut self) -> Result<LiveDelivery, AgentFailure> {
+        if self.attempt.is_none() {
+            return Err(AgentFailure::Conflict);
+        }
         self.revalidate().await?;
         if self.pending_delivery.is_none() {
             if self.terminal_usage.is_some() {
@@ -155,7 +188,7 @@ impl<S: LiveEventTransport, R: DependencyResolver, A: GatewayAdmission>
     }
 }
 
-impl<S: LiveSessionControl, R, A> Drop for AuthorizedLiveSession<S, R, A> {
+impl Drop for AuthorizedLiveSession {
     fn drop(&mut self) {
         self.scope
             .cancellation()
@@ -175,8 +208,8 @@ impl<S: LiveSessionControl, R, A> Drop for AuthorizedLiveSession<S, R, A> {
 }
 
 // Covers cancellation/panic between a returned transport and ready publication.
-struct PendingLiveSession<S: LiveSessionControl>(Option<Arc<S>>);
-impl<S: LiveSessionControl> Drop for PendingLiveSession<S> {
+struct PendingLiveSession(Option<Arc<dyn LiveEventTransport>>);
+impl Drop for PendingLiveSession {
     fn drop(&mut self) {
         if let Some(session) = &self.0 {
             session.fence();
@@ -184,32 +217,37 @@ impl<S: LiveSessionControl> Drop for PendingLiveSession<S> {
     }
 }
 
-async fn bounded_revalidate<R: DependencyResolver, A: GatewayAdmission>(
-    fence: &ModelDispatchFence<R, A>,
+// Private type erasure retains the one Access-owned fence. Voice consumers do
+// not import resolver/Gateway policy types or get a second authorization path.
+trait LiveSourceFence: Send + Sync {
+    fn revalidate(&self) -> floe_execution::BoxFuture<'_, Result<(), AgentFailure>>;
+}
+impl<R: DependencyResolver, A: GatewayAdmission> LiveSourceFence for ModelDispatchFence<R, A> {
+    fn revalidate(&self) -> floe_execution::BoxFuture<'_, Result<(), AgentFailure>> {
+        Box::pin(revalidate_model_dispatch(self))
+    }
+}
+async fn bounded_revalidate(
+    fence: &Arc<dyn LiveSourceFence>,
     scope: &ExecutionScope,
 ) -> Result<(), AgentFailure> {
     let observation = scope.child_scope(scope.deadline(), 0, 0, None);
     observation
         .run(async {
-            tokio::time::timeout(REVALIDATE_TIMEOUT, revalidate_model_dispatch(fence))
+            tokio::time::timeout(REVALIDATE_TIMEOUT, fence.revalidate())
                 .await
                 .map_err(|_| AgentFailure::DeadlineExceeded)?
         })
         .await
 }
-fn monitor<S, R, A>(
-    transport: Arc<S>,
-    fence: Arc<ModelDispatchFence<R, A>>,
+fn monitor(
+    transport: Arc<dyn LiveEventTransport>,
+    fence: Arc<dyn LiveSourceFence>,
     scope: ExecutionScope,
     preparation_cancellation: Cancellation,
     owner_cancellation: Cancellation,
     failure: Arc<Mutex<Option<AgentFailure>>>,
-) -> JoinHandle<()>
-where
-    S: LiveSessionControl + Send + Sync + 'static,
-    R: DependencyResolver + 'static,
-    A: GatewayAdmission + 'static,
-{
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         let terminal = loop {
             tokio::select! {
@@ -254,10 +292,7 @@ where
         request: LiveStartRequest,
         custody: &dyn LiveDispatchCustody,
         scope: &ExecutionScope,
-    ) -> Result<
-        AuthorizedLiveSession<<P::Transport as PreparedLiveTransport>::Session, R, A>,
-        AgentFailure,
-    > {
+    ) -> Result<AuthorizedLiveSession, AgentFailure> {
         let PreparedLiveSelection {
             plan,
             target,
@@ -325,10 +360,7 @@ where
         lifetime: &ExecutionScope,
         preparation_cancellation: Cancellation,
         owner_cancellation: Cancellation,
-    ) -> Result<
-        AuthorizedLiveSession<<P::Transport as PreparedLiveTransport>::Session, R, A>,
-        AgentFailure,
-    > {
+    ) -> Result<AuthorizedLiveSession, AgentFailure> {
         let intent = LiveDispatchIntent {
             actor: plan.actor.clone(),
             voice_session_id: request.voice_session_id,
@@ -392,7 +424,9 @@ where
             return Err(AgentFailure::PolicyDenied);
         }
         attempt.mark_dispatched();
-        let session = Arc::new(transport.start(canonical, admitted).await?);
+        let session: Arc<dyn LiveEventTransport> =
+            Arc::new(transport.start(canonical, admitted).await?);
+        let fence: Arc<dyn LiveSourceFence> = fence;
         let mut pending = PendingLiveSession(Some(session.clone()));
         bounded_revalidate(&fence, lifetime).await?;
         if preparation_cancellation.is_cancelled() || owner_cancellation.is_cancelled() {

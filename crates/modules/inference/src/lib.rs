@@ -33,4 +33,4 @@ pub use ports::live_transport::{
     LiveStartRequest, PreparedLiveTransport,
 };
 
-pub use application::AuthorizedLiveSession;
+pub use application::{AuthorizedLiveSession, LiveSettlement};
