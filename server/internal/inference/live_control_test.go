@@ -82,13 +82,18 @@ func (p *controlPrepared) Start(ctx context.Context, in LiveStartInput) (LiveTra
 }
 
 type controlTransport struct {
-	deliveryMu    sync.Mutex
-	deliveries    []LiveDelivery
-	acks          atomic.Int32
-	closed        atomic.Bool
-	changedAnswer atomic.Bool
-	once          sync.Once
-	done          chan struct{}
+	preparedWrites atomic.Int32
+	sentWrites     atomic.Int32
+	closeWrites    atomic.Int32
+	writeRelease   chan struct{}
+	writeFailure   bool
+	deliveryMu     sync.Mutex
+	deliveries     []LiveDelivery
+	acks           atomic.Int32
+	closed         atomic.Bool
+	changedAnswer  atomic.Bool
+	once           sync.Once
+	done           chan struct{}
 }
 
 func (t *controlTransport) Answer() (string, error) {
@@ -121,12 +126,43 @@ func (t *controlTransport) Acknowledge(sequence uint64) error {
 	t.acks.Add(1)
 	return nil
 }
-func (t *controlTransport) PrepareAppend(LiveAppend) (PreparedLiveWrite, error) {
-	panic("start fixture cannot append")
+func (t *controlTransport) PrepareAppend(in LiveAppend) (PreparedLiveWrite, error) {
+	if in.Validate() != nil || t.closed.Load() {
+		return nil, Failure{Code: RequestRejected}
+	}
+	t.preparedWrites.Add(1)
+	return &controlWrite{transport: t}, nil
 }
-func (t *controlTransport) RequestClose(context.Context) (bool, error) { t.Fence(); return true, nil }
-func (t *controlTransport) Fence()                                     { t.closed.Store(true); t.once.Do(func() { close(t.done) }) }
-func (t *controlTransport) Done() <-chan struct{}                      { return t.done }
+func (t *controlTransport) RequestClose(context.Context) (bool, error) {
+	t.closeWrites.Add(1)
+	t.Fence()
+	return true, nil
+}
+
+type controlWrite struct {
+	transport *controlTransport
+	used      atomic.Bool
+}
+
+func (w *controlWrite) Send(ctx context.Context) (LiveWriteObservation, error) {
+	if !w.used.CompareAndSwap(false, true) {
+		return LiveWriteObservation{}, Failure{Code: RequestRejected}
+	}
+	w.transport.sentWrites.Add(1)
+	if w.transport.writeRelease != nil {
+		select {
+		case <-w.transport.writeRelease:
+		case <-ctx.Done():
+			return LiveWriteObservation{}, ctx.Err()
+		}
+	}
+	if w.transport.writeFailure {
+		return LiveWriteObservation{CompletedFrames: 1}, Failure{Code: ModelUnavailable}
+	}
+	return LiveWriteObservation{CompletedFrames: 1, WriteComplete: true}, nil
+}
+func (t *controlTransport) Fence()                { t.closed.Store(true); t.once.Do(func() { close(t.done) }) }
+func (t *controlTransport) Done() <-chan struct{} { return t.done }
 func controlFixture(t *testing.T, blocked, ignoreCancel bool) (*Service, *controlAccount, *controlTrust) {
 	t.Helper()
 	authority := &controlTrust{}

@@ -40,6 +40,8 @@ func (p *liveHTTPPrepared) Start(context.Context, inference.LiveStartInput) (inf
 }
 
 type liveHTTPTransport struct {
+	writes atomic.Int32
+	closes atomic.Int32
 	acks   atomic.Int32
 	closed atomic.Bool
 	once   sync.Once
@@ -66,11 +68,22 @@ func (t *liveHTTPTransport) Acknowledge(sequence uint64) error {
 	return nil
 }
 func (t *liveHTTPTransport) PrepareAppend(inference.LiveAppend) (inference.PreparedLiveWrite, error) {
-	panic("start fixture cannot append")
+	return liveHTTPWrite{t}, nil
 }
-func (t *liveHTTPTransport) RequestClose(context.Context) (bool, error) { t.Fence(); return true, nil }
-func (t *liveHTTPTransport) Fence()                                     { t.closed.Store(true); t.once.Do(func() { close(t.done) }) }
-func (t *liveHTTPTransport) Done() <-chan struct{}                      { return t.done }
+
+type liveHTTPWrite struct{ transport *liveHTTPTransport }
+
+func (w liveHTTPWrite) Send(context.Context) (inference.LiveWriteObservation, error) {
+	w.transport.writes.Add(1)
+	return inference.LiveWriteObservation{CompletedFrames: 1, WriteComplete: true}, nil
+}
+func (t *liveHTTPTransport) RequestClose(context.Context) (bool, error) {
+	t.closes.Add(1)
+	t.Fence()
+	return true, nil
+}
+func (t *liveHTTPTransport) Fence()                { t.closed.Store(true); t.once.Do(func() { close(t.done) }) }
+func (t *liveHTTPTransport) Done() <-chan struct{} { return t.done }
 func configureHTTPLive(t *testing.T, f *consoleFixture, a *liveHTTPAccount) {
 	t.Helper()
 	if err := f.handler.Inference.Service.Configure(inference.InferenceConfig{Routes: map[inference.Purpose]inference.PurposeRoute{inference.LivePresentation: {TargetID: "live", Enabled: true}}}, map[string]inference.ModelAccount{"live": a}, noLiveGeneration{}); err != nil {
@@ -167,6 +180,32 @@ func TestLiveHTTPCallIsPrincipalBoundOneShotAndNotRecreatedAfterRestart(t *testi
 	if a.call.acks.Load() != 1 {
 		t.Fatal("ACK response loss duplicated queue mutation")
 	}
+	appendRequest := liveAppendRequest{1, ticket.TicketID, trust.NewID(), "presentable_result", "delegation", "synthetic-private-result"}
+	for i := 0; i < 3; i++ {
+		if r := f.inferenceRequest(http.MethodPost, "/v1/live/append", liveJSON(t, appendRequest), owner); r.Code != 200 {
+			t.Fatal("append replay failed", r.Code)
+		}
+	}
+	writePath := "/v1/live/calls/" + ticket.TicketID + "/writes/" + appendRequest.OperationID
+	var write liveWriteDTO
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		r := f.inferenceRequest(http.MethodGet, writePath, nil, owner)
+		if r.Code == 200 && json.Unmarshal(r.Body.Bytes(), &write) == nil && write.Phase == "written" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if write.Phase != "written" || a.call.writes.Load() != 1 {
+		t.Fatal("append write evidence missing/duplicated")
+	}
+	if r := f.inferenceRequest(http.MethodGet, writePath, nil, other); r.Code != http.StatusForbidden {
+		t.Fatal("foreign client read write evidence", r.Code)
+	}
+	appendRequest.Text = "changed"
+	if r := f.inferenceRequest(http.MethodPost, "/v1/live/append", liveJSON(t, appendRequest), owner); r.Code == 200 {
+		t.Fatal("changed append replay admitted")
+	}
 	listed := f.inferenceRequest(http.MethodGet, "/v1/live/calls", nil, owner)
 	if listed.Code != 200 || strings.Contains(listed.Body.String(), "synthetic-private") || strings.Contains(listed.Body.String(), "answer") {
 		t.Fatal("handle inventory leaked signaling or input")
@@ -193,6 +232,25 @@ func TestLiveHTTPCallIsPrincipalBoundOneShotAndNotRecreatedAfterRestart(t *testi
 	<-h.liveBodies
 	if a.starts.Load() != 1 {
 		t.Fatal("exact/changed/foreign requests duplicated provider creation")
+	}
+	closeRequest := liveCloseRequest{1, ticket.TicketID, trust.NewID()}
+	for i := 0; i < 3; i++ {
+		if r := f.inferenceRequest(http.MethodPost, "/v1/live/close", liveJSON(t, closeRequest), owner); r.Code != 200 {
+			t.Fatal("close replay failed", r.Code)
+		}
+	}
+	closePath := "/v1/live/calls/" + ticket.TicketID + "/writes/" + closeRequest.OperationID
+	deadline = time.Now().Add(time.Second)
+	write = liveWriteDTO{}
+	for time.Now().Before(deadline) {
+		r := f.inferenceRequest(http.MethodGet, closePath, nil, owner)
+		if r.Code == 200 && json.Unmarshal(r.Body.Bytes(), &write) == nil && write.Phase == "written" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if write.Phase != "written" || a.call.closes.Load() != 1 {
+		t.Fatal("close write evidence missing/duplicated")
 	}
 	old := h.Service
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

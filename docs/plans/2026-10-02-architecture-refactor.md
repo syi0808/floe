@@ -3206,3 +3206,27 @@ Qualification: default/development full Go race suites (17/18 test-bearing
 packages) and both vet runs pass on 200 frozen Go/module inputs. Focused event
 owner cases also pass three race-enabled repetitions. No Rust/dashboard source
 changed in this slice; prior qualification remains scoped to that unchanged tree.
+
+
+### Live append and graceful-close transport evidence
+
+The existing ticket now admits one-shot append and close operations, exposes
+read-only operation status and keeps exact identity/payload replay checks. There
+is one append writer, a non-evicting 256-operation host limit and one close intent.
+Request cancellation cannot cancel an admitted write. Pure preflight precedes
+admission; after Send, incomplete evidence remains uncertain and fences new writes.
+Written means local frame completion only. Close prevents new append admission,
+attempts one bounded close frame and preserves received-event custody until local
+release/expiry; it is not provider finalization or a native Stop receipt.
+
+Synthetic cases cover concurrent exact replay, changed payload rejection,
+observer cancellation, bounded writer/identity admission, partial-write uncertainty
+without retry, and one-shot close. HTTP uses real paired Trust scope and tests
+append/status/close replay plus cross-client receipt denial. Rust Gateway consumer,
+automatic result scheduling, native/Flutter and real audio remain open.
+
+Final qualification passes on 203 frozen Go/module inputs: default race 17
+and development-tag race 18 test-bearing packages, plus both vet runs. The
+focused live owner suite also passed three race-enabled repetitions before the
+final identity-capacity case, which is covered by both complete final suites.
+Rust/dashboard inputs are unchanged; their prior results do not qualify audio.

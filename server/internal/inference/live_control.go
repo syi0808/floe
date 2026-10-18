@@ -72,6 +72,9 @@ type liveEntry struct {
 	deliveryGate                          chan struct{}
 	pendingSequence, acknowledgedSequence uint64
 	pendingDigest, acknowledgedDigest     string
+	writes                                map[string]*liveWriteEntry
+	activeWrite                           string
+	closeWrite                            *liveWriteEntry
 	releaseSelection                      func()
 }
 type liveRegistry struct {
@@ -251,7 +254,7 @@ func (s *Service) PrepareLiveCall(ctx context.Context, p trust.Principal, revisi
 	if prepared == nil {
 		return LiveTicket{}, Failure{Code: ModelUnavailable}
 	}
-	e := &liveEntry{principal: p, scope: scope, selected: selected, prepared: prepared, phase: "prepared", deadline: time.Now().Add(livePreparationLifetime), releaseSelection: release, deliveryGate: make(chan struct{}, 1)}
+	e := &liveEntry{principal: p, scope: scope, selected: selected, prepared: prepared, phase: "prepared", deadline: time.Now().Add(livePreparationLifetime), releaseSelection: release, deliveryGate: make(chan struct{}, 1), writes: make(map[string]*liveWriteEntry)}
 	if err = r.source(observation, e, false); err != nil {
 		return LiveTicket{}, err
 	}
@@ -491,6 +494,7 @@ func (r *liveRegistry) watch(e *liveEntry) {
 		expired := !time.Now().Before(e.deadline)
 		retired := e.retired
 		transport := e.transport
+		expectedClose := e.phase == "closing" || e.phase == "closed_local"
 		e.mu.Unlock()
 		if retired {
 			return
@@ -506,7 +510,9 @@ func (r *liveRegistry) watch(e *liveEntry) {
 		if transport != nil {
 			select {
 			case <-transport.Done():
-				r.fail(e, ModelUnavailable)
+				if !expectedClose {
+					r.fail(e, ModelUnavailable)
+				}
 			default:
 			}
 		}

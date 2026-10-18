@@ -1421,3 +1421,25 @@ not that empty state. Local transport closure can still drain already-received
 events under current source/account authority. Expiry, release, configuration
 change and principal revocation prevent further release; retired observations
 cannot publish late data. No event is elevated into a Manager command by Go.
+
+
+### Live one-shot write receipts
+
+Append and graceful close are detached from HTTP observers once admitted. Their
+process-local operation identities retain pending/written/not-sent/uncertain
+transport evidence; exact retries read that evidence and changed append payloads
+are rejected. This is transport deduplication under a single-use call ticket,
+not another durable Voice intent or Conversation delivery journal. Voice retains
+the durable logical intent and cannot infer permission to retry after restart or
+lost transport evidence.
+
+Whole-append codec preflight is pure and precedes admission. The call admits one
+append writer and retains at most 256 operation identities without eviction;
+exhaustion is explicit host quota failure. Close has one separate exact operation
+and prevents new append admission. Network writes have a ten-second bound under
+the call owner. Once Send is entered, failed/incomplete evidence is uncertain,
+even with zero completed frames; uncertainty fences new writes before releasing
+the writer slot. Known completed frames are diagnostic evidence only, not provider
+acceptance or playback. Graceful close records at most one close-frame write and
+keeps received-event custody/read-only receipts until explicit release or expiry.
+Immediate native fencing and local release remain separate from network close.

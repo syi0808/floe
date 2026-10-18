@@ -100,6 +100,9 @@ func (h *InferenceHandler) serveLive(w http.ResponseWriter, r *http.Request, p t
 		fail(inference.Failure{Code: inference.Validation})
 		return
 	}
+	if h.serveLiveWrite(w, r, p) {
+		return
+	}
 	switch r.URL.Path {
 	case "/v1/live/prepare":
 		var request livePrepareRequest
@@ -196,6 +199,19 @@ func (h *InferenceHandler) serveLive(w http.ResponseWriter, r *http.Request, p t
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/v1/live/calls/")
+		if call, operation, ok := strings.Cut(id, "/writes/"); ok {
+			if !trust.ValidID(call) || !trust.ValidID(operation) {
+				fail(inference.Failure{Code: inference.Validation})
+				return
+			}
+			out, err := h.Service.LiveWriteStatus(r.Context(), p, call, operation)
+			if err != nil {
+				fail(err)
+				return
+			}
+			writeInferenceJSON(w, liveWriteProjection(out))
+			return
+		}
 		eventRead := strings.HasSuffix(id, "/event")
 		if eventRead {
 			id = strings.TrimSuffix(id, "/event")
