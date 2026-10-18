@@ -49,6 +49,8 @@ impl LiveModelCapabilities {
 #[serde(deny_unknown_fields)]
 pub struct LiveTransportLimits {
     pub initial_context_bytes: u64,
+    /// Maximum whole logical append payload; provider frame chunking is private
+    /// adapter policy and may use a smaller wire-frame bound.
     pub append_bytes: u64,
     pub local_session_duration_ms: u64,
 }

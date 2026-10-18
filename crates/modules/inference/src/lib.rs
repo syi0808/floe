@@ -27,3 +27,10 @@ pub use ports::live_provider::{
     LIVE_PRESENTATION_CONSUMER, LIVE_PRESENTATION_PURPOSE, LiveModelPlanRequest, LiveModelProvider,
     ObservedLiveModelCapability, PreparedLiveModelProfile,
 };
+
+pub use ports::live_transport::{
+    CanonicalLiveStart, LiveDispatchCustody, LiveDispatchIntent, LiveSessionControl,
+    LiveStartRequest, PreparedLiveTransport,
+};
+
+pub use application::AuthorizedLiveSession;

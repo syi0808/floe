@@ -23,7 +23,7 @@ pub struct AdmittedDispatchTarget {
 
 impl AdmittedDispatchTarget {
     pub fn from_consumed<Resolver, Authority>(
-        fence: &floe_access::ModelDispatchFence<'_, '_, '_, Resolver, Authority>,
+        fence: &floe_access::ModelDispatchFence<Resolver, Authority>,
     ) -> Self {
         let (binding_digest, target) = fence.target();
         Self {

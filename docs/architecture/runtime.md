@@ -1156,7 +1156,7 @@ Call-create POST and a consumed append batch are never blindly repeated. A known
 call ID survives a malformed answer as uncertain startup custody; a closed or
 revoked call cannot release a usable SDP answer. Append writes and session.close
 writes do not claim provider acceptance, playback, remote termination or usage.
-Credential rotation, logout and shutdown close local sidebands; native capture
+Credential rotation, logout, captured credential expiry and shutdown close local sidebands; native capture
 Stop still belongs to the client driver and cannot be inferred from that close.
 
 These transport operations are not exposed through a public Gateway route yet.
@@ -1164,3 +1164,59 @@ Live Inference selection/source/budget admission, per-client control ownership,
 retained event acknowledgement and Rust/native composition are the remaining
 production gates. The fixture uses local HTTP/WebSocket servers and synthetic
 credentials only; no actual account or microphone qualification is implied.
+
+
+### Owned live dispatch authority and accounting
+
+The diagram is the synthetic-qualified owner path; concrete native media and the
+continuous provider delivery controller are still pending.
+
+```mermaid
+flowchart TD
+    Plan[One prepared live selection + exact Context projection] --> Admit[Shared Access admission + budget reservation + codec preflight]
+    Native[Exact confirmed-muted native lease receipt] --> Claim[Fresh Voice journal dispatch claim]
+    Admit --> Claim
+    Claim --> Fence[Consume Access fence again at handoff]
+    Fence --> Start[One provider transport start]
+    Start --> Release[Revalidate before publishing the live guard]
+    Release --> Monitor[Independent source and lifetime monitor]
+    Retire[Voice owner / preparation cancellation / deadline] --> Cutoff[Terminal local adapter fence]
+    Monitor --> Cutoff
+    End[Final usage or uncertain termination] --> Ledger[Existing Execution attempt ledger]
+    Ledger --> Store[Immutable Voice usage receipt + Stop intent]
+    Store -. does not confirm .-> Ack[Exact native Stop acknowledgement]
+    Ack --> Lease[Release local media lease]
+```
+
+Access now owns its canonical model-dispatch permit/fence dependencies through
+Arc and retains the original execution scope value. Generation and live calls
+use the same authorization policy; ownership never extends a deadline or removes
+cancellation. Inference consumes one prepared live transport only after exact
+Context/plan/media correlation, source admission, real budget reservation, pure
+adapter preflight and a fresh Voice journal dispatch claim. Voice compares the
+entire saved intent and requires the confirmed-muted native lease. Replayed or
+uncertain claims never authorize another provider start.
+
+A live guard retains the consumed Access fence and the canonical Voice generation
+lifetime. Its independent monitor observes authorization every 250 ms, bounds a
+stalled authorization read at 500 ms, and interrupts even an in-flight check when
+the owner/preparation lifetime ends. These are host scheduling bounds, not a
+zero-latency external-revocation guarantee. Local fencing does not wait for DB or
+provider cleanup and is terminal for the lease; actual native Stop confirmation
+still owns local-lease release. RAII covers cancellation after a transport returns
+but before post-handoff authorization can publish it. No raw transport is exposed
+from the guard.
+
+Accounting uses Execution's existing model-attempt ledger. A dispatched dropped
+or uncertain call retains unknown usage; observed overruns retain their receipt
+rather than refunding the reservation. Voice stores the exact terminal receipt
+once and requests Stop, without claiming microphone/provider-close completion. Exact replay is read-only;
+changed settlement conflicts. A new epoch may recover only the conservative
+saved ceiling after retiring old ingress, never invent observed zero usage or
+revive capture. Source/layout changes remain same-snapshot development data;
+there is no automatic profile or key reset.
+
+This startup/accounting guard is not yet the production event/append controller.
+Continuous guarded delivery, cumulative append provenance, controller registration
+and late settlement during generation shutdown, authenticated Gateway selection
+and native/Flutter composition remain explicit integration work.

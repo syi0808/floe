@@ -3828,3 +3828,6 @@ fn typed_work_admission_queues_during_execution_and_cancels_only_pending_work() 
 
 #[path = "support/voice_work.rs"]
 mod voice_work;
+
+#[path = "support/voice_dispatch.rs"]
+mod voice_dispatch;

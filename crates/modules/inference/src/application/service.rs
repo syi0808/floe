@@ -46,8 +46,8 @@ impl InferenceAvailability {
 /// The sole role-neutral planner. Source projection follows its immutable plan.
 pub struct InferenceService<Provider, Resolver, Authority> {
     pub(super) provider: Provider,
-    resolver: Arc<Resolver>,
-    authority: Arc<Authority>,
+    pub(super) resolver: Arc<Resolver>,
+    pub(super) authority: Arc<Authority>,
 }
 
 impl<Provider, Resolver, Authority> InferenceService<Provider, Resolver, Authority> {
@@ -272,9 +272,9 @@ where
         };
         let permit = admit_model_dispatch(
             dispatch,
-            self.resolver.as_ref(),
-            self.authority.as_ref(),
-            scope,
+            self.resolver.clone(),
+            self.authority.clone(),
+            scope.clone(),
         )
         .await?;
         let mut tokens = request

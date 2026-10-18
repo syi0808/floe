@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 /// Non-clone and privately constructed. Inspection is not a dispatch token.
 pub struct PreparedLiveSelection<T> {
-    plan: LiveModelPlan,
+    pub(super) plan: LiveModelPlan,
     pub(super) target: floe_access::ModelDispatchTarget,
     pub(super) transport: T,
     pub(super) preparation_cancellation: floe_execution::Cancellation,

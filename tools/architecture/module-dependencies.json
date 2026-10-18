@@ -144,6 +144,7 @@
       "responsibility": "Live session lifecycle, native intent correlation and presentation ownership; no OS or provider wire",
       "group": "modules",
       "allowed_internal_dependencies": [
+        "inference",
         "conversation",
         "conversation_contract",
         "model_contract",

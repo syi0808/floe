@@ -1306,3 +1306,112 @@ async fn concurrent_event_observers_share_one_input_and_one_work_receipt() {
         a.work
     );
 }
+
+#[tokio::test]
+async fn terminal_live_usage_survives_lost_ack_and_replays_read_only_without_zero_refund() {
+    let (f, vault) = fixture().await;
+    let call = capturing(&f, &vault).await;
+    let usage = call.unresolved_usage();
+    assert!(usage.dispatched && usage.accounting.unknown_tokens && usage.accounting.unknown_cost);
+    let request = mutation(&call, VoiceMutationKind::SettleUsage { receipt: usage });
+    vault
+        .registry_transaction_ack_loss
+        .store(true, Ordering::Release);
+    assert!(vault.mutate(&f.actor, request.clone()).await.is_err());
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    let retained = reopened
+        .read_call(&f.actor, call.intent.binding.voice_session_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.usage, Some(usage));
+    let mut connection = reopened.connection().unwrap();
+    let writer = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let replay = reopened.mutate(&f.actor, request.clone()).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.record.usage, Some(usage));
+    writer.rollback().await.unwrap();
+    let mut changed = usage;
+    changed.charged_tokens -= 1;
+    let changed = mutation(
+        &retained,
+        VoiceMutationKind::SettleUsage { receipt: changed },
+    );
+    assert!(reopened.mutate(&f.actor, changed).await.is_err());
+    assert_eq!(
+        reopened
+            .read_call(&f.actor, call.intent.binding.voice_session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .usage,
+        Some(usage)
+    );
+}
+#[tokio::test]
+async fn new_epoch_can_only_settle_conservative_usage_after_retiring_old_ingress() {
+    let (f, vault) = fixture().await;
+    let call = capturing(&f, &vault).await;
+    let actor = OwnerActor {
+        runtime_epoch: f.actor.runtime_epoch + 1,
+        ..f.actor.clone()
+    };
+    let usage = call.unresolved_usage();
+    let early = mutation(&call, VoiceMutationKind::SettleUsage { receipt: usage });
+    assert!(vault.mutate(&actor, early).await.is_err());
+    let retired = vault
+        .mutate(&actor, mutation(&call, VoiceMutationKind::Stop {}))
+        .await
+        .unwrap()
+        .record;
+    let mut fake_zero = usage;
+    fake_zero.charged_tokens = 0;
+    fake_zero.charged_cost_micros = 0;
+    fake_zero.accounting = floe_execution::budget::ModelAccounting {
+        observed_tokens: Some(0),
+        observed_cost_micros: Some(0),
+        unknown_tokens: false,
+        unknown_cost: false,
+    };
+    assert!(
+        vault
+            .mutate(
+                &actor,
+                mutation(
+                    &retired,
+                    VoiceMutationKind::SettleUsage { receipt: fake_zero }
+                )
+            )
+            .await
+            .is_err()
+    );
+    let settled = vault
+        .mutate(
+            &actor,
+            mutation(&retired, VoiceMutationKind::SettleUsage { receipt: usage }),
+        )
+        .await
+        .unwrap()
+        .record;
+    assert_eq!(settled.usage, Some(usage));
+    assert!(!settled.session.local_lease_released());
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened
+            .read_call(&actor, call.intent.binding.voice_session_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .usage,
+        Some(usage)
+    );
+}

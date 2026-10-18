@@ -46,6 +46,7 @@ type LivePrepared struct {
 	runtime                   *Runtime
 	generation                uint64
 	identity, bearer, account string
+	expiresAt                 time.Time
 	used                      atomic.Bool
 }
 
@@ -69,7 +70,7 @@ func (runtime *Runtime) PrepareLive(ctx context.Context, expectedIdentity string
 	if ctx.Err() != nil || runtime.closed || runtime.credentialMutation || runtime.credentialReadError != nil || runtime.tokens == nil || accountIdentity(credential) != expectedIdentity || accountIdentity(runtime.tokens) != expectedIdentity {
 		return nil, unavailable
 	}
-	return &LivePrepared{runtime: runtime, generation: runtime.credentialGeneration, identity: expectedIdentity, bearer: credential.AccessToken, account: credential.AccountID}, nil
+	return &LivePrepared{runtime: runtime, generation: runtime.credentialGeneration, identity: expectedIdentity, bearer: credential.AccessToken, account: credential.AccountID, expiresAt: credential.ExpiresAt}, nil
 }
 
 // LiveStart is adapter-only signaling. SDP must travel only between the admitted
@@ -88,6 +89,7 @@ type LiveCall struct {
 	runtime                   *Runtime
 	generation                uint64
 	identity, bearer, account string
+	expiresAt                 time.Time
 	ctx                       context.Context
 	cancel                    context.CancelFunc
 	closed                    atomic.Bool
@@ -116,11 +118,17 @@ func (p *LivePrepared) Start(lifetime context.Context, in LiveStart) (*LiveCall,
 	if !bounded || !deadline.After(time.Now()) || lifetime.Err() != nil || !in.validate() {
 		return nil, LiveStartError{Failure: invalidOutput}
 	}
+	if !time.Now().Before(p.expiresAt) {
+		return nil, LiveStartError{Failure: ErrCredentialExpired}
+	}
 	if !p.used.CompareAndSwap(false, true) {
 		return nil, LiveStartError{Failure: errLiveConsumed}
 	}
-	ctx, cancel := context.WithCancel(lifetime)
-	c := &LiveCall{runtime: p.runtime, generation: p.generation, identity: p.identity, bearer: p.bearer, account: p.account, ctx: ctx, cancel: cancel, writer: make(chan struct{}, 1)}
+	if p.expiresAt.Before(deadline) {
+		deadline = p.expiresAt
+	}
+	ctx, cancel := context.WithDeadline(lifetime, deadline)
+	c := &LiveCall{runtime: p.runtime, generation: p.generation, identity: p.identity, bearer: p.bearer, account: p.account, expiresAt: p.expiresAt, ctx: ctx, cancel: cancel, writer: make(chan struct{}, 1)}
 	r := p.runtime
 	r.mu.Lock()
 	if r.closed || r.credentialMutation || r.credentialGeneration != p.generation || accountIdentity(r.tokens) != p.identity {
@@ -224,7 +232,7 @@ func (c *LiveCall) headers(headers http.Header) {
 	headers.Set("User-Agent", "floe-server/0.1")
 }
 func (c *LiveCall) current() bool {
-	if c.closed.Load() || c.ctx.Err() != nil {
+	if c.closed.Load() || c.ctx.Err() != nil || !time.Now().Before(c.expiresAt) {
 		return false
 	}
 	r := c.runtime

@@ -79,6 +79,29 @@ pub struct ModelAttemptReceipt {
     pub dispatched: bool,
 }
 
+impl ModelAttemptReceipt {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.attempt_id.is_nil() {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.accounting
+            .validate_charge(self.charged_tokens, self.charged_cost_micros)?;
+        if self.dispatched {
+            if self.accounting.unknown_tokens != self.accounting.observed_tokens.is_none()
+                || self.accounting.unknown_cost != self.accounting.observed_cost_micros.is_none()
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+        } else if self.charged_tokens != 0
+            || self.charged_cost_micros != 0
+            || self.accounting != ModelAccounting::default()
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 enum ModelAttemptState {
     Pending { dispatched: bool },
@@ -924,6 +947,43 @@ mod tests {
     };
     use floe_kernel::AgentFailure;
     use uuid::Uuid;
+
+    #[test]
+    fn model_receipt_validation_distinguishes_unknown_from_observed_zero() {
+        use super::{ModelAccounting, ModelAttemptReceipt};
+        let known_zero = ModelAttemptReceipt {
+            attempt_id: Uuid::new_v4(),
+            charged_tokens: 0,
+            charged_cost_micros: 0,
+            accounting: ModelAccounting {
+                observed_tokens: Some(0),
+                observed_cost_micros: Some(0),
+                unknown_tokens: false,
+                unknown_cost: false,
+            },
+            dispatched: true,
+        };
+        known_zero.validate().unwrap();
+        let mut missing = known_zero;
+        missing.accounting = ModelAccounting::default();
+        assert_eq!(missing.validate(), Err(AgentFailure::InvalidInput));
+        missing.dispatched = false;
+        missing.validate().unwrap();
+        missing.charged_tokens = 1;
+        assert_eq!(missing.validate(), Err(AgentFailure::InvalidInput));
+        let mut unknown = known_zero;
+        unknown.charged_tokens = 10;
+        unknown.charged_cost_micros = 20;
+        unknown.accounting = ModelAccounting {
+            observed_tokens: None,
+            observed_cost_micros: None,
+            unknown_tokens: true,
+            unknown_cost: true,
+        };
+        unknown.validate().unwrap();
+        unknown.attempt_id = Uuid::nil();
+        assert_eq!(unknown.validate(), Err(AgentFailure::InvalidInput));
+    }
 
     #[test]
     fn remaining_ceiling_tracks_sequential_positive_cost_attempts() {

@@ -2873,3 +2873,40 @@ was used. This is an adapter foundation: live-purpose selection, source/budget f
 control handles and retained delivery, Rust control/Inference ownership and native
 WebRTC/Flutter still need composition. No new public HTTP route is exposed by this
 slice. The existing server credential owner remains the only credential holder.
+
+
+### Owned live dispatch and accounting in progress
+
+The borrowed Access dispatch fence has been migrated, including generation
+callers, to one owned fence with the original cancellation/deadline. The live
+start path now joins exact Voice/Vault dispatch custody with that same source
+policy and Execution budget reservation. A retained guard fences a returned
+transport on post-handoff failure, later revocation, owner retirement or deadline;
+accounting never becomes an implicit native Stop receipt. The retirement fixture
+first reproduced a stalled source-read delay; retirement now interrupts that
+check rather than waiting for its timeout.
+
+Voice now stores immutable terminal accounting, retains known receipts across
+ACK loss, and permits only conservative unknown recovery in a retired old epoch.
+Focused Inference/Access/Execution and physical Vault checks pass; the real App
+Voice/Inference claim fixture includes immutable settlement and native-stop
+separation. The Go adapter also fences the captured credential expiry, including
+a prepared capability that expires before dispatch.
+Final qualification covers 804 frozen inputs (617 Rust/Cargo, 184 Go/module,
+one shared event fixture, two architecture-validation files): workspace and
+doctests 541 passed; App QA 85 passed plus one intentional ignore; Linux FFI
+built; boundary/whitespace checks passed (27 nodes, 154 edges). The identical Go
+source snapshot passes all race tests in 17 tested packages and go vet. Fifteen
+Go live-adapter test groups include captured credential expiry. Twenty Inference
+unit cases cover planning/selection plus live source/lifetime/accounting. The
+causal source failure is recorded before cancellation/local fencing so a later
+cancellation cannot hide the review/expiry reason; that publication ordering has
+a regression fixture too. All transport/native observations are synthetic. No
+real account, microphone or public live Gateway route was used.
+
+Next: own the continuous reader and append delivery without exposing the raw
+transport; retain cumulative source/memory lineage for all transmitted context;
+register the long-lived controller before start so shutdown can drain known
+settlement after closing public admission. Then compose Gateway live selection,
+per-client control/delivery and native media. Do not mistake the current startup
+resource guard for that completed controller or actual audio qualification.

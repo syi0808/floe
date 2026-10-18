@@ -6,7 +6,7 @@ use crate::{
     VoiceMutationAdmission, VoiceStartAdmission, VoiceStartIntent,
 };
 use floe_conversation::ConversationOwner;
-use floe_execution::ExecutionScope;
+use floe_execution::{Cancellation, ExecutionScope};
 use floe_kernel::{AgentFailure, CommandFailure, OwnerActor};
 use floe_model_contract::LiveProviderEvent;
 use std::{
@@ -30,6 +30,7 @@ pub struct VoiceService {
     journal: Arc<dyn VoiceIngressJournal>,
     conversation: Arc<dyn ConversationOwner>,
     closing: AtomicBool,
+    shutdown: Cancellation,
     tasks: Mutex<JoinSet<()>>,
 }
 #[derive(Clone, Debug)]
@@ -51,6 +52,7 @@ impl VoiceService {
             journal,
             conversation,
             closing: AtomicBool::new(false),
+            shutdown: Cancellation::new(),
             tasks: Mutex::new(JoinSet::new()),
         })
     }
@@ -167,8 +169,49 @@ impl VoiceService {
             .run(self.journal.read_event(actor, voice, kind, id))
             .await
     }
+    /// Records the Inference owner's exact terminal accounting independently of
+    /// native Stop/remote-close receipts. Replay reads the original fact only.
+    pub async fn settle_usage(
+        &self,
+        actor: &OwnerActor,
+        voice: Uuid,
+        receipt: floe_execution::budget::ModelAttemptReceipt,
+        scope: &ExecutionScope,
+    ) -> Result<floe_execution::budget::ModelAttemptReceipt, CommandFailure<AgentFailure>> {
+        self.check(actor).map_err(CommandFailure::NotAdmitted)?;
+        receipt.validate().map_err(CommandFailure::Indeterminate)?;
+        let record = self
+            .read_call(actor, voice, scope)
+            .await
+            .map_err(CommandFailure::Indeterminate)?
+            .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+        if record.intent.binding.plan_id != receipt.attempt_id {
+            return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
+        }
+        if let Some(saved) = record.usage {
+            return if saved == receipt {
+                Ok(saved)
+            } else {
+                Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
+            };
+        }
+        let request = VoiceMutation {
+            voice_session_id: voice,
+            command_id: Uuid::new_v5(&voice, b"floe.voice.usage-settlement"),
+            expected_revision: record.revision,
+            kind: crate::VoiceMutationKind::SettleUsage { receipt },
+        };
+        let admission = self.mutate(actor, request, scope).await?;
+        admission
+            .record
+            .usage
+            .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+    }
+
     pub fn close_admission(&self) {
         self.closing.store(true, Ordering::Release);
+        self.shutdown
+            .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
     }
     pub async fn shutdown_and_drain(&self, scope: &ExecutionScope) -> Result<(), AgentFailure> {
         self.close_admission();
@@ -186,5 +229,61 @@ impl VoiceService {
                 }
             })
             .await
+    }
+}
+
+impl floe_inference::LiveDispatchCustody for VoiceService {
+    fn lifetime_cancellation(&self, actor: &OwnerActor) -> Result<Cancellation, AgentFailure> {
+        self.check(actor)?;
+        Ok(self.shutdown.clone())
+    }
+
+    fn claim<'a>(
+        &'a self,
+        intent: &'a floe_inference::LiveDispatchIntent,
+        scope: &'a ExecutionScope,
+    ) -> floe_execution::BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            intent.validate()?;
+            self.check(&intent.actor)?;
+            let record = self
+                .read_call(&intent.actor, intent.voice_session_id, scope)
+                .await?
+                .ok_or(AgentFailure::NotFound)?;
+            let saved = &record.intent;
+            if saved.binding.actor != intent.actor
+                || saved.binding.surface_session_id != intent.surface_session_id
+                || saved.binding.media_lease_id != intent.media_lease_id
+                || saved.binding.plan_id != intent.plan.operation_id
+                || saved.model_binding != intent.plan.binding_digest
+                || saved.selection_commitment != intent.plan.selection_commitment
+                || saved.capabilities != intent.plan.capabilities
+                || saved.limits != intent.plan.limits
+                || saved.boundary != intent.plan.boundary
+                || saved.context_digest != intent.projection_digest
+                || saved.reservation != intent.reservation
+            {
+                return Err(AgentFailure::PolicyDenied);
+            }
+            if record.session.remote() != crate::RemoteState::NotStarted {
+                return Ok(false);
+            }
+            let request = VoiceMutation {
+                voice_session_id: intent.voice_session_id,
+                command_id: Uuid::new_v5(&intent.voice_session_id, b"floe.voice.provider-dispatch"),
+                expected_revision: record.revision,
+                kind: crate::VoiceMutationKind::BeginRemoteDispatch {},
+            };
+            // Pure canonical policy preflight rejects unconfirmed native state
+            // before submitting a command. Storage repeats it under the CAS.
+            record.apply(&intent.actor, &request)?;
+            // The exact confirmed native muted lease is mandatory. CAS races
+            // and uncertain storage never become provider dispatch.
+            let admission = self
+                .mutate(&intent.actor, request, scope)
+                .await
+                .map_err(CommandFailure::into_failure)?;
+            Ok(admission.fresh_remote_dispatch())
+        })
     }
 }

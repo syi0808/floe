@@ -6,34 +6,38 @@ use chrono::Utc;
 use floe_context_contract::{DataClass, DependencyCoverage};
 use floe_execution::ExecutionScope;
 use floe_kernel::AgentFailure;
+use std::sync::Arc;
 
+/// Owns the original resolver/authority and execution scope so a live call can
+/// retain the same fence across awaits. Ownership never extends its deadline or
+/// detaches cancellation. Generation and live dispatch share this one policy.
 #[must_use = "consume the permit at the provider handoff fence"]
-pub struct ModelDispatchPermit<'resolver, 'authority, 'scope, Resolver, Authority> {
+pub struct ModelDispatchPermit<Resolver, Authority> {
     request: ModelDispatchRequest,
-    resolver: &'resolver Resolver,
-    authority: &'authority Authority,
-    scope: &'scope ExecutionScope,
+    resolver: Arc<Resolver>,
+    authority: Arc<Authority>,
+    scope: ExecutionScope,
 }
 #[must_use = "revalidate the fence before releasing the response"]
-pub struct ModelDispatchFence<'resolver, 'authority, 'scope, Resolver, Authority> {
+pub struct ModelDispatchFence<Resolver, Authority> {
     request: ModelDispatchRequest,
-    resolver: &'resolver Resolver,
-    authority: &'authority Authority,
-    scope: &'scope ExecutionScope,
+    resolver: Arc<Resolver>,
+    authority: Arc<Authority>,
+    scope: ExecutionScope,
 }
-impl<Resolver, Authority> ModelDispatchFence<'_, '_, '_, Resolver, Authority> {
+impl<Resolver, Authority> ModelDispatchFence<Resolver, Authority> {
     pub fn target(&self) -> (&[u8; 32], &ModelDispatchTarget) {
         (&self.request.binding_digest, &self.request.target)
     }
 }
 
-pub async fn admit_model_dispatch<'r, 'a, 's, R: DependencyResolver, A: GatewayAdmission>(
+pub async fn admit_model_dispatch<R: DependencyResolver, A: GatewayAdmission>(
     request: ModelDispatchRequest,
-    resolver: &'r R,
-    authority: &'a A,
-    scope: &'s ExecutionScope,
-) -> Result<ModelDispatchPermit<'r, 'a, 's, R, A>, AgentFailure> {
-    authorize_request(&request, resolver, authority, scope).await?;
+    resolver: Arc<R>,
+    authority: Arc<A>,
+    scope: ExecutionScope,
+) -> Result<ModelDispatchPermit<R, A>, AgentFailure> {
+    authorize_request(&request, resolver.as_ref(), authority.as_ref(), &scope).await?;
     Ok(ModelDispatchPermit {
         request,
         resolver,
@@ -41,16 +45,16 @@ pub async fn admit_model_dispatch<'r, 'a, 's, R: DependencyResolver, A: GatewayA
         scope,
     })
 }
-pub async fn consume_model_dispatch<'r, 'a, 's, R: DependencyResolver, A: GatewayAdmission>(
-    permit: ModelDispatchPermit<'r, 'a, 's, R, A>,
-) -> Result<ModelDispatchFence<'r, 'a, 's, R, A>, AgentFailure> {
+pub async fn consume_model_dispatch<R: DependencyResolver, A: GatewayAdmission>(
+    permit: ModelDispatchPermit<R, A>,
+) -> Result<ModelDispatchFence<R, A>, AgentFailure> {
     let ModelDispatchPermit {
         request,
         resolver,
         authority,
         scope,
     } = permit;
-    authorize_request(&request, resolver, authority, scope).await?;
+    authorize_request(&request, resolver.as_ref(), authority.as_ref(), &scope).await?;
     Ok(ModelDispatchFence {
         request,
         resolver,
@@ -59,9 +63,15 @@ pub async fn consume_model_dispatch<'r, 'a, 's, R: DependencyResolver, A: Gatewa
     })
 }
 pub async fn revalidate_model_dispatch<R: DependencyResolver, A: GatewayAdmission>(
-    fence: &ModelDispatchFence<'_, '_, '_, R, A>,
+    fence: &ModelDispatchFence<R, A>,
 ) -> Result<(), AgentFailure> {
-    authorize_request(&fence.request, fence.resolver, fence.authority, fence.scope).await
+    authorize_request(
+        &fence.request,
+        fence.resolver.as_ref(),
+        fence.authority.as_ref(),
+        &fence.scope,
+    )
+    .await
 }
 async fn authorize_request<R: DependencyResolver, A: GatewayAdmission>(
     request: &ModelDispatchRequest,
@@ -239,28 +249,86 @@ mod memory_fence_tests {
         }
     }
     #[tokio::test]
-    async fn forgotten_memory_is_checked_at_admission_handoff_and_response_release() {
-        let scope = scope();
-        let resolver = MemoryResolver {
-            live: AtomicBool::new(true),
-            reads: AtomicUsize::new(0),
-        };
-        let permit = admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope)
+    async fn owned_fence_crosses_tasks_without_detaching_original_cancellation() {
+        let (fence, cancellation, resolver) = {
+            let scope = scope();
+            let cancellation = scope.cancellation().clone();
+            let resolver = Arc::new(MemoryResolver {
+                live: AtomicBool::new(true),
+                reads: AtomicUsize::new(0),
+            });
+            let permit = admit_model_dispatch(
+                request(&scope),
+                resolver.clone(),
+                Arc::new(NoGateway),
+                scope,
+            )
             .await
             .unwrap();
+            (
+                consume_model_dispatch(permit).await.unwrap(),
+                cancellation,
+                resolver,
+            )
+        };
+        let fence = tokio::spawn(async move {
+            revalidate_model_dispatch(&fence).await.unwrap();
+            fence
+        })
+        .await
+        .unwrap();
+        resolver.live.store(false, Ordering::SeqCst);
+        assert_eq!(
+            revalidate_model_dispatch(&fence).await,
+            Err(AgentFailure::StaleContext)
+        );
+        resolver.live.store(true, Ordering::SeqCst);
+        cancellation.cancel_with_reason(floe_execution::CancelReason::User);
+        assert_eq!(
+            revalidate_model_dispatch(&fence).await,
+            Err(AgentFailure::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn forgotten_memory_is_checked_at_admission_handoff_and_response_release() {
+        let scope = scope();
+        let resolver = Arc::new(MemoryResolver {
+            live: AtomicBool::new(true),
+            reads: AtomicUsize::new(0),
+        });
+        let permit = admit_model_dispatch(
+            request(&scope),
+            resolver.clone(),
+            Arc::new(NoGateway),
+            scope.clone(),
+        )
+        .await
+        .unwrap();
         resolver.live.store(false, Ordering::SeqCst);
         assert!(matches!(
             consume_model_dispatch(permit).await,
             Err(AgentFailure::StaleContext)
         ));
         assert!(matches!(
-            admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope).await,
+            admit_model_dispatch(
+                request(&scope),
+                resolver.clone(),
+                Arc::new(NoGateway),
+                scope.clone()
+            )
+            .await,
             Err(AgentFailure::StaleContext)
         ));
         resolver.live.store(true, Ordering::SeqCst);
-        let permit = admit_model_dispatch(request(&scope), &resolver, &NoGateway, &scope)
-            .await
-            .unwrap();
+        let permit = admit_model_dispatch(
+            request(&scope),
+            resolver.clone(),
+            Arc::new(NoGateway),
+            scope.clone(),
+        )
+        .await
+        .unwrap();
         let fence = consume_model_dispatch(permit).await.unwrap();
         resolver.live.store(false, Ordering::SeqCst);
         assert_eq!(
@@ -270,9 +338,10 @@ mod memory_fence_tests {
         assert_eq!(resolver.reads.load(Ordering::SeqCst), 6);
         let mut empty = request(&scope);
         empty.memories.clear();
-        let permit = admit_model_dispatch(empty, &resolver, &NoGateway, &scope)
-            .await
-            .unwrap();
+        let permit =
+            admit_model_dispatch(empty, resolver.clone(), Arc::new(NoGateway), scope.clone())
+                .await
+                .unwrap();
         let fence = consume_model_dispatch(permit).await.unwrap();
         revalidate_model_dispatch(&fence).await.unwrap();
         assert_eq!(

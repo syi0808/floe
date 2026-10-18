@@ -234,7 +234,7 @@ create, then explicitly joins that exact call's sideband. Initial instructions
 and bounded quoted context accompany creation. It never follows a provider
 Location as a destination, retries call creation, returns OAuth credentials, or
 falls back to a paid API. Failed signaling preserves a known call ID as uncertain
-custody while refusing media use. Credential rotation/logout and Runtime close
+custody while refusing media use. Credential rotation/logout, captured credential expiry and Runtime close
 fence pending creates and active control sockets.
 
 The bounded continuous reader normalizes final turn IDs and delegation hints;

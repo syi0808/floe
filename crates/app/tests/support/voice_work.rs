@@ -418,7 +418,14 @@ fn voice_custody_outlives_observer_cancellation_and_retirement_drains_it() {
                 Err(CommandFailure::Indeterminate(AgentFailure::Cancelled))
             ));
             assert_eq!(journal.finished.load(Ordering::Acquire), 0);
+            let owner_lifetime =
+                floe_inference::LiveDispatchCustody::lifetime_cancellation(voice.as_ref(), &actor)
+                    .unwrap();
             voice.close_admission();
+            assert!(
+                owner_lifetime.is_cancelled(),
+                "retirement reaches a retained live dispatcher"
+            );
             let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
             assert!(matches!(
                 voice

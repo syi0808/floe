@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+floe-inference = { path = "../inference" }
 floe-conversation = { path = "../conversation" }
 floe-conversation-contract = { path = "../../contracts/conversation" }
 floe-model-contract = { path = "../../contracts/model" }

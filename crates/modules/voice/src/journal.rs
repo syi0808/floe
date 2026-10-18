@@ -2,7 +2,10 @@
 //! source-processing, budget-debit or provider credentials/capabilities.
 use crate::{MediaCommand, MediaState, VoiceBinding, VoiceSession};
 use floe_context_contract::{LiveContextProjection, LiveProjectionSource};
-use floe_execution::{BoxFuture, budget::ModelReservationCeiling};
+use floe_execution::{
+    BoxFuture,
+    budget::{ModelAttemptReceipt, ModelReservationCeiling},
+};
 use floe_kernel::{AgentFailure, CommandFailure, OwnerActor};
 use floe_model_contract::{
     LiveEndEvidence, LiveModelCapabilities, LiveModelPlan, LiveTransportLimits, ModelBindingDigest,
@@ -117,6 +120,7 @@ pub struct VoiceCallRecord {
     pub revision: u64,
     pub session: VoiceSession,
     pub ingress_closed: bool,
+    pub usage: Option<ModelAttemptReceipt>,
 }
 impl VoiceCallRecord {
     pub fn prepare(intent: VoiceStartIntent) -> Result<Self, AgentFailure> {
@@ -127,6 +131,7 @@ impl VoiceCallRecord {
             revision: 1,
             session,
             ingress_closed: false,
+            usage: None,
         };
         value.validate()?;
         Ok(value)
@@ -134,11 +139,23 @@ impl VoiceCallRecord {
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.intent.validate()?;
         self.session.validate()?;
+        if let Some(receipt) = &self.usage {
+            receipt.validate()?;
+            if receipt.attempt_id != self.intent.binding.plan_id
+                || (receipt.accounting.unknown_tokens
+                    && receipt.charged_tokens > self.intent.reservation.tokens)
+                || (receipt.accounting.unknown_cost
+                    && receipt.charged_cost_micros > self.intent.reservation.cost_micros)
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+        }
         if self.ingress_closed && !self.session.stop_requested() {
             return Err(AgentFailure::InvalidInput);
         }
         if self.revision == 1
-            && (self.session.media() != MediaState::Preparing
+            && (self.usage.is_some()
+                || self.session.media() != MediaState::Preparing
                 || self.session.remote() != crate::RemoteState::NotStarted
                 || self.session.stop_requested()
                 || self.session.pending_media_command().is_none_or(|command| {
@@ -155,6 +172,35 @@ impl VoiceCallRecord {
         }
         Ok(())
     }
+    /// Conservative recovery after a lost owner scope, never an observed bill.
+    /// A recorded dispatch intent may have crossed the provider boundary.
+    pub fn unresolved_usage(&self) -> ModelAttemptReceipt {
+        if let Some(receipt) = self.usage {
+            return receipt;
+        }
+        let dispatched = self.session.remote() != crate::RemoteState::NotStarted;
+        ModelAttemptReceipt {
+            attempt_id: self.intent.binding.plan_id,
+            charged_tokens: if dispatched {
+                self.intent.reservation.tokens
+            } else {
+                0
+            },
+            charged_cost_micros: if dispatched {
+                self.intent.reservation.cost_micros
+            } else {
+                0
+            },
+            accounting: floe_execution::budget::ModelAccounting {
+                observed_tokens: None,
+                observed_cost_micros: None,
+                unknown_tokens: dispatched,
+                unknown_cost: dispatched,
+            },
+            dispatched,
+        }
+    }
+
     pub fn authorize_mutation(
         &self,
         actor: &OwnerActor,
@@ -166,7 +212,10 @@ impl VoiceCallRecord {
         {
             return Err(AgentFailure::PolicyDenied);
         }
+        let recovery_accounting = matches!(kind, VoiceMutationKind::SettleUsage { receipt }
+            if self.session.stop_requested() && self.ingress_closed && *receipt == self.unresolved_usage());
         if actor.runtime_epoch != self.intent.binding.actor.runtime_epoch
+            && !recovery_accounting
             && !matches!(
                 kind,
                 VoiceMutationKind::Stop {}
@@ -204,6 +253,28 @@ impl VoiceCallRecord {
         let mut next = self.clone();
         let mut remote_dispatch = false;
         let media_command = match &request.kind {
+            VoiceMutationKind::SettleUsage { receipt } => {
+                receipt.validate()?;
+                if receipt.attempt_id != self.intent.binding.plan_id {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                if self.usage.is_some_and(|saved| saved != *receipt) {
+                    return Err(AgentFailure::Conflict);
+                }
+                if !receipt.dispatched
+                    && (self.session.capture_started()
+                        || matches!(
+                            self.session.remote(),
+                            crate::RemoteState::Connected | crate::RemoteState::Closed
+                        ))
+                {
+                    return Err(AgentFailure::Conflict);
+                }
+                next.usage = Some(*receipt);
+                // Terminal accounting closes admission to new capture/work,
+                // without claiming the actual native or provider stop completed.
+                Some(next.session.request_stop(&policy_actor)?)
+            }
             VoiceMutationKind::CloseIngress {} => {
                 if !next.session.stop_requested() {
                     return Err(AgentFailure::Conflict);
@@ -301,6 +372,9 @@ impl fmt::Debug for VoiceCallRecord {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum VoiceMutationKind {
+    SettleUsage {
+        receipt: ModelAttemptReceipt,
+    },
     CloseIngress {},
     NativeReceipt {
         command: MediaCommand,

@@ -527,3 +527,31 @@ func TestLiveDuplicateRemoteIdentityDoesNotTakeOverAnotherActiveCall(t *testing.
 		t.Fatal("collision exposed usable media answer")
 	}
 }
+
+func TestLiveCredentialExpiryFencesPreparedAndActiveCapabilities(t *testing.T) {
+	var creates atomic.Int32
+	r := liveFixtureRuntime(t, func(w http.ResponseWriter, req *http.Request) { creates.Add(1); liveFixtureAnswer(w) })
+	expired := liveFixturePrepare(t, r)
+	expired.expiresAt = time.Now().Add(-time.Second)
+	if _, err := expired.Start(liveFixtureContext(t), liveFixtureStart()); !errors.Is(err, ErrCredentialExpired) || creates.Load() != 0 {
+		t.Fatal("expired credential capability dispatched")
+	}
+	active := liveFixturePrepare(t, r)
+	active.expiresAt = time.Now().Add(100 * time.Millisecond)
+	call, err := active.Start(liveFixtureContext(t), liveFixtureStart())
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-call.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("captured credential expiry did not bound call lifetime")
+	}
+	if call.current() {
+		t.Fatal("expired live call remains current")
+	}
+	if _, err := call.AnswerSDP(); err == nil {
+		t.Fatal("expired capability released SDP")
+	}
+	call.CloseLocal()
+}
