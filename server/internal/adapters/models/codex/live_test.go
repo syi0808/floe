@@ -157,12 +157,21 @@ func TestLiveCredentialRotationFencesPreparedAndActiveCalls(t *testing.T) {
 	r := liveFixtureRuntime(t, func(w http.ResponseWriter, req *http.Request) { creates.Add(1); liveFixtureAnswer(w) })
 	stale := liveFixturePrepare(t, r)
 	active := liveFixtureCall(t, r)
+	if err := active.deliveries.push(context.Background(), deliveryEvent("before-rotation")); err != nil {
+		t.Fatal(err)
+	}
 	next := &tokenBundle{AccessToken: "synthetic-next", RefreshToken: "synthetic-next-refresh", AccountID: "synthetic-live-account", ExpiresAt: time.Now().Add(time.Hour)}
 	if err := r.save(context.Background(), next); err != nil {
 		t.Fatal(err)
 	}
 	if active.current() || !active.closed.Load() {
 		t.Fatal("old live call survived rotation")
+	}
+	if _, err := active.Observe(liveFixtureContext(t)); !errors.Is(err, errLiveClosed) {
+		t.Fatal("retained text crossed credential rotation")
+	}
+	if err := active.Acknowledge(1); !errors.Is(err, errLiveClosed) {
+		t.Fatal("retired account acknowledged retained data")
 	}
 	if _, err := stale.Start(liveFixtureContext(t), liveFixtureStart()); err == nil || creates.Load() != 1 {
 		t.Fatal("old prepared identity dispatched")
@@ -317,12 +326,37 @@ func TestLiveSidebandUsesOwnedReaderAndOneShotAppendWithoutSessionOverwrite(t *t
 		t.Fatal(err)
 	}
 	<-attached
-	ready, err := call.Next()
-	if err != nil || ready.Kind != "ready" {
+	deadline := time.Now().Add(time.Second)
+	for {
+		call.deliveries.mu.Lock()
+		queued := len(call.deliveries.pending)
+		call.deliveries.mu.Unlock()
+		if queued == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reader waited for an observer")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := call.Observe(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled observer consumed event")
+	}
+	ready, err := call.Observe(liveFixtureContext(t))
+	if err != nil || ready.Event.Kind != "ready" {
 		t.Fatal("missing session readiness")
 	}
-	final, err := call.Next()
-	if err != nil || final.UtteranceID != "turn-a" {
+	replay, err := call.Observe(liveFixtureContext(t))
+	if err != nil || replay.Sequence != ready.Sequence {
+		t.Fatal("lost unacknowledged event")
+	}
+	if err := call.Acknowledge(ready.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	final, err := call.Observe(liveFixtureContext(t))
+	if err != nil || final.Event.UtteranceID != "turn-a" {
 		t.Fatal("lost turn identity")
 	}
 	select {
@@ -351,9 +385,17 @@ func TestLiveSidebandUsesOwnedReaderAndOneShotAppendWithoutSessionOverwrite(t *t
 			t.Fatal("missing append")
 		}
 	}
+	if err := call.Acknowledge(final.Sequence); err != nil {
+		t.Fatal(err)
+	}
 	done := make(chan error, 1)
-	go func() { _, err := call.Next(); done <- err }()
+	go func() { _, err := call.Observe(liveFixtureContext(t)); done <- err }()
 	call.CloseLocal()
+	select {
+	case <-call.Done():
+	default:
+		t.Fatal("local fence waited for delivery")
+	}
 	select {
 	case err := <-done:
 		if err == nil {
@@ -413,10 +455,14 @@ func TestLiveSessionIdentityChangeClosesCanonicalReader(t *testing.T) {
 	if err := call.Attach(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := call.Next(); err != nil {
+	first, err := call.Observe(liveFixtureContext(t))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := call.Next(); !errors.Is(err, invalidOutput) || call.current() {
+	if err := call.Acknowledge(first.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := call.Observe(liveFixtureContext(t)); !errors.Is(err, invalidOutput) || call.current() {
 		t.Fatal("mixed provider sessions released events")
 	}
 }

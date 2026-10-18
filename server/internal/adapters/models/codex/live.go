@@ -97,7 +97,7 @@ type LiveCall struct {
 	conn                      *websocket.Conn
 	attaching                 bool
 	sessionID                 string // Pinned by the one canonical reader, not an authorization ID.
-	reader                    atomic.Bool
+	deliveries                *liveDeliveryQueue
 	writer                    chan struct{}
 	callID, answer            string
 }
@@ -128,7 +128,7 @@ func (p *LivePrepared) Start(lifetime context.Context, in LiveStart) (*LiveCall,
 		deadline = p.expiresAt
 	}
 	ctx, cancel := context.WithDeadline(lifetime, deadline)
-	c := &LiveCall{runtime: p.runtime, generation: p.generation, identity: p.identity, bearer: p.bearer, account: p.account, expiresAt: p.expiresAt, ctx: ctx, cancel: cancel, writer: make(chan struct{}, 1)}
+	c := &LiveCall{runtime: p.runtime, generation: p.generation, identity: p.identity, bearer: p.bearer, account: p.account, expiresAt: p.expiresAt, ctx: ctx, cancel: cancel, writer: make(chan struct{}, 1), deliveries: newLiveDeliveryQueue()}
 	r := p.runtime
 	r.mu.Lock()
 	if r.closed || r.credentialMutation || r.credentialGeneration != p.generation || accountIdentity(r.tokens) != p.identity {
@@ -277,16 +277,12 @@ func (c *LiveCall) Attach() error {
 	}
 	c.conn = conn
 	c.mu.Unlock()
+	go c.pumpDeliveries()
 	return nil
 }
 
-// Next has no observation context: a continuous owner reader must retain each
-// returned event until downstream custody. Concurrent readers are rejected.
-func (c *LiveCall) Next() (*inference.LiveEvent, error) {
-	if !c.reader.CompareAndSwap(false, true) {
-		return nil, unavailable
-	}
-	defer c.reader.Store(false)
+// One owner pump reads wire frames independently of observation requests.
+func (c *LiveCall) readNextWire() (*inference.LiveEvent, error) {
 	for {
 		if !c.current() {
 			c.CloseLocal()

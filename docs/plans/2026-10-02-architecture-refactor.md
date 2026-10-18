@@ -2959,3 +2959,25 @@ known dependency obligations: Device-local calls permit Unknown coverage, but
 must still revalidate all previously transmitted known sources and memory
 revisions. Conflicting revisions or exhausted provenance capacity must end or
 restart the call explicitly rather than silently dropping earlier obligations.
+
+
+### Continuous Go sideband custody
+
+Successful exact-call attachment now starts the canonical owner reader. The old
+public pull-based Next path is removed; Observe/ACK retains the head across UI or
+HTTP cancellation and exact replay. A bounded queue backpressures the provider
+reader, retaining one already-received tail if cancellation arrives while full.
+Local Done is independent of delivery drain, so native Stop need not wait for
+ACK. Retained delivery still checks the captured account generation/expiry; it
+cannot cross logout/rotation. No crash-persistent delivery or provider acceptance
+is claimed, and there is no automatic call creation or reconnect retry.
+
+Synthetic HTTP/WebSocket and queue fixtures cover independent pumping, cancelled
+observation, ACK ordering/replay, retained tail at close, bounded backpressure,
+mutable-pointer isolation, debug redaction and credential rotation. Final Go
+qualification passes on 186 frozen Go/module inputs: default race tests in 17
+packages, development-tag race tests in 18 packages, and go vet for both builds.
+There are 18 focused live-adapter test groups; an earlier focused run repeated the
+suite three times under race detection. Rust/Cargo/architecture inputs remain
+identical to the prior qualified controller snapshot. Authenticated per-client
+Gateway routing and Rust source-authorized custody composition remain pending.

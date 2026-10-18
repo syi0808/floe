@@ -1163,9 +1163,19 @@ writes do not claim provider acceptance, playback, remote termination or usage.
 Credential rotation, logout, captured credential expiry and shutdown close local sidebands; native capture
 Stop still belongs to the client driver and cannot be inferred from that close.
 
+Attachment starts one continuous Go owner reader. Its bounded retained-delivery
+queue separates Observe from exact sequential ACK: lost/cancelled observation
+cannot remove an event, duplicate ACK cannot consume a later event, and normal
+local transport loss permits queued custody under the still-current account.
+Rotation/logout/captured expiry still fence release. At most 64 queued events
+plus one already-received cancellation tail are retained; backpressure replaces
+silent dropping. The independent Done signal must fence native work without
+waiting for queued custody. This state is in-memory, not crash-persistent storage
+or provider acceptance, and never permits call recreation after a lost create.
+
 These transport operations are not exposed through a public Gateway route yet.
 Live Inference selection/source/budget admission, per-client control ownership,
-retained event acknowledgement and Rust/native composition are the remaining
+authenticated retained-event routing and Rust/native composition are the remaining
 production gates. The fixture uses local HTTP/WebSocket servers and synthetic
 credentials only; no actual account or microphone qualification is implied.
 

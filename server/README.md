@@ -246,9 +246,21 @@ nor playback. Instruction appends fail before sending because no equivalent
 Codex mapping was verified. Local socket close remains remote-termination/usage
 uncertainty; a session.close write is not a provider-final receipt.
 
+Successful sideband attachment starts one owner reader independently of poll/UI
+observers. Observe returns the same call-scoped delivery until exact head ACK;
+ACK replay never consumes a later event. Cancellation of observation does not
+cancel the reader. A 64-event queue backpressures reads, with at most one extra
+already-received tail retained when owner cancellation interrupts backpressure.
+Local closure still permits custody of queued events under the exact live account
+generation, while rotation/logout/expiry prevents release. Done signals immediate
+local transport closure independently of that queue; native Stop must not wait
+for ACK drain. This is bounded in-memory custody, not crash-persistent delivery,
+provider acknowledgement, or proof of remote termination. No reconnect/create
+retry is introduced.
+
 This adapter is not exposed by a public Gateway route or the product yet.
 Inference live purpose/selection, source and budget fences, per-client control
-ownership, retained event delivery/acknowledgement, Rust control and native media
+ownership, authenticated delivery/acknowledgement routing, Rust control and native media
 composition remain required. No running account or microphone was used in the
 fixture tests. The paid public GPT-Live API and the experimental Codex subscription
 wire are distinct providers; their event names and limits are not interchangeable.
