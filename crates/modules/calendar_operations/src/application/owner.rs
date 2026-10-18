@@ -50,6 +50,12 @@ pub struct CalendarOperationsService {
     #[cfg(feature = "qa-fixtures")]
     pub(super) receipt_settlement_attempts: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(feature = "qa-fixtures")]
+    pub(super) busy_collection_acks: Arc<AtomicU8>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) lose_collection_ack: Arc<AtomicBool>,
+    #[cfg(feature = "qa-fixtures")]
+    pub(super) collection_ack_attempts: Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(feature = "qa-fixtures")]
     pub(super) busy_submission_admissions: Arc<AtomicU8>,
     #[cfg(feature = "qa-fixtures")]
     pub(super) lose_submission_ack: Arc<AtomicBool>,
@@ -86,12 +92,31 @@ impl CalendarOperationsService {
             #[cfg(feature = "qa-fixtures")]
             receipt_settlement_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             #[cfg(feature = "qa-fixtures")]
+            busy_collection_acks: Arc::new(AtomicU8::new(0)),
+            #[cfg(feature = "qa-fixtures")]
+            lose_collection_ack: Arc::new(AtomicBool::new(false)),
+            #[cfg(feature = "qa-fixtures")]
+            collection_ack_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(feature = "qa-fixtures")]
             busy_submission_admissions: Arc::new(AtomicU8::new(0)),
             #[cfg(feature = "qa-fixtures")]
             lose_submission_ack: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "qa-fixtures")]
             submission_admission_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
+    }
+
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_busy_next_collection_acks(&self, count: u8) {
+        self.busy_collection_acks.store(count, Ordering::Release);
+    }
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_lose_next_collection_ack(&self) {
+        self.lose_collection_ack.store(true, Ordering::Release);
+    }
+    #[cfg(feature = "qa-fixtures")]
+    pub fn qa_collection_ack_attempts(&self) -> usize {
+        self.collection_ack_attempts.load(Ordering::Acquire)
     }
 
     /// Local positive-admission contention, before any provider dispatch.

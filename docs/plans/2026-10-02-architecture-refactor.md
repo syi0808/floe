@@ -2981,3 +2981,48 @@ There are 18 focused live-adapter test groups; an earlier focused run repeated t
 suite three times under race detection. Rust/Cargo/architecture inputs remain
 identical to the prior qualified controller snapshot. Authenticated per-client
 Gateway routing and Rust source-authorized custody composition remain pending.
+
+
+### Guarded Rust live delivery observation
+
+Prepared live sessions now require the retained event transport, with no parallel
+control-only session path. The selected Inference guard validates sequence/content
+and source release, retains the pending delivery across observation loss, and
+advances only after exact ACK. Terminal usage remains known despite denied source
+release or guard drop; journal settlement still belongs to the registered Voice
+controller, not transport ACK or native-stop inference.
+
+A focused dropped-observer regression first failed with Interrupted: the bounded
+revalidation future reused the call's cancellation scope. Observation now derives
+child scopes, including nested Access resolver/Gateway revalidation, preserving
+both original cancellation parents and deadlines. Deterministic polling fixtures
+cover cancellation during post-delivery source checks and after remote ACK but
+before its response. Other fixtures cover source revocation, invalid sequence,
+repeated receive/ACK, known usage on drop and independent request cancellation.
+Focused Access/Inference tests pass; final aggregate qualification is recorded
+with the Calendar collection correction below.
+Cumulative append provenance, concrete Voice event handling and authenticated
+Gateway/native/Flutter composition remain open.
+
+
+### Calendar collection ACK contention found during live regression gate
+
+The first aggregate App run for guarded delivery failed one existing Calendar
+case at Succeeded/collection Pending; a target rerun passed. That occurrence did
+not retain the exact failed storage phase, so it is not by itself proof of every
+intermittent Storage failure's cause. Inspection found that a known Day receipt's
+final Vault acknowledgement was attempted only once, unlike provider-receipt
+settlement. A deterministic injected ACK Busy regression failed with one attempt,
+confirming this liveness defect independently of the original flaky run.
+
+The existing bounded known-local-custody retry policy now covers that exact
+CollectionAck without rebuilding its ticket revision, repeating Day collection,
+looking up the external receipt or redispatching the provider effect. New real
+App fixtures exercise Busy, lost commit acknowledgement and shutdown while Busy.
+The pending-status diagnostic now includes the collection-ACK attempt count.
+All 14 focused Calendar integration tests passed three consecutive runs after
+the fix. Final combined qualification passes on 622 frozen Rust/Cargo/validation
+inputs: workspace and doctests 550, App QA 91 plus one intentional ignore, Linux
+FFI, boundary validation (27 nodes, 154 edges), and whitespace checks. The 186
+Go/module inputs are unchanged from the qualified continuous-reader checkpoint.
+Generic Day storage error classification is not changed by this fix.

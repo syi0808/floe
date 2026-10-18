@@ -18,7 +18,7 @@ use floe_model_contract::{
     LiveContextPayload, LiveModelCapabilities, LiveTransportLimits, ModelBindingDigest,
     ModelSelectionCommitment, ProcessingBoundary,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use uuid::Uuid;
 
 struct FenceGate {
@@ -26,6 +26,13 @@ struct FenceGate {
     release: std::sync::mpsc::Receiver<()>,
 }
 struct State {
+    events: Mutex<std::collections::VecDeque<LiveDelivery>>,
+    observations: AtomicUsize,
+    acknowledged: AtomicU64,
+    lose_ack_response: AtomicBool,
+    stall_ack_response: AtomicBool,
+    revoke_after_observe: AtomicBool,
+    stall_after_observe: AtomicBool,
     fence_gate: Mutex<Option<FenceGate>>,
     owner_stop: Cancellation,
     stalled: tokio::sync::Notify,
@@ -45,6 +52,13 @@ struct State {
 impl State {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            events: Mutex::new(Default::default()),
+            observations: AtomicUsize::new(0),
+            acknowledged: AtomicU64::new(0),
+            lose_ack_response: AtomicBool::new(false),
+            stall_ack_response: AtomicBool::new(false),
+            revoke_after_observe: AtomicBool::new(false),
+            stall_after_observe: AtomicBool::new(false),
             fence_gate: Mutex::new(None),
             owner_stop: Cancellation::new(),
             stalled: tokio::sync::Notify::new(),
@@ -114,6 +128,53 @@ impl LiveSessionControl for Session {
             gate.entered.send(()).unwrap();
             gate.release.recv_timeout(Duration::from_secs(2)).unwrap();
         }
+    }
+}
+impl LiveEventTransport for Session {
+    fn observe<'a>(
+        &'a self,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<LiveDelivery, AgentFailure>> {
+        Box::pin(async move {
+            self.0.observations.fetch_add(1, Ordering::SeqCst);
+            let event = self.0.events.lock().unwrap().front().cloned();
+            if self.0.revoke_after_observe.load(Ordering::SeqCst) {
+                self.0.live.store(false, Ordering::SeqCst);
+            }
+            if self.0.stall_after_observe.load(Ordering::SeqCst) {
+                self.0.stall.store(true, Ordering::SeqCst);
+            }
+            match event {
+                Some(event) => Ok(event),
+                None => std::future::pending().await,
+            }
+        })
+    }
+    fn acknowledge<'a>(
+        &'a self,
+        sequence: u64,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            if sequence <= self.0.acknowledged.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            {
+                let mut events = self.0.events.lock().unwrap();
+                if events.front().map(|v| v.sequence) != Some(sequence) {
+                    return Err(AgentFailure::Conflict);
+                }
+                events.pop_front();
+            }
+            self.0.acknowledged.store(sequence, Ordering::SeqCst);
+            if self.0.stall_ack_response.load(Ordering::SeqCst) {
+                return scope.run(std::future::pending()).await;
+            }
+            if self.0.lose_ack_response.swap(false, Ordering::SeqCst) {
+                return Err(AgentFailure::ServerModelUnavailable);
+            }
+            Ok(())
+        })
     }
 }
 impl PreparedLiveTransport for Transport {
@@ -584,4 +645,176 @@ async fn source_failure_is_recorded_before_local_fencing_and_derivative_cancella
         Some(AgentFailure::StaleContext),
         "cancellation caused by revocation must not hide the revocation"
     );
+}
+
+fn delivery(sequence: u64) -> LiveDelivery {
+    LiveDelivery {
+        sequence,
+        event: floe_model_contract::LiveProviderEvent::PersonUtteranceFinal {
+            utterance_id: format!("utterance-{sequence}"),
+            text: "synthetic input".into(),
+        },
+    }
+}
+#[tokio::test]
+async fn retained_live_delivery_and_lost_ack_never_consume_later_input() {
+    let state = State::new();
+    state
+        .events
+        .lock()
+        .unwrap()
+        .extend([delivery(1), delivery(2)]);
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    assert_eq!(call.receive().await.unwrap(), delivery(1));
+    assert_eq!(call.receive().await.unwrap(), delivery(1));
+    assert_eq!(state.observations.load(Ordering::SeqCst), 1);
+    assert_eq!(call.acknowledge(2).await, Err(AgentFailure::Conflict));
+    state.lose_ack_response.store(true, Ordering::SeqCst);
+    assert_eq!(
+        call.acknowledge(1).await,
+        Err(AgentFailure::ServerModelUnavailable)
+    );
+    assert_eq!(call.receive().await.unwrap(), delivery(1));
+    call.acknowledge(1).await.unwrap();
+    call.acknowledge(1).await.unwrap();
+    assert_eq!(call.receive().await.unwrap(), delivery(2));
+    assert_eq!(state.observations.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn observer_drop_during_post_delivery_source_check_retains_pending_event() {
+    let state = State::new();
+    state.events.lock().unwrap().push_back(delivery(1));
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    state.stall_after_observe.store(true, Ordering::SeqCst);
+    let mut observation = Box::pin(call.receive());
+    let polled = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(observation.as_mut(), cx))
+    })
+    .await;
+    assert!(polled.is_pending());
+    assert_eq!(state.observations.load(Ordering::SeqCst), 1);
+    drop(observation);
+    state.stall.store(false, Ordering::SeqCst);
+    state.stall_after_observe.store(false, Ordering::SeqCst);
+    assert_eq!(call.receive().await.unwrap(), delivery(1));
+    assert_eq!(state.observations.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn terminal_usage_survives_denied_event_release_after_source_revocation() {
+    let state = State::new();
+    state.events.lock().unwrap().push_back(LiveDelivery {
+        sequence: 1,
+        event: floe_model_contract::LiveProviderEvent::Ended {
+            evidence: floe_model_contract::LiveEndEvidence::ProviderConfirmed,
+            usage: LiveUsageObservation {
+                tokens: Some(9),
+                cost_micros: Some(4),
+            },
+        },
+    });
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    state.revoke_after_observe.store(true, Ordering::SeqCst);
+    assert_eq!(call.receive().await, Err(AgentFailure::StaleContext));
+    assert!(state.fenced.load(Ordering::SeqCst));
+    let receipt = call.finish(LiveUsageObservation::default()).unwrap();
+    assert_eq!(receipt.accounting.observed_tokens, Some(9));
+    assert_eq!(receipt.charged_cost_micros, 4);
+    assert!(!receipt.accounting.unknown_tokens);
+    assert_eq!(state.acknowledged.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn invalid_live_delivery_sequence_is_fenced_before_release() {
+    for sequence in [0, 2, u64::MAX] {
+        let state = State::new();
+        state.events.lock().unwrap().push_back(delivery(sequence));
+        let service = fixture_service(&state);
+        let root = fixture_scope();
+        let (prepared, request) = fixture_prepared(&service, &root).await;
+        let mut call = service
+            .start_live(prepared, request, &Custody(state.clone()), &root)
+            .await
+            .unwrap();
+        assert_eq!(call.receive().await, Err(AgentFailure::InvalidInput));
+        assert!(state.fenced.load(Ordering::SeqCst));
+    }
+}
+
+#[tokio::test]
+async fn dropping_a_guard_after_terminal_delivery_preserves_known_ledger_usage() {
+    let state = State::new();
+    state.events.lock().unwrap().push_back(LiveDelivery {
+        sequence: 1,
+        event: floe_model_contract::LiveProviderEvent::Ended {
+            evidence: floe_model_contract::LiveEndEvidence::Disconnected,
+            usage: LiveUsageObservation {
+                tokens: Some(11),
+                cost_micros: None,
+            },
+        },
+    });
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let id = prepared.plan().operation_id;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    call.receive().await.unwrap();
+    drop(call);
+    let receipt = root.budget().model_attempt_receipt(id).unwrap();
+    assert_eq!(receipt.accounting.observed_tokens, Some(11));
+    assert!(!receipt.accounting.unknown_tokens);
+    assert!(receipt.accounting.unknown_cost);
+    assert_eq!(receipt.charged_tokens, 11);
+}
+
+#[tokio::test]
+async fn observer_drop_after_remote_ack_keeps_local_head_and_owner_alive() {
+    let state = State::new();
+    state
+        .events
+        .lock()
+        .unwrap()
+        .extend([delivery(1), delivery(2)]);
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    call.receive().await.unwrap();
+    state.stall_ack_response.store(true, Ordering::SeqCst);
+    let mut ack = Box::pin(call.acknowledge(1));
+    let polled = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(ack.as_mut(), cx))
+    })
+    .await;
+    assert!(polled.is_pending());
+    assert_eq!(state.acknowledged.load(Ordering::SeqCst), 1);
+    drop(ack);
+    assert!(!root.cancellation().is_cancelled());
+    assert_eq!(call.receive().await.unwrap(), delivery(1));
+    state.stall_ack_response.store(false, Ordering::SeqCst);
+    call.acknowledge(1).await.unwrap();
+    assert_eq!(call.receive().await.unwrap(), delivery(2));
 }

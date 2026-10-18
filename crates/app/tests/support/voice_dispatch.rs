@@ -44,6 +44,22 @@ impl LiveSessionControl for LiveSession {
         self.0.fenced.store(true, Ordering::SeqCst);
     }
 }
+impl floe_inference::LiveEventTransport for LiveSession {
+    fn observe<'a>(
+        &'a self,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<floe_inference::LiveDelivery, AgentFailure>> {
+        // This dispatch-only fixture has no incoming events.
+        Box::pin(std::future::pending())
+    }
+    fn acknowledge<'a>(
+        &'a self,
+        _: u64,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::NotFound) })
+    }
+}
 impl PreparedLiveTransport for LiveTransport {
     type Session = LiveSession;
     fn validate_start(&self, request: &CanonicalLiveStart) -> Result<(), AgentFailure> {

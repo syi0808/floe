@@ -1221,6 +1221,23 @@ still owns local-lease release. RAII covers cancellation after a transport retur
 but before post-handoff authorization can publish it. No raw transport is exposed
 from the guard.
 
+Every prepared live session now implements the retained event transport contract.
+The Inference guard validates exact next call-local sequence and normalized
+content, revalidates sources before and after receiving, and keeps one pending
+delivery until exact ACK succeeds. Repeated observation and lost ACK responses
+cannot advance to a later event. Read/ACK observation scopes are children of the
+call lifetime: dropping an observation cannot cancel the retained call. Access
+revalidation likewise uses child resolver/Gateway scopes while preserving both
+original scope and original request cancellation ancestry and deadlines.
+
+A validated terminal usage observation is retained before source release checks;
+denied content release does not erase known accounting. Finishing or dropping
+the guard preserves those known dimensions in the Execution ledger while unknown
+dimensions remain conservatively reserved. Drop does not by itself write the
+Voice journal; the registered controller still owns terminal custody. No event
+ACK means provider acceptance, playback or confirmed native Stop. Concrete
+Voice event dispatch and authenticated transport wiring remain integration work.
+
 Accounting uses Execution's existing model-attempt ledger. A dispatched dropped
 or uncertain call retains unknown usage; observed overruns retain their receipt
 rather than refunding the reservation. Voice stores the exact terminal receipt
@@ -1251,3 +1268,15 @@ provenance, authenticated Gateway selection and native/Flutter composition remai
 explicit integration work. The concrete driver must carry the registered child
 lifetime into its bounded Inference execution scope and finish required custody
 before returning success; synthetic driver tests do not qualify real audio.
+
+
+### Known Calendar collection acknowledgement custody
+
+After Day returns its exact collection receipt, Calendar Operations retains the
+immutable CollectionAck and its original ticket revision while retrying only
+proven local StorageBusy. It shares the existing bounded local-custody retry
+policy with provider-receipt settlement. ACK response loss replays the same
+request against the Vault receipt; it never repeats Day collection, provider
+execution or external receipt lookup. Owner retirement/cancellation/deadline
+still bounds retries, and other failures remain visible as pending recovery.
+This does not reclassify generic Day storage failures as retryable Busy.

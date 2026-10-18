@@ -307,7 +307,10 @@ mod qa {
             };
             assert!(
                 Instant::now() < deadline,
-                "Calendar operation did not settle; last status: {last}"
+                "Calendar operation did not settle; last status: {last}; collection ACK attempts: {}",
+                support::with_ready(host, |_, _, owners| owners
+                    .calendar_operations
+                    .qa_collection_ack_attempts())
             );
             std::thread::sleep(Duration::from_millis(25));
         }
@@ -816,6 +819,105 @@ mod qa {
                 collection: floe_calendar_operations::ActionCollectionStatus::Collected
             }
         ));
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(effects.lookups, 0);
+    }
+
+    fn collection_ack_recovery(lose_ack: bool) {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            if lose_ack {
+                owners.calendar_operations.qa_lose_next_collection_ack();
+            } else {
+                owners.calendar_operations.qa_busy_next_collection_acks(2);
+            }
+            owners.calendar_operations.clone()
+        });
+        let interaction = scenario.proposal.interaction.as_ref().unwrap();
+        decide(
+            &scenario.host,
+            scenario.session_id,
+            interaction,
+            floe_conversation::InteractionDecisionKind::Approve,
+            interaction.target_digest,
+        )
+        .unwrap();
+        let minimum_attempts = if lose_ack { 2 } else { 3 };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while owner.qa_collection_ack_attempts() < minimum_attempts {
+            assert!(
+                Instant::now() < deadline,
+                "known Day collection acknowledgement was not retried; attempts={}",
+                owner.qa_collection_ack_attempts()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        wait_for_status(
+            &scenario.host,
+            scenario.proposal.operation.action_ref,
+            |status| {
+                matches!(
+                    status,
+                    floe_calendar_operations::ActionStatus::Succeeded {
+                        collection: floe_calendar_operations::ActionCollectionStatus::Collected
+                    }
+                )
+            },
+        );
+        let effects = scenario.executor.snapshot();
+        assert_eq!(effects.dispatch_attempts, 1);
+        assert_eq!(effects.external_effects, 1);
+        assert_eq!(effects.lookups, 0);
+    }
+    #[test]
+    fn known_day_collection_receipt_retries_busy_ack_without_provider_lookup() {
+        collection_ack_recovery(false);
+    }
+    #[test]
+    fn known_day_collection_receipt_replays_lost_ack_without_provider_lookup() {
+        collection_ack_recovery(true);
+    }
+
+    #[test]
+    fn known_day_collection_ack_retry_honors_shutdown_without_provider_lookup() {
+        let scenario = prepare_scenario(OperationPolicyMode::Ask, CalendarExecutorScript::Commit);
+        let owner = support::with_ready(&scenario.host, |_, _, owners| {
+            owners.calendar_operations.qa_busy_next_collection_acks(255);
+            owners.calendar_operations.clone()
+        });
+        let interaction = scenario.proposal.interaction.as_ref().unwrap();
+        decide(
+            &scenario.host,
+            scenario.session_id,
+            interaction,
+            floe_conversation::InteractionDecisionKind::Approve,
+            interaction.target_digest,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while owner.qa_collection_ack_attempts() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "collection acknowledgement retry did not start"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        support::with_ready(&scenario.host, |services, _, _| {
+            let owner = owner.clone();
+            services.execute_owner(async move {
+                owner
+                    .shutdown_and_drain(&floe_app::host_scope(
+                        Uuid::new_v4(),
+                        floe_execution::Cancellation::new(),
+                        Duration::from_secs(2),
+                    ))
+                    .await
+            })
+        })
+        .unwrap();
+        assert!(owner.qa_collection_ack_attempts() < 255);
         let effects = scenario.executor.snapshot();
         assert_eq!(effects.dispatch_attempts, 1);
         assert_eq!(effects.external_effects, 1);

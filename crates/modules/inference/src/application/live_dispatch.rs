@@ -2,8 +2,9 @@
 //! generation. Caller observation is separate from the bounded owner lifetime.
 use crate::{
     AdmittedDispatchTarget, CanonicalLiveStart, InferenceService, LIVE_PRESENTATION_CONSUMER,
-    LIVE_PRESENTATION_PURPOSE, LiveDispatchCustody, LiveDispatchIntent, LiveModelProvider,
-    LiveSessionControl, LiveStartRequest, PreparedLiveSelection, PreparedLiveTransport,
+    LIVE_PRESENTATION_PURPOSE, LiveDelivery, LiveDispatchCustody, LiveDispatchIntent,
+    LiveEventTransport, LiveModelProvider, LiveSessionControl, LiveStartRequest,
+    PreparedLiveSelection, PreparedLiveTransport,
 };
 use floe_access::{
     DependencyResolver, GatewayAdmission, ModelDispatchFence, ModelDispatchRequest,
@@ -26,7 +27,8 @@ const REVALIDATE_INTERVAL: Duration = Duration::from_millis(250);
 const REVALIDATE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Retains one fenced transport and budget reservation. No raw transport is
-/// exposed: eventual event/append release must use guarded owned operations.
+/// exposed: event release is guarded and retained; append remains a separate
+/// integration gate with cumulative source provenance.
 pub struct AuthorizedLiveSession<Session: LiveSessionControl, Resolver, Authority> {
     plan: LiveModelPlan,
     transport: Arc<Session>,
@@ -37,6 +39,9 @@ pub struct AuthorizedLiveSession<Session: LiveSessionControl, Resolver, Authorit
     attempt: Option<BudgetAttempt>,
     monitor: JoinHandle<()>,
     failure: Arc<Mutex<Option<AgentFailure>>>,
+    pending_delivery: Option<LiveDelivery>,
+    acknowledged_delivery: u64,
+    terminal_usage: Option<LiveUsageObservation>,
 }
 impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
     pub fn plan(&self) -> &LiveModelPlan {
@@ -44,6 +49,14 @@ impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
     }
     pub fn failure(&self) -> Option<AgentFailure> {
         *self.failure.lock().unwrap()
+    }
+    fn fail(&self, failure: AgentFailure) {
+        // Publish the causal failure before derivative cancellation/local fence.
+        self.failure.lock().unwrap().get_or_insert(failure);
+        self.scope
+            .cancellation()
+            .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
+        self.transport.fence();
     }
     pub fn finish(
         mut self,
@@ -53,6 +66,13 @@ impl<S: LiveSessionControl, R, A> AuthorizedLiveSession<S, R, A> {
         self.transport.fence();
         self.monitor.abort();
         usage.validate().map_err(|_| AgentFailure::InvalidInput)?;
+        let usage = match self.terminal_usage {
+            Some(observed) => LiveUsageObservation {
+                tokens: observed.tokens.or(usage.tokens),
+                cost_micros: observed.cost_micros.or(usage.cost_micros),
+            },
+            None => usage,
+        };
         self.attempt
             .take()
             .ok_or(AgentFailure::Conflict)?
@@ -74,18 +94,67 @@ impl<S: LiveSessionControl, R: DependencyResolver, A: GatewayAdmission>
             bounded_revalidate(&self.fence, &self.scope).await
         };
         if let Err(failure) = result {
-            // Publish the causal failure before waking cancellation observers
-            // or entering the local adapter fence. A derivative cancellation
-            // must not replace a source-review/expiry failure with "cancelled".
-            self.failure.lock().unwrap().get_or_insert(failure);
-            self.scope
-                .cancellation()
-                .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
-            self.transport.fence();
+            self.fail(failure);
         }
         result
     }
 }
+impl<S: LiveEventTransport, R: DependencyResolver, A: GatewayAdmission>
+    AuthorizedLiveSession<S, R, A>
+{
+    /// Source-authorized observation, retained locally until the owner confirms
+    /// custody. A dropped observer future never clears this pending delivery.
+    pub async fn receive(&mut self) -> Result<LiveDelivery, AgentFailure> {
+        self.revalidate().await?;
+        if self.pending_delivery.is_none() {
+            if self.terminal_usage.is_some() {
+                return Err(AgentFailure::Conflict);
+            }
+            let observation = self.scope.child_scope(self.scope.deadline(), 0, 0, None);
+            let delivery = match observation.run(self.transport.observe(&observation)).await {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    self.fail(error);
+                    return Err(error);
+                }
+            };
+            if delivery.validate().is_err() || delivery.sequence != self.acknowledged_delivery + 1 {
+                self.fail(AgentFailure::InvalidInput);
+                return Err(AgentFailure::InvalidInput);
+            }
+            if let floe_model_contract::LiveProviderEvent::Ended { usage, .. } = &delivery.event {
+                // Accounting is retained even if source release is later denied.
+                // Local fencing does not fabricate a native Stop acknowledgement.
+                self.terminal_usage = Some(*usage);
+                self.transport.fence();
+            }
+            self.pending_delivery = Some(delivery);
+        }
+        self.revalidate().await?;
+        Ok(self.pending_delivery.as_ref().unwrap().clone())
+    }
+    /// Call only after canonical local custody. ACK loss retains the same local
+    /// head, allowing an exact transport retry; it never advances to later input.
+    pub async fn acknowledge(&mut self, sequence: u64) -> Result<(), AgentFailure> {
+        if sequence == 0 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        if sequence <= self.acknowledged_delivery {
+            return Ok(());
+        }
+        if self.pending_delivery.as_ref().map(|d| d.sequence) != Some(sequence) {
+            return Err(AgentFailure::Conflict);
+        }
+        let observation = self.scope.child_scope(self.scope.deadline(), 0, 0, None);
+        observation
+            .run(self.transport.acknowledge(sequence, &observation))
+            .await?;
+        self.acknowledged_delivery = sequence;
+        self.pending_delivery = None;
+        Ok(())
+    }
+}
+
 impl<S: LiveSessionControl, R, A> Drop for AuthorizedLiveSession<S, R, A> {
     fn drop(&mut self) {
         self.scope
@@ -95,6 +164,13 @@ impl<S: LiveSessionControl, R, A> Drop for AuthorizedLiveSession<S, R, A> {
         // dispatched attempt drops to unknown, never a zero-usage claim.
         self.transport.fence();
         self.monitor.abort();
+        // A terminal observation already received from the transport remains
+        // known in the Execution ledger even if its observer drops this guard.
+        if let Some(usage) = self.terminal_usage
+            && let Some(attempt) = self.attempt.take()
+        {
+            let _ = attempt.settle_observed(usage.tokens, usage.cost_micros);
+        }
     }
 }
 
@@ -112,7 +188,8 @@ async fn bounded_revalidate<R: DependencyResolver, A: GatewayAdmission>(
     fence: &ModelDispatchFence<R, A>,
     scope: &ExecutionScope,
 ) -> Result<(), AgentFailure> {
-    scope
+    let observation = scope.child_scope(scope.deadline(), 0, 0, None);
+    observation
         .run(async {
             tokio::time::timeout(REVALIDATE_TIMEOUT, revalidate_model_dispatch(fence))
                 .await
@@ -341,6 +418,9 @@ where
             attempt: Some(attempt),
             monitor,
             failure,
+            pending_delivery: None,
+            acknowledged_delivery: 0,
+            terminal_usage: None,
         })
     }
 }

@@ -70,7 +70,7 @@ pub struct CanonicalLiveStart {
     pub cancellation: Cancellation,
 }
 pub trait PreparedLiveTransport: Send + 'static {
-    type Session: LiveSessionControl + Send + Sync + 'static;
+    type Session: LiveEventTransport + Send + Sync + 'static;
     /// Pure local preflight. No provider I/O, microphone start or credential
     /// mutation is permitted before the durable custody and Access fences.
     fn validate_start(&self, request: &CanonicalLiveStart) -> Result<(), AgentFailure>;
@@ -85,4 +85,38 @@ pub trait LiveSessionControl {
     /// composed media/control adapter permanently fences this lease against
     /// late unmute/write commands, then settles actual stop receipts separately. This is not proof of provider close or zero usage.
     fn fence(&self);
+}
+
+/// A call-local retained transport observation, not a Conversation identity.
+/// The adapter keeps this exact value until acknowledgement; no crash-durability
+/// or provider acceptance is implied by its sequence.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveDelivery {
+    pub sequence: u64,
+    pub event: floe_model_contract::LiveProviderEvent,
+}
+impl LiveDelivery {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        if self.sequence == 0 || self.sequence > 9_007_199_254_740_991 {
+            return Err(AgentFailure::InvalidInput);
+        }
+        self.event
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)
+    }
+}
+/// A real transport boundary. Observe is cancellation-safe: until ACK, repeated
+/// observation returns the same head. ACK is exact, ordered and replay-safe even
+/// after response loss. One continuously owned adapter reader supplies it; UI
+/// request cancellation cannot cancel that reader or consume a pending event.
+pub trait LiveEventTransport: LiveSessionControl {
+    fn observe<'a>(
+        &'a self,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<LiveDelivery, AgentFailure>>;
+    fn acknowledge<'a>(
+        &'a self,
+        sequence: u64,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
 }

@@ -65,11 +65,16 @@ pub async fn consume_model_dispatch<R: DependencyResolver, A: GatewayAdmission>(
 pub async fn revalidate_model_dispatch<R: DependencyResolver, A: GatewayAdmission>(
     fence: &ModelDispatchFence<R, A>,
 ) -> Result<(), AgentFailure> {
+    // Revalidation is a read observation. Cancelling or dropping its nested
+    // resolver/Gateway future must not cancel the retained dispatch lifetime.
+    let observation = fence.scope.child_scope(fence.scope.deadline(), 0, 0, None);
+    let mut request = fence.request.clone();
+    request.cancellation = fence.request.cancellation.child_scope();
     authorize_request(
-        &fence.request,
+        &request,
         fence.resolver.as_ref(),
         fence.authority.as_ref(),
-        &fence.scope,
+        &observation,
     )
     .await
 }
@@ -181,6 +186,7 @@ mod memory_fence_tests {
     use uuid::Uuid;
 
     struct MemoryResolver {
+        stall: AtomicBool,
         live: AtomicBool,
         reads: AtomicUsize,
     }
@@ -196,9 +202,17 @@ mod memory_fence_tests {
             &'a self,
             _: PersonId,
             references: &'a [MemoryRevisionReference],
-            _: &'a DependencyAuthorization,
+            authorization: &'a DependencyAuthorization,
         ) -> BoxFuture<'a, Result<(), AgentFailure>> {
             Box::pin(async move {
+                if self.stall.load(Ordering::SeqCst) {
+                    return floe_execution::tasks::run_bounded(
+                        std::future::pending(),
+                        authorization.deadline,
+                        &authorization.cancellation,
+                    )
+                    .await;
+                }
                 assert_eq!(references.len(), 1);
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 if self.live.load(Ordering::SeqCst) {
@@ -256,6 +270,7 @@ mod memory_fence_tests {
             let resolver = Arc::new(MemoryResolver {
                 live: AtomicBool::new(true),
                 reads: AtomicUsize::new(0),
+                stall: AtomicBool::new(false),
             });
             let permit = admit_model_dispatch(
                 request(&scope),
@@ -296,6 +311,7 @@ mod memory_fence_tests {
         let resolver = Arc::new(MemoryResolver {
             live: AtomicBool::new(true),
             reads: AtomicUsize::new(0),
+            stall: AtomicBool::new(false),
         });
         let permit = admit_model_dispatch(
             request(&scope),
@@ -359,5 +375,56 @@ mod memory_fence_tests {
         request.memories.pop();
         request.memories[0].revision = 0;
         assert_eq!(request.validate(), Err(AgentFailure::InvalidInput));
+    }
+    #[tokio::test]
+    async fn dropped_nested_revalidation_cannot_cancel_original_dispatch_scope() {
+        let scope = scope();
+        let resolver = Arc::new(MemoryResolver {
+            live: AtomicBool::new(true),
+            reads: AtomicUsize::new(0),
+            stall: AtomicBool::new(false),
+        });
+        let permit = admit_model_dispatch(
+            request(&scope),
+            resolver.clone(),
+            Arc::new(NoGateway),
+            scope.clone(),
+        )
+        .await
+        .unwrap();
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        resolver.stall.store(true, Ordering::SeqCst);
+        let mut observation = Box::pin(revalidate_model_dispatch(&fence));
+        let polled = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::future::Future::poll(observation.as_mut(), cx))
+        })
+        .await;
+        assert!(polled.is_pending());
+        drop(observation);
+        assert!(!scope.cancellation().is_cancelled());
+        resolver.stall.store(false, Ordering::SeqCst);
+        revalidate_model_dispatch(&fence).await.unwrap();
+    }
+    #[tokio::test]
+    async fn revalidation_retains_a_distinct_original_request_cancellation() {
+        let scope = scope();
+        let request_cancellation = Cancellation::new();
+        let mut selected = request(&scope);
+        selected.cancellation = request_cancellation.clone();
+        let resolver = Arc::new(MemoryResolver {
+            live: AtomicBool::new(true),
+            reads: AtomicUsize::new(0),
+            stall: AtomicBool::new(false),
+        });
+        let permit = admit_model_dispatch(selected, resolver, Arc::new(NoGateway), scope.clone())
+            .await
+            .unwrap();
+        let fence = consume_model_dispatch(permit).await.unwrap();
+        request_cancellation.cancel();
+        assert_eq!(
+            revalidate_model_dispatch(&fence).await,
+            Err(AgentFailure::Cancelled)
+        );
+        assert!(!scope.cancellation().is_cancelled());
     }
 }

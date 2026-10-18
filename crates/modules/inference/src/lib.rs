@@ -29,7 +29,7 @@ pub use ports::live_provider::{
 };
 
 pub use ports::live_transport::{
-    CanonicalLiveStart, LiveDispatchCustody, LiveDispatchIntent, LiveSessionControl,
+    CanonicalLiveStart, LiveDelivery, LiveDispatchCustody, LiveDispatchIntent, LiveEventTransport, LiveSessionControl,
     LiveStartRequest, PreparedLiveTransport,
 };
 

@@ -529,11 +529,25 @@ impl CalendarOperationsService {
         settlement: ExecutionSettlement,
         scope: &ExecutionScope,
     ) -> Result<ActionRecord, AgentFailure> {
-        // Keep the already observed receipt for this owner's existing bounded
-        // lifetime. Only local Busy is retried; no scope/deadline is extended.
+        self.retry_known_local_custody(scope, || self.settle_receipt_once(settlement.clone()))
+            .await
+    }
+
+    async fn retry_known_local_custody<T, F, Fut>(
+        &self,
+        scope: &ExecutionScope,
+        mut write: F,
+    ) -> Result<T, AgentFailure>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T, CalendarOperationStoreError>>,
+    {
+        // Retain the exact known local payload, including its CAS identity.
+        // This retries neither the provider effect nor Day collection. Only
+        // local Busy is retried within the owner's existing bounded lifetime.
         let mut delay = Duration::from_millis(20);
         loop {
-            match self.settle_receipt_once(settlement.clone()).await {
+            match write().await {
                 Ok(record) => return Ok(record),
                 Err(CalendarOperationStoreError::StorageBusy) => {
                     if self.closed.load(Ordering::Acquire)
@@ -584,6 +598,30 @@ impl CalendarOperationsService {
             return Err(CalendarOperationStoreError::StorageBusy);
         }
         Ok(record)
+    }
+
+    async fn ack_collection_once(
+        &self,
+        ack: CollectionAck,
+    ) -> Result<CollectionTicket, CalendarOperationStoreError> {
+        #[cfg(feature = "qa-fixtures")]
+        self.collection_ack_attempts.fetch_add(1, Ordering::AcqRel);
+        #[cfg(feature = "qa-fixtures")]
+        if self
+            .busy_collection_acks
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(CalendarOperationStoreError::StorageBusy);
+        }
+        let result = self.repository.ack_collection(ack).await?;
+        #[cfg(feature = "qa-fixtures")]
+        if self.lose_collection_ack.swap(false, Ordering::AcqRel) {
+            return Err(CalendarOperationStoreError::StorageBusy);
+        }
+        Ok(result)
     }
 
     async fn collect(
@@ -659,14 +697,14 @@ impl CalendarOperationsService {
         if result.execution_id != record.execution_id || result.receipt_digest != receipt_digest {
             return Err(AgentFailure::Conflict);
         }
-        self.repository
-            .ack_collection(CollectionAck {
-                person_id: record.person_id,
-                execution_id: record.execution_id,
-                receipt_digest,
-                expected_ticket_revision: ticket.revision,
-                day_projection_ref: result.day_projection_ref,
-            })
+        let ack = CollectionAck {
+            person_id: record.person_id,
+            execution_id: record.execution_id,
+            receipt_digest,
+            expected_ticket_revision: ticket.revision,
+            day_projection_ref: result.day_projection_ref,
+        };
+        self.retry_known_local_custody(scope, || self.ack_collection_once(ack.clone()))
             .await?;
         Ok(())
     }
