@@ -55,6 +55,36 @@ impl GatewayHttpTransport {
         cancellation: &Cancellation,
         max_response_bytes: usize,
     ) -> Result<(u16, Vec<u8>), AgentFailure> {
+        self.request_with_limits(
+            endpoint,
+            token,
+            method,
+            path,
+            body,
+            deadline,
+            cancellation,
+            MAX_REQUEST_BYTES,
+            max_response_bytes,
+        )
+        .await
+    }
+    /// Private caller-specific framing ceilings. Generation retains its existing
+    /// 96-KiB default; live signaling/context cannot silently widen that route.
+    pub async fn request_with_limits(
+        &self,
+        endpoint: &str,
+        token: Option<&str>,
+        method: Method,
+        path: &str,
+        body: Option<Vec<u8>>,
+        deadline: Instant,
+        cancellation: &Cancellation,
+        max_request_bytes: usize,
+        max_response_bytes: usize,
+    ) -> Result<(u16, Vec<u8>), AgentFailure> {
+        if max_request_bytes == 0 || max_request_bytes > 16 * 1024 * 1024 {
+            return Err(AgentFailure::BudgetExceeded);
+        }
         if max_response_bytes == 0 || max_response_bytes > 1024 * 1024 + 1024 {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -67,7 +97,7 @@ impl GatewayHttpTransport {
         }
         if body
             .as_ref()
-            .is_some_and(|body| body.len() > MAX_REQUEST_BYTES)
+            .is_some_and(|body| body.len() > max_request_bytes)
         {
             return Err(AgentFailure::BudgetExceeded);
         }
@@ -145,4 +175,41 @@ pub(crate) fn valid_endpoint(value: &str) -> bool {
             && url.query().is_none()
             && url.fragment().is_none()
     })
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+    #[tokio::test]
+    async fn live_framing_does_not_widen_generation_default() {
+        let http = GatewayHttpTransport::new().unwrap();
+        let cancel = Cancellation::new();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let result = http
+            .request(
+                "http://127.0.0.1:1",
+                None,
+                Method::POST,
+                "/v1/agent",
+                Some(vec![b' '; MAX_REQUEST_BYTES + 1]),
+                deadline,
+                &cancel,
+            )
+            .await;
+        assert_eq!(result, Err(AgentFailure::BudgetExceeded));
+        let result = http
+            .request_with_limits(
+                "http://127.0.0.1:1",
+                None,
+                Method::POST,
+                "/v1/live/start",
+                None,
+                deadline,
+                &cancel,
+                16 * 1024 * 1024 + 1,
+                1024,
+            )
+            .await;
+        assert_eq!(result, Err(AgentFailure::BudgetExceeded));
+    }
 }

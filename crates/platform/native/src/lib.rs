@@ -8,6 +8,7 @@ pub mod calendar_wire;
 pub mod dylib;
 mod host;
 mod installation;
+pub mod live_media;
 
 pub use acquisition::{
     AcquisitionBroker, AcquisitionExchange, AttentionAcquisitionMode, AttentionAcquisitionRequest,

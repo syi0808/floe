@@ -421,6 +421,7 @@ where
             media_lease_id: request.media_lease_id,
             plan: plan.clone(),
             context: request.projection.payload,
+            input_data_classes: request.projection.input_data_classes,
             reservation: ModelReservationCeiling {
                 tokens,
                 cost_micros: cost,

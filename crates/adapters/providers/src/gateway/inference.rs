@@ -445,7 +445,7 @@ fn model_calls() -> &'static CallLimiter {
         .expect("static model limits")
     })
 }
-fn credential_observation(error: GatewayCredentialError) -> ModelObservationError {
+pub(super) fn credential_observation(error: GatewayCredentialError) -> ModelObservationError {
     match error {
         GatewayCredentialError::Timeout => ModelObservationError::Timeout,
         GatewayCredentialError::Cancelled => ModelObservationError::Cancelled,
@@ -460,7 +460,7 @@ fn credential_observation(error: GatewayCredentialError) -> ModelObservationErro
         }
     }
 }
-fn observation_failure(error: AgentFailure) -> ModelObservationError {
+pub(super) fn observation_failure(error: AgentFailure) -> ModelObservationError {
     match error {
         AgentFailure::Cancelled => ModelObservationError::Cancelled,
         AgentFailure::DeadlineExceeded | AgentFailure::ServerModelTimeout => {

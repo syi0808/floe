@@ -3230,3 +3230,54 @@ and development-tag race 18 test-bearing packages, plus both vet runs. The
 focused live owner suite also passed three race-enabled repetitions before the
 final identity-capacity case, which is covered by both complete final suites.
 Rust/dashboard inputs are unchanged; their prior results do not qualify audio.
+
+
+### Rust Gateway live control bridge and native signaling boundary
+
+The provider adapter now implements live observation/preparation and the existing
+Inference live transport ports over the paired Go control routes. Credential and
+binding checks remain in the existing Gateway reader. A new private native port
+looks up only the exact already-prepared muted media lease; offer/answer cannot
+unmute or request permission and never enter Dart JSON or persistence. Actual
+projected data classes are carried through CanonicalLiveStart rather than invented
+by the transport. There is no new model invocation fallback or local live backend.
+
+The adapter posts one Start and polls only its exact ticket, retains event/ACK
+proofs, polls exact append receipts, and bounds best-effort close/release cleanup.
+An independent status watcher fences native media while event polling is absent.
+Cached event replay rechecks server authority; provider confirmation/usage is not
+fabricated from local disconnection. Generation's 96-KiB default request ceiling
+is unchanged; the live caller supplies its separately bounded framing limits.
+
+An explicit Rust-to-real-Go-HTTP cross-language fixture uses real Go Trust pairing,
+synthetic provider transport and a synthetic native lease. It exercises a 125-KiB
+initial context, SDP offer/answer, retained event replay, exact ACK replay, append
+replay and one-shot close, asserting one underlying start/ACK/append/close. This
+is transport qualification, not the full registered Voice/Access flow, an Apple
+WebRTC driver, microphone permission or actual provider/audio qualification.
+Product composition and automatic Manager-result scheduling remain open.
+
+Native implementation follow-through must verify the exact shipped SDK before
+claiming physical capture/Stop behavior. Candidate research (not an installed or
+qualified dependency): LiveKit's [WebRTC Swift package 150.7871.03](https://github.com/livekit/webrtc-xcframework/blob/150.7871.03/Package.swift)
+pins the official binary checksum
+`5727a03c32ed902da570b699e3983e3fb4bfe853ab4da045af70912a7db44557`.
+The [upstream audio-device interface](https://github.com/webrtc-sdk/webrtc/blob/main/sdk/objc/api/peerconnection/RTCAudioDeviceModule.h)
+exposes recording/playout control and actual engine state, but a main-branch
+header is not proof that a released binary implements that exact interface.
+[LiveKit's RTC isolation implementation](https://github.com/livekit/client-sdk-swift/blob/main/Sources/LiveKit/Core/RTC.swift)
+explicitly separates blocking libwebrtc proxies/destruction from cooperative and
+serial execution. Floe's immediate fence must not synchronously wait for those
+proxies; physical Stop remains independently observed. No SDK was downloaded,
+installed, executed or added to Apple build dependencies by this research.
+
+Final qualification passes on 633 frozen Rust/Cargo/validation inputs: workspace
+and doctests 565 passed plus the explicitly invoked cross-language test ignored
+in the default run; App QA 97 passed plus its intentional subprocess-entry ignore;
+Linux FFI build and architecture boundaries (27 nodes, 154 edges). The final
+Rust-to-Go transport gate passed three race-enabled Go runs against the same
+source. On 204 Go/module inputs, default/development full race (17/18 test-bearing
+packages) and both vet gates also pass. The Go cross-language fixture is explicitly
+skipped unless requested, not counted as implicitly exercised by the default Go
+suite. Existing platform-only warnings remain; no Apple/browser/audio completion
+is inferred from these results.

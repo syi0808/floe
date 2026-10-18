@@ -1443,3 +1443,39 @@ the writer slot. Known completed frames are diagnostic evidence only, not provid
 acceptance or playback. Graceful close records at most one close-frame write and
 keeps received-event custody/read-only receipts until explicit release or expiry.
 Immediate native fencing and local release remain separate from network close.
+
+
+### Rust Gateway live transport and private native signaling port
+
+GatewayLiveModelProvider uses the existing encrypted credential reader and exact
+verified Gateway binding. It observes the distinct live profile, prepares one
+server ticket and implements Inference's prepared transport. Only explicit Primary
+absence permits the owner's local-fallback decision; this adapter has no local
+live implementation and never substitutes a paid route. Every HTTP exchange
+checks the current credential/binding before and after under a bounded read scope.
+The original generation framing ceiling remains unchanged; live has explicit
+separate request/response ceilings.
+
+The selected adapter looks up an already-prepared muted native lease with exact
+actor/runtime, Voice, media-lease and plan identity. SDP is a bounded redacted
+native/adapter value, not Dart JSON, Context, journal data or a credential. Offer
+and answer operations cannot prompt for permission or unmute. Native preparation,
+actual microphone permission, media commands and Stop receipts remain native/Voice
+responsibilities. The current port and synthetic lease exercise this boundary;
+an Apple WebRTC implementation and product composition are not yet present.
+
+Canonical live dispatch now carries the actual projected input data classes
+alongside provider-facing context; the adapter cannot label real context as
+synthetic. Durable Inference/Voice admission still precedes Start. The adapter
+posts Start once, polls only its existing ticket, pins the answer to that lease,
+and fences late/failed native signaling. Dropped tickets can only release their
+existing server handle and otherwise expire; no cleanup recreates a call.
+
+A continuously owned status watcher fences native media on owner/native shutdown,
+server failure or lost transport observation even without UI event polling. Event
+reads/ACKs retain exact sequence/digest, recheck current server authority for replay
+and never release cached text merely because it was previously observed. A local
+ended event is synthesized only as Disconnected with unknown usage, never provider
+confirmation or zero billing. Append polls one admitted operation's write evidence;
+uncertain results do not retry the write. Local fencing is immediate and bounded
+best-effort close/release cleanup cannot claim remote finalization.

@@ -3,6 +3,7 @@ pub(crate) mod http;
 mod inference;
 mod inference_wire;
 pub(crate) mod json;
+pub mod live;
 mod model_provider;
 mod pairing;
 pub use credentials::{GatewayCredentialError, GatewayCredentialStore};

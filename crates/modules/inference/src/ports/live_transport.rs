@@ -65,6 +65,7 @@ pub struct CanonicalLiveStart {
     pub media_lease_id: Uuid,
     pub plan: LiveModelPlan,
     pub context: LiveContextPayload,
+    pub input_data_classes: Vec<floe_context_contract::DataClass>,
     pub reservation: ModelReservationCeiling,
     pub deadline: Instant,
     pub cancellation: Cancellation,
