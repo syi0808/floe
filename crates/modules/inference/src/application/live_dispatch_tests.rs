@@ -853,3 +853,34 @@ async fn settled_live_call_can_ack_custody_but_cannot_release_more_events() {
         Err(AgentFailure::Conflict)
     ));
 }
+
+#[tokio::test]
+async fn waiting_delivery_returns_the_source_failure_not_derivative_cancellation() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    let read = tokio::spawn(async move {
+        let result = call.receive().await;
+        (call, result)
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while state.observations.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    state.live.store(false, Ordering::SeqCst);
+    let (call, result) = tokio::time::timeout(Duration::from_secs(2), read)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(call.failure(), Some(AgentFailure::StaleContext));
+    assert_eq!(result, Err(AgentFailure::StaleContext));
+    assert!(!root.cancellation().is_cancelled());
+}

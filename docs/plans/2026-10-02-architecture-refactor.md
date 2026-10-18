@@ -3055,3 +3055,17 @@ doctests 552, App QA 95 plus one intentional ignore, Linux FFI, boundaries
 unchanged from their qualified default/development race and vet snapshot. No real
 account, microphone or public live route was used; result append, authenticated
 Gateway and native/Flutter composition remain open.
+
+### Preserve the causal live failure across observer cancellation
+
+A new regression reproduced source revocation while a retained delivery read was
+waiting: the monitor stored StaleContext, but receive returned the derivative
+Interrupted caused by fencing that read. The guard now returns its first recorded
+cause from receive/revalidation failures and cannot revive a failed call after a
+concurrent successful authorization read. Owner retirement is classified as
+Interrupted consistently with the independent monitor. The focused Inference
+suite passes all 28 tests. Final qualification passes on 624 frozen Rust/Cargo/
+validation inputs: workspace and doctests 553, App QA 95 plus one intentional
+ignore, Linux FFI, boundaries (27 nodes, 154 edges), and whitespace checks.
+Provider/native edges remain synthetic; live append and real media integration
+are not claimed by this correction.

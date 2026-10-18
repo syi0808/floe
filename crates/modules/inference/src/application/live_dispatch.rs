@@ -58,13 +58,14 @@ impl AuthorizedLiveSession {
     pub fn failure(&self) -> Option<AgentFailure> {
         *self.failure.lock().unwrap()
     }
-    fn fail(&self, failure: AgentFailure) {
+    fn fail(&self, failure: AgentFailure) -> AgentFailure {
         // Publish the causal failure before derivative cancellation/local fence.
-        self.failure.lock().unwrap().get_or_insert(failure);
+        let cause = *self.failure.lock().unwrap().get_or_insert(failure);
         self.scope
             .cancellation()
             .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
         self.transport.fence();
+        cause
     }
     pub fn settle_usage(
         &mut self,
@@ -118,17 +119,19 @@ impl AuthorizedLiveSession {
         if let Some(failure) = self.failure() {
             return Err(failure);
         }
-        let result = if self.preparation_cancellation.is_cancelled()
-            || self.owner_cancellation.is_cancelled()
-        {
+        let result = if self.owner_cancellation.is_cancelled() {
+            Err(AgentFailure::Interrupted)
+        } else if self.preparation_cancellation.is_cancelled() {
             Err(AgentFailure::Cancelled)
         } else {
             bounded_revalidate(&self.fence, &self.scope).await
         };
-        if let Err(failure) = result {
-            self.fail(failure);
+        match result {
+            Err(failure) => Err(self.fail(failure)),
+            // A concurrent monitor may have retired the call while this read
+            // succeeded. A later successful read cannot revive that call.
+            Ok(()) => self.failure().map_or(Ok(()), Err),
         }
-        result
     }
 }
 impl AuthorizedLiveSession {
@@ -147,13 +150,11 @@ impl AuthorizedLiveSession {
             let delivery = match observation.run(self.transport.observe(&observation)).await {
                 Ok(delivery) => delivery,
                 Err(error) => {
-                    self.fail(error);
-                    return Err(error);
+                    return Err(self.fail(error));
                 }
             };
             if delivery.validate().is_err() || delivery.sequence != self.acknowledged_delivery + 1 {
-                self.fail(AgentFailure::InvalidInput);
-                return Err(AgentFailure::InvalidInput);
+                return Err(self.fail(AgentFailure::InvalidInput));
             }
             if let floe_model_contract::LiveProviderEvent::Ended { usage, .. } = &delivery.event {
                 // Accounting is retained even if source release is later denied.
