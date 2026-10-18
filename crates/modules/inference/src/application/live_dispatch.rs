@@ -24,15 +24,23 @@ use std::{
 };
 use tokio::task::JoinHandle;
 
+#[path = "live_append.rs"]
+mod append;
+
 // Host scheduling bounds, not zero-latency external revocation guarantees.
 const REVALIDATE_INTERVAL: Duration = Duration::from_millis(250);
 const REVALIDATE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Retains one fenced transport and budget reservation. No raw transport is
-/// exposed: event release is guarded and retained; append remains a separate
-/// integration gate with cumulative source provenance.
+/// exposed: event release is guarded and retained; one-shot append preserves
+/// cumulative source obligations before any possible provider write.
 pub struct AuthorizedLiveSession {
     plan: LiveModelPlan,
+    voice_session_id: uuid::Uuid,
+    surface_session_id: uuid::Uuid,
+    history: Arc<append::History>,
+    append_sources: append::Sources,
+    append_authority: Arc<dyn append::SourceAdmission>,
     transport: Arc<dyn LiveEventTransport>,
     fence: Arc<dyn LiveSourceFence>,
     scope: ExecutionScope,
@@ -388,6 +396,12 @@ where
             deadline: lifetime.deadline(),
             cancellation: lifetime.cancellation().clone(),
         };
+        let append_sources = append::Sources::initial(&request.projection);
+        let append_authority: Arc<dyn append::SourceAdmission> = Arc::new(append::Authority {
+            request: dispatch.clone(),
+            resolver: self.resolver.clone(),
+            authority: self.authority.clone(),
+        });
         let permit = admit_model_dispatch(
             dispatch,
             self.resolver.clone(),
@@ -427,7 +441,11 @@ where
         attempt.mark_dispatched();
         let session: Arc<dyn LiveEventTransport> =
             Arc::new(transport.start(canonical, admitted).await?);
-        let fence: Arc<dyn LiveSourceFence> = fence;
+        let history = Arc::new(append::History {
+            initial: fence,
+            appended: Mutex::new(None),
+        });
+        let fence: Arc<dyn LiveSourceFence> = history.clone();
         let mut pending = PendingLiveSession(Some(session.clone()));
         bounded_revalidate(&fence, lifetime).await?;
         if preparation_cancellation.is_cancelled() || owner_cancellation.is_cancelled() {
@@ -445,6 +463,11 @@ where
         pending.0.take();
         Ok(AuthorizedLiveSession {
             plan,
+            voice_session_id: request.voice_session_id,
+            surface_session_id: request.surface_session_id,
+            history,
+            append_sources,
+            append_authority,
             transport: session,
             fence,
             scope: lifetime.clone(),

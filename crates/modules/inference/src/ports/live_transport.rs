@@ -110,6 +110,19 @@ impl LiveDelivery {
 /// after response loss. One continuously owned adapter reader supplies it; UI
 /// request cancellation cannot cancel that reader or consume a pending event.
 pub trait LiveEventTransport: LiveSessionControl + Send + Sync {
+    /// Pure whole-batch codec preflight, before durable intent or provider I/O.
+    fn validate_append(
+        &self,
+        payload: &floe_model_contract::LiveAppendPayload,
+    ) -> Result<(), AgentFailure>;
+    /// One shot on this exact call. The owner retains the durable intent if this
+    /// future is interrupted; a dropped response cannot justify recreating it.
+    fn append<'a>(
+        &'a self,
+        payload: &'a floe_model_contract::LiveAppendPayload,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+
     fn observe<'a>(
         &'a self,
         scope: &'a ExecutionScope,
@@ -119,4 +132,66 @@ pub trait LiveEventTransport: LiveSessionControl + Send + Sync {
         sequence: u64,
         scope: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+}
+
+/// One Context-owned result projection for an already selected call. No raw
+/// caller text can be substituted for the projection payload at this boundary.
+pub struct LiveAppendRequest {
+    pub operation_id: Uuid,
+    pub kind: floe_model_contract::LiveAppendKind,
+    pub delegation_id: Option<String>,
+    pub projection: LiveContextProjection,
+}
+#[derive(Clone, Debug)]
+pub struct LiveAppendIntent {
+    pub actor: OwnerActor,
+    pub voice_session_id: Uuid,
+    pub surface_session_id: Uuid,
+    pub plan_id: Uuid,
+    pub source: floe_context_contract::LiveProjectionSource,
+    pub projection_digest: [u8; 32],
+    pub payload: floe_model_contract::LiveAppendPayload,
+}
+impl LiveAppendIntent {
+    pub fn validate(&self) -> Result<(), AgentFailure> {
+        self.actor.validate()?;
+        self.source.validate()?;
+        self.payload
+            .validate()
+            .map_err(|_| AgentFailure::InvalidInput)?;
+        if self.voice_session_id.is_nil()
+            || self.surface_session_id.is_nil()
+            || self.plan_id.is_nil()
+            || self.projection_digest == [0; 32]
+            || self.source.through().session_id != self.surface_session_id
+            || !matches!(
+                self.source,
+                floe_context_contract::LiveProjectionSource::SurfaceResult { .. }
+            )
+            || matches!(
+                self.payload.kind,
+                floe_model_contract::LiveAppendKind::Instruction
+            )
+        {
+            return Err(AgentFailure::InvalidInput);
+        }
+        Ok(())
+    }
+}
+pub trait LiveAppendCustody: Send + Sync {
+    /// Fresh durable intent only. Exact replay, uncertain commit and restart
+    /// never authorize another provider write. The Voice owner binds the result
+    /// and delegation to canonical Work before returning true.
+    fn claim_append<'a>(
+        &'a self,
+        intent: &'a LiveAppendIntent,
+        scope: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>>;
+}
+/// Local transport evidence only: neither variant proves remote acceptance or
+/// audio playback. An uncertain write must never be blindly retried.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LiveAppendWrite {
+    Written,
+    Uncertain(AgentFailure),
 }

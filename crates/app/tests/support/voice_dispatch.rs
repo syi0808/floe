@@ -52,6 +52,20 @@ impl LiveSessionControl for LiveSession {
     }
 }
 impl floe_inference::LiveEventTransport for LiveSession {
+    fn validate_append(
+        &self,
+        payload: &floe_model_contract::LiveAppendPayload,
+    ) -> Result<(), AgentFailure> {
+        payload.validate().map_err(|_| AgentFailure::InvalidInput)
+    }
+    fn append<'a>(
+        &'a self,
+        _: &'a floe_model_contract::LiveAppendPayload,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::InvalidInput) })
+    }
+
     fn observe<'a>(
         &'a self,
         _: &'a ExecutionScope,

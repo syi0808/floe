@@ -3069,3 +3069,38 @@ validation inputs: workspace and doctests 553, App QA 95 plus one intentional
 ignore, Linux FFI, boundaries (27 nodes, 154 edges), and whitespace checks.
 Provider/native edges remain synthetic; live append and real media integration
 are not claimed by this correction.
+
+### Cumulative live append authority foundation
+
+Inference's retained call now accepts a Context-owned canonical SurfaceResult
+projection for one-shot append. It never accepts a second arbitrary text value
+alongside that projection. Whole-batch limits and pure codec preflight precede a
+fresh Voice custody claim; exact actor/call/plan/Surface identity and all old plus
+incoming source obligations are checked again before provider I/O.
+
+The initial source fence is retained unchanged. A bounded cumulative known-source
+and memory-revision manifest backs the additional fence, including after a later
+independent result. Unknown initial Device history cannot erase later known
+obligations through DependencyCoverage::merge. Conflicting source/memory revisions
+and aggregate proof capacity fail before a new write; no old proof is discarded
+or remote context silently relabelled. The independent monitor revalidates both
+fences without a transcript reader. No new Voice-to-Access dependency is added.
+
+Append has no automatic transport retry. A returned write completion proves only
+local write completion, not provider acceptance or playback. A failed/partially
+written batch is uncertain and fences the call. Dropping the write future also
+fences it through RAII while its durable intent remains unresolved. Voice's
+custody implementation must correlate the exact canonical result/Work/delegation
+and reject duplicate logical delivery even under a different request UUID.
+
+Six added Inference regressions cover exact replay, uncertain write, revocation
+while waiting for custody, cumulative memory revocation after a later independent
+result and unknown initial history, preflight rejection, conflicting revision,
+aggregate memory capacity, foreign call identity, and dropped write fencing. The
+focused suite passes 34 tests. Final qualification passes on 625 frozen Rust/Cargo/
+validation inputs: workspace and doctests 559, App QA 95 plus one intentional
+ignore, Linux FFI, boundaries (27 nodes, 154 edges), and whitespace checks. The
+186 Go/module inputs are unchanged from their qualified race/vet snapshot. This checkpoint
+adds the guarded transport/custody contract only: persistent Voice outbound rows,
+result availability scheduling, real Gateway transport and native audio remain
+open. The existing App stream fixture explicitly rejects unexpected append I/O.

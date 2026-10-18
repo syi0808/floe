@@ -26,6 +26,12 @@ struct FenceGate {
     release: std::sync::mpsc::Receiver<()>,
 }
 struct State {
+    append_claims: Mutex<std::collections::HashSet<Uuid>>,
+    appends: AtomicUsize,
+    append_fail: AtomicBool,
+    append_stall: AtomicBool,
+    append_revoke: AtomicBool,
+    revoked_memory: Mutex<Option<Uuid>>,
     events: Mutex<std::collections::VecDeque<LiveDelivery>>,
     observations: AtomicUsize,
     acknowledged: AtomicU64,
@@ -52,6 +58,12 @@ struct State {
 impl State {
     fn new() -> Arc<Self> {
         Arc::new(Self {
+            append_claims: Mutex::new(Default::default()),
+            appends: AtomicUsize::new(0),
+            append_fail: AtomicBool::new(false),
+            append_stall: AtomicBool::new(false),
+            append_revoke: AtomicBool::new(false),
+            revoked_memory: Mutex::new(None),
             events: Mutex::new(Default::default()),
             observations: AtomicUsize::new(0),
             acknowledged: AtomicU64::new(0),
@@ -93,13 +105,17 @@ impl DependencyResolver for Resolver {
         _: &'a floe_access::DependencyAuthorization,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
-            assert_eq!(refs.len(), 1);
+            assert!(!refs.is_empty());
             self.0.reads.fetch_add(1, Ordering::SeqCst);
             if self.0.stall.load(Ordering::SeqCst) {
                 self.0.stalled.notify_one();
                 std::future::pending::<()>().await;
             }
-            if self.0.live.load(Ordering::SeqCst) {
+            if self.0.live.load(Ordering::SeqCst)
+                && !refs
+                    .iter()
+                    .any(|r| Some(r.target_id) == *self.0.revoked_memory.lock().unwrap())
+            {
                 Ok(())
             } else {
                 Err(AgentFailure::StaleContext)
@@ -131,6 +147,37 @@ impl LiveSessionControl for Session {
     }
 }
 impl LiveEventTransport for Session {
+    fn validate_append(
+        &self,
+        payload: &floe_model_contract::LiveAppendPayload,
+    ) -> Result<(), AgentFailure> {
+        payload.validate().map_err(|_| AgentFailure::InvalidInput)
+    }
+    fn append<'a>(
+        &'a self,
+        payload: &'a floe_model_contract::LiveAppendPayload,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            assert!(
+                self.0
+                    .append_claims
+                    .lock()
+                    .unwrap()
+                    .contains(&payload.operation_id)
+            );
+            self.0.appends.fetch_add(1, Ordering::SeqCst);
+            if self.0.append_stall.load(Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
+            if self.0.append_fail.load(Ordering::SeqCst) {
+                Err(AgentFailure::ServerModelUnavailable)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     fn observe<'a>(
         &'a self,
         _: &'a ExecutionScope,
@@ -883,4 +930,252 @@ async fn waiting_delivery_returns_the_source_failure_not_derivative_cancellation
     assert_eq!(call.failure(), Some(AgentFailure::StaleContext));
     assert_eq!(result, Err(AgentFailure::StaleContext));
     assert!(!root.cancellation().is_cancelled());
+}
+
+impl crate::LiveAppendCustody for Custody {
+    fn claim_append<'a>(
+        &'a self,
+        intent: &'a crate::LiveAppendIntent,
+        _: &'a ExecutionScope,
+    ) -> BoxFuture<'a, Result<bool, AgentFailure>> {
+        Box::pin(async move {
+            if self.0.append_revoke.load(Ordering::SeqCst) {
+                self.0.live.store(false, Ordering::SeqCst);
+            }
+            Ok(self
+                .0
+                .append_claims
+                .lock()
+                .unwrap()
+                .insert(intent.payload.operation_id))
+        })
+    }
+}
+fn append_request(
+    mut projection: LiveContextProjection,
+    operation_id: Uuid,
+) -> crate::LiveAppendRequest {
+    let through = projection.source.through();
+    projection.source = serde_json::from_value(serde_json::json!({
+        "kind":"surface_result", "through":{"session_id":through.session_id,"sequence":1,"digest":vec![7u8;32]}, "surface_message_id":Uuid::new_v4()
+    })).unwrap();
+    projection.projection_id = operation_id;
+    projection.payload = LiveContextPayload::new("Manager result".into()).unwrap();
+    crate::LiveAppendRequest {
+        operation_id,
+        kind: floe_model_contract::LiveAppendKind::PresentableResult,
+        delegation_id: Some("delegation-1".into()),
+        projection,
+    }
+}
+#[tokio::test]
+async fn append_claim_is_one_shot_and_write_failure_remains_uncertain() {
+    for fail in [false, true] {
+        let state = State::new();
+        let service = fixture_service(&state);
+        let root = fixture_scope();
+        let (prepared, request) = fixture_prepared(&service, &root).await;
+        let projection = request.projection.clone();
+        let mut call = service
+            .start_live(prepared, request, &Custody(state.clone()), &root)
+            .await
+            .unwrap();
+        state.append_fail.store(fail, Ordering::SeqCst);
+        let id = Uuid::new_v4();
+        let result = call
+            .append(
+                append_request(projection.clone(), id),
+                &Custody(state.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            if fail {
+                crate::LiveAppendWrite::Uncertain(AgentFailure::ServerModelUnavailable)
+            } else {
+                crate::LiveAppendWrite::Written
+            }
+        );
+        assert!(
+            call.append(append_request(projection, id), &Custody(state.clone()))
+                .await
+                .is_err()
+        );
+        assert_eq!(state.appends.load(Ordering::SeqCst), 1);
+        assert_eq!(state.starts.load(Ordering::SeqCst), 1);
+        assert!(!root.cancellation().is_cancelled());
+    }
+}
+#[tokio::test]
+async fn append_rechecks_source_after_custody_before_any_write() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let projection = request.projection.clone();
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    state.append_revoke.store(true, Ordering::SeqCst);
+    assert_eq!(
+        call.append(
+            append_request(projection, Uuid::new_v4()),
+            &Custody(state.clone())
+        )
+        .await,
+        Err(AgentFailure::StaleContext)
+    );
+    assert_eq!(state.appends.load(Ordering::SeqCst), 0);
+    assert_eq!(state.append_claims.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn append_cumulative_memory_survives_later_independent_result_and_unknown_initial_history() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, mut request) = fixture_prepared(&service, &root).await;
+    request.projection.coverage = DependencyCoverage::Unknown;
+    // Keep the initial memory so the start fixture checks real Access reads.
+    let mut projection = request.projection.clone();
+    projection.coverage = DependencyCoverage::Independent;
+    let added = Uuid::new_v4();
+    projection.memories = vec![MemoryRevisionReference {
+        target_id: added,
+        revision: 1,
+    }];
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    call.append(
+        append_request(projection.clone(), Uuid::new_v4()),
+        &Custody(state.clone()),
+    )
+    .await
+    .unwrap();
+    projection.memories.clear();
+    call.append(
+        append_request(projection, Uuid::new_v4()),
+        &Custody(state.clone()),
+    )
+    .await
+    .unwrap();
+    *state.revoked_memory.lock().unwrap() = Some(added);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while call.failure().is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(call.revalidate().await, Err(AgentFailure::StaleContext));
+    assert_eq!(state.appends.load(Ordering::SeqCst), 2);
+    assert!(state.fenced.load(Ordering::SeqCst));
+}
+#[tokio::test]
+async fn append_rejects_unknown_revision_replacement_and_capacity_before_claim() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let projection = request.projection.clone();
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    let mut unknown = append_request(projection.clone(), Uuid::new_v4());
+    unknown.projection.coverage = DependencyCoverage::Unknown;
+    assert_eq!(
+        call.append(unknown, &Custody(state.clone())).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    let mut changed = append_request(projection.clone(), Uuid::new_v4());
+    changed.projection.memories[0].revision += 1;
+    assert_eq!(
+        call.append(changed, &Custody(state.clone())).await,
+        Err(AgentFailure::StaleContext)
+    );
+    let mut large = append_request(projection, Uuid::new_v4());
+    large.projection.payload =
+        LiveContextPayload::new("x".repeat(call.plan().limits.append_bytes as usize + 1)).unwrap();
+    assert_eq!(
+        call.append(large, &Custody(state.clone())).await,
+        Err(AgentFailure::ModelInputCapacityExceeded)
+    );
+    assert_eq!(state.appends.load(Ordering::SeqCst), 0);
+    assert!(state.append_claims.lock().unwrap().is_empty());
+    assert!(!state.fenced.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn dropped_append_write_fences_the_call_and_never_replays() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let projection = request.projection.clone();
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    state.append_stall.store(true, Ordering::SeqCst);
+    let id = Uuid::new_v4();
+    let custody = Custody(state.clone());
+    let mut operation = Box::pin(call.append(append_request(projection.clone(), id), &custody));
+    std::future::poll_fn(|cx| {
+        assert!(operation.as_mut().poll(cx).is_pending());
+        if state.appends.load(Ordering::SeqCst) == 1 {
+            std::task::Poll::Ready(())
+        } else {
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+    drop(operation);
+    assert_eq!(call.failure(), Some(AgentFailure::Interrupted));
+    assert!(state.fenced.load(Ordering::SeqCst));
+    assert_eq!(
+        call.append(append_request(projection, id), &custody).await,
+        Err(AgentFailure::Interrupted)
+    );
+    assert_eq!(state.appends.load(Ordering::SeqCst), 1);
+    assert!(!root.cancellation().is_cancelled());
+}
+
+#[tokio::test]
+async fn append_checks_cumulative_memory_capacity_and_call_identity_before_custody() {
+    let state = State::new();
+    let service = fixture_service(&state);
+    let root = fixture_scope();
+    let (prepared, request) = fixture_prepared(&service, &root).await;
+    let projection = request.projection.clone();
+    let mut call = service
+        .start_live(prepared, request, &Custody(state.clone()), &root)
+        .await
+        .unwrap();
+    let mut foreign = append_request(projection.clone(), Uuid::new_v4());
+    foreign.projection.voice_session_id = Uuid::new_v4();
+    assert_eq!(
+        call.append(foreign, &Custody(state.clone())).await,
+        Err(AgentFailure::PolicyDenied)
+    );
+    let mut oversized = append_request(projection, Uuid::new_v4());
+    oversized.projection.memories = (0..floe_context_contract::MAX_CONTEXT_MEMORIES)
+        .map(|_| MemoryRevisionReference {
+            target_id: Uuid::new_v4(),
+            revision: 1,
+        })
+        .collect();
+    // Each incoming projection is valid alone; the already-sent initial memory
+    // makes the cumulative obligation set exceed its bounded authority contract.
+    oversized.projection.validate().unwrap();
+    assert_eq!(
+        call.append(oversized, &Custody(state.clone())).await,
+        Err(AgentFailure::ModelInputCapacityExceeded)
+    );
+    assert!(state.append_claims.lock().unwrap().is_empty());
+    assert_eq!(state.appends.load(Ordering::SeqCst), 0);
 }
