@@ -5,6 +5,8 @@ package node
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
@@ -104,5 +106,62 @@ func TestSuccessfulStartupRetainsConfigurationUntilClose(t *testing.T) {
 	n.Close()
 	if got := configurationCleanupWorkers(t); got != before {
 		t.Fatalf("configuration survived close: %d", got)
+	}
+}
+
+func TestCloseBoundsAnAdmittedRequestThatIgnoresCancellation(t *testing.T) {
+	n, err := New(Config{Directory: filepath.Join(t.TempDir(), "profile"), Address: "127.0.0.1:18431"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := n.storage.files.Scope("integrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = files.Write("shutdown-sentinel.json", []byte("synthetic retained IO")); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an admitted handler stuck in an external boundary that ignores
+	// request cancellation. New admissions are fenced, but this task still owns IO.
+	n.active.Add(1)
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			n.active.Done()
+		}
+	}
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- n.Close() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("undrained request reported successful shutdown")
+		}
+	case <-time.After(6 * time.Second):
+		release()
+		<-done
+		t.Fatal("Close exceeded its shutdown bound while waiting for an admitted request")
+	}
+	if data, err := files.Read("shutdown-sentinel.json", 1024); err != nil || string(data) != "synthetic retained IO" {
+		t.Fatal("storage closed underneath an admitted request", err)
+	}
+	response := httptest.NewRecorder()
+	n.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18431/manage/", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatal("shutdown admitted a new request", response.Code)
+	}
+	release()
+	select {
+	case <-n.closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("late request drain did not release resources")
+	}
+	if _, err := files.Read("shutdown-sentinel.json", 1024); err == nil {
+		t.Fatal("drained node retained live storage")
+	}
+	if err := n.Close(); err == nil {
+		t.Fatal("retry erased the original incomplete-shutdown evidence")
 	}
 }

@@ -1508,3 +1508,15 @@ uncertainty fences the call after immutable receipt custody. Correlation is capp
 at 256 delegations per call, consistent with bounded transport write identities;
 exhaustion stops live presentation without dropping already-admitted Work. The
 controller remains generation-owned and drains through the same shutdown path.
+
+### Bounded server shutdown observation
+
+The CLI closes Node admission and fences live handles immediately when shutdown
+is signaled, before HTTP drain. Node Close also bounds its whole drain observation,
+not just the final live-worker wait: an admitted external boundary that ignores
+cancellation cannot block the caller forever. Timeout is explicit incomplete
+shutdown, never success or evidence that all effects stopped. An owned drain tail
+retains shared storage/credentials until actual requests, catalog work and owner
+effects finish; it never closes those resources underneath an admitted task.
+Repeated Close preserves the original incomplete observation instead of silently
+turning it into success after a late completion.

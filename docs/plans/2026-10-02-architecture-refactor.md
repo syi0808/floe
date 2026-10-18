@@ -3354,3 +3354,22 @@ All 237 Flutter tests pass on 153 frozen Dart/test/manifest inputs. Removing two
 unused Connector-screen imports leaves analyzer errors/warnings at zero, with
 91 informational lints still reported and a nonzero analyzer exit status. This
 is headless client qualification, not Firefox visual or Apple microphone QA.
+
+### Server shutdown drain bound correction
+
+Direct review found the old Node Close awaited active HTTP work before entering
+its bounded live drain. A request ignoring cancellation could therefore wait
+forever. The regression reproduced this before the fix by exceeding six seconds.
+Close now fences admission immediately and reports incomplete shutdown after its
+five-second observation bound. A retained cleanup tail closes storage only after
+actual active work and effects drain, including late completion; a second Close
+cannot erase the original incomplete evidence. SIGINT/SIGTERM fences the Node
+before HTTP shutdown waits. The regression also checks new-request rejection and
+that shared storage remains usable for the admitted task until real drain, then
+is closed. Focused node/CLI race tests pass three repetitions.
+
+The shutdown correction passes the full default/development Go race suites
+(17/18 test-bearing packages) and both vet gates on 204 frozen Go/module inputs.
+All 634 Rust/Cargo/validation and 153 Dart/test/manifest inputs are unchanged
+from the qualified automatic-result and Flutter snapshots; no unrelated native
+or UI qualification is implied by the shutdown test.

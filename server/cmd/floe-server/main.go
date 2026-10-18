@@ -65,12 +65,12 @@ func main() {
 	}
 	defer func() {
 		if err := server.Close(); err != nil {
-			log.Print("Local server shutdown incomplete: live control did not drain")
+			log.Print("Local server shutdown incomplete: owner resources did not drain")
 		}
 	}()
 	log.Printf("Local dashboard: http://%s/manage/", address)
 	log.Print("Administrator token is encrypted. Use this binary with --print-admin-token and the same FLOE_SERVER_DATA to retrieve it privately.")
-	serve(server, address)
+	serve(server, address, server.CloseAdmission)
 }
 
 func parseCatalogCommand(args []string) (command, path string, ok bool) {
@@ -152,7 +152,7 @@ func catalogError(err error) string {
 	}
 }
 
-func serve(handler http.Handler, address string) {
+func serve(handler http.Handler, address string, closeAdmission func()) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	server := &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 45 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192, BaseContext: func(net.Listener) context.Context { return ctx }}
@@ -160,6 +160,7 @@ func serve(handler http.Handler, address string) {
 	go func() {
 		defer close(done)
 		<-ctx.Done()
+		closeAdmission()
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)

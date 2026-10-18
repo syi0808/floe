@@ -31,19 +31,21 @@ type Config struct {
 	ModelCatalogRefreshInterval time.Duration
 }
 type Node struct {
-	handler      *httptransport.Handler
-	integrations *integrations.Service
-	clients      *trust.ClientAdministration
-	runtime      *codexauth.Runtime
-	storage      *admittedStorage
-	catalogDone  chan struct{}
-	close        sync.Once
-	closeErr     error
-	mu           sync.Mutex
-	active       sync.WaitGroup
-	closed       bool
-	ctx          context.Context
-	cancel       context.CancelFunc
+	handler        *httptransport.Handler
+	integrations   *integrations.Service
+	clients        *trust.ClientAdministration
+	runtime        *codexauth.Runtime
+	storage        *admittedStorage
+	catalogDone    chan struct{}
+	close          sync.Once
+	admissionClose sync.Once
+	closeDone      chan struct{}
+	closeErr       error
+	mu             sync.Mutex
+	active         sync.WaitGroup
+	closed         bool
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func New(config Config) (*Node, error) {
@@ -196,30 +198,55 @@ func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	n.handler.ServeHTTP(w, r.WithContext(ctx))
 }
-func (n *Node) Close() error {
-	n.close.Do(func() {
+
+// CloseAdmission is the immediate lifetime fence, separate from waiting for
+// external requests/effects. The HTTP signal path calls it before its own drain.
+func (n *Node) CloseAdmission() {
+	n.admissionClose.Do(func() {
 		n.mu.Lock()
 		n.closed = true
 		n.cancel()
 		n.mu.Unlock()
-		if n.catalogDone != nil {
-			<-n.catalogDone
-		}
 		n.handler.Inference.Service.DenyConfiguration()
 		n.handler.Inference.Service.CloseLiveAdmission()
-		n.active.Wait()
-		n.handler.Configuration.Close()
-		n.handler.Mirror.Close()
-		n.handler.Sources.Close()
-		n.clients.Close()
-		n.integrations.Close()
-		n.runtime.Close()
-		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := n.handler.Inference.Service.ShutdownLive(drain); err != nil {
-			n.closeErr = errors.New("live control shutdown did not drain")
+	})
+}
+
+func (n *Node) Close() error {
+	n.close.Do(func() {
+		n.CloseAdmission()
+		n.closeDone = make(chan struct{})
+		drained := make(chan error, 1)
+		go func() {
+			defer close(n.closeDone)
+			// An ignored cancellation cannot make the caller wait forever, but
+			// closing shared storage underneath that task would be unsafe. The
+			// owned tail keeps resources until actual requests/effects drain.
+			if n.catalogDone != nil {
+				<-n.catalogDone
+			}
+			n.active.Wait()
+			n.handler.Configuration.Close()
+			n.handler.Mirror.Close()
+			n.handler.Sources.Close()
+			n.clients.Close()
+			n.integrations.Close()
+			n.runtime.Close()
+			if err := n.handler.Inference.Service.ShutdownLive(context.Background()); err != nil {
+				drained <- errors.New("server effect drain failed")
+				return
+			}
+			n.storage.Close()
+			drained <- nil
+		}()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case err := <-drained:
+			n.closeErr = err
+		case <-timer.C:
+			n.closeErr = errors.New("server shutdown did not drain")
 		}
-		cancel()
-		n.storage.Close()
 	})
 	return n.closeErr
 }
