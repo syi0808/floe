@@ -2910,3 +2910,22 @@ register the long-lived controller before start so shutdown can drain known
 settlement after closing public admission. Then compose Gateway live selection,
 per-client control/delivery and native media. Do not mistake the current startup
 resource guard for that completed controller or actual audio qualification.
+
+
+### Voice settlement admission correction
+
+A cancellation fixture reproduced a lost terminal usage receipt when observer
+cancellation occurred during settlement's initial journal read: the mutation had
+not yet entered owned custody, and shutdown drained no settlement task. The
+complete read/compare/mutate sequence now enters the existing bounded custody
+owner before the first read. New requests after retirement remain rejected;
+accepted requests drain without converting accounting to native Stop evidence.
+This closes the already-admitted settlement gap, not controller registration or
+admission of future terminal events after shutdown. The fixture uses a delayed
+journal with canonical lifecycle policy and a real App Conversation owner;
+final qualification passes on 622 frozen Rust/Cargo/architecture-tool inputs:
+workspace/doctests 541 passed, App QA 86 passed plus one intentional ignore,
+Linux FFI built, dependency validation passed (27 nodes, 154 edges), and
+whitespace checks passed. The delayed-read regression failed before the fix
+(zero writes) and passes afterward with exactly one retained receipt. This does
+not qualify actual audio, native permissions or a provider account.

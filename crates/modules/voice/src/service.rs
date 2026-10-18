@@ -180,32 +180,40 @@ impl VoiceService {
     ) -> Result<floe_execution::budget::ModelAttemptReceipt, CommandFailure<AgentFailure>> {
         self.check(actor).map_err(CommandFailure::NotAdmitted)?;
         receipt.validate().map_err(CommandFailure::Indeterminate)?;
-        let record = self
-            .read_call(actor, voice, scope)
-            .await
-            .map_err(CommandFailure::Indeterminate)?
-            .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
-        if record.intent.binding.plan_id != receipt.attempt_id {
-            return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
-        }
-        if let Some(saved) = record.usage {
-            return if saved == receipt {
-                Ok(saved)
-            } else {
-                Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
+        let journal = self.journal.clone();
+        let owner = actor.clone();
+        // Admission owns the entire read/compare/mutate operation. An observer
+        // leaving during the first read must not discard a known terminal bill,
+        // and retirement must drain this task before sealing the journal.
+        self.custody(actor, scope, async move {
+            let record = journal
+                .read_call(&owner, voice)
+                .await
+                .map_err(CommandFailure::Indeterminate)?
+                .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+            if record.intent.binding.plan_id != receipt.attempt_id {
+                return Err(CommandFailure::Indeterminate(AgentFailure::PolicyDenied));
+            }
+            if let Some(saved) = record.usage {
+                return if saved == receipt {
+                    Ok(saved)
+                } else {
+                    Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
+                };
+            }
+            let request = VoiceMutation {
+                voice_session_id: voice,
+                command_id: Uuid::new_v5(&voice, b"floe.voice.usage-settlement"),
+                expected_revision: record.revision,
+                kind: crate::VoiceMutationKind::SettleUsage { receipt },
             };
-        }
-        let request = VoiceMutation {
-            voice_session_id: voice,
-            command_id: Uuid::new_v5(&voice, b"floe.voice.usage-settlement"),
-            expected_revision: record.revision,
-            kind: crate::VoiceMutationKind::SettleUsage { receipt },
-        };
-        let admission = self.mutate(actor, request, scope).await?;
-        admission
-            .record
-            .usage
-            .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+            let admission = journal.mutate(&owner, request).await?;
+            admission
+                .record
+                .usage
+                .ok_or(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
+        })
+        .await
     }
 
     pub fn close_admission(&self) {

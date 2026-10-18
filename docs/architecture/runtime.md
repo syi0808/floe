@@ -1133,6 +1133,10 @@ canonical Conversation receipts, without imposing a lifetime event-count cap.
 App composes one VoiceService with the same Conversation owner and encrypted
 Vault. It retains bounded custody tasks independently of caller observation
 scope, then wakes canonical Work discovery after actual storage completion.
+Terminal usage settlement admits the complete read/compare/mutate sequence as
+one custody task, so cancellation during its initial read cannot discard the
+already-received usage receipt. Retirement rejects new settlement requests but
+drains ones already admitted before closing the journal.
 Retirement fences new custody and drains the owned tasks. These are storage and
 queue lifetimes, not a provider reader, native media driver, or permission grant.
 Actual native privacy Stop must occur independently of storage latency. Live

@@ -450,3 +450,165 @@ fn voice_custody_outlives_observer_cancellation_and_retirement_drains_it() {
         });
     });
 }
+
+/// A delayed read before the accounting mutation must already belong to the
+/// admitted custody task, rather than the UI observer's cancellable future.
+struct DelayedSettlementJournal {
+    record: std::sync::Mutex<VoiceCallRecord>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    writes: std::sync::atomic::AtomicUsize,
+}
+impl floe_voice::VoiceJournal for DelayedSettlementJournal {
+    fn admit_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: VoiceStartIntent,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceStartAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("settlement cannot start another call") })
+    }
+    fn read_call<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<VoiceCallRecord>, AgentFailure>> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.release.notified().await;
+            Ok(Some(self.record.lock().unwrap().clone()))
+        })
+    }
+    fn mutate<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        request: VoiceMutation,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceMutationAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async move {
+            assert!(matches!(
+                request.kind,
+                VoiceMutationKind::SettleUsage { .. }
+            ));
+            let mut record = self.record.lock().unwrap();
+            let (next, receipt) = record
+                .apply(actor, &request)
+                .map_err(CommandFailure::NotAdmitted)?;
+            *record = next.clone();
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(floe_voice::VoiceMutationAdmission {
+                record: next,
+                receipt,
+                replayed: false,
+            })
+        })
+    }
+}
+impl floe_voice::VoiceIngressJournal for DelayedSettlementJournal {
+    fn read_event<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: &'a str,
+        _: &'a str,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Option<floe_voice::VoiceIngressAdmission>, AgentFailure>,
+    > {
+        Box::pin(async { panic!("settlement cannot read an ingress event") })
+    }
+    fn ingest<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: LiveProviderEvent,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceIngressAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("settlement cannot admit new input") })
+    }
+}
+#[test]
+fn admitted_voice_usage_settlement_survives_cancel_during_read_and_shutdown() {
+    use floe_execution::budget::{ModelAccounting, ModelAttemptReceipt};
+    use std::sync::{Arc, atomic::Ordering};
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    let call = capturing(&host, surface);
+    let voice_id = call.intent.binding.voice_session_id;
+    let receipt = ModelAttemptReceipt {
+        attempt_id: call.intent.binding.plan_id,
+        charged_tokens: 7,
+        charged_cost_micros: 3,
+        accounting: ModelAccounting {
+            observed_tokens: Some(7),
+            observed_cost_micros: Some(3),
+            unknown_tokens: false,
+            unknown_cost: false,
+        },
+        dispatched: true,
+    };
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let journal = Arc::new(DelayedSettlementJournal {
+                record: std::sync::Mutex::new(call),
+                entered: Default::default(),
+                release: Default::default(),
+                writes: Default::default(),
+            });
+            let voice = Arc::new(
+                floe_voice::VoiceService::new(
+                    actor.clone(),
+                    journal.clone(),
+                    owners.conversation.clone(),
+                )
+                .unwrap(),
+            );
+            let cancellation = Cancellation::new();
+            let scope = host_scope(Uuid::new_v4(), cancellation.clone(), WAIT_TIMEOUT);
+            let child = voice.clone();
+            let child_actor = actor.clone();
+            let observer = tokio::spawn(async move {
+                child
+                    .settle_usage(&child_actor, voice_id, receipt, &scope)
+                    .await
+            });
+            tokio::time::timeout(WAIT_TIMEOUT, journal.entered.notified())
+                .await
+                .unwrap();
+            cancellation.cancel_with_reason(floe_execution::CancelReason::User);
+            assert!(matches!(
+                observer.await.unwrap(),
+                Err(CommandFailure::Indeterminate(AgentFailure::Cancelled))
+            ));
+            voice.close_admission();
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            assert!(matches!(
+                voice.settle_usage(&actor, voice_id, receipt, &scope).await,
+                Err(CommandFailure::NotAdmitted(AgentFailure::VaultUnavailable))
+            ));
+            let child = voice.clone();
+            let drain = tokio::spawn(async move { child.shutdown_and_drain(&scope).await });
+            tokio::task::yield_now().await;
+            journal.release.notify_one();
+            tokio::time::timeout(WAIT_TIMEOUT, drain)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(journal.writes.load(Ordering::SeqCst), 1);
+            let record = journal.record.lock().unwrap();
+            assert_eq!(record.usage, Some(receipt));
+            assert!(record.session.stop_requested());
+            assert_ne!(record.session.media(), MediaState::Stopped);
+        });
+    });
+}
