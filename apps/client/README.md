@@ -347,3 +347,22 @@ Follow the [active verification sequence](../../docs/plans/2026-10-02-architectu
 - Run format/compile/checks at the completed slice, not every file; final production builds must pass. Broad legacy-suite reconstruction follows stabilized contracts.
 
 The historical Flutter/native tests were removed after behavior extraction. Inspect the current pubspec and targets before selecting a test command; retained lockfile entries are not proof of a runnable suite.
+
+### Recoverable local reset
+
+`scripts/reset-local-data.sh --yes` moves only known development data into a
+private recovery directory under `~/.Trash`. A missing Trash directory is created
+with private permissions; a symbolic link or non-directory is rejected. The
+recovery path is printed before the first move, including when a later move fails.
+Production data requires explicit `--profile production`. Keychain entries,
+custom `FLOE_SERVER_DATA` locations and OS privacy permissions are not reset.
+
+Run the isolated script regressions from the repository root:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/tests -p test_local_scripts.py -v
+```
+
+These use temporary homes and fake macOS/process commands, not real user data.
+`FLOE_TEST_BASH` may select another Bash executable. Passing these fixtures does
+not qualify real macOS application startup, signing, Flutter or Keychain behavior.

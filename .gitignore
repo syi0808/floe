@@ -8,3 +8,5 @@
 .DS_Store
 /prototypes/floe-ui/node_modules/
 /prototypes/floe-ui/dist/
+__pycache__/
+*.py[cod]

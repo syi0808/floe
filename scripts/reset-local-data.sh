@@ -88,7 +88,23 @@ for index in "${!data_sources[@]}"; do
   source=${data_sources[$index]}
   [[ -e "$source" ]] || continue
   if [[ -z "$trash_directory" ]]; then
-    trash_directory=$(mktemp -d "$HOME/.Trash/Floe-$profile-reset-XXXXXX")
+    trash_root="$HOME/.Trash"
+    if [[ -L "$trash_root" || ( -e "$trash_root" && ! -d "$trash_root" ) ]]; then
+      printf 'Refusing invalid Trash directory: %s\n' "$trash_root" >&2
+      exit 1
+    fi
+    if [[ ! -d "$trash_root" ]]; then
+      (umask 077; mkdir "$trash_root") || {
+        printf 'Cannot create Trash directory: %s\n' "$trash_root" >&2
+        exit 1
+      }
+    fi
+    trash_directory=$(mktemp -d "$trash_root/Floe-$profile-reset-XXXXXX") || {
+      printf 'Cannot create recoverable reset directory in: %s\n' "$trash_root" >&2
+      exit 1
+    }
+    # Print before moving anything so a partial failure remains recoverable.
+    printf 'Recoverable data: %s\n' "$trash_directory"
   fi
   mv "$source" "$trash_directory/${data_labels[$index]}"
   moved=$((moved + 1))
