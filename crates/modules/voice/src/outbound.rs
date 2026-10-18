@@ -193,7 +193,21 @@ pub struct VoiceAppendAdmission {
     pub record: VoiceAppendRecord,
     pub replayed: bool,
 }
+/// Read-only correlation for the current canonical result of an admitted
+/// delegation. There is no new delivery queue or copied Manager result body.
+#[derive(Clone, Debug)]
+pub struct VoiceResultCandidate {
+    pub delegation_id: String,
+    pub source: LiveProjectionSource,
+}
 pub trait VoiceOutboundJournal: VoiceIngressJournal {
+    fn pending_result<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        voice_session_id: Uuid,
+        delegation_id: &'a str,
+    ) -> BoxFuture<'a, Result<Option<VoiceResultCandidate>, AgentFailure>>;
+
     fn claim_append<'a>(
         &'a self,
         actor: &'a OwnerActor,

@@ -3281,3 +3281,38 @@ packages) and both vet gates also pass. The Go cross-language fixture is explici
 skipped unless requested, not counted as implicitly exercised by the default Go
 suite. Existing platform-only warnings remain; no Apple/browser/audio completion
 is inferred from these results.
+
+
+### Automatic Manager-result discovery and live delivery
+
+The one registered Voice consumer now multiplexes retained input with bounded
+round-robin discovery of results for its admitted delegations. The existing journal
+point-reads original Work, current Run descendant and exact published Surface
+result; an existing append intent suppresses every automatic reissue, including
+unknown/uncertain outcomes. There is no copied result body, new durable queue,
+second Manager or new model invocation to discover a result.
+
+Context's LiveResultProjector uses the real Vault reader and current dependency
+resolver. App composes it and Voice directly depends on the Context owner for this
+real projection responsibility (one new allowed architecture edge). Inference
+provides only a zero-budget bounded child read scope and retains final source
+admission. Required source review/compaction remains fail-closed, not automatic
+processing expansion or lossy suffix delivery. Conversation retains non-result
+Work outcomes; native permission/Stop and product UI composition are still open.
+
+Two new registered App cases drive the actual Manager, encrypted journal, Context
+projector and Voice consumer without manually waiting for or constructing the
+Manager result. They verify automatic single delivery and immutable uncertainty
+without reissuing Work. Existing cancellation, ACK loss, terminal usage and manual
+exact-receipt regressions remain active. The synthetic transport now consistently
+honors its advertised ContextAppend capability when a result races an already
+queued terminal event; the original failure/usage/ACK assertions remain intact.
+
+Final qualification passes on 634 frozen Rust/Cargo/validation inputs: workspace
+and doctests 565 plus the explicit cross-language ignore, App QA 99 plus its
+intentional subprocess-entry ignore, Linux FFI and architecture boundaries
+(27 nodes, 155 edges). The nine focused live App cases passed three repetitions;
+the final Rust-to-Go synthetic transport gate also passed three race-enabled Go
+runs. All 204 Go/module inputs remain identical to their qualified full race/vet
+snapshot. No Apple device, physical audio, real provider or browser visual gate
+is claimed by this automatic-result checkpoint.

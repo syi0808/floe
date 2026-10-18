@@ -38,6 +38,8 @@ struct Probe {
     appends: AtomicUsize,
     append_enabled: AtomicBool,
     append_uncertain: AtomicBool,
+    auto_end: AtomicBool,
+    last_append: std::sync::Mutex<Option<floe_model_contract::LiveAppendPayload>>,
     fenced: AtomicBool,
     events: std::sync::Mutex<std::collections::VecDeque<floe_inference::LiveDelivery>>,
     changed: tokio::sync::Notify,
@@ -63,7 +65,7 @@ impl floe_inference::LiveEventTransport for LiveSession {
     }
     fn append<'a>(
         &'a self,
-        _: &'a floe_model_contract::LiveAppendPayload,
+        payload: &'a floe_model_contract::LiveAppendPayload,
         _: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
         Box::pin(async move {
@@ -72,6 +74,26 @@ impl floe_inference::LiveEventTransport for LiveSession {
                 return Err(AgentFailure::InvalidInput);
             }
             self.0.appends.fetch_add(1, Ordering::SeqCst);
+            *self.0.last_append.lock().unwrap() = Some(payload.clone());
+            if self.0.auto_end.load(Ordering::SeqCst)
+                && !self.0.append_uncertain.load(Ordering::SeqCst)
+            {
+                self.0
+                    .events
+                    .lock()
+                    .unwrap()
+                    .push_back(floe_inference::LiveDelivery {
+                        sequence: 6,
+                        event: floe_model_contract::LiveProviderEvent::Ended {
+                            evidence: floe_model_contract::LiveEndEvidence::ProviderConfirmed,
+                            usage: LiveUsageObservation {
+                                tokens: Some(9),
+                                cost_micros: Some(4),
+                            },
+                        },
+                    });
+                self.0.changed.notify_one();
+            }
             if self.0.append_uncertain.load(Ordering::SeqCst) {
                 Err(AgentFailure::ServerModelUnavailable)
             } else {
@@ -444,6 +466,8 @@ enum AppendMode {
     Disabled,
     Written,
     Uncertain,
+    AutomaticWritten,
+    AutomaticUncertain,
 }
 fn drive_retained_stream(
     lost_ack: bool,
@@ -452,7 +476,14 @@ fn drive_retained_stream(
     append: AppendMode,
 ) {
     let append_result = append != AppendMode::Disabled;
-    let append_uncertain = append == AppendMode::Uncertain;
+    let append_uncertain = matches!(
+        append,
+        AppendMode::Uncertain | AppendMode::AutomaticUncertain
+    );
+    let automatic = matches!(
+        append,
+        AppendMode::AutomaticWritten | AppendMode::AutomaticUncertain
+    );
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let recorder = model.recorder();
     let (_profile, host) = create_ready_app(&model);
@@ -471,7 +502,11 @@ fn drive_retained_stream(
                 fenced: AtomicBool::new(false),
                 ..Default::default()
             });
-            probe.append_enabled.store(append_result, Ordering::SeqCst);
+            // The advertised ContextAppend capability remains valid even when
+            // this fixture already queued its terminal event. A result may win
+            // that race; it must still use one durable write, not fail preflight.
+            probe.append_enabled.store(true, Ordering::SeqCst);
+            probe.auto_end.store(automatic, Ordering::SeqCst);
             probe
                 .append_uncertain
                 .store(append_uncertain, Ordering::SeqCst);
@@ -669,6 +704,7 @@ fn drive_retained_stream(
                     }));
                 native_probe.changed.notify_one();
             });
+            let live_projector = owners.live_result_projector.clone();
             let live_voice = owners.voice.clone();
             let live_scope = scope.clone();
             let live_conversation = owners.conversation.clone();
@@ -698,7 +734,7 @@ fn drive_retained_stream(
                                 &owned,
                             )
                             .await?;
-                        if append_result {
+                        if append_result && !automatic {
                             // Drive a bounded synthetic input prefix, then send
                             // the actual canonical Manager result through the
                             // registered controller and real outbound journal.
@@ -851,7 +887,33 @@ fn drive_retained_stream(
                                 live_probe.changed.notify_one();
                             }
                         }
-                        let result = controller.consume_live(call).await?;
+                        let result = controller
+                            .consume_live(call, live_projector.as_ref())
+                            .await?;
+                        if automatic {
+                            let payload = live_probe
+                                .last_append
+                                .lock()
+                                .unwrap()
+                                .clone()
+                                .expect("automatic result append");
+                            let saved = live_voice
+                                .read_append(&live_actor, voice, payload.operation_id, &owned)
+                                .await?
+                                .expect("durable automatic result intent");
+                            assert_eq!(saved.intent.payload, payload);
+                            assert_eq!(
+                                saved.receipt.expect("automatic write receipt").outcome,
+                                if append_uncertain {
+                                    floe_voice::VoiceAppendOutcome::Uncertain {
+                                        failure: AgentFailure::ServerModelUnavailable,
+                                    }
+                                } else {
+                                    floe_voice::VoiceAppendOutcome::Written
+                                }
+                            );
+                            assert!(!payload.text.contains("synthetic filler"));
+                        }
                         if append_uncertain {
                             assert_eq!(result.failure, Some(AgentFailure::ServerModelUnavailable));
                             assert!(result.usage.accounting.unknown_tokens);
@@ -888,6 +950,10 @@ fn drive_retained_stream(
                 assert!(probe.ack_calls.load(Ordering::SeqCst) > 4);
             }
             assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
+            assert!(
+                probe.appends.load(Ordering::SeqCst) <= 1,
+                "one canonical result cannot be appended twice"
+            );
             assert_eq!(
                 probe.acknowledged.load(Ordering::SeqCst),
                 if unavailable_ack {
@@ -984,4 +1050,13 @@ fn registered_live_controller_delivers_canonical_manager_result_once_with_durabl
 #[test]
 fn uncertain_live_append_is_retained_without_a_retry_or_fabricated_delivery() {
     drive_retained_stream(false, false, false, AppendMode::Uncertain);
+}
+
+#[test]
+fn owned_live_driver_automatically_projects_and_delivers_manager_result() {
+    drive_retained_stream(false, false, false, AppendMode::AutomaticWritten);
+}
+#[test]
+fn automatic_live_result_keeps_uncertain_write_without_reissuing_work() {
+    drive_retained_stream(false, false, false, AppendMode::AutomaticUncertain);
 }

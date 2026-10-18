@@ -149,6 +149,7 @@
         "conversation_contract",
         "model_contract",
         "context_contract",
+        "context",
         "execution","kernel"]
     },
     {

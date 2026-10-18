@@ -10,6 +10,7 @@ floe-inference = { path = "../inference" }
 floe-conversation = { path = "../conversation" }
 floe-conversation-contract = { path = "../../contracts/conversation" }
 floe-model-contract = { path = "../../contracts/model" }
+floe-context = { path = "../context" }
 floe-context-contract = { path = "../../contracts/context" }
 floe-execution = { path = "../../runtime/execution" }
 sha2.workspace = true

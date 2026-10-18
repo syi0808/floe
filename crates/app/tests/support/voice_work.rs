@@ -788,6 +788,16 @@ fn voice_controller_failure_is_not_hidden_by_observer_delivery_or_later_drain() 
 }
 
 impl floe_voice::VoiceOutboundJournal for DelayedJournal {
+    fn pending_result<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: &'a str,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<floe_voice::VoiceResultCandidate>, AgentFailure>>
+    {
+        Box::pin(async { panic!("fixture cannot discover results") })
+    }
+
     fn claim_append<'a>(
         &'a self,
         _: &'a OwnerActor,
@@ -821,6 +831,16 @@ impl floe_voice::VoiceOutboundJournal for DelayedJournal {
 }
 
 impl floe_voice::VoiceOutboundJournal for DelayedSettlementJournal {
+    fn pending_result<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: &'a str,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<floe_voice::VoiceResultCandidate>, AgentFailure>>
+    {
+        Box::pin(async { panic!("fixture cannot discover results") })
+    }
+
     fn claim_append<'a>(
         &'a self,
         _: &'a OwnerActor,

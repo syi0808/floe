@@ -144,6 +144,101 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
     }
 }
 impl<Keys: VaultKeyProvider> VoiceOutboundJournal for EncryptedAgentVault<Keys> {
+    fn pending_result<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        voice: Uuid,
+        delegation: &'a str,
+    ) -> BoxFuture<'a, Result<Option<floe_voice::VoiceResultCandidate>, AgentFailure>> {
+        Box::pin(async move {
+            self.voice_actor(actor)?;
+            if voice.is_nil() || delegation.is_empty() || delegation.len() > 256 {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let mut c = self.connection()?;
+            let tx = c
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .await
+                .map_err(sql)?;
+            schema(&tx).await?;
+            let candidate = async {
+                let call = self
+                    .voice_current_on(&tx, voice)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                if &call.intent.binding.actor != actor {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                if call.ingress_closed || call.usage.is_some() || call.session.stop_requested() {
+                    return Ok(None);
+                }
+                let event = self
+                    .voice_event_on(&tx, &call, "delegation", delegation)
+                    .await?
+                    .ok_or(AgentFailure::NotFound)?;
+                let VoiceEventOutcome::Work {
+                    work_command_id, ..
+                } = event.outcome
+                else {
+                    return Ok(None);
+                };
+                let work = self
+                    .surface_work_snapshot_on(&tx, actor, work_command_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                let Some(run_id) = work.current_run_id else {
+                    return Ok(None);
+                };
+                let run = self
+                    .conversation_run_on(&tx, run_id)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                if run.state != floe_conversation::RunState::Completed
+                    && !(run.state == floe_conversation::RunState::Failed && run.output.is_some())
+                {
+                    return Ok(None);
+                }
+                let reference = floe_conversation::SurfaceResultReference::for_run(&run)?;
+                let entry = self
+                    .surface_entry_command_on(&tx, reference.command_id())
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                let floe_conversation::SurfaceEntryReceipt::PublishedResult(receipt) = entry else {
+                    return Err(AgentFailure::StorageUnavailable);
+                };
+                if receipt.result != reference
+                    || receipt.through.session_id != call.intent.binding.surface_session_id
+                {
+                    return Err(AgentFailure::StorageUnavailable);
+                }
+                let source = floe_context_contract::LiveProjectionSource::SurfaceResult {
+                    through: receipt.through,
+                    surface_message_id: reference.message_id(),
+                };
+                // Reuse exact publication/body/source validation, not a second
+                // result store or an unverified latest-message lookup.
+                self.read_live_result_on(&tx, actor, &source).await?;
+                let operation = floe_voice::append_operation_id(
+                    voice,
+                    &source,
+                    floe_model_contract::LiveAppendKind::PresentableResult,
+                    delegation,
+                )?;
+                if self.voice_append_on(&tx, &call, operation).await?.is_some() {
+                    return Ok(None);
+                }
+                Ok(Some(floe_voice::VoiceResultCandidate {
+                    delegation_id: delegation.into(),
+                    source,
+                }))
+            }
+            .await?;
+            tx.commit().await.map_err(sql)?;
+            self.check_access()?;
+            Ok(candidate)
+        })
+    }
+
     fn read_append<'a>(
         &'a self,
         actor: &'a OwnerActor,

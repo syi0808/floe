@@ -60,6 +60,15 @@ pub struct LiveSettlement {
     pub failure: Option<AgentFailure>,
 }
 impl AuthorizedLiveSession {
+    /// A zero-budget child read scope; this does not grant model or media I/O.
+    pub fn result_read_scope(&self) -> ExecutionScope {
+        self.scope.child_scope(
+            (tokio::time::Instant::now() + Duration::from_millis(500)).min(self.scope.deadline()),
+            0,
+            0,
+            None,
+        )
+    }
     pub fn plan(&self) -> &LiveModelPlan {
         &self.plan
     }

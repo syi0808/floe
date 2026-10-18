@@ -34,5 +34,5 @@ mod custody;
 mod outbound;
 pub use outbound::{
     VoiceAppendAdmission, VoiceAppendIntent, VoiceAppendOutcome, VoiceAppendReceipt,
-    VoiceAppendRecord, VoiceOutboundJournal, append_operation_id,
+    VoiceAppendRecord, VoiceOutboundJournal, VoiceResultCandidate, append_operation_id,
 };

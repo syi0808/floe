@@ -1479,3 +1479,32 @@ ended event is synthesized only as Disconnected with unknown usage, never provid
 confirmation or zero billing. Append polls one admitted operation's write evidence;
 uncertain results do not retry the write. Local fencing is immediate and bounded
 best-effort close/release cleanup cannot claim remote finalization.
+
+
+### Automatic canonical Manager-result presentation
+
+The registered Voice driver retains only bounded call-local delegation identities,
+not a second Work/result queue. While receiving retained live events it periodically
+reads the current canonical Run/result for each admitted delegation, round-robin.
+The encrypted Voice journal resolves the delegation's original Work, its current
+Continue/Resume descendant and the exact published Surface receipt in one read
+transaction. A result with any existing append intent is never redispatched,
+including unresolved or uncertain evidence. The source anchor is the publication's
+own immutable prefix, not a later UI head or cached message body.
+
+Voice now directly consumes Context's LiveResultProjector, composed by App from
+the existing Vault result reader and source dependency resolver. Context owns
+canonical result encoding, current source checks, processing review and capacity
+outcomes. Inference repeats live source/plan admission at append; Voice owns the
+existing durable intent/receipt. No provider caption or caller text substitutes
+for the Manager result. Required review/compaction is not silently bypassed or
+replaced by truncated text; live delivery fails closed while canonical text/Work
+remains available. Non-result Work outcomes remain Conversation/UI responsibilities.
+
+A read tick may cancel only an event observation, never its retained head, the
+call or Manager Work. One bounded result read is independent of admitted write
+custody. Busy/read-timeout retries cannot reissue an append intent; terminal write
+uncertainty fences the call after immutable receipt custody. Correlation is capped
+at 256 delegations per call, consistent with bounded transport write identities;
+exhaustion stops live presentation without dropping already-admitted Work. The
+controller remains generation-owned and drains through the same shutdown path.
