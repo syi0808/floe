@@ -3316,3 +3316,41 @@ the final Rust-to-Go synthetic transport gate also passed three race-enabled Go
 runs. All 204 Go/module inputs remain identical to their qualified full race/vet
 snapshot. No Apple device, physical audio, real provider or browser visual gate
 is claimed by this automatic-result checkpoint.
+
+### Remaining product/native coordinator gates
+
+Do not wire a cosmetic Start button directly to Go or to an arbitrary prepared
+transport. The Voice application coordinator must own these remaining boundaries:
+
+- A user Start command needs stable call identity and read-only exact replay;
+  a response timeout cannot replan/recreate a provider call. UI status queries
+  must not allocate server preparation tickets or unmute a device.
+- Physical native process ownership must be established separately from a Rust
+  runtime epoch. An empty in-memory registry is not, by itself, a durable Stop
+  receipt. A new process may retire prior native leases only with platform-backed
+  ownership/absence evidence; same-process generation retirement must drain actual
+  Stop independently. Neither path proves provider termination or zero usage.
+- Orphan Go ticket cleanup may use only the authenticated client's list/release
+  surface after exclusive client-process ownership is established. It cannot
+  resume an old call, affect another paired client, or create replacement work.
+- The UI observes the actual Voice/native receipt state. Closing a screen does not
+  abandon owned teardown or cancel Manager Work. Stop intent, immediate local fence
+  and physical Stop confirmation remain distinct and truthful in presentation.
+- Source-review/compaction and non-result Work outcomes need explicit product
+  handling. They cannot be converted into fabricated speech results, implicit
+  permission or truncated context merely to keep the call running.
+
+These are remaining coordinator acceptance gates, not claims that native recovery
+or the product voice UI has been implemented. Apple access/build and microphone
+behavior must be qualified on a real supported host before that cutover.
+
+### Cloud Flutter baseline restored
+
+The root cloud SDK is pinned to official Flutter 3.47.5 commit
+`6a19cca56475dbfba1478ee68d7bd0c2ef891da1` (Dart 3.13.4). Tool state and
+package caches use writable isolated HOME/XDG locations; analytics is disabled.
+Locked dependency installation succeeded without changing the project lockfile.
+All 237 Flutter tests pass on 153 frozen Dart/test/manifest inputs. Removing two
+unused Connector-screen imports leaves analyzer errors/warnings at zero, with
+91 informational lints still reported and a nonzero analyzer exit status. This
+is headless client qualification, not Firefox visual or Apple microphone QA.

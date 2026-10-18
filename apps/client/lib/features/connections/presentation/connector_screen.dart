@@ -2,8 +2,6 @@ import 'package:floe_client/features/day/domain/day_models.dart';
 
 import 'service_presentation.dart';
 
-import 'package:floe_client/app/runtime/app_owner_exception.dart';
-
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -18,7 +16,6 @@ import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/presentation/gateway_connection_panel.dart';
-import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/connections/presentation/integration_detail_panel.dart';
 import 'package:floe_client/features/connections/presentation/source_connection_panel.dart';
 
