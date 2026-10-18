@@ -173,7 +173,7 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	if !validOutputFormat(in.OutputFormat) || in.OutputFormat.Kind == "json" && len(in.Input.Tools) != 0 {
 		return Failure{Code: Validation}
 	}
-	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 16384 {
+	if !ValidGenerationPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 16384 {
 		return Failure{Code: Validation}
 	}
 	if len(in.Instructions) > 9216 {
@@ -235,7 +235,7 @@ func ValidateAgentInvocation(in AgentInvocation) error {
 	return nil
 }
 func ValidateStructuredInvocation(in StructuredInvocation) error {
-	if !ValidPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 32768 {
+	if !ValidGenerationPurpose(string(in.Purpose)) || !ValidHex(in.CapabilityRevision, 32) || !trust.ValidID(in.AttemptID) || !validClasses(in.DataClasses) || strings.TrimSpace(in.Instructions) == "" || !utf8.ValidString(in.Instructions) || in.MaxOutputBytes < 1 || in.MaxOutputBytes > 32768 {
 		return Failure{Code: Validation}
 	}
 	if len(in.Instructions) > 8192 || len(in.Input) > 32768 || len(in.OutputSchema) > 32768 {

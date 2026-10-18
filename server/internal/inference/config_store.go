@@ -204,11 +204,11 @@ func validateConfigurationState(state ConfigState, factory ProviderFactory) erro
 		}
 	}
 	for _, profile := range state.Providers {
-		if profile.Purposes == nil || len(profile.Purposes) > 3 {
+		if profile.Purposes == nil || len(profile.Purposes) > len(Purposes) {
 			return errors.New("invalid provider configuration")
 		}
-		for purpose := range profile.Purposes {
-			if !ValidPurpose(purpose) {
+		for purpose, model := range profile.Purposes {
+			if !ValidPurpose(purpose) || !ValidPurposeEffort(Purpose(purpose), model.ReasoningEffort) || purpose == string(LivePresentation) && model.BudgetOverride != nil {
 				return errors.New("invalid purpose")
 			}
 		}

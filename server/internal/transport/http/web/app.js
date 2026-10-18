@@ -1,7 +1,7 @@
 import {budgetOverrideForTarget} from './budget-override.mjs';
 
 const element = (id) => document.getElementById(id);
-const purposes = ['quick_response', 'everyday_assistance', 'deep_work'];
+const purposes = ['quick_response', 'everyday_assistance', 'deep_work', 'live_presentation'];
 let csrf = '';
 let pairing = null;
 let unlocked = false;
@@ -278,6 +278,7 @@ function renderModelCatalogSuggestions() {
   }
   for (const purpose of purposes) {
     const input = document.querySelector(`[name="${purpose}_model"]`);
+    if (purpose === 'live_presentation') { input.removeAttribute('list'); continue; }
     if (suggestions.length) input.setAttribute('list', 'model-suggestions');
     else input.removeAttribute('list');
   }
@@ -383,6 +384,18 @@ function renderProvider() {
     }
     const row = form.querySelector(`[data-class="${purpose}"]`);
     const identityMatches = providerModelIdentityMatchesSaved(profile, form, purpose);
+    if (purpose === 'live_presentation') {
+      row.hidden = !isCodex;
+      row.classList.toggle('active-route', configured.active === true);
+      const target = row.querySelector('.capability-states');
+      target.textContent = configured.live_profile && identityMatches
+        ? `Experimental live transport configured. Host ceilings: ${configured.live_profile.limits.initial_context_bytes} initial bytes, ${configured.live_profile.limits.append_bytes} append bytes, ${Math.floor(configured.live_profile.limits.local_session_duration_ms / 60000)} minutes. This is not an audio qualification.`
+        : configured.model && identityMatches && configured.available === false
+          ? 'The saved live route is unavailable. Check experimental Codex authentication and the exact model ID. No generation or paid fallback will be used.'
+          : 'Optional experimental Codex voice route. Only gpt-live-1-codex is supported. It does not use generation reasoning or token-limit overrides.';
+      continue;
+    }
+
     renderCapabilityStates(row.querySelector('.capability-states'), configured.capability_states, {identityMatches, operationPending});
     row.classList.toggle('active-route', configured.active === true);
     const testButton = row.querySelector('.test-class');
@@ -524,9 +537,11 @@ function providerPayloadFromForm(form) {
   const configured = {};
   const baseURL = form.elements.base_url.value;
   for (const purpose of purposes) {
+    if (purpose === 'live_presentation' && selectedProvider !== 'codex_oauth') continue;
     const model = form.elements[`${purpose}_model`].value.trim();
     if (model) {
       configured[purpose] = {model, reasoning_effort: form.elements[`${purpose}_effort`].value};
+      if (purpose === 'live_presentation') { configured[purpose].reasoning_effort = ''; continue; }
       const targetBudget = budgetOverrideForTarget(state.providers?.[selectedProvider], purpose, model, baseURL);
       if (targetBudget.budgetOverride) configured[purpose].budget_override = targetBudget.budgetOverride;
     }

@@ -44,7 +44,7 @@ func (s *Service) Configure(config InferenceConfig, accounts map[string]ModelAcc
 	}
 	routes := map[Purpose]PurposeRoute{}
 	for p, r := range config.Routes {
-		if accounts[r.TargetID] == nil || !validProtocolAccount(accounts[r.TargetID]) {
+		if accounts[r.TargetID] == nil || !validRouteAccount(p, accounts[r.TargetID]) {
 			return errors.New("configured target missing")
 		}
 		routes[p] = r
@@ -73,7 +73,7 @@ func (s *Service) RecoverConfiguration(config InferenceConfig, accounts map[stri
 	}
 	routes := make(map[Purpose]PurposeRoute, len(config.Routes))
 	for purpose, route := range config.Routes {
-		if accounts[route.TargetID] == nil || !validProtocolAccount(accounts[route.TargetID]) {
+		if accounts[route.TargetID] == nil || !validRouteAccount(purpose, accounts[route.TargetID]) {
 			return errors.New("configured target missing")
 		}
 		routes[purpose] = route
@@ -213,9 +213,12 @@ func (s *Service) current(ctx context.Context, p Purpose) (ResolvedModelTarget, 
 	}
 	return target, revision, executor, err
 }
+
+// Snapshot is the generation-purpose inventory. Live has its own typed
+// observation on this same owner, not a generation capability alias.
 func (s *Service) Snapshot(ctx context.Context) (PurposeInventory, error) {
 	var out PurposeInventory
-	for _, p := range Purposes {
+	for _, p := range generationPurposes {
 		target, revision, _, err := s.current(ctx, p)
 		if err != nil {
 			var f Failure

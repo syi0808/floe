@@ -113,6 +113,10 @@ func (p *provider) ReplayIdentity() string {
 }
 
 func (p *provider) ProtocolCapabilities() []string {
+	if p.target.Provider == "codex_oauth" && p.target.Model == "gpt-live-1-codex" {
+		return []string{}
+	}
+
 	// These are adapter implementation facts only. Model support for chat, JSON,
 	// and tool proposals still requires exact metadata evidence in Inference.
 	return []string{inference.ChatCapability, inference.StructuredOutputCapability, inference.ToolProposalsCapability}

@@ -65,6 +65,21 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/v1/live-model":
+		if r.Method != http.MethodGet {
+			writeInferenceError(w, inference.Failure{Code: inference.MethodNotAllowed})
+			return
+		}
+		if r.ContentLength != 0 {
+			writeInferenceError(w, inference.Failure{Code: inference.Validation})
+			return
+		}
+		capability, err := h.Service.ObserveLivePurpose(r.Context(), paired)
+		if err != nil {
+			writeInferenceError(w, err)
+			return
+		}
+		writeInferenceJSON(w, livePurposeProjection(capability))
 	case "/v1/inference-purposes":
 		if r.Method != http.MethodGet {
 			writeInferenceError(w, inference.Failure{Code: inference.MethodNotAllowed})

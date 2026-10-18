@@ -59,6 +59,12 @@ func (s *Service) ProbeTarget(ctx context.Context, operator trust.OperatorPrinci
 		}
 		s.mu.Unlock()
 	}()
+	protocol, validProtocol := protocolCapabilitySet(account.ProtocolCapabilities())
+	if !validProtocol || !protocol[ChatCapability] {
+		// Unknown model evidence may be probed, but a live-only transport must
+		// never be sent a generation request by this diagnostic endpoint.
+		return ProbeResult{}, Failure{Code: RequestRejected}
+	}
 	if err := account.Ready(ctx); err != nil {
 		return ProbeResult{}, normalizeFailure(err)
 	}

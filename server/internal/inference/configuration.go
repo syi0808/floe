@@ -107,8 +107,8 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 	if ValidateConfig(config) != nil || executor == nil {
 		return errors.New("invalid inference configuration")
 	}
-	for _, route := range config.Routes {
-		if accounts[route.TargetID] == nil || !validProtocolAccount(accounts[route.TargetID]) {
+	for purpose, route := range config.Routes {
+		if accounts[route.TargetID] == nil || !validRouteAccount(purpose, accounts[route.TargetID]) {
 			return errors.New("configured target missing")
 		}
 	}
@@ -116,7 +116,7 @@ func validatePreparedConfiguration(config InferenceConfig, accounts map[string]M
 }
 
 func (c *Configuration) open(ctx context.Context, state ConfigState) (map[string]ModelAccount, ModelExecutor, error) {
-	targets := make(map[string]ProviderTarget, len(state.Targets)+9)
+	targets := make(map[string]ProviderTarget, len(state.Targets)+3*len(Purposes))
 	for id, target := range state.Targets {
 		target.BudgetOverride = cloneModelBudgetOverride(target.BudgetOverride)
 		targets[id] = target

@@ -12,11 +12,11 @@ type PurposeRoute struct {
 }
 
 func ValidateConfig(config InferenceConfig) error {
-	if config.Routes == nil || len(config.Routes) > 3 {
+	if config.Routes == nil || len(config.Routes) > len(Purposes) {
 		return errors.New("invalid inference configuration")
 	}
 	for p, r := range config.Routes {
-		if !ValidPurpose(string(p)) || !ValidAlias(r.TargetID) || !ValidEffort(r.ReasoningEffort) {
+		if !ValidPurpose(string(p)) || !ValidAlias(r.TargetID) || !ValidPurposeEffort(p, r.ReasoningEffort) {
 			return errors.New("invalid inference route")
 		}
 	}
@@ -24,4 +24,8 @@ func ValidateConfig(config InferenceConfig) error {
 }
 func ValidEffort(value string) bool {
 	return value == "" || value == "low" || value == "medium" || value == "high" || value == "xhigh" || value == "max" || value == "ultra"
+}
+
+func ValidPurposeEffort(p Purpose, effort string) bool {
+	return ValidEffort(effort) && (p != LivePresentation || effort == "")
 }

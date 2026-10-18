@@ -1173,17 +1173,18 @@ silent dropping. The independent Done signal must fence native work without
 waiting for queued custody. This state is in-memory, not crash-persistent storage
 or provider acceptance, and never permits call recreation after a lost create.
 
-These transport operations are not exposed through a public Gateway route yet.
-Live Inference selection/source/budget admission, per-client control ownership,
-authenticated retained-event routing and Rust/native composition are the remaining
-production gates. The fixture uses local HTTP/WebSocket servers and synthetic
+Create/control transport operations are not exposed through a public Gateway
+route yet. Go now observes its configured live purpose through authenticated
+read-only metadata; Rust live source/budget admission is qualified separately.
+Per-client transport custody, authenticated retained-event/write routing and
+Rust/native composition remain production gates. The fixture uses local HTTP/WebSocket servers and synthetic
 credentials only; no actual account or microphone qualification is implied.
 
 
 ### Owned live dispatch authority and accounting
 
-The diagram is the synthetic-qualified owner path; concrete native media and the
-continuous provider delivery controller are still pending.
+The diagram is the synthetic-qualified owner path; concrete native media remains
+pending. The registered retained-event controller is described below.
 
 ```mermaid
 flowchart TD
@@ -1354,3 +1355,22 @@ bounded pages, canonical Work/result links, historical admission state and
 independent intent/receipt row digests; corruption never triggers redispatch or
 repair. This pre-stable Voice family change requires a matching snapshot/fresh
 development profile, not automatic migration or reset.
+
+
+### Configured Go live capability observation
+
+The same Inference configuration owner accepts live_presentation as a distinct
+long-lived purpose. Model/account/profile/configuration changes alter its opaque
+capability revision. Live capability/limit evidence never becomes chat, structured
+output, tool-proposal or generation-budget evidence. Unsupported live targets
+fail the existing pre-commit configuration gate rather than poisoning a saved
+configuration. The same Codex credential runtime supplies the prepared transport;
+no account secret or provider call ID is part of the public metadata.
+
+GET /v1/live-model uses existing paired-client authentication, current issuer
+checks, exact host and no-Origin rules. It returns explicit missing/disabled
+availability or the configured experimental profile; failures are not fallback
+permission. This read does not prepare a call. The dashboard preserves the live
+purpose in exact provider-operation replay and excludes generation reasoning,
+budget overrides and the generation test action for it. These metadata and
+configuration paths do not yet expose live create/control or qualify audio.

@@ -258,10 +258,26 @@ for ACK drain. This is bounded in-memory custody, not crash-persistent delivery,
 provider acknowledgement, or proof of remote termination. No reconnect/create
 retry is introduced.
 
-This adapter is not exposed by a public Gateway route or the product yet.
-Inference live purpose/selection, source and budget fences, per-client control
-ownership, authenticated delivery/acknowledgement routing, Rust control and native media
-composition remain required. No running account or microphone was used in the
+The configured `live_presentation` purpose now uses the same Inference
+configuration/credential owners. Its experimental `gpt-live-1-codex` target has
+separate live capabilities and explicit host ceilings (2 MiB initial context,
+64 KiB logical append, one-hour maximum local lifetime, further bounded by owner
+and credential expiry). These are not provider context-window, billing or remote
+expiry claims. Generation reasoning/token overrides are not used, and the
+ordinary generation diagnostic rejects a live-only transport before dispatch.
+
+The paired, origin-restricted `GET /v1/live-model` exposes read-only availability,
+a profile and opaque capability revision; it neither prepares nor creates a
+call. A missing/disabled route is explicit absence, while credential, identity
+or configuration failures are errors. The dashboard offers an optional Codex-only
+live model field without a generation test button. Saving a route does not grant
+microphone permission or start audio. Generation inventory/requests keep their
+separate existing contract.
+
+Call creation, event/ACK, append and close are not public Gateway routes yet.
+Per-client live control ownership, durable one-shot transport custody, Rust
+control and native media composition remain required. Rust source/budget fences
+are already qualified separately. No running account or microphone was used in the
 fixture tests. The paid public GPT-Live API and the experimental Codex subscription
 wire are distinct providers; their event names and limits are not interchangeable.
 

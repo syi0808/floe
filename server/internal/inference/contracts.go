@@ -8,12 +8,18 @@ const (
 	QuickResponse      Purpose = "quick_response"
 	EverydayAssistance Purpose = "everyday_assistance"
 	DeepWork           Purpose = "deep_work"
+	LivePresentation   Purpose = "live_presentation"
 )
 
-var Purposes = []Purpose{QuickResponse, EverydayAssistance, DeepWork}
+var generationPurposes = []Purpose{QuickResponse, EverydayAssistance, DeepWork}
+var Purposes = []Purpose{QuickResponse, EverydayAssistance, DeepWork, LivePresentation}
+
+func ValidGenerationPurpose(value string) bool {
+	return value == string(QuickResponse) || value == string(EverydayAssistance) || value == string(DeepWork)
+}
 
 func ValidPurpose(value string) bool {
-	return value == string(QuickResponse) || value == string(EverydayAssistance) || value == string(DeepWork)
+	return ValidGenerationPurpose(value) || value == string(LivePresentation)
 }
 
 type PurposeStatus string

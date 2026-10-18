@@ -601,3 +601,28 @@ func TestLiveCredentialExpiryFencesPreparedAndActiveCapabilities(t *testing.T) {
 	}
 	call.CloseLocal()
 }
+
+func TestLiveCodecPreflightDoesNotDispatchOrConsumePreparedCall(t *testing.T) {
+	var requests atomic.Int32
+	r := liveFixtureRuntime(t, func(w http.ResponseWriter, req *http.Request) { requests.Add(1); liveFixtureAnswer(w) })
+	prepared := liveFixturePrepare(t, r)
+	if err := prepared.ValidateStart(liveFixtureStart()); err != nil {
+		t.Fatal(err)
+	}
+	invalid := liveFixtureStart()
+	invalid.SDP = "not SDP"
+	if prepared.ValidateStart(invalid) == nil {
+		t.Fatal("invalid SDP accepted")
+	}
+	if requests.Load() != 0 {
+		t.Fatal("preflight dispatched")
+	}
+	call, err := prepared.Start(liveFixtureContext(t), liveFixtureStart())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer call.CloseLocal()
+	if requests.Load() != 1 {
+		t.Fatal("preflight consumed the call")
+	}
+}

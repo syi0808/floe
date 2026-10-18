@@ -779,3 +779,33 @@ test('double submit uses one provider request and settles only after its respons
   assert.equal(env.window.sessionStorage.getItem(providerOperationStorage), null);
   env.assertDrained();
 });
+
+test('experimental live purpose is Codex-only and survives provider form saves without generation overrides', async (t) => {
+  const provider = {purposes: {
+    quick_response: {model: 'generation-model'},
+    live_presentation: {model: 'gpt-live-1-codex', active: true, available: true,
+      live_profile: {experimental: true, limits: {initial_context_bytes: 2048, append_bytes: 500, local_session_duration_ms: 60000}}},
+  }};
+  const env = makeDashboard([{path: '/manage/api/state', method: 'GET', response: Promise.resolve(jsonResponse(200, state({providers: {codex_oauth: provider}})))}]);
+  t.after(() => env.close());
+  await env.settle();
+  const row = env.window.document.querySelector('[data-class="live_presentation"]');
+  assert.equal(row.hidden, true);
+  env.window.document.querySelector('.provider-option[data-provider="codex_oauth"]').click();
+  assert.equal(row.hidden, false);
+  assert.equal(row.querySelector('.test-class'), null);
+  assert.match(row.textContent, /not an audio qualification/);
+  const form = element(env.window, 'provider-form');
+  assert.equal(form.elements.live_presentation_model.getAttribute('list'), null);
+  form.elements.quick_response_model.value = 'updated-generation-model';
+  form.dispatchEvent(new env.window.Event('input', {bubbles: true}));
+  env.expect('provider', 'POST', jsonResponse(200, {ok: true}));
+  env.expect('state', 'GET', jsonResponse(200, state({providers: {codex_oauth: provider}})));
+  submitProviderForm(env);
+  await env.settle();
+  const sent = JSON.parse(env.requests.find((r) => r.path === '/manage/api/provider').body);
+  assert.deepEqual(sent.purposes.live_presentation, {model: 'gpt-live-1-codex', reasoning_effort: ''});
+  assert.equal(sent.purposes.quick_response.model, 'updated-generation-model');
+  assert.equal(env.requests.some((r) => r.path.includes('/test') || r.path.includes('/live/')), false);
+  env.assertDrained();
+});

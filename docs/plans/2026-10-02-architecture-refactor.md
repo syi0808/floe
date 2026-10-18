@@ -3130,3 +3130,30 @@ on 627 frozen Rust/Cargo/validation inputs: workspace and doctests 562, App QA
 and whitespace checks. The 186 Go/module inputs remain unchanged from their
 qualified race/vet snapshot. The Voice schema family changed pre-stably: no migration, automatic
 reset, or modification of an existing real user profile was performed.
+
+### Configured Go live model observation and provider bridge
+
+Go's existing Inference configuration now selects an optional live_presentation
+purpose with distinct long-lived capabilities/host limits. The configured Codex
+adapter binds the exact gpt-live-1-codex model to the existing credential runtime,
+checks identity around preparation, performs pure whole-start preflight, and
+caps the owned transport lifetime. No generation invocation or hidden paid route
+is used. Live-only targets cannot enter the generation diagnostic. Unsupported
+live accounts are rejected before configuration persistence.
+
+Authenticated GET /v1/live-model exposes availability and a revision-bound
+experimental profile without preparing/starting a call, returning credentials,
+or admitting microphone use. The optional dashboard field is Codex-only,
+retained by exact provider form replay and does not carry generation effort or
+token overrides. Host limits are explicitly different from provider quota,
+context capacity and remote expiry. Existing generation contracts remain separate.
+
+Qualification passes on 204 frozen Go/module/dashboard inputs: default race
+17 test-bearing packages, development-tag race 18, both vet runs, and 23
+headless DOM tests. The 627 Rust/Cargo/validation inputs are unchanged from the
+qualified workspace562/App97/FFI snapshot. A new HTTP fixture checks paired auth,
+explicit absence, active profile, no account disclosure, origin/query/method
+rejection and no generation probe for live-only targets. DOM QA is not visual
+browser QA; actual Firefox render/interaction qualification remains open.
+Per-client durable live transport custody, create/control routes, Rust Gateway
+bridge, automatic result scheduling and native/Flutter composition remain open.

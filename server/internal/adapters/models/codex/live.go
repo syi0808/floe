@@ -111,6 +111,15 @@ func (c *LiveCall) AnswerSDP() (string, error) {
 	return c.answer, nil
 }
 
+// ValidateStart is pure codec preflight for the owner before durable intent.
+// It neither refreshes credentials nor starts a provider call.
+func (p *LivePrepared) ValidateStart(in LiveStart) error {
+	if !in.validate() {
+		return invalidOutput
+	}
+	return nil
+}
+
 // lifetime is the bounded owner call scope, not an HTTP poll or UI observer.
 // There is one create POST, no retry/redirect/paid-provider fallback.
 func (p *LivePrepared) Start(lifetime context.Context, in LiveStart) (*LiveCall, error) {

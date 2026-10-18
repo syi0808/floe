@@ -36,6 +36,7 @@ type ProviderUpdate struct {
 }
 
 type OperatorPurposeProfile struct {
+	LiveProfile      *LiveProfile
 	Model            string
 	ReasoningEffort  string
 	Active           bool
@@ -72,7 +73,7 @@ func (c *Configuration) UpdateRoute(ctx context.Context, operator trust.Operator
 		if c.configUnavailable {
 			return operation.Fail(operation.Unavailable, "configuration_unavailable")
 		}
-		if !ValidPurpose(input.Purpose) || !ValidEffort(input.ReasoningEffort) {
+		if !ValidPurpose(input.Purpose) || !ValidPurposeEffort(Purpose(input.Purpose), input.ReasoningEffort) {
 			return operation.Fail(operation.Invalid, "validation")
 		}
 		next := cloneConfigurationState(c.state)
@@ -152,7 +153,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 		if c.configUnavailable {
 			return operation.Fail(operation.Unavailable, "configuration_unavailable")
 		}
-		if input.Purposes == nil || input.Provider != "codex_oauth" && input.Provider != "openai_compatible" || len(input.Purposes) > 3 || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
+		if input.Purposes == nil || input.Provider != "codex_oauth" && input.Provider != "openai_compatible" || len(input.Purposes) > len(Purposes) || len(input.APIKey) > 8192 || strings.ContainsAny(input.APIKey, "\r\n\x00") {
 			return operation.Fail(operation.Invalid, "validation")
 		}
 		next := cloneConfigurationState(c.state)
@@ -176,7 +177,7 @@ func (c *Configuration) UpdateProvider(ctx context.Context, operator trust.Opera
 			profile.APIKeyEnv = old.APIKeyEnv
 		}
 		for purpose, configured := range profile.Purposes {
-			if !ValidPurpose(purpose) || !ValidEffort(configured.ReasoningEffort) || configured.BudgetOverride != nil && configured.BudgetOverride.Validate() != nil || c.factory.ValidateTarget(profileTarget(input.Provider, purpose, profile)) != nil {
+			if !ValidPurpose(purpose) || !ValidPurposeEffort(Purpose(purpose), configured.ReasoningEffort) || configured.BudgetOverride != nil && configured.BudgetOverride.Validate() != nil || c.factory.ValidateTarget(profileTarget(input.Provider, purpose, profile)) != nil {
 				return operation.Fail(operation.Invalid, "invalid_provider_configuration")
 			}
 			next.Routes[Purpose(purpose)] = PurposeRoute{TargetID: profileTargetID(input.Provider, purpose), ReasoningEffort: configured.ReasoningEffort, Enabled: true}
@@ -237,6 +238,7 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 			return operation.Fail(operation.Unavailable, "configuration_unavailable")
 		}
 		inventory, inventoryErr := c.engine.Snapshot(ctx)
+		live, liveErr := c.engine.currentLive(ctx)
 		profiles := make(map[string]OperatorProviderProfile, len(c.state.Providers))
 		for provider, configured := range c.state.Providers {
 			purposes := make(map[string]OperatorPurposeProfile, len(configured.Purposes))
@@ -244,8 +246,20 @@ func (c *Configuration) Snapshot(ctx context.Context, operator trust.OperatorPri
 				targetID := profileTargetID(provider, purpose)
 				route := c.state.Routes[Purpose(purpose)]
 				available := inventoryErr == nil && inventory.Get(Purpose(purpose)).Status == Available
-				capabilityStates, _ := c.engine.CapabilityStatesForTarget(ctx, targetID)
+				var liveProfile *LiveProfile
+				var capabilityStates CapabilityStates
+				if Purpose(purpose) == LivePresentation {
+					available = liveErr == nil && live.targetID == targetID
+					if available {
+						profile := CloneLiveProfile(live.profile)
+						liveProfile = &profile
+					}
+				} else {
+					capabilityStates, _ = c.engine.CapabilityStatesForTarget(ctx, targetID)
+				}
+
 				purposes[purpose] = OperatorPurposeProfile{
+					LiveProfile:      liveProfile,
 					Model:            model.Model,
 					ReasoningEffort:  model.ReasoningEffort,
 					Active:           route.TargetID == targetID && route.Enabled,
