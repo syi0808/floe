@@ -1373,4 +1373,34 @@ availability or the configured experimental profile; failures are not fallback
 permission. This read does not prepare a call. The dashboard preserves the live
 purpose in exact provider-operation replay and excludes generation reasoning,
 budget overrides and the generation test action for it. These metadata and
-configuration paths do not yet expose live create/control or qualify audio.
+configuration paths are metadata-only; call control is a separate authenticated
+transport surface below and does not qualify audio.
+
+
+### Process-bound Go live call capabilities
+
+The existing Inference service owns a bounded registry of server-issued live
+transport tickets, not a second durable Voice/Work journal. Prepare reads the
+selected account and leases its configuration generation without creating a
+provider call. Start atomically consumes that exact random ticket once; identical
+retries observe the original operation and changed input is rejected. Unknown,
+expired or prior-process tickets never create or resume calls. The durable client
+Voice owner must retain its logical intent and exact ticket; an uncertain Start
+must not trigger a new Prepare/Start workflow automatically.
+
+Paired-client prepare/start/status/list/release routes enforce current issuer,
+client/Person/device scope, capability revision and bounded host lifetime. One
+client cannot read signaling or release another client's call. Status publishes
+the pinned SDP answer only while the source and call remain current; inventory
+contains metadata only. Configuration/principal changes fence transport even
+without a polling observer. HTTP cancellation is observation-only after Start
+admission. Late provider handoff after retirement is fenced and cannot publish
+its answer. Release proves only local control retirement, not remote finalization.
+
+The host admits at most eight outstanding tickets/reservations and two per
+client; unused preparation expires after thirty seconds. Large Start body reads
+have a separate two-reader admission bound and report explicit pressure without
+blocking small control reads. Shutdown first closes admission/fences handles and
+then reports bounded effect-drain failure honestly. These are host resource
+policies, not provider limits or durable business identities. Event custody/ACK,
+append, remote close and the Rust Gateway consumer remain subsequent integration.

@@ -35,6 +35,12 @@ func validRouteAccount(purpose Purpose, account ModelAccount) bool {
 	return ok && profile.Validate() == nil && profile.ModelIdentity == account.ModelIdentity()
 }
 func (s *Service) currentLive(ctx context.Context) (selectedLive, error) {
+	return s.selectLive(ctx, true)
+}
+
+// Existing live leases can check immutable routing/account facts without
+// initiating another credential refresh. The transport owns expiry/rotation.
+func (s *Service) selectLive(ctx context.Context, checkReadiness bool) (selectedLive, error) {
 	if err := ctx.Err(); err != nil {
 		return selectedLive{}, err
 	}
@@ -56,8 +62,10 @@ func (s *Service) currentLive(ctx context.Context) (selectedLive, error) {
 	if !ValidPurposeEffort(LivePresentation, route.ReasoningEffort) || !validRouteAccount(LivePresentation, account) {
 		return selectedLive{}, Failure{Code: ModelUnavailable}
 	}
-	if err := account.Ready(ctx); err != nil {
-		return selectedLive{}, err
+	if checkReadiness {
+		if err := account.Ready(ctx); err != nil {
+			return selectedLive{}, err
+		}
 	}
 	live := account.(LiveModelAccount)
 	profile, ok := live.LiveProfile()

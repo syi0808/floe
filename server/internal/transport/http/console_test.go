@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	credentialadapter "floe/server/internal/adapters/credentials"
 	"floe/server/internal/adapters/modelmetadata"
@@ -169,6 +170,13 @@ func newConsoleFixtureWithEvidence(t *testing.T, model, endpoint string, capabil
 	if err != nil {
 		t.Fatalf("create inference owner: %v", err)
 	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := inferenceService.ShutdownLive(ctx); err != nil {
+			t.Error(err)
+		}
+	})
 	providerCredentials := credentialadapter.NewInferenceProviderAccess(credentialsStore)
 	factory := providers.NewFactory(providerCredentials.ReadProviderCredential, nil)
 	configurationRepository := storageadapter.NewInferenceConfigRepository(inferenceFiles)
@@ -476,6 +484,11 @@ type testEnrollment struct {
 
 func (fixture *consoleFixture) startPairing(t *testing.T) testEnrollment {
 	t.Helper()
+	return fixture.startPairingForPerson(t, trust.NewID())
+}
+
+func (fixture *consoleFixture) startPairingForPerson(t *testing.T, person string) testEnrollment {
+	t.Helper()
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -488,7 +501,7 @@ func (fixture *consoleFixture) startPairing(t *testing.T) testEnrollment {
 		SchemaVersion:   1,
 		OperationID:     trust.NewID(),
 		Proof:           base64.RawURLEncoding.EncodeToString(proofBytes),
-		PersonID:        trust.NewID(),
+		PersonID:        person,
 		DeviceID:        "synthetic-device",
 		IssuerKeyID:     trust.NewID(),
 		IssuerPublicKey: base64.RawURLEncoding.EncodeToString(publicKey),

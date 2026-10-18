@@ -58,7 +58,7 @@ type Handler struct {
 }
 
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/v1/live-model" || request.URL.Path == "/v1/inference-purposes" || request.URL.Path == "/v1/agent" || request.URL.Path == "/v1/generate" || strings.HasPrefix(request.URL.Path, "/v1/traces") {
+	if strings.HasPrefix(request.URL.Path, "/v1/live/") || request.URL.Path == "/v1/live-model" || request.URL.Path == "/v1/inference-purposes" || request.URL.Path == "/v1/agent" || request.URL.Path == "/v1/generate" || strings.HasPrefix(request.URL.Path, "/v1/traces") {
 		handler.Inference.ServeHTTP(writer, request)
 		return
 	}

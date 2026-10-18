@@ -11,13 +11,16 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 type InferenceHandler struct {
-	Service      *inference.Service
-	Trust        *trust.Service
-	ModelCatalog *modelcatalog.Store
-	Address      string
+	liveBodiesOnce sync.Once
+	liveBodies     chan struct{}
+	Service        *inference.Service
+	Trust          *trust.Service
+	ModelCatalog   *modelcatalog.Store
+	Address        string
 }
 
 func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +65,10 @@ func (h *InferenceHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.RawQuery != "" {
 		writeInferenceError(w, inference.Failure{Code: inference.Validation})
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/v1/live/") {
+		h.serveLive(w, r, paired)
 		return
 	}
 	switch r.URL.Path {

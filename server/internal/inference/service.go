@@ -14,6 +14,7 @@ import (
 )
 
 type Service struct {
+	live        *liveRegistry
 	mu          sync.RWMutex
 	unavailable bool
 	trust       Trust
@@ -36,6 +37,7 @@ func NewService(t Trust, metadata CapabilityMetadataPort) (*Service, error) {
 	if _, err := rand.Read(s.secret[:]); err != nil {
 		return nil, err
 	}
+	s.live = newLiveRegistry(s)
 	return s, nil
 }
 func (s *Service) Configure(config InferenceConfig, accounts map[string]ModelAccount, executor ModelExecutor) error {

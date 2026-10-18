@@ -63,7 +63,11 @@ func main() {
 	if err != nil {
 		profileFailure(err, "Cannot start local server: verify the private profile, security state and loopback address")
 	}
-	defer server.Close()
+	defer func() {
+		if err := server.Close(); err != nil {
+			log.Print("Local server shutdown incomplete: live control did not drain")
+		}
+	}()
 	log.Printf("Local dashboard: http://%s/manage/", address)
 	log.Print("Administrator token is encrypted. Use this binary with --print-admin-token and the same FLOE_SERVER_DATA to retrieve it privately.")
 	serve(server, address)

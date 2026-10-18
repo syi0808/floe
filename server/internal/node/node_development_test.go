@@ -28,7 +28,11 @@ func TestFailedStartupClosesConfigurationBeforeReleasingStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(n.Close)
+	t.Cleanup(func() {
+		if err := n.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	files, err := n.storage.files.Scope("integrations")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +91,11 @@ func TestSuccessfulStartupRetainsConfigurationUntilClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(n.Close)
+	t.Cleanup(func() {
+		if err := n.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	runtime.Gosched()
 	if got := configurationCleanupWorkers(t); got != before+1 {
 		t.Fatalf("configuration lifetime: got %d want %d", got, before+1)

@@ -3155,5 +3155,32 @@ qualified workspace562/App97/FFI snapshot. A new HTTP fixture checks paired auth
 explicit absence, active profile, no account disclosure, origin/query/method
 rejection and no generation probe for live-only targets. DOM QA is not visual
 browser QA; actual Firefox render/interaction qualification remains open.
-Per-client durable live transport custody, create/control routes, Rust Gateway
-bridge, automatic result scheduling and native/Flutter composition remain open.
+At this checkpoint, call control, Rust Gateway bridge, automatic result
+scheduling and native/Flutter composition remained open. The following control
+slice uses process-bound tickets with existing durable client Voice intent,
+rather than introducing another durable Go business journal.
+
+
+### Process-bound live call control
+
+The existing Go Inference owner now issues single-use process-local tickets and
+serves paired prepare/start/status/list/release routes. Preparation never creates
+a provider call. Exact Start retries share one handoff; changed payloads and
+expired/prior-process tickets cannot recreate it. Authentication and exact
+client/Person/device binding protect signaling and release. Request cancellation
+does not cancel admitted work; principal/configuration drift and host shutdown
+fence the retained transport without requiring status polling. Late handoffs
+cannot publish an answer after retirement. Local release is not remote completion.
+
+Synthetic tests cover concurrent duplicate Start, prior-process rejection,
+principal revocation, canceled observation, changed answer, bounded preparations,
+released configuration leases, shutdown timeout/late completion, real Trust
+pairing scope separation and large-body admission pressure. No real account,
+provider call, microphone, Apple runtime or Firefox visual qualification is
+established. Event observation/ACK, append/close, Rust Gateway consumer, automatic
+result scheduling and native/Flutter remain pending.
+
+Final server qualification passes on 198 frozen Go/module inputs: default race
+17 test-bearing packages, development-tag race 18, both vet runs, and architecture
+boundaries (27 nodes, 154 edges). The unchanged dashboard/Rust snapshot retains
+its prior qualification; no browser or native qualification is inferred from it.

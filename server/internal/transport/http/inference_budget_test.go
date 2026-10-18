@@ -263,7 +263,11 @@ func (fixture *consoleFixture) inferenceRequest(method, path string, body []byte
 
 func completeSyntheticPairing(t *testing.T, fixture *consoleFixture, cookie *http.Cookie, csrf string) string {
 	t.Helper()
-	enrollment := fixture.startPairing(t)
+	return finishSyntheticPairing(t, fixture, cookie, csrf, fixture.startPairing(t))
+}
+
+func finishSyntheticPairing(t *testing.T, fixture *consoleFixture, cookie *http.Cookie, csrf string, enrollment testEnrollment) string {
+	t.Helper()
 	approval := fixture.request(http.MethodPost, "/manage/api/pair/approve", pairingApproval(enrollment), cookie, "http://"+fixture.address, csrf, "")
 	if approval.Code != http.StatusOK {
 		t.Fatalf("approve synthetic client: %d %s", approval.Code, approval.Body.String())

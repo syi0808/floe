@@ -38,6 +38,7 @@ type Node struct {
 	storage      *admittedStorage
 	catalogDone  chan struct{}
 	close        sync.Once
+	closeErr     error
 	mu           sync.Mutex
 	active       sync.WaitGroup
 	closed       bool
@@ -195,7 +196,7 @@ func (n *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	n.handler.ServeHTTP(w, r.WithContext(ctx))
 }
-func (n *Node) Close() {
+func (n *Node) Close() error {
 	n.close.Do(func() {
 		n.mu.Lock()
 		n.closed = true
@@ -205,6 +206,7 @@ func (n *Node) Close() {
 			<-n.catalogDone
 		}
 		n.handler.Inference.Service.DenyConfiguration()
+		n.handler.Inference.Service.CloseLiveAdmission()
 		n.active.Wait()
 		n.handler.Configuration.Close()
 		n.handler.Mirror.Close()
@@ -212,6 +214,12 @@ func (n *Node) Close() {
 		n.clients.Close()
 		n.integrations.Close()
 		n.runtime.Close()
+		drain, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := n.handler.Inference.Service.ShutdownLive(drain); err != nil {
+			n.closeErr = errors.New("live control shutdown did not drain")
+		}
+		cancel()
 		n.storage.Close()
 	})
+	return n.closeErr
 }
