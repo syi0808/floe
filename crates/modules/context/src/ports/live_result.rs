@@ -16,6 +16,20 @@ pub struct LiveResultSnapshot {
     pub coverage: DependencyCoverage,
 }
 impl LiveResultSnapshot {
+    /// One canonical encoding used for projection and durable delivery binding.
+    /// Internal Run identities, source proofs and credentials never enter it.
+    pub fn presentable_payload(
+        &self,
+    ) -> Result<floe_model_contract::LiveContextPayload, AgentFailure> {
+        floe_model_contract::LiveContextPayload::new(
+            serde_json::json!({
+                "kind": "manager_result", "partial": self.partial, "text": self.text,
+            })
+            .to_string(),
+        )
+        .map_err(|_| AgentFailure::ModelInputCapacityExceeded)
+    }
+
     pub fn validate_for(
         &self,
         actor: &OwnerActor,

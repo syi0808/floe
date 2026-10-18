@@ -45,6 +45,7 @@ mod surface_compaction;
 mod surface_work_page;
 mod surface_projection;
 mod voice_journal;
+mod voice_outbound;
 mod voice_ingress;
 mod live_result_projection;
 mod run_successors;

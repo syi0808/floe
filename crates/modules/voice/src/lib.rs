@@ -30,3 +30,9 @@ mod driver;
 pub use driver::VoiceLiveCompletion;
 
 mod custody;
+
+mod outbound;
+pub use outbound::{
+    VoiceAppendAdmission, VoiceAppendIntent, VoiceAppendOutcome, VoiceAppendReceipt,
+    VoiceAppendRecord, VoiceOutboundJournal, append_operation_id,
+};

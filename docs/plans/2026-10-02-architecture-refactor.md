@@ -3104,3 +3104,29 @@ ignore, Linux FFI, boundaries (27 nodes, 154 edges), and whitespace checks. The
 adds the guarded transport/custody contract only: persistent Voice outbound rows,
 result availability scheduling, real Gateway transport and native audio remain
 open. The existing App stream fixture explicitly rejects unexpected append I/O.
+
+### Voice outbound intent and canonical Manager result custody
+
+The registered controller now exposes deliver_result through the guarded
+Inference append. Voice persists an encrypted one-shot intent with exact
+Work/delegation/result binding, then an immutable Written, NotSent or Uncertain
+local receipt. Stable logical identity prevents replay under a fresh UUID.
+Canonical result encoding has one Context-owned implementation, reused by Vault's
+binding check. Fresh claims require the current active call; existing intents and
+late receipts remain readable/settleable after Stop without authorizing more I/O.
+The owner records NotSent only after its own fresh claim, never over an unresolved
+older intent or a lost claim acknowledgement. No receipt claims playback.
+
+Three focused encrypted Vault cases cover all receipt outcomes, unresolved intent
+reopen, exact replay after Stop/reopen, forged payload/new operation UUID rejection,
+immutable settlement, and valid-looking receipt corruption rejected on read and
+reopen. Two new registered App cases use a real Manager result and real journal to
+prove one write despite replay and uncertain-write retention without retry. Their
+input prefix/result timing is explicitly orchestrated by the fixture; this is not
+yet automatic production result scheduling or real provider/native media QA.
+The five existing App live dispatch cases also pass. Final qualification passes
+on 627 frozen Rust/Cargo/validation inputs: workspace and doctests 562, App QA
+97 plus one intentional ignore, Linux FFI, boundaries (27 nodes, 154 edges),
+and whitespace checks. The 186 Go/module inputs remain unchanged from their
+qualified race/vet snapshot. The Voice schema family changed pre-stably: no migration, automatic
+reset, or modification of an existing real user profile was performed.

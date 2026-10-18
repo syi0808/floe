@@ -2593,3 +2593,330 @@ async fn live_result_point_read_preserves_exact_publication_scope_and_reopen() {
         result
     );
 }
+
+async fn exercise_voice_outbound_custody(outcome: floe_voice::VoiceAppendOutcome) {
+    use floe_context::LiveResultReader;
+    use floe_context_contract::{
+        DataClass, DependencyCoverage, LiveContextProjection, LiveProjectionSource,
+    };
+    use floe_model_contract::{
+        LiveAppendKind, LiveAppendPayload, LiveContextPayload, LiveModelCapabilities,
+        LiveModelPlan, LiveProviderEvent, LiveTransportLimits, ModelBindingDigest,
+        ModelSelectionCommitment, ProcessingBoundary,
+    };
+    use floe_voice::{
+        MediaState, VoiceAppendIntent, VoiceAppendOutcome, VoiceAppendReceipt, VoiceBinding,
+        VoiceIngressJournal, VoiceJournal, VoiceMutation, VoiceMutationKind, VoiceOutboundJournal,
+        VoiceStartIntent,
+    };
+    let (f, vault) = fixture().await;
+    vault.activate_conversation_executor().await.unwrap();
+    let plan = LiveModelPlan {
+        operation_id: Uuid::new_v4(),
+        actor: f.actor.clone(),
+        capabilities: LiveModelCapabilities::conversational(),
+        limits: LiveTransportLimits {
+            initial_context_bytes: 16384,
+            append_bytes: 65536,
+            local_session_duration_ms: 60000,
+        },
+        boundary: ProcessingBoundary::Device,
+        binding_digest: ModelBindingDigest([1; 32]),
+        selection_commitment: ModelSelectionCommitment([2; 32]),
+    };
+    let binding = VoiceBinding {
+        actor: f.actor.clone(),
+        surface_session_id: f.session,
+        voice_session_id: Uuid::new_v4(),
+        media_lease_id: Uuid::new_v4(),
+        plan_id: plan.operation_id,
+    };
+    let projection = LiveContextProjection {
+        person_id: f.actor.person_id,
+        device_id: f.actor.device_id.clone(),
+        runtime_epoch: f.actor.runtime_epoch,
+        voice_session_id: binding.voice_session_id,
+        plan_id: plan.operation_id,
+        binding_digest: plan.binding_digest,
+        projection_id: Uuid::new_v4(),
+        projection_revision: 1,
+        source: LiveProjectionSource::SurfacePrefix {
+            through: vault.surface_head(&f.actor, f.session).await.unwrap(),
+        },
+        coverage: DependencyCoverage::Independent,
+        memories: vec![],
+        input_data_classes: vec![DataClass::Synthetic],
+        payload: LiveContextPayload::new("Synthetic initial context".into()).unwrap(),
+    };
+    let start = VoiceStartIntent::prepare(
+        binding.clone(),
+        &plan,
+        &projection,
+        floe_execution::budget::ModelReservationCeiling {
+            tokens: 20,
+            cost_micros: 20,
+        },
+    )
+    .unwrap();
+    let mut call = vault.admit_start(&f.actor, start).await.unwrap().record;
+    let prepare = call.session.pending_media_command().unwrap().clone();
+    for kind in [
+        VoiceMutationKind::NativeReceipt {
+            command: prepare,
+            state: MediaState::Muted,
+        },
+        VoiceMutationKind::BeginRemoteDispatch {},
+        VoiceMutationKind::RemoteReady {
+            binding: binding.clone(),
+        },
+        VoiceMutationKind::Unmute {},
+    ] {
+        call = vault
+            .mutate(
+                &f.actor,
+                VoiceMutation {
+                    voice_session_id: binding.voice_session_id,
+                    command_id: Uuid::new_v4(),
+                    expected_revision: call.revision,
+                    kind,
+                },
+            )
+            .await
+            .unwrap()
+            .record;
+    }
+    let unmute = call.session.pending_media_command().unwrap().clone();
+    call = vault
+        .mutate(
+            &f.actor,
+            VoiceMutation {
+                voice_session_id: binding.voice_session_id,
+                command_id: Uuid::new_v4(),
+                expected_revision: call.revision,
+                kind: VoiceMutationKind::NativeReceipt {
+                    command: unmute,
+                    state: MediaState::Capturing,
+                },
+            },
+        )
+        .await
+        .unwrap()
+        .record;
+    vault
+        .ingest(
+            &f.actor,
+            binding.voice_session_id,
+            LiveProviderEvent::PersonUtteranceFinal {
+                utterance_id: "utterance".into(),
+                text: "voice work".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let delegated = vault
+        .ingest(
+            &f.actor,
+            binding.voice_session_id,
+            LiveProviderEvent::DelegationRequested {
+                delegation_id: "delegation".into(),
+                utterance_ref: Some("utterance".into()),
+                input_hint: None,
+            },
+        )
+        .await
+        .unwrap();
+    let work = delegated.work.unwrap();
+    let execution = execution(&f, &work, "voice work", 0);
+    let identity = floe_conversation::prompts::default_manager_identity(f.actor.person_id).unwrap();
+    vault
+        .claim_manager_surface_work(work.clone(), execution.clone(), identity)
+        .await
+        .unwrap();
+    let run = vault
+        .conversation_run(execution.run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let terminal = completed_terminal(&vault, &run).await;
+    let completed = vault
+        .settle_manager_conversation_run(run.run_id, 1, terminal)
+        .await
+        .unwrap();
+    let source = LiveProjectionSource::SurfaceResult {
+        through: vault.surface_head(&f.actor, f.session).await.unwrap(),
+        surface_message_id: SurfaceResultReference::for_run(&completed)
+            .unwrap()
+            .message_id(),
+    };
+    let snapshot = vault.read_live_result(&f.actor, &source).await.unwrap();
+    let operation = floe_voice::append_operation_id(
+        binding.voice_session_id,
+        &source,
+        LiveAppendKind::PresentableResult,
+        "delegation",
+    )
+    .unwrap();
+    let intent = VoiceAppendIntent {
+        binding: binding.clone(),
+        source: source.clone(),
+        projection_digest: [7; 32],
+        payload: LiveAppendPayload {
+            operation_id: operation,
+            kind: LiveAppendKind::PresentableResult,
+            delegation_id: Some("delegation".into()),
+            text: snapshot.presentable_payload().unwrap().as_str().to_owned(),
+        },
+    };
+    let mut forged = intent.clone();
+    forged.payload.text = "not the canonical Manager output".into();
+    assert!(vault.claim_append(&f.actor, forged).await.is_err());
+    let first = vault.claim_append(&f.actor, intent.clone()).await.unwrap();
+    assert!(!first.replayed && first.record.receipt.is_none());
+    assert_eq!(first.record.work_command_id, work.command_id);
+    let replay = vault.claim_append(&f.actor, intent.clone()).await.unwrap();
+    assert!(replay.replayed && replay.record.receipt.is_none());
+    assert!(replay.record == first.record);
+    // Reopening an unresolved intent preserves unknown delivery, never a fresh claim.
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    assert!(
+        vault
+            .read_append(&f.actor, binding.voice_session_id, operation)
+            .await
+            .unwrap()
+            .unwrap()
+            .receipt
+            .is_none()
+    );
+    assert!(
+        vault
+            .claim_append(&f.actor, intent.clone())
+            .await
+            .unwrap()
+            .replayed
+    );
+    // An invented UUID cannot create a second delivery of the same logical result.
+    let mut new_id = intent.clone();
+    new_id.payload.operation_id = Uuid::new_v4();
+    assert!(vault.claim_append(&f.actor, new_id).await.is_err());
+    call = vault
+        .mutate(
+            &f.actor,
+            VoiceMutation {
+                voice_session_id: binding.voice_session_id,
+                command_id: Uuid::new_v4(),
+                expected_revision: call.revision,
+                kind: VoiceMutationKind::Stop {},
+            },
+        )
+        .await
+        .unwrap()
+        .record;
+    let stop = call.session.pending_media_command().unwrap().clone();
+    vault
+        .mutate(
+            &f.actor,
+            VoiceMutation {
+                voice_session_id: binding.voice_session_id,
+                command_id: Uuid::new_v4(),
+                expected_revision: call.revision,
+                kind: VoiceMutationKind::NativeReceipt {
+                    command: stop,
+                    state: MediaState::Stopped,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let receipt = VoiceAppendReceipt {
+        operation_id: operation,
+        intent_digest: intent.digest().unwrap(),
+        outcome,
+    };
+    let settled = vault
+        .settle_append(&f.actor, binding.voice_session_id, receipt.clone())
+        .await
+        .unwrap();
+    assert_eq!(settled.receipt, Some(receipt.clone()));
+    assert_eq!(
+        vault
+            .settle_append(&f.actor, binding.voice_session_id, receipt.clone())
+            .await
+            .unwrap()
+            .receipt,
+        Some(receipt.clone())
+    );
+    let mut changed = receipt.clone();
+    changed.outcome = if outcome == VoiceAppendOutcome::Written {
+        VoiceAppendOutcome::NotSent {
+            failure: AgentFailure::Interrupted,
+        }
+    } else {
+        VoiceAppendOutcome::Written
+    };
+    assert!(
+        vault
+            .settle_append(&f.actor, binding.voice_session_id, changed)
+            .await
+            .is_err()
+    );
+    drop(vault);
+    let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    let retained = reopened
+        .read_append(&f.actor, binding.voice_session_id, operation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.receipt, Some(receipt));
+    assert!(
+        reopened
+            .claim_append(&f.actor, intent)
+            .await
+            .unwrap()
+            .replayed
+    );
+    if outcome == VoiceAppendOutcome::Written {
+        let mut corrupted = retained;
+        corrupted.receipt.as_mut().unwrap().outcome = VoiceAppendOutcome::Uncertain {
+            failure: AgentFailure::Interrupted,
+        };
+        let connection = reopened.connection().unwrap();
+        connection.execute("UPDATE voice_appends SET payload = ? WHERE voice_session_id = ? AND operation_id = ?", (serde_json::to_string(&corrupted).unwrap(), binding.voice_session_id.to_string(), operation.to_string())).await.unwrap();
+        assert!(matches!(
+            reopened
+                .read_append(&f.actor, binding.voice_session_id, operation)
+                .await,
+            Err(AgentFailure::StorageUnavailable)
+        ));
+        drop(connection);
+        drop(reopened);
+        assert!(
+            EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn voice_outbound_custody_binds_canonical_work_and_replays_after_stop_and_reopen() {
+    exercise_voice_outbound_custody(floe_voice::VoiceAppendOutcome::Written).await;
+}
+#[tokio::test]
+async fn voice_outbound_unknown_write_is_immutable_after_restart() {
+    exercise_voice_outbound_custody(floe_voice::VoiceAppendOutcome::Uncertain {
+        failure: AgentFailure::ServerModelUnavailable,
+    })
+    .await;
+}
+#[tokio::test]
+async fn voice_outbound_known_not_sent_does_not_turn_into_written_on_retry() {
+    exercise_voice_outbound_custody(floe_voice::VoiceAppendOutcome::NotSent {
+        failure: AgentFailure::StaleContext,
+    })
+    .await;
+}

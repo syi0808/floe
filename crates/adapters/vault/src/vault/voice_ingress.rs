@@ -60,7 +60,7 @@ struct WorkLink {
     first_sequence: u64,
 }
 impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
-    async fn voice_event_on(
+    pub(super) async fn voice_event_on(
         &self,
         c: &Connection,
         call: &VoiceCallRecord,

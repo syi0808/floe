@@ -35,6 +35,9 @@ use std::sync::{
 #[derive(Default)]
 struct Probe {
     starts: AtomicUsize,
+    appends: AtomicUsize,
+    append_enabled: AtomicBool,
+    append_uncertain: AtomicBool,
     fenced: AtomicBool,
     events: std::sync::Mutex<std::collections::VecDeque<floe_inference::LiveDelivery>>,
     changed: tokio::sync::Notify,
@@ -63,7 +66,18 @@ impl floe_inference::LiveEventTransport for LiveSession {
         _: &'a floe_model_contract::LiveAppendPayload,
         _: &'a ExecutionScope,
     ) -> BoxFuture<'a, Result<(), AgentFailure>> {
-        Box::pin(async { Err(AgentFailure::InvalidInput) })
+        Box::pin(async move {
+            if !self.0.append_enabled.load(Ordering::SeqCst) || self.0.fenced.load(Ordering::SeqCst)
+            {
+                return Err(AgentFailure::InvalidInput);
+            }
+            self.0.appends.fetch_add(1, Ordering::SeqCst);
+            if self.0.append_uncertain.load(Ordering::SeqCst) {
+                Err(AgentFailure::ServerModelUnavailable)
+            } else {
+                Ok(())
+            }
+        })
     }
 
     fn observe<'a>(
@@ -425,7 +439,20 @@ async fn native_fixture_mutation(
     .unwrap()
     .record
 }
-fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: bool) {
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum AppendMode {
+    Disabled,
+    Written,
+    Uncertain,
+}
+fn drive_retained_stream(
+    lost_ack: bool,
+    over_budget: bool,
+    unavailable_ack: bool,
+    append: AppendMode,
+) {
+    let append_result = append != AppendMode::Disabled;
+    let append_uncertain = append == AppendMode::Uncertain;
     let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
     let recorder = model.recorder();
     let (_profile, host) = create_ready_app(&model);
@@ -444,6 +471,10 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
                 fenced: AtomicBool::new(false),
                 ..Default::default()
             });
+            probe.append_enabled.store(append_result, Ordering::SeqCst);
+            probe
+                .append_uncertain
+                .store(append_uncertain, Ordering::SeqCst);
             let inference = floe_inference::InferenceService::new(
                 LiveProvider(probe.clone()),
                 Independent,
@@ -596,7 +627,7 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
                     &native_scope,
                 )
                 .await;
-                let events = [
+                let mut events = vec![
                     LiveProviderEvent::TranscriptDelta {
                         speaker: LiveSpeaker::Person,
                         utterance_id: None,
@@ -623,6 +654,9 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
                         },
                     },
                 ];
+                if append_result {
+                    events.pop();
+                }
                 native_probe
                     .events
                     .lock()
@@ -637,6 +671,9 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
             });
             let live_voice = owners.voice.clone();
             let live_scope = scope.clone();
+            let live_conversation = owners.conversation.clone();
+            let live_probe = probe.clone();
+            let live_actor = actor.clone();
             owners
                 .voice
                 .run_controller(binding, &scope, move |controller| {
@@ -647,7 +684,7 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
                             live_scope.budget().child(40, 60),
                             live_scope.trace_context(),
                         );
-                        let call = inference
+                        let mut call = inference
                             .start_live(
                                 prepared,
                                 floe_inference::LiveStartRequest {
@@ -661,8 +698,164 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
                                 &owned,
                             )
                             .await?;
+                        if append_result {
+                            // Drive a bounded synthetic input prefix, then send
+                            // the actual canonical Manager result through the
+                            // registered controller and real outbound journal.
+                            for _ in 0..5 {
+                                let delivery = call.receive().await?;
+                                match delivery.event {
+                                    LiveProviderEvent::Ready {} => {
+                                        let record = live_voice
+                                            .read_call(&live_actor, voice, &owned)
+                                            .await?
+                                            .unwrap();
+                                        native_fixture_mutation(
+                                            &live_voice,
+                                            &live_actor,
+                                            &record,
+                                            VoiceMutationKind::RemoteReady {
+                                                binding: controller.binding().clone(),
+                                            },
+                                            &owned,
+                                        )
+                                        .await;
+                                    }
+                                    event @ (LiveProviderEvent::PersonUtteranceFinal { .. }
+                                    | LiveProviderEvent::DelegationRequested { .. }
+                                    | LiveProviderEvent::AssistantUtteranceFinal {
+                                        ..
+                                    }) => {
+                                        live_voice
+                                            .ingest(&live_actor, voice, event, &owned)
+                                            .await
+                                            .map_err(floe_kernel::CommandFailure::into_failure)?;
+                                    }
+                                    LiveProviderEvent::TranscriptDelta { .. } => {}
+                                    _ => return Err(AgentFailure::InvalidInput),
+                                }
+                                call.acknowledge(delivery.sequence).await?;
+                            }
+                            let message = loop {
+                                let snapshot = live_conversation
+                                    .read_surface(
+                                        &live_actor,
+                                        floe_conversation::SurfaceReadRequest {
+                                            session_id: surface,
+                                            through: None,
+                                            limit: 64,
+                                        },
+                                        &owned,
+                                    )
+                                    .await?;
+                                if let Some(message) =
+                                    snapshot.messages.into_iter().find(|message| {
+                                        matches!(
+                                            message.content,
+                                            floe_conversation::SurfaceMessageContent::Result { .. }
+                                        )
+                                    })
+                                {
+                                    break message;
+                                }
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            };
+                            let floe_conversation::SurfaceMessageContent::Result {
+                                text,
+                                completeness,
+                                ..
+                            } = message.content
+                            else {
+                                unreachable!()
+                            };
+                            let source = LiveProjectionSource::SurfaceResult {
+                                through: message.through,
+                                surface_message_id: message.message_id,
+                            };
+                            let operation = floe_voice::append_operation_id(
+                                voice,
+                                &source,
+                                floe_model_contract::LiveAppendKind::PresentableResult,
+                                "work",
+                            )?;
+                            let snapshot = floe_context::LiveResultSnapshot {
+                                person_id: live_actor.person_id,
+                                source: source.clone(),
+                                text,
+                                partial: completeness
+                                    == floe_conversation::SurfaceResultCompleteness::Partial,
+                                coverage: DependencyCoverage::Independent,
+                            };
+                            let result_projection = LiveContextProjection {
+                                person_id: live_actor.person_id,
+                                device_id: live_actor.device_id.clone(),
+                                runtime_epoch: live_actor.runtime_epoch,
+                                voice_session_id: voice,
+                                plan_id: call.plan().operation_id,
+                                binding_digest: call.plan().binding_digest,
+                                projection_id: operation,
+                                projection_revision: 1,
+                                source,
+                                coverage: DependencyCoverage::Independent,
+                                memories: vec![],
+                                input_data_classes: vec![DataClass::Synthetic],
+                                payload: snapshot.presentable_payload()?,
+                            };
+                            let request = || floe_inference::LiveAppendRequest {
+                                operation_id: operation,
+                                kind: floe_model_contract::LiveAppendKind::PresentableResult,
+                                delegation_id: Some("work".into()),
+                                projection: result_projection.clone(),
+                            };
+                            let delivered = controller.deliver_result(&mut call, request()).await?;
+                            assert_eq!(
+                                delivered.outcome,
+                                if append_uncertain {
+                                    floe_voice::VoiceAppendOutcome::Uncertain {
+                                        failure: AgentFailure::ServerModelUnavailable,
+                                    }
+                                } else {
+                                    floe_voice::VoiceAppendOutcome::Written
+                                }
+                            );
+                            if append_uncertain {
+                                assert_eq!(
+                                    controller.deliver_result(&mut call, request()).await,
+                                    Err(AgentFailure::ServerModelUnavailable)
+                                );
+                            } else {
+                                assert_eq!(
+                                    controller.deliver_result(&mut call, request()).await?,
+                                    delivered
+                                );
+                            }
+                            let saved = live_voice
+                                .read_append(&live_actor, voice, operation, &owned)
+                                .await?
+                                .unwrap();
+                            assert_eq!(saved.receipt, Some(delivered));
+                            assert_eq!(live_probe.appends.load(Ordering::SeqCst), 1);
+                            if !append_uncertain {
+                                live_probe.events.lock().unwrap().push_back(
+                                    floe_inference::LiveDelivery {
+                                        sequence: 6,
+                                        event: LiveProviderEvent::Ended {
+                                            evidence: LiveEndEvidence::ProviderConfirmed,
+                                            usage: LiveUsageObservation {
+                                                tokens: Some(9),
+                                                cost_micros: Some(4),
+                                            },
+                                        },
+                                    },
+                                );
+                                live_probe.changed.notify_one();
+                            }
+                        }
                         let result = controller.consume_live(call).await?;
-                        if unavailable_ack {
+                        if append_uncertain {
+                            assert_eq!(result.failure, Some(AgentFailure::ServerModelUnavailable));
+                            assert!(result.usage.accounting.unknown_tokens);
+                        } else if unavailable_ack {
                             assert_eq!(result.failure, Some(AgentFailure::ServerModelUnavailable));
                             assert!(result.usage.accounting.unknown_tokens);
                         } else if over_budget {
@@ -683,7 +876,13 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
             if !unavailable_ack {
                 assert_eq!(
                     probe.ack_calls.load(Ordering::SeqCst),
-                    if lost_ack { 7 } else { 6 }
+                    if append_uncertain {
+                        5
+                    } else if lost_ack {
+                        7
+                    } else {
+                        6
+                    }
                 );
             } else {
                 assert!(probe.ack_calls.load(Ordering::SeqCst) > 4);
@@ -691,7 +890,13 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
             assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
             assert_eq!(
                 probe.acknowledged.load(Ordering::SeqCst),
-                if unavailable_ack { 3 } else { 6 }
+                if unavailable_ack {
+                    3
+                } else if append_uncertain {
+                    5
+                } else {
+                    6
+                }
             );
             let retained = owners
                 .voice
@@ -708,7 +913,7 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
             assert!(!retained.session.local_lease_released());
             assert_eq!(
                 retained.session.remote(),
-                if unavailable_ack {
+                if unavailable_ack || append_uncertain {
                     RemoteState::Unknown
                 } else {
                     RemoteState::Closed
@@ -754,19 +959,29 @@ fn drive_retained_stream(lost_ack: bool, over_budget: bool, unavailable_ack: boo
 }
 #[test]
 fn registered_retained_live_stream_drives_canonical_manager_work_and_terminal_custody() {
-    drive_retained_stream(false, false, false);
+    drive_retained_stream(false, false, false, AppendMode::Disabled);
 }
 #[test]
 fn lost_live_delivery_ack_preserves_one_manager_work_without_recreating_call() {
-    drive_retained_stream(true, false, false);
+    drive_retained_stream(true, false, false, AppendMode::Disabled);
 }
 
 #[test]
 fn retained_live_stream_keeps_over_budget_terminal_receipt_in_real_voice_journal() {
-    drive_retained_stream(false, true, false);
+    drive_retained_stream(false, true, false, AppendMode::Disabled);
 }
 
 #[test]
 fn unavailable_live_ack_ends_call_but_retains_canonical_work_and_unknown_usage() {
-    drive_retained_stream(false, false, true);
+    drive_retained_stream(false, false, true, AppendMode::Disabled);
+}
+
+#[test]
+fn registered_live_controller_delivers_canonical_manager_result_once_with_durable_receipt() {
+    drive_retained_stream(false, false, false, AppendMode::Written);
+}
+
+#[test]
+fn uncertain_live_append_is_retained_without_a_retry_or_fabricated_delivery() {
+    drive_retained_stream(false, false, false, AppendMode::Uncertain);
 }

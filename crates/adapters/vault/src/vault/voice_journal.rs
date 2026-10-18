@@ -56,7 +56,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let Some(row) = rows.next().await.map_err(sql)? else {
             let mut orphan = c
                 .query(
-                    "SELECT 1 FROM voice_session_commands WHERE voice_session_id = ?1 UNION ALL SELECT 1 FROM voice_events WHERE voice_session_id = ?1 LIMIT 1",
+                    "SELECT 1 FROM voice_session_commands WHERE voice_session_id = ?1 UNION ALL SELECT 1 FROM voice_events WHERE voice_session_id = ?1 UNION ALL SELECT 1 FROM voice_appends WHERE voice_session_id = ?1 LIMIT 1",
                     [id.to_string()],
                 )
                 .await
@@ -227,7 +227,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             .await
             .map_err(sql)?;
         schema(&tx).await?;
-        let mut orphan = tx.query("SELECT 1 FROM voice_session_commands c LEFT JOIN voice_sessions s ON s.voice_session_id = c.voice_session_id WHERE s.voice_session_id IS NULL UNION ALL SELECT 1 FROM voice_events e LEFT JOIN voice_sessions s ON s.voice_session_id = e.voice_session_id WHERE s.voice_session_id IS NULL LIMIT 1", ()).await.map_err(sql)?;
+        let mut orphan = tx.query("SELECT 1 FROM voice_session_commands c LEFT JOIN voice_sessions s ON s.voice_session_id = c.voice_session_id WHERE s.voice_session_id IS NULL UNION ALL SELECT 1 FROM voice_events e LEFT JOIN voice_sessions s ON s.voice_session_id = e.voice_session_id WHERE s.voice_session_id IS NULL UNION ALL SELECT 1 FROM voice_appends a LEFT JOIN voice_sessions s ON s.voice_session_id = a.voice_session_id WHERE s.voice_session_id IS NULL LIMIT 1", ()).await.map_err(sql)?;
         if orphan.next().await.map_err(sql)?.is_some() {
             return Err(AgentFailure::StorageUnavailable);
         }
@@ -259,6 +259,7 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
                     .voice_advance_state_on(&tx, &record, initial, record.revision)
                     .await?;
                 self.validate_voice_events_on(&tx, &record).await?;
+                self.validate_voice_appends_on(&tx, &record).await?;
                 if replay.digest()? != record.digest()? {
                     return Err(AgentFailure::StorageUnavailable);
                 }

@@ -1333,3 +1333,24 @@ The concrete consumer is exercised with the real encrypted Vault, Conversation
 queue and Manager runtime, but synthetic retained transport and native receipts.
 Production Gateway/native wiring, UI caption/activity subscribers and cumulative
 source-authorized result append are still separate integration work.
+
+### Durable live result write evidence
+
+Voice owns encrypted outbound intents and immutable write receipts, correlated
+with the exact call, original delegation, canonical Work and published Surface
+result. Stable operation identity is derived from the call, result message,
+delegation and presentation kind, so a new request UUID cannot create a second
+logical delivery. The canonical Context result encoding is shared with the Vault
+binding check; arbitrary captions or caller text cannot replace a Manager result.
+
+Only a fresh active-call claim can reach Inference's one-shot append. Existing
+claims are read-only, including after response loss, Stop or reopen. A known
+pre-write failure can be retained as NotSent only by the invocation that received
+its own fresh-claim acknowledgement. An unresolved prior intent stays unknown.
+Written proves a local transport write, never acceptance or playback; uncertain
+writes are retained without retry. Late local settlement survives retirement,
+and a different outcome cannot replace an existing receipt. Startup validates
+bounded pages, canonical Work/result links, historical admission state and
+independent intent/receipt row digests; corruption never triggers redispatch or
+repair. This pre-stable Voice family change requires a matching snapshot/fresh
+development profile, not automatic migration or reset.

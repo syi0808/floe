@@ -7,7 +7,7 @@ use floe_context_contract::{
 };
 use floe_execution::ExecutionScope;
 use floe_kernel::AgentFailure;
-use floe_model_contract::{LiveContextPayload, LiveModelPlan};
+use floe_model_contract::LiveModelPlan;
 use std::future::Future;
 use uuid::Uuid;
 
@@ -69,15 +69,7 @@ where
             let classes = live_coverage_classes(&snapshot.coverage);
             // Serialize only presentable content. Internal actor/Run/Source proof,
             // provider credentials and tool execution frames never enter this text.
-            let payload = LiveContextPayload::new(
-                serde_json::json!({
-                    "kind": "manager_result",
-                    "partial": snapshot.partial,
-                    "text": snapshot.text,
-                })
-                .to_string(),
-            )
-            .map_err(|_| AgentFailure::ModelInputCapacityExceeded)?;
+            let payload = snapshot.presentable_payload()?;
             let projection = LiveContextProjection {
                 person_id: request.plan.actor.person_id,
                 device_id: request.plan.actor.device_id.clone(),

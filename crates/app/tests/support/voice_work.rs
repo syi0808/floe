@@ -786,3 +786,69 @@ fn voice_controller_failure_is_not_hidden_by_observer_delivery_or_later_drain() 
         });
     });
 }
+
+impl floe_voice::VoiceOutboundJournal for DelayedJournal {
+    fn claim_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceAppendIntent,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceAppendAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("fixture cannot append model input") })
+    }
+    fn settle_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: floe_voice::VoiceAppendReceipt,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceAppendRecord, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("fixture cannot settle append") })
+    }
+    fn read_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: Uuid,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<floe_voice::VoiceAppendRecord>, AgentFailure>>
+    {
+        Box::pin(async { panic!("fixture cannot read append") })
+    }
+}
+
+impl floe_voice::VoiceOutboundJournal for DelayedSettlementJournal {
+    fn claim_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceAppendIntent,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceAppendAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("fixture cannot append model input") })
+    }
+    fn settle_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: floe_voice::VoiceAppendReceipt,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceAppendRecord, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("fixture cannot settle append") })
+    }
+    fn read_append<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+        _: Uuid,
+    ) -> floe_execution::BoxFuture<'a, Result<Option<floe_voice::VoiceAppendRecord>, AgentFailure>>
+    {
+        Box::pin(async { panic!("fixture cannot read append") })
+    }
+}

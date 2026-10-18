@@ -3,7 +3,7 @@
 //! wait for these storage operations. Conversation retains all Work execution.
 use crate::{
     VoiceCallRecord, VoiceIngressAdmission, VoiceIngressJournal, VoiceMutation,
-    VoiceMutationAdmission, VoiceStartAdmission, VoiceStartIntent,
+    VoiceMutationAdmission, VoiceOutboundJournal, VoiceStartAdmission, VoiceStartIntent,
 };
 use floe_conversation::ConversationOwner;
 use floe_execution::{Cancellation, ExecutionScope};
@@ -27,7 +27,7 @@ const MAX_CUSTODY_TASKS: usize = 64;
 
 pub struct VoiceService {
     actor: OwnerActor,
-    journal: Arc<dyn VoiceIngressJournal>,
+    journal: Arc<dyn VoiceOutboundJournal>,
     conversation: Arc<dyn ConversationOwner>,
     closing: AtomicBool,
     shutdown: Cancellation,
@@ -45,7 +45,7 @@ pub struct VoiceIngressResult {
 impl VoiceService {
     pub fn new(
         actor: OwnerActor,
-        journal: Arc<dyn VoiceIngressJournal>,
+        journal: Arc<dyn VoiceOutboundJournal>,
         conversation: Arc<dyn ConversationOwner>,
     ) -> Result<Self, AgentFailure> {
         actor.validate()?;
@@ -161,6 +161,18 @@ impl VoiceService {
     ) -> Result<Option<VoiceCallRecord>, AgentFailure> {
         self.check(actor)?;
         scope.run(self.journal.read_call(actor, voice)).await
+    }
+    pub async fn read_append(
+        &self,
+        actor: &OwnerActor,
+        voice: Uuid,
+        operation: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<Option<crate::VoiceAppendRecord>, AgentFailure> {
+        self.check(actor)?;
+        scope
+            .run(self.journal.read_append(actor, voice, operation))
+            .await
     }
     pub async fn read_event(
         &self,
@@ -342,7 +354,7 @@ impl floe_inference::LiveDispatchCustody for VoiceService {
 pub struct VoiceController {
     pub(crate) binding: crate::VoiceBinding,
     pub(crate) shutdown: Cancellation,
-    pub(crate) journal: Arc<dyn VoiceIngressJournal>,
+    pub(crate) journal: Arc<dyn VoiceOutboundJournal>,
     pub(crate) conversation: Arc<dyn ConversationOwner>,
     _lease: ControllerLease,
 }
