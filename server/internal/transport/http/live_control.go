@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"errors"
 	"floe/server/internal/inference"
 	"floe/server/internal/trust"
 	"io"
@@ -27,6 +28,19 @@ type liveStartRequest struct {
 type liveReleaseRequest struct {
 	SchemaVersion int    `json:"schema_version"`
 	TicketID      string `json:"ticket_id"`
+}
+type liveEventAckRequest struct {
+	SchemaVersion int    `json:"schema_version"`
+	TicketID      string `json:"ticket_id"`
+	Sequence      uint64 `json:"sequence"`
+	Digest        string `json:"digest"`
+}
+type liveEventDTO struct {
+	SchemaVersion int                 `json:"schema_version"`
+	TicketID      string              `json:"ticket_id"`
+	Sequence      uint64              `json:"sequence"`
+	Digest        string              `json:"digest"`
+	Event         inference.LiveEvent `json:"event"`
 }
 type liveTicketDTO struct {
 	SchemaVersion      int    `json:"schema_version"`
@@ -119,6 +133,21 @@ func (h *InferenceHandler) serveLive(w http.ResponseWriter, r *http.Request, p t
 			return
 		}
 		writeInferenceJSON(w, liveStatusProjection(status))
+	case "/v1/live/event/ack":
+		var request liveEventAckRequest
+		if err := h.decodeLiveBody(r, &request, 2048); err != nil {
+			fail(err)
+			return
+		}
+		if request.SchemaVersion != 1 {
+			fail(inference.Failure{Code: inference.UnsupportedSchema})
+			return
+		}
+		if err := h.Service.AcknowledgeLiveEvent(r.Context(), p, request.TicketID, request.Sequence, request.Digest); err != nil {
+			fail(err)
+			return
+		}
+		writeInferenceJSON(w, map[string]any{"schema_version": 1, "acknowledged_sequence": request.Sequence, "digest": request.Digest})
 	case "/v1/live/release":
 		var request liveReleaseRequest
 		if err := h.decodeLiveBody(r, &request, 2048); err != nil {
@@ -167,8 +196,26 @@ func (h *InferenceHandler) serveLive(w http.ResponseWriter, r *http.Request, p t
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/v1/live/calls/")
+		eventRead := strings.HasSuffix(id, "/event")
+		if eventRead {
+			id = strings.TrimSuffix(id, "/event")
+		}
 		if !trust.ValidID(id) {
 			fail(inference.Failure{Code: inference.Validation})
+			return
+		}
+		if eventRead {
+			observed, err := h.Service.ObserveLiveEvent(r.Context(), p, id)
+			if errors.Is(err, inference.ErrLiveObservationPending) {
+				// A bounded empty observation is not a terminal call failure.
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if err != nil {
+				fail(err)
+				return
+			}
+			writeInferenceJSON(w, liveEventDTO{1, id, observed.Delivery.Sequence, observed.Digest, observed.Delivery.Event})
 			return
 		}
 		status, err := h.Service.LiveCallStatus(r.Context(), p, id)

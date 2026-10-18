@@ -3184,3 +3184,25 @@ Final server qualification passes on 198 frozen Go/module inputs: default race
 17 test-bearing packages, development-tag race 18, both vet runs, and architecture
 boundaries (27 nodes, 154 edges). The unchanged dashboard/Rust snapshot retains
 its prior qualification; no browser or native qualification is inferred from it.
+
+
+### Authenticated retained live event custody
+
+The existing process ticket now supports bounded GET event observation and exact
+POST ACK. The server retains the transport head until the client explicitly ACKs
+its observed sequence/digest after Voice persistence. Exact ACK retries do not
+re-consume it; another paired client cannot read or ACK it. Read cancellation is
+observation-only; local transport failure retains queued finals while the original
+authority still permits release. Event reads have a one-per-call bound, independent
+of status/release, and source checks bracket data release. A twenty-second empty
+observation is distinct from provider failure or owner/request cancellation.
+
+Synthetic owner cases cover retained final drain, exact read/ACK replay, rejected
+unseen/wrong proofs, observer pressure/cancellation and changed head detection.
+The real Trust HTTP fixture additionally verifies foreign-client event/ACK denial.
+Rust Gateway/native transport and actual audio qualification remain open.
+
+Qualification: default/development full Go race suites (17/18 test-bearing
+packages) and both vet runs pass on 200 frozen Go/module inputs. Focused event
+owner cases also pass three race-enabled repetitions. No Rust/dashboard source
+changed in this slice; prior qualification remains scoped to that unchanged tree.

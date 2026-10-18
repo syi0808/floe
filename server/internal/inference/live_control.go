@@ -51,25 +51,28 @@ func (LiveCallStatus) String() string     { return "LiveCallStatus[redacted]" }
 func (v LiveCallStatus) GoString() string { return v.String() }
 
 type liveEntry struct {
-	mu                                   sync.Mutex
-	id                                   string
-	principal                            trust.Principal
-	scope                                trust.PrincipalSnapshot
-	selected                             selectedLive
-	prepared                             PreparedLiveTransport
-	phase                                string
-	deadline                             time.Time
-	requestID, fingerprint, answerDigest string
-	attempted                            bool
-	issue                                FailureCode
-	controlCtx                           context.Context
-	cancelControl                        context.CancelFunc
-	transportCtx                         context.Context
-	cancelTransport                      context.CancelFunc
-	transport                            LiveTransport
-	workers                              int
-	retired                              bool
-	releaseSelection                     func()
+	mu                                    sync.Mutex
+	id                                    string
+	principal                             trust.Principal
+	scope                                 trust.PrincipalSnapshot
+	selected                              selectedLive
+	prepared                              PreparedLiveTransport
+	phase                                 string
+	deadline                              time.Time
+	requestID, fingerprint, answerDigest  string
+	attempted                             bool
+	issue                                 FailureCode
+	controlCtx                            context.Context
+	cancelControl                         context.CancelFunc
+	transportCtx                          context.Context
+	cancelTransport                       context.CancelFunc
+	transport                             LiveTransport
+	workers                               int
+	retired                               bool
+	deliveryGate                          chan struct{}
+	pendingSequence, acknowledgedSequence uint64
+	pendingDigest, acknowledgedDigest     string
+	releaseSelection                      func()
 }
 type liveRegistry struct {
 	service      *Service
@@ -248,7 +251,7 @@ func (s *Service) PrepareLiveCall(ctx context.Context, p trust.Principal, revisi
 	if prepared == nil {
 		return LiveTicket{}, Failure{Code: ModelUnavailable}
 	}
-	e := &liveEntry{principal: p, scope: scope, selected: selected, prepared: prepared, phase: "prepared", deadline: time.Now().Add(livePreparationLifetime), releaseSelection: release}
+	e := &liveEntry{principal: p, scope: scope, selected: selected, prepared: prepared, phase: "prepared", deadline: time.Now().Add(livePreparationLifetime), releaseSelection: release, deliveryGate: make(chan struct{}, 1)}
 	if err = r.source(observation, e, false); err != nil {
 		return LiveTicket{}, err
 	}

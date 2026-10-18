@@ -1404,3 +1404,20 @@ blocking small control reads. Shutdown first closes admission/fences handles and
 then reports bounded effect-drain failure honestly. These are host resource
 policies, not provider limits or durable business identities. Event custody/ACK,
 append, remote close and the Rust Gateway consumer remain subsequent integration.
+
+
+### Live retained event control
+
+The paired event endpoint observes one retained normalized provider event without
+consuming it. Each call admits one concurrent event read/ACK; status and release
+remain independent. Observation pins the next exact sequence and payload digest.
+ACK requires that observed head and proof; the last exact ACK retry is read-only.
+A changed/skipped head fails closed. The client must persist Voice custody before
+ACK, and no HTTP response itself establishes that persistence.
+
+The twenty-second empty observation window returns no content only while both
+request and owner authority remain live. Request timeout and provider failure are
+not that empty state. Local transport closure can still drain already-received
+events under current source/account authority. Expiry, release, configuration
+change and principal revocation prevent further release; retired observations
+cannot publish late data. No event is elevated into a Manager command by Go.

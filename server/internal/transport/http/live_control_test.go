@@ -40,6 +40,7 @@ func (p *liveHTTPPrepared) Start(context.Context, inference.LiveStartInput) (inf
 }
 
 type liveHTTPTransport struct {
+	acks   atomic.Int32
 	closed atomic.Bool
 	once   sync.Once
 	done   chan struct{}
@@ -52,10 +53,18 @@ func (t *liveHTTPTransport) Answer() (string, error) {
 	return "v=0\r\ns=synthetic-private-answer\r\n", nil
 }
 func (t *liveHTTPTransport) Observe(ctx context.Context) (inference.LiveDelivery, error) {
+	if t.acks.Load() == 0 {
+		return inference.LiveDelivery{Sequence: 1, Event: inference.LiveEvent{Kind: "person_utterance_final", UtteranceID: "synthetic-utterance", Text: "synthetic-private-event"}}, ctx.Err()
+	}
 	<-ctx.Done()
 	return inference.LiveDelivery{}, ctx.Err()
 }
-func (t *liveHTTPTransport) Acknowledge(uint64) error { return nil }
+func (t *liveHTTPTransport) Acknowledge(sequence uint64) error {
+	if sequence != 1 || !t.acks.CompareAndSwap(0, 1) {
+		return inference.Failure{Code: inference.RequestRejected}
+	}
+	return nil
+}
 func (t *liveHTTPTransport) PrepareAppend(inference.LiveAppend) (inference.PreparedLiveWrite, error) {
 	panic("start fixture cannot append")
 }
@@ -134,6 +143,29 @@ func TestLiveHTTPCallIsPrincipalBoundOneShotAndNotRecreatedAfterRestart(t *testi
 	}
 	if r := f.inferenceRequest(http.MethodPost, "/v1/live/release", liveJSON(t, liveReleaseRequest{1, ticket.TicketID}), other); r.Code != http.StatusForbidden {
 		t.Fatal("foreign client closed the call", r.Code)
+	}
+	eventPath := "/v1/live/calls/" + ticket.TicketID + "/event"
+	if r := f.inferenceRequest(http.MethodGet, eventPath, nil, other); r.Code != http.StatusForbidden || strings.Contains(r.Body.String(), "synthetic-private-event") {
+		t.Fatal("foreign client read retained event", r.Code)
+	}
+	var event liveEventDTO
+	for i := 0; i < 2; i++ {
+		r := f.inferenceRequest(http.MethodGet, eventPath, nil, owner)
+		if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &event) != nil || event.Sequence != 1 || event.Event.Text != "synthetic-private-event" {
+			t.Fatal("retained event response invalid", r.Code)
+		}
+	}
+	ack := liveEventAckRequest{1, ticket.TicketID, event.Sequence, event.Digest}
+	if r := f.inferenceRequest(http.MethodPost, "/v1/live/event/ack", liveJSON(t, ack), other); r.Code != http.StatusForbidden {
+		t.Fatal("foreign client acknowledged event", r.Code)
+	}
+	for i := 0; i < 2; i++ {
+		if r := f.inferenceRequest(http.MethodPost, "/v1/live/event/ack", liveJSON(t, ack), owner); r.Code != 200 {
+			t.Fatal("exact ACK retry failed", r.Code)
+		}
+	}
+	if a.call.acks.Load() != 1 {
+		t.Fatal("ACK response loss duplicated queue mutation")
 	}
 	listed := f.inferenceRequest(http.MethodGet, "/v1/live/calls", nil, owner)
 	if listed.Code != 200 || strings.Contains(listed.Body.String(), "synthetic-private") || strings.Contains(listed.Body.String(), "answer") {

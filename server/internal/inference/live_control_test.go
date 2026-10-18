@@ -82,6 +82,9 @@ func (p *controlPrepared) Start(ctx context.Context, in LiveStartInput) (LiveTra
 }
 
 type controlTransport struct {
+	deliveryMu    sync.Mutex
+	deliveries    []LiveDelivery
+	acks          atomic.Int32
 	closed        atomic.Bool
 	changedAnswer atomic.Bool
 	once          sync.Once
@@ -98,10 +101,26 @@ func (t *controlTransport) Answer() (string, error) {
 	return "v=0\r\ns=synthetic-answer\r\n", nil
 }
 func (t *controlTransport) Observe(ctx context.Context) (LiveDelivery, error) {
+	t.deliveryMu.Lock()
+	if len(t.deliveries) > 0 {
+		d := t.deliveries[0]
+		t.deliveryMu.Unlock()
+		return d, ctx.Err()
+	}
+	t.deliveryMu.Unlock()
 	<-ctx.Done()
 	return LiveDelivery{}, ctx.Err()
 }
-func (t *controlTransport) Acknowledge(uint64) error { return nil }
+func (t *controlTransport) Acknowledge(sequence uint64) error {
+	t.deliveryMu.Lock()
+	defer t.deliveryMu.Unlock()
+	if len(t.deliveries) == 0 || t.deliveries[0].Sequence != sequence {
+		return Failure{Code: RequestRejected}
+	}
+	t.deliveries = t.deliveries[1:]
+	t.acks.Add(1)
+	return nil
+}
 func (t *controlTransport) PrepareAppend(LiveAppend) (PreparedLiveWrite, error) {
 	panic("start fixture cannot append")
 }
