@@ -124,7 +124,7 @@ impl TryFrom<StoredVoiceSession> for VoiceSession {
         Ok(session)
     }
 }
-mod actor_wire {
+pub(crate) mod actor_wire {
     use super::*;
     #[derive(Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]

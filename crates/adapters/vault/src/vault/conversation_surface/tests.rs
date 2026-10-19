@@ -2658,6 +2658,9 @@ async fn exercise_voice_outbound_custody(outcome: floe_voice::VoiceAppendOutcome
         },
     )
     .unwrap();
+    vault.reserve_start(&f.actor, floe_voice::VoiceStartCommand {
+        command_id: binding.voice_session_id, surface_session_id: f.session,
+    }).await.unwrap();
     let mut call = vault.admit_start(&f.actor, start).await.unwrap().record;
     let prepare = call.session.pending_media_command().unwrap().clone();
     for kind in [

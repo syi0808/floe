@@ -3420,3 +3420,26 @@ initial Vault filter matched zero tests and is not counted; the corrected
 `vault::voice_journal::tests::` selection provided the 20-case result. Apple build
 was attempted on Castles but blocked before build by checkout/cache permissions;
 no new Apple, microphone, browser or real-provider qualification is claimed.
+
+### Start command custody implementation
+
+The pre-planning command record is now implemented at Voice/Vault. `command_id`
+is the stable eventual call ID; exact Person/device/Surface replay is read-only
+and never fresh. Vault atomically binds the selected dispatch intent to the
+original preparation, or retains explicit cancellation. Existing lifecycle and
+App live fixtures now establish preparation before their dispatch intent; the
+live App path reserves before Inference preparation. New regressions cover
+concurrent admissions, changed/foreign requests, read-only replay under a writer,
+late binding after cancellation and lost ACK/reopen into a new runtime epoch.
+
+This checkpoint is durable command custody, not the finished product Start
+controller. Owning actual preparation across cancellation and native teardown,
+UI Start/status and Apple physical process/Stop evidence remain open. This stored
+layout intentionally requires a matching fresh development store; no existing
+data or key is reset by this change.
+
+This custody snapshot passes the final 636-input Rust gate: workspace/doctests
+570 plus one explicit cross-language ignore, App QA 99 plus one intentional
+subprocess-entry ignore, Linux FFI build and architecture boundaries (27 nodes,
+155 edges). The 25 Voice-journal tests passed twice and the focused App voice
+selection passed 14. No Apple/native/browser/provider qualification is inferred.

@@ -483,6 +483,23 @@ impl VoiceMutationAdmission {
 }
 
 pub trait VoiceJournal: Send + Sync {
+    fn reserve_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command: crate::VoiceStartCommand,
+    ) -> BoxFuture<'a, Result<crate::VoiceStartCommandAdmission, CommandFailure<AgentFailure>>>;
+    fn read_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command_id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<crate::VoiceStartCommandRecord>, AgentFailure>>;
+    /// Cancels only pre-binding preparation. A bound call requires normal Stop.
+    fn cancel_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command: crate::VoiceStartCommand,
+    ) -> BoxFuture<'a, Result<crate::VoiceStartCommandRecord, CommandFailure<AgentFailure>>>;
+
     fn admit_start<'a>(
         &'a self,
         actor: &'a OwnerActor,

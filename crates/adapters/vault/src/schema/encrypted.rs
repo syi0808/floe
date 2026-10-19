@@ -573,6 +573,10 @@ pub(super) const CONVERSATION_COMPACTION_V1: &[SchemaObject] = &[
 pub(super) const VOICE: &[SchemaObject] = &[
     SchemaObject::marker("voice_session_schema", 1,
         "CREATE TABLE voice_session_schema (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL CHECK (version = 1))"),
+    SchemaObject::table("voice_start_commands",
+        "CREATE TABLE voice_start_commands (command_id TEXT PRIMARY KEY CHECK (length(command_id) = 36), person_id TEXT NOT NULL, device_id TEXT NOT NULL, surface_session_id TEXT NOT NULL, request_digest TEXT NOT NULL CHECK (length(request_digest) = 64), state TEXT NOT NULL CHECK (state IN ('preparing','bound','cancelled')), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 65536), FOREIGN KEY (surface_session_id) REFERENCES agent_sessions(id))"),
+    SchemaObject::index("voice_one_preparing_start",
+        "CREATE UNIQUE INDEX voice_one_preparing_start ON voice_start_commands(person_id, device_id) WHERE state = 'preparing'"),
     SchemaObject::table("voice_sessions",
         "CREATE TABLE voice_sessions (voice_session_id TEXT PRIMARY KEY CHECK (length(voice_session_id) = 36), person_id TEXT NOT NULL CHECK (length(person_id) = 36), device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256), surface_session_id TEXT NOT NULL CHECK (length(surface_session_id) = 36), media_lease_id TEXT NOT NULL UNIQUE CHECK (length(media_lease_id) = 36), intent_digest TEXT NOT NULL CHECK (length(intent_digest) = 64), revision INTEGER NOT NULL CHECK (revision > 0), lease_held INTEGER NOT NULL CHECK (lease_held IN (0,1)), payload TEXT NOT NULL CHECK (length(CAST(payload AS BLOB)) BETWEEN 1 AND 65536), FOREIGN KEY (surface_session_id) REFERENCES agent_sessions(id))"),
     SchemaObject::index("voice_one_local_media_lease",

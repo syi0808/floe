@@ -1521,3 +1521,30 @@ retains shared storage/credentials until actual requests, catalog work and owner
 effects finish; it never closes those resources underneath an admitted task.
 Repeated Close preserves the original incomplete observation instead of silently
 turning it into success after a late completion.
+
+### User Start command custody before live planning
+
+Voice owns `VoiceStartCommand` separately from the later selected-model dispatch
+intent. Its command ID is also the eventual call ID; its immutable payload binds
+the Person/device/Surface. App callers reserve it before model preparation. Vault
+serializes initial admission, retains one preparing command per device, and
+rejects another fresh command while a local media lease is held. Exact replay and
+status are read-only and never authorize preparation, including after lost ACK
+or runtime restart. The original runtime epoch remains on the receipt.
+
+Binding the selected `VoiceStartIntent` and changing preparation to Bound occur
+in the same transaction. A missing, cancelled, foreign or stale-epoch preparation
+cannot bind a call. The existing call journal remains the sole lifecycle owner.
+An explicit pre-binding cancellation is idempotent and fences late binding; a
+bound call must use its normal Stop path. This cancellation is not physical media
+Stop or evidence of remote provider termination. Reopen checks bounded command
+pages, exact row/payload identity and the command-to-call relationship without
+repairing or reissuing anything. Old local stores without this table are rejected;
+no migration, key reset or automatic data deletion is performed.
+
+VoiceService places these command mutations in its existing generation-owned
+custody tasks, so observation timeout does not discard admitted writes. The
+product/native Start controller still must retain preparation ownership, consume
+only a fresh command admission and cancel/fence unfinished preparation on shutdown.
+These receipts do not by themselves implement the UI, native process recovery or
+microphone permission.

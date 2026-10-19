@@ -94,6 +94,16 @@ fn capturing(host: &AppHost<AppComposition>, session: Uuid) -> VoiceCallRecord {
                 )
                 .unwrap(),
             };
+            support::exact_recovery::observe_exact_request(
+                floe_voice::VoiceStartCommand {
+                    command_id: binding.voice_session_id,
+                    surface_session_id: session,
+                },
+                |exact| owners.voice.reserve_start(&actor, exact, &scope),
+                busy,
+            )
+            .await
+            .unwrap();
             let intent = VoiceStartIntent::prepare(
                 binding.clone(),
                 &plan,
@@ -304,6 +314,37 @@ struct DelayedJournal {
     finished: std::sync::atomic::AtomicUsize,
 }
 impl floe_voice::VoiceJournal for DelayedJournal {
+    fn reserve_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceStartCommand,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceStartCommandAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not prepare a call") })
+    }
+    fn read_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not read preparation") })
+    }
+    fn cancel_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceStartCommand,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceStartCommandRecord, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not cancel preparation") })
+    }
+
     fn admit_start<'a>(
         &'a self,
         _: &'a OwnerActor,
@@ -461,6 +502,37 @@ struct DelayedSettlementJournal {
     writes: std::sync::atomic::AtomicUsize,
 }
 impl floe_voice::VoiceJournal for DelayedSettlementJournal {
+    fn reserve_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceStartCommand,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceStartCommandAdmission, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not prepare a call") })
+    }
+    fn read_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: Uuid,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not read preparation") })
+    }
+    fn cancel_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+        _: floe_voice::VoiceStartCommand,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<floe_voice::VoiceStartCommandRecord, CommandFailure<AgentFailure>>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not cancel preparation") })
+    }
+
     fn admit_start<'a>(
         &'a self,
         _: &'a OwnerActor,

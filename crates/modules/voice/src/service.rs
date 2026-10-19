@@ -105,6 +105,41 @@ impl VoiceService {
             .await
             .map_err(CommandFailure::Indeterminate)?
     }
+    pub async fn reserve_start(
+        &self,
+        actor: &OwnerActor,
+        command: crate::VoiceStartCommand,
+        scope: &ExecutionScope,
+    ) -> Result<crate::VoiceStartCommandAdmission, CommandFailure<AgentFailure>> {
+        let journal = self.journal.clone();
+        let owner = actor.clone();
+        self.custody(actor, scope, async move {
+            journal.reserve_start(&owner, command).await
+        })
+        .await
+    }
+    pub async fn read_start(
+        &self,
+        actor: &OwnerActor,
+        id: Uuid,
+        scope: &ExecutionScope,
+    ) -> Result<Option<crate::VoiceStartCommandRecord>, AgentFailure> {
+        self.check(actor)?;
+        scope.run(self.journal.read_start(actor, id)).await
+    }
+    pub async fn cancel_start(
+        &self,
+        actor: &OwnerActor,
+        command: crate::VoiceStartCommand,
+        scope: &ExecutionScope,
+    ) -> Result<crate::VoiceStartCommandRecord, CommandFailure<AgentFailure>> {
+        let journal = self.journal.clone();
+        let owner = actor.clone();
+        self.custody(actor, scope, async move {
+            journal.cancel_start(&owner, command).await
+        })
+        .await
+    }
     pub async fn admit_start(
         &self,
         actor: &OwnerActor,

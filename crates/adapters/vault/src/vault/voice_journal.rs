@@ -1,5 +1,7 @@
-//! Encrypted Voice lifecycle custody. No native/provider I/O occurs under a
-//! transaction. Exact replay is read-only; new state and receipt commit together.
+#[path = "voice_start_commands.rs"]
+mod start_commands;
+// Encrypted Voice lifecycle custody. No native/provider I/O occurs under a
+// transaction. Exact replay is read-only; new state and receipt commit together.
 use super::*;
 use floe_execution::BoxFuture;
 use floe_kernel::{CommandFailure, OwnerActor};
@@ -134,6 +136,16 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
         let Some(record) = self.voice_record_on(c, id).await? else {
             return Ok(None);
         };
+        let command = self
+            .voice_start_on(c, id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if command.state != floe_voice::VoiceStartCommandState::Bound
+            || command.actor != record.intent.binding.actor
+            || command.command.surface_session_id != record.intent.binding.surface_session_id
+        {
+            return Err(AgentFailure::StorageUnavailable);
+        }
         let mut rows=c.query("SELECT command_id FROM voice_session_commands WHERE voice_session_id = ? ORDER BY revision DESC LIMIT 1",[id.to_string()]).await.map_err(sql)?;
         let last = rows.next().await.map_err(sql)?;
         if record.revision == 1 {
@@ -232,6 +244,28 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             return Err(AgentFailure::StorageUnavailable);
         }
         drop(orphan);
+        let mut start_after = String::new();
+        loop {
+            let mut rows = tx.query("SELECT command_id FROM voice_start_commands WHERE command_id > ? ORDER BY command_id LIMIT 128", [start_after.clone()]).await.map_err(sql)?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().await.map_err(sql)? {
+                ids.push(row.get::<String>(0).map_err(storage)?);
+            }
+            let count = ids.len();
+            for raw in ids {
+                let record = self
+                    .voice_start_on(&tx, Uuid::parse_str(&raw).map_err(storage)?)
+                    .await?
+                    .ok_or(AgentFailure::StorageUnavailable)?;
+                self.surface_session_on(&tx, &record.actor, record.command.surface_session_id)
+                    .await?;
+                self.check_start_link(&tx, &record).await?;
+                start_after = raw;
+            }
+            if count < 128 {
+                break;
+            }
+        }
         let mut after = String::new();
         loop {
             let mut rows=tx.query("SELECT voice_session_id FROM voice_sessions WHERE voice_session_id > ? ORDER BY voice_session_id LIMIT 128",[after.clone()]).await.map_err(sql)?;
@@ -324,6 +358,58 @@ async fn schema(c: &Connection) -> Result<(), AgentFailure> {
         .map_err(crate::schema::SchemaFailure::into_agent)
 }
 impl<Keys: VaultKeyProvider> VoiceJournal for EncryptedAgentVault<Keys> {
+    fn reserve_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command: floe_voice::VoiceStartCommand,
+    ) -> BoxFuture<'a, Result<floe_voice::VoiceStartCommandAdmission, CommandFailure<AgentFailure>>>
+    {
+        Box::pin(self.start_command_operation(actor, command, false))
+    }
+    fn cancel_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        command: floe_voice::VoiceStartCommand,
+    ) -> BoxFuture<'a, Result<floe_voice::VoiceStartCommandRecord, CommandFailure<AgentFailure>>>
+    {
+        Box::pin(async move {
+            Ok(self
+                .start_command_operation(actor, command, true)
+                .await?
+                .record)
+        })
+    }
+    fn read_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+        id: Uuid,
+    ) -> BoxFuture<'a, Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>> {
+        Box::pin(async move {
+            self.voice_actor(actor)?;
+            if id.is_nil() {
+                return Err(AgentFailure::InvalidInput);
+            }
+            let mut c = self.connection()?;
+            let tx = c
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .await
+                .map_err(sql)?;
+            schema(&tx).await?;
+            let record = self.voice_start_on(&tx, id).await?;
+            if let Some(value) = &record {
+                if value.actor.device_id != actor.device_id {
+                    return Err(AgentFailure::PolicyDenied);
+                }
+                self.check_start_link(&tx, value).await?;
+            } else if self.voice_record_on(&tx, id).await?.is_some() {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+            tx.commit().await.map_err(sql)?;
+            self.check_access()?;
+            Ok(record)
+        })
+    }
+
     fn read_call<'a>(
         &'a self,
         actor: &'a OwnerActor,
@@ -383,6 +469,16 @@ impl<Keys: VaultKeyProvider> VoiceJournal for EncryptedAgentVault<Keys> {
                     if read_only { return Ok(None); }
                     self.surface_session_on(&tx, actor, intent.binding.surface_session_id).await?;
                     self.surface_anchor_on(&tx, intent.source.through()).await?;
+                    let mut command = self.voice_start_on(&tx, intent.binding.voice_session_id).await?
+                        .ok_or(AgentFailure::Conflict)?;
+                    if command.actor != *actor || command.command.surface_session_id != intent.binding.surface_session_id
+                        || command.state != floe_voice::VoiceStartCommandState::Preparing {
+                        return Err(AgentFailure::Conflict);
+                    }
+                    command.state = floe_voice::VoiceStartCommandState::Bound;
+                    let changed = tx.execute("UPDATE voice_start_commands SET state = 'bound', payload = ? WHERE command_id = ? AND state = 'preparing'",
+                        (encode(&command)?, intent.binding.voice_session_id.to_string())).await.map_err(sql)?;
+                    if changed != 1 { return Err(AgentFailure::Conflict); }
                     let record = VoiceCallRecord::prepare(intent.clone())?;
                     let values = (
                         intent.binding.voice_session_id.to_string(), self.person_id.to_string(),

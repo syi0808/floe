@@ -145,7 +145,11 @@ fn mutation(record: &VoiceCallRecord, kind: VoiceMutationKind) -> VoiceMutation 
 }
 async fn muted(f: &Fixture, vault: &EncryptedAgentVault<Keys>) -> VoiceCallRecord {
     let start = intent(f, vault).await;
-    let record = vault.admit_start(&f.actor, start).await.unwrap().record;
+    let record = vault
+        .admit_test_start(&f.actor, start)
+        .await
+        .unwrap()
+        .record;
     let command = record.session.pending_media_command().unwrap().clone();
     vault
         .mutate(
@@ -186,7 +190,7 @@ async fn start_and_dispatch_replay_are_read_only_and_never_fresh_twice() {
     assert_eq!(replay.receipt, admitted.receipt);
     assert_eq!(replay.record.revision, current.revision);
     let start = vault
-        .admit_start(&f.actor, record.intent.clone())
+        .admit_test_start(&f.actor, record.intent.clone())
         .await
         .unwrap();
     assert!(start.replayed);
@@ -221,7 +225,7 @@ async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
     let record = muted(&f, &vault).await;
     let other = intent(&f, &vault).await;
     assert!(matches!(
-        vault.admit_start(&f.actor, other.clone()).await,
+        vault.admit_test_start(&f.actor, other.clone()).await,
         Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     ));
     let dispatch = vault
@@ -247,7 +251,12 @@ async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
         .unwrap();
     assert_eq!(ended.record.session.remote(), RemoteState::Unknown);
     assert!(!ended.record.session.local_lease_released());
-    assert!(vault.admit_start(&f.actor, other.clone()).await.is_err());
+    assert!(
+        vault
+            .admit_test_start(&f.actor, other.clone())
+            .await
+            .is_err()
+    );
     let stopped = vault
         .mutate(
             &f.actor,
@@ -268,7 +277,13 @@ async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
         stopped.intent.reservation.cost_micros, 100,
         "unknown remote end cannot manufacture zero cost"
     );
-    assert!(!vault.admit_start(&f.actor, other).await.unwrap().replayed);
+    assert!(
+        !vault
+            .admit_test_start(&f.actor, other)
+            .await
+            .unwrap()
+            .replayed
+    );
 }
 #[tokio::test]
 async fn lost_dispatch_ack_reopens_as_replay_without_dispatch_permission() {
@@ -340,14 +355,14 @@ async fn foreign_scope_changed_start_and_wrong_native_lease_never_mutate_custody
     let (f, vault) = fixture().await;
     let original = intent(&f, &vault).await;
     let record = vault
-        .admit_start(&f.actor, original.clone())
+        .admit_test_start(&f.actor, original.clone())
         .await
         .unwrap()
         .record;
     let mut changed = original;
     changed.context_digest = [8; 32];
     assert!(matches!(
-        vault.admit_start(&f.actor, changed).await,
+        vault.admit_test_start(&f.actor, changed).await,
         Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
     ));
     let mut person = f.actor.clone();
@@ -404,7 +419,7 @@ async fn fresh_start_and_control_busy_leave_exact_retry_and_no_fake_receipt() {
         .await
         .unwrap();
     assert!(matches!(
-        vault.admit_start(&f.actor, start.clone()).await,
+        vault.admit_test_start(&f.actor, start.clone()).await,
         Err(CommandFailure::Indeterminate(AgentFailure::StorageBusy))
     ));
     assert!(
@@ -415,7 +430,11 @@ async fn fresh_start_and_control_busy_leave_exact_retry_and_no_fake_receipt() {
             .is_none()
     );
     held.rollback().await.unwrap();
-    let record = vault.admit_start(&f.actor, start).await.unwrap().record;
+    let record = vault
+        .admit_test_start(&f.actor, start)
+        .await
+        .unwrap()
+        .record;
     let request = mutation(
         &record,
         VoiceMutationKind::NativeReceipt {
@@ -479,7 +498,7 @@ async fn session_history_pages_validate_the_last_session_and_preserve_all_prior_
     let mut ids = Vec::new();
     for _ in 0..130 {
         let record = vault
-            .admit_start(&f.actor, intent(&f, &vault).await)
+            .admit_test_start(&f.actor, intent(&f, &vault).await)
             .await
             .unwrap()
             .record;
@@ -1200,7 +1219,7 @@ async fn new_runtime_can_retire_an_old_lease_but_cannot_revive_its_capture_or_di
     assert!(stopped.record.session.local_lease_released());
     assert_eq!(stopped.receipt.caller_epoch, current.runtime_epoch);
     let next = intent_for_actor(&f, &vault, &current).await;
-    vault.admit_start(&current, next).await.unwrap();
+    vault.admit_test_start(&current, next).await.unwrap();
     drop(vault);
     let reopened = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
         .await
@@ -1413,5 +1432,258 @@ async fn new_epoch_can_only_settle_conservative_usage_after_retiring_old_ingress
             .unwrap()
             .usage,
         Some(usage)
+    );
+}
+
+// Existing lifecycle cases explicitly establish the new pre-planning custody.
+// Admission-specific regressions below call the production methods directly.
+impl EncryptedAgentVault<Keys> {
+    async fn admit_test_start(
+        &self,
+        actor: &OwnerActor,
+        intent: VoiceStartIntent,
+    ) -> Result<VoiceStartAdmission, CommandFailure<AgentFailure>> {
+        self.reserve_start(
+            actor,
+            floe_voice::VoiceStartCommand {
+                command_id: intent.binding.voice_session_id,
+                surface_session_id: intent.binding.surface_session_id,
+            },
+        )
+        .await?;
+        self.admit_start(actor, intent).await
+    }
+}
+
+#[tokio::test]
+async fn user_start_receipt_precedes_binding_and_exact_replay_is_read_only() {
+    let (f, vault) = fixture().await;
+    let start = intent(&f, &vault).await;
+    let command = floe_voice::VoiceStartCommand {
+        command_id: start.binding.voice_session_id,
+        surface_session_id: f.session,
+    };
+    assert!(vault.admit_start(&f.actor, start.clone()).await.is_err());
+    assert!(
+        vault
+            .read_start(&f.actor, command.command_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let admitted = vault
+        .reserve_start(&f.actor, command.clone())
+        .await
+        .unwrap();
+    assert!(!admitted.replayed);
+    assert_eq!(
+        admitted.record.state,
+        floe_voice::VoiceStartCommandState::Preparing
+    );
+    assert!(
+        vault
+            .read_call(&f.actor, command.command_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut writer = vault.connection().unwrap();
+    let held = writer
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .await
+        .unwrap();
+    let replay = vault
+        .reserve_start(&f.actor, command.clone())
+        .await
+        .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.record, admitted.record);
+    held.rollback().await.unwrap();
+    let call = vault.admit_start(&f.actor, start.clone()).await.unwrap();
+    assert!(!call.replayed);
+    assert_eq!(
+        vault
+            .read_start(&f.actor, command.command_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        floe_voice::VoiceStartCommandState::Bound
+    );
+    assert!(vault.cancel_start(&f.actor, command.clone()).await.is_err());
+    assert!(
+        vault
+            .reserve_start(&f.actor, command)
+            .await
+            .unwrap()
+            .replayed
+    );
+    assert!(vault.admit_start(&f.actor, start).await.unwrap().replayed);
+}
+
+#[tokio::test]
+async fn cancelled_preparation_fences_late_binding_and_never_reacquires_on_replay() {
+    let (f, vault) = fixture().await;
+    let start = intent(&f, &vault).await;
+    let command = floe_voice::VoiceStartCommand {
+        command_id: start.binding.voice_session_id,
+        surface_session_id: f.session,
+    };
+    vault
+        .reserve_start(&f.actor, command.clone())
+        .await
+        .unwrap();
+    let other = floe_voice::VoiceStartCommand {
+        command_id: Uuid::new_v4(),
+        surface_session_id: f.session,
+    };
+    assert!(vault.reserve_start(&f.actor, other.clone()).await.is_err());
+    let mut next = f.actor.clone();
+    next.runtime_epoch += 1;
+    let replay = vault.reserve_start(&next, command.clone()).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.record.actor.runtime_epoch, f.actor.runtime_epoch);
+    let stopped = vault.cancel_start(&next, command.clone()).await.unwrap();
+    assert_eq!(stopped.state, floe_voice::VoiceStartCommandState::Cancelled);
+    assert_eq!(
+        vault.cancel_start(&next, command.clone()).await.unwrap(),
+        stopped
+    );
+    assert!(vault.admit_start(&f.actor, start).await.is_err());
+    let replay = vault.reserve_start(&next, command).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.record, stopped);
+    assert!(!vault.reserve_start(&next, other).await.unwrap().replayed);
+}
+
+#[tokio::test]
+async fn preparing_command_scope_and_payload_cannot_be_rebound() {
+    let (f, vault) = fixture().await;
+    let command = floe_voice::VoiceStartCommand {
+        command_id: Uuid::new_v4(),
+        surface_session_id: f.session,
+    };
+    vault
+        .reserve_start(&f.actor, command.clone())
+        .await
+        .unwrap();
+    let mut changed = command.clone();
+    changed.surface_session_id = Uuid::new_v4();
+    assert!(
+        vault
+            .reserve_start(&f.actor, changed.clone())
+            .await
+            .is_err()
+    );
+    assert!(vault.cancel_start(&f.actor, changed).await.is_err());
+    let mut foreign = f.actor.clone();
+    foreign.device_id = "other-device".into();
+    assert!(
+        vault
+            .read_start(&foreign, command.command_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        vault
+            .reserve_start(&foreign, command.clone())
+            .await
+            .is_err()
+    );
+    assert!(vault.cancel_start(&foreign, command.clone()).await.is_err());
+    assert_eq!(
+        vault
+            .read_start(&f.actor, command.command_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        floe_voice::VoiceStartCommandState::Preparing
+    );
+}
+
+#[tokio::test]
+async fn lost_user_start_ack_reopens_as_observation_not_preparation_authority() {
+    let (f, vault) = fixture().await;
+    let start = intent(&f, &vault).await;
+    let command = floe_voice::VoiceStartCommand {
+        command_id: start.binding.voice_session_id,
+        surface_session_id: f.session,
+    };
+    vault
+        .registry_transaction_ack_loss
+        .store(true, Ordering::Release);
+    assert!(matches!(
+        vault.reserve_start(&f.actor, command.clone()).await,
+        Err(CommandFailure::Indeterminate(
+            AgentFailure::StorageUnavailable
+        ))
+    ));
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    let mut next = f.actor.clone();
+    next.runtime_epoch += 1;
+    let replay = vault.reserve_start(&next, command.clone()).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(
+        replay.record.state,
+        floe_voice::VoiceStartCommandState::Preparing
+    );
+    assert_eq!(replay.record.actor, f.actor);
+    // A changed epoch cannot bind the old preparation even with a new plan.
+    let mut changed = start;
+    changed.binding.actor = next.clone();
+    assert!(vault.admit_start(&next, changed).await.is_err());
+    assert!(
+        vault
+            .read_call(&next, command.command_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    vault.cancel_start(&next, command.clone()).await.unwrap();
+    drop(vault);
+    let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
+        .await
+        .unwrap();
+    let replay = vault.reserve_start(&next, command).await.unwrap();
+    assert!(replay.replayed);
+    assert_eq!(
+        replay.record.state,
+        floe_voice::VoiceStartCommandState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn concurrent_start_observers_receive_only_one_fresh_preparation_receipt() {
+    let (f, vault) = fixture().await;
+    let command = floe_voice::VoiceStartCommand {
+        command_id: Uuid::new_v4(),
+        surface_session_id: f.session,
+    };
+    let observe = || async {
+        for _ in 0..100 {
+            match vault.reserve_start(&f.actor, command.clone()).await {
+                Err(
+                    CommandFailure::Indeterminate(AgentFailure::StorageBusy)
+                    | CommandFailure::NotAdmitted(AgentFailure::StorageBusy),
+                ) => tokio::task::yield_now().await,
+                other => return other.unwrap(),
+            }
+        }
+        panic!("start receipt did not settle")
+    };
+    let (a, b, c) = tokio::join!(observe(), observe(), observe());
+    assert_eq!([&a, &b, &c].iter().filter(|v| !v.replayed).count(), 1);
+    assert_eq!(a.record, b.record);
+    assert_eq!(a.record, c.record);
+    assert!(
+        vault
+            .read_call(&f.actor, command.command_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }

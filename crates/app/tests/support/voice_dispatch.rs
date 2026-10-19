@@ -257,6 +257,17 @@ fn live_inference_consumes_exact_real_voice_start_once_and_does_not_fake_native_
                 Independent,
                 Independent,
             );
+            let voice = Uuid::new_v4();
+            let command = floe_voice::VoiceStartCommand {
+                command_id: voice,
+                surface_session_id: surface,
+            };
+            let admission = owners
+                .voice
+                .reserve_start(&actor, command, &scope)
+                .await
+                .unwrap();
+            assert!(!admission.replayed);
             let prepared = inference
                 .prepare_live(
                     LiveModelPlanRequest {
@@ -268,7 +279,6 @@ fn live_inference_consumes_exact_real_voice_start_once_and_does_not_fake_native_
                 .await
                 .unwrap();
             let plan = prepared.plan().clone();
-            let voice = Uuid::new_v4();
             let media = Uuid::new_v4();
             let through = owners
                 .conversation
@@ -514,6 +524,17 @@ fn drive_retained_stream(
                 Independent,
                 Independent,
             );
+            let voice = Uuid::new_v4();
+            let command = floe_voice::VoiceStartCommand {
+                command_id: voice,
+                surface_session_id: surface,
+            };
+            let admission = owners
+                .voice
+                .reserve_start(&actor, command, &scope)
+                .await
+                .unwrap();
+            assert!(!admission.replayed);
             let prepared = inference
                 .prepare_live(
                     LiveModelPlanRequest {
@@ -525,7 +546,6 @@ fn drive_retained_stream(
                 .await
                 .unwrap();
             let plan = prepared.plan().clone();
-            let voice = Uuid::new_v4();
             let media = Uuid::new_v4();
             let through = owners
                 .conversation
