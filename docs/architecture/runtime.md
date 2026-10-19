@@ -1248,26 +1248,32 @@ saved ceiling after retiring old ingress, never invent observed zero usage or
 revive capture. Source/layout changes remain same-snapshot development data;
 there is no automatic profile or key reset.
 
-VoiceService registers one active driver per exact saved call binding before
-invoking its driver future. Registration rejects retired owners, mismatched
-leases, already-dispatched/stopped calls and duplicate active drivers. The driver
-is one of the generation-owned bounded tasks; caller cancellation only detaches
-its observer. Its borrowed VoiceController capability exposes the exact binding,
-a child cancellation scope and exact-call terminal accounting, never the raw
-journal or new input admission. Closing public admission signals that child but
-still drains late accounting from registered drivers. Driver exit cancels the
-child scope; failure/panic remains a drain failure even after observer loss.
-Pending task-registration lock waits observe owner shutdown so they cannot wait
-behind a drain that is itself waiting for their controller. A rejected
-registration performs no driver I/O. Provider start still requires the canonical
-Inference/Access/budget and durable dispatch claim; registration is not permission
-to bypass those gates or reuse a remote call after restart.
+VoiceService retains command admission, preparation and the bound driver in one
+bounded generation task through `run_start_controller`. Only fresh durable
+command admission issues a task-borrowed `VoicePreparation`; exact replay returns
+the original command state and never invokes the driver. Consuming preparation
+with `bind` verifies the exact actor/command/Surface and atomically binds the
+selected intent before exposing a task-borrowed `VoiceController`. Neither
+capability can escape into a detached task. The former post-binding
+`run_controller` entry is removed.
 
-This registration and startup/accounting path is not yet the production
-event/append controller. Continuous guarded delivery, cumulative append
-provenance, authenticated Gateway selection and native/Flutter composition remain
-explicit integration work. The concrete driver must carry the registered child
-lifetime into its bounded Inference execution scope and finish required custody
+Observer cancellation only detaches observation. Explicit pre-binding Cancel
+commits cancellation and fences the registered preparation token; registration
+rechecks the journal so cancellation committed before registration also prevents
+planning. Closing admission cancels generation children but drains late planning
+and accounting. Driver exit fences its lifetime before storage cleanup; unbound
+commands are explicitly cancelled, while bound calls retain their ordinary
+Stop/usage custody. An error/panic remains a drain failure after observer loss.
+Abrupt failure may retain incomplete custody for explicit conservative recovery;
+it never permits automatic re-preparation. Pending registration-lock waits observe
+shutdown so they cannot wait behind the drain they would themselves block.
+Provider start still requires Inference/Access/budget and durable dispatch claim;
+registration never grants microphone permission or reuses a call after restart.
+
+The retained-event/result driver and authenticated Gateway transport described
+below implement delivery and append custody. Native/Flutter product composition
+remains explicit integration work. The concrete driver must carry the registered
+child lifetime into its bounded Inference execution scope and finish required custody
 before returning success; synthetic driver tests do not qualify real audio.
 
 
@@ -1542,9 +1548,8 @@ pages, exact row/payload identity and the command-to-call relationship without
 repairing or reissuing anything. Old local stores without this table are rejected;
 no migration, key reset or automatic data deletion is performed.
 
-VoiceService places these command mutations in its existing generation-owned
-custody tasks, so observation timeout does not discard admitted writes. The
-product/native Start controller still must retain preparation ownership, consume
-only a fresh command admission and cancel/fence unfinished preparation on shutdown.
-These receipts do not by themselves implement the UI, native process recovery or
-microphone permission.
+VoiceService places command admission and the preparation-to-bound transition in
+one retained Start-controller task, as described above. Exact replay is status,
+not renewed planning authority. Product composition still must supply actual
+native preparation/teardown and connect Start/status to the UI. These receipts do
+not implement native process recovery or microphone permission.

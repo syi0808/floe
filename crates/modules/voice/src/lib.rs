@@ -24,7 +24,7 @@ pub use ingress::{
 };
 
 mod service;
-pub use service::{VoiceController, VoiceIngressResult, VoiceService};
+pub use service::{VoiceController, VoiceIngressResult, VoicePreparation, VoiceService};
 
 mod driver;
 pub use driver::VoiceLiveCompletion;

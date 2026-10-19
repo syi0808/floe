@@ -529,33 +529,43 @@ fn drive_retained_stream(
                 command_id: voice,
                 surface_session_id: surface,
             };
-            let admission = owners
-                .voice
-                .reserve_start(&actor, command, &scope)
-                .await
-                .unwrap();
-            assert!(!admission.replayed);
-            let prepared = inference
-                .prepare_live(
-                    LiveModelPlanRequest {
-                        actor: actor.clone(),
-                        required_capabilities: LiveModelCapabilities::conversational(),
-                    },
-                    &scope,
-                )
-                .await
-                .unwrap();
-            let plan = prepared.plan().clone();
-            let media = Uuid::new_v4();
-            let through = owners
-                .conversation
-                .surface_head(&actor, surface, &scope)
-                .await
-                .unwrap();
-            assert_eq!(through, SurfaceAnchor::empty(surface).unwrap());
-            let source = LiveProjectionSource::SurfacePrefix { through };
-            let floe_context::LiveProjectionOutcome::Ready(projection) = owners
-                .live_context_projector
+            let retained_voice = owners.voice.clone();
+            let owned_voice = owners.voice.clone();
+            let owned_conversation = owners.conversation.clone();
+            let owned_projector = owners.live_context_projector.clone();
+            let owned_actor = actor.clone();
+            let owned_scope = scope.clone();
+            let owned_probe = probe.clone();
+            retained_voice
+                .run_start_controller(&actor, command, &scope, move |preparation| {
+                    Box::pin(async move {
+                        let actor = owned_actor;
+                        let probe = owned_probe;
+                        let scope = ExecutionScope::root(
+                            preparation.cancellation().clone(),
+                            owned_scope.deadline(),
+                            owned_scope.budget().child(100, 100),
+                            owned_scope.trace_context(),
+                        );
+                        let prepared = inference
+                            .prepare_live(
+                                LiveModelPlanRequest {
+                                    actor: actor.clone(),
+                                    required_capabilities: LiveModelCapabilities::conversational(),
+                                },
+                                &scope,
+                            )
+                            .await
+                            .unwrap();
+                        let plan = prepared.plan().clone();
+                        let media = Uuid::new_v4();
+                        let through = owned_conversation
+                            .surface_head(&actor, surface, &scope)
+                            .await
+                            .unwrap();
+                        assert_eq!(through, SurfaceAnchor::empty(surface).unwrap());
+                        let source = LiveProjectionSource::SurfacePrefix { through };
+                        let floe_context::LiveProjectionOutcome::Ready(projection) = owned_projector
                 .project_prefix(floe_context::LivePrefixProjectionRequest {
                     plan: &plan,
                     voice_session_id: voice,
@@ -567,171 +577,163 @@ fn drive_retained_stream(
                 .await
                 .unwrap()
             else { panic!("empty canonical prefix must be projectable") };
-            let reservation = ModelReservationCeiling {
-                tokens: 40,
-                cost_micros: 60,
-            };
-            let start = VoiceStartIntent::prepare(
-                VoiceBinding {
-                    actor: actor.clone(),
-                    surface_session_id: surface,
-                    voice_session_id: voice,
-                    media_lease_id: media,
-                    plan_id: plan.operation_id,
-                },
-                &plan,
-                &projection,
-                reservation,
-            )
-            .unwrap();
-            let claim = LiveDispatchIntent {
-                actor: actor.clone(),
-                voice_session_id: voice,
-                surface_session_id: surface,
-                media_lease_id: media,
-                plan: plan.clone(),
-                projection_digest: projection.digest().unwrap(),
-                reservation,
-            };
-            let record = owners
-                .voice
-                .admit_start(&actor, start, &scope)
-                .await
-                .unwrap()
-                .record;
-            assert!(
-                owners.voice.claim(&claim, &scope).await.is_err(),
-                "unconfirmed native preparation cannot hand off a model"
-            );
-            let media_command = record.session.pending_media_command().unwrap().clone();
-            owners
-                .voice
-                .mutate(
-                    &actor,
-                    VoiceMutation {
-                        voice_session_id: voice,
-                        command_id: Uuid::new_v4(),
-                        expected_revision: record.revision,
-                        kind: VoiceMutationKind::NativeReceipt {
-                            command: media_command,
-                            state: MediaState::Muted,
-                        },
-                    },
-                    &scope,
-                )
-                .await
-                .unwrap();
+                        let reservation = ModelReservationCeiling {
+                            tokens: 40,
+                            cost_micros: 60,
+                        };
+                        let start = VoiceStartIntent::prepare(
+                            VoiceBinding {
+                                actor: actor.clone(),
+                                surface_session_id: surface,
+                                voice_session_id: voice,
+                                media_lease_id: media,
+                                plan_id: plan.operation_id,
+                            },
+                            &plan,
+                            &projection,
+                            reservation,
+                        )
+                        .unwrap();
+                        let claim = LiveDispatchIntent {
+                            actor: actor.clone(),
+                            voice_session_id: voice,
+                            surface_session_id: surface,
+                            media_lease_id: media,
+                            plan: plan.clone(),
+                            projection_digest: projection.digest().unwrap(),
+                            reservation,
+                        };
+                        let controller = preparation.bind(start).await?;
+                        let record = owned_voice.read_call(&actor, voice, &scope).await?.unwrap();
+                        assert!(
+                            owned_voice.claim(&claim, &scope).await.is_err(),
+                            "unconfirmed native preparation cannot hand off a model"
+                        );
+                        let media_command = record.session.pending_media_command().unwrap().clone();
+                        owned_voice
+                            .mutate(
+                                &actor,
+                                VoiceMutation {
+                                    voice_session_id: voice,
+                                    command_id: Uuid::new_v4(),
+                                    expected_revision: record.revision,
+                                    kind: VoiceMutationKind::NativeReceipt {
+                                        command: media_command,
+                                        state: MediaState::Muted,
+                                    },
+                                },
+                                &scope,
+                            )
+                            .await
+                            .unwrap();
 
-            use floe_model_contract::{LiveEndEvidence, LiveProviderEvent, LiveSpeaker};
-            let binding = record.intent.binding.clone();
-            probe
-                .events
-                .lock()
-                .unwrap()
-                .push_back(floe_inference::LiveDelivery {
-                    sequence: 1,
-                    event: LiveProviderEvent::Ready {},
-                });
-            if lost_ack {
-                probe.lose_ack_at.store(4, Ordering::SeqCst);
-            }
-            if unavailable_ack {
-                probe.fail_ack_at.store(4, Ordering::SeqCst);
-            }
-            let native_voice = owners.voice.clone();
-            let native_actor = actor.clone();
-            let native_scope = scope.clone();
-            let native_probe = probe.clone();
-            let native = tokio::spawn(async move {
-                let ready = loop {
-                    assert!(tokio::time::Instant::now() < native_scope.deadline());
-                    match native_voice
-                        .read_call(&native_actor, voice, &native_scope)
-                        .await
-                    {
-                        Ok(Some(record)) if record.session.remote() == RemoteState::Connected => {
-                            break record;
+                        use floe_model_contract::{
+                            LiveEndEvidence, LiveProviderEvent, LiveSpeaker,
+                        };
+                        probe
+                            .events
+                            .lock()
+                            .unwrap()
+                            .push_back(floe_inference::LiveDelivery {
+                                sequence: 1,
+                                event: LiveProviderEvent::Ready {},
+                            });
+                        if lost_ack {
+                            probe.lose_ack_at.store(4, Ordering::SeqCst);
                         }
-                        Ok(_) | Err(AgentFailure::StorageBusy) => {
-                            tokio::time::sleep(Duration::from_millis(5)).await
+                        if unavailable_ack {
+                            probe.fail_ack_at.store(4, Ordering::SeqCst);
                         }
-                        Err(error) => panic!("native fixture observed {error:?}"),
-                    }
-                };
-                // Explicit synthetic user Unmute and exact native ACK; Ready
-                // itself never unmutes. No microphone permission or SDK is used.
-                let unmute = native_fixture_mutation(
-                    &native_voice,
-                    &native_actor,
-                    &ready,
-                    VoiceMutationKind::Unmute {},
-                    &native_scope,
-                )
-                .await;
-                let command = unmute.session.pending_media_command().unwrap().clone();
-                native_fixture_mutation(
-                    &native_voice,
-                    &native_actor,
-                    &unmute,
-                    VoiceMutationKind::NativeReceipt {
-                        command,
-                        state: MediaState::Capturing,
-                    },
-                    &native_scope,
-                )
-                .await;
-                let mut events = vec![
-                    LiveProviderEvent::TranscriptDelta {
-                        speaker: LiveSpeaker::Person,
-                        utterance_id: None,
-                        text: "not a final input".into(),
-                    },
-                    LiveProviderEvent::PersonUtteranceFinal {
-                        utterance_id: "user-final".into(),
-                        text: USER_TEXT.into(),
-                    },
-                    LiveProviderEvent::DelegationRequested {
-                        delegation_id: "work".into(),
-                        utterance_ref: Some("user-final".into()),
-                        input_hint: None,
-                    },
-                    LiveProviderEvent::AssistantUtteranceFinal {
-                        utterance_id: "presentation".into(),
-                        text: "synthetic filler, not a Manager answer".into(),
-                    },
-                    LiveProviderEvent::Ended {
-                        evidence: LiveEndEvidence::ProviderConfirmed,
-                        usage: LiveUsageObservation {
-                            tokens: Some(if over_budget { 41 } else { 9 }),
-                            cost_micros: Some(if over_budget { 61 } else { 4 }),
-                        },
-                    },
-                ];
-                if append_result {
-                    events.pop();
-                }
-                native_probe
-                    .events
-                    .lock()
-                    .unwrap()
-                    .extend(events.into_iter().enumerate().map(|(i, event)| {
-                        floe_inference::LiveDelivery {
-                            sequence: i as u64 + 2,
-                            event,
-                        }
-                    }));
-                native_probe.changed.notify_one();
-            });
-            let live_projector = owners.live_context_projector.clone();
-            let live_voice = owners.voice.clone();
-            let live_scope = scope.clone();
-            let live_conversation = owners.conversation.clone();
-            let live_probe = probe.clone();
-            let live_actor = actor.clone();
-            owners
-                .voice
-                .run_controller(binding, &scope, move |controller| {
-                    Box::pin(async move {
+                        let native_voice = owned_voice.clone();
+                        let native_actor = actor.clone();
+                        let native_scope = scope.clone();
+                        let native_probe = probe.clone();
+                        let native = tokio::spawn(async move {
+                            let ready = loop {
+                                assert!(tokio::time::Instant::now() < native_scope.deadline());
+                                match native_voice
+                                    .read_call(&native_actor, voice, &native_scope)
+                                    .await
+                                {
+                                    Ok(Some(record))
+                                        if record.session.remote() == RemoteState::Connected =>
+                                    {
+                                        break record;
+                                    }
+                                    Ok(_) | Err(AgentFailure::StorageBusy) => {
+                                        tokio::time::sleep(Duration::from_millis(5)).await
+                                    }
+                                    Err(error) => panic!("native fixture observed {error:?}"),
+                                }
+                            };
+                            // Explicit synthetic user Unmute and exact native ACK; Ready
+                            // itself never unmutes. No microphone permission or SDK is used.
+                            let unmute = native_fixture_mutation(
+                                &native_voice,
+                                &native_actor,
+                                &ready,
+                                VoiceMutationKind::Unmute {},
+                                &native_scope,
+                            )
+                            .await;
+                            let command = unmute.session.pending_media_command().unwrap().clone();
+                            native_fixture_mutation(
+                                &native_voice,
+                                &native_actor,
+                                &unmute,
+                                VoiceMutationKind::NativeReceipt {
+                                    command,
+                                    state: MediaState::Capturing,
+                                },
+                                &native_scope,
+                            )
+                            .await;
+                            let mut events = vec![
+                                LiveProviderEvent::TranscriptDelta {
+                                    speaker: LiveSpeaker::Person,
+                                    utterance_id: None,
+                                    text: "not a final input".into(),
+                                },
+                                LiveProviderEvent::PersonUtteranceFinal {
+                                    utterance_id: "user-final".into(),
+                                    text: USER_TEXT.into(),
+                                },
+                                LiveProviderEvent::DelegationRequested {
+                                    delegation_id: "work".into(),
+                                    utterance_ref: Some("user-final".into()),
+                                    input_hint: None,
+                                },
+                                LiveProviderEvent::AssistantUtteranceFinal {
+                                    utterance_id: "presentation".into(),
+                                    text: "synthetic filler, not a Manager answer".into(),
+                                },
+                                LiveProviderEvent::Ended {
+                                    evidence: LiveEndEvidence::ProviderConfirmed,
+                                    usage: LiveUsageObservation {
+                                        tokens: Some(if over_budget { 41 } else { 9 }),
+                                        cost_micros: Some(if over_budget { 61 } else { 4 }),
+                                    },
+                                },
+                            ];
+                            if append_result {
+                                events.pop();
+                            }
+                            native_probe.events.lock().unwrap().extend(
+                                events.into_iter().enumerate().map(|(i, event)| {
+                                    floe_inference::LiveDelivery {
+                                        sequence: i as u64 + 2,
+                                        event,
+                                    }
+                                }),
+                            );
+                            native_probe.changed.notify_one();
+                        });
+                        let live_projector = owned_projector.clone();
+                        let live_voice = owned_voice.clone();
+                        let live_scope = scope.clone();
+                        let live_conversation = owned_conversation.clone();
+                        let live_probe = probe.clone();
+                        let live_actor = actor.clone();
                         let owned = ExecutionScope::root(
                             controller.cancellation().clone(),
                             live_scope.deadline(),
@@ -946,12 +948,12 @@ fn drive_retained_stream(
                             assert_eq!(result.failure, None);
                             assert_eq!(result.usage.accounting.observed_tokens, Some(9));
                         }
+                        native.await.unwrap();
                         Ok(())
                     })
                 })
                 .await
                 .unwrap();
-            native.await.unwrap();
             assert!(probe.fenced.load(Ordering::SeqCst));
             if !unavailable_ack {
                 assert_eq!(

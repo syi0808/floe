@@ -32,7 +32,7 @@ pub struct VoiceService {
     closing: AtomicBool,
     shutdown: Cancellation,
     tasks: Mutex<JoinSet<()>>,
-    controllers: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+    controllers: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, Cancellation>>>,
     controller_failure: Arc<AtomicBool>,
 }
 #[derive(Clone, Debug)]
@@ -56,7 +56,7 @@ impl VoiceService {
             closing: AtomicBool::new(false),
             shutdown: Cancellation::new(),
             tasks: Mutex::new(JoinSet::new()),
-            controllers: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            controllers: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             controller_failure: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -135,8 +135,14 @@ impl VoiceService {
     ) -> Result<crate::VoiceStartCommandRecord, CommandFailure<AgentFailure>> {
         let journal = self.journal.clone();
         let owner = actor.clone();
+        let controllers = self.controllers.clone();
         self.custody(actor, scope, async move {
-            journal.cancel_start(&owner, command).await
+            let id = command.command_id;
+            let record = journal.cancel_start(&owner, command).await?;
+            if let Some(cancellation) = controllers.lock().unwrap().get(&id) {
+                cancellation.cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
+            }
+            Ok(record)
         })
         .await
     }
@@ -244,61 +250,92 @@ impl VoiceService {
         .await
     }
 
-    /// Registers the call driver before it may start provider/native work. The
-    /// observer may leave, but the driver remains in this generation's drain.
-    /// Its borrowed capability allows exact-call accounting after admission is
-    /// closed, without reopening public commands or exposing the journal.
-    /// Return Ok only after required final custody. An error/panic remains a
-    /// drain failure even if the observer has already left.
-    pub async fn run_controller<D>(
+    /// Retains command admission, preparation and the bound driver in one task.
+    /// Exact replay observes the original record without invoking the driver.
+    /// The observer's cancellation never owns the preparation lifetime.
+    pub async fn run_start_controller<D>(
         &self,
-        binding: crate::VoiceBinding,
+        actor: &OwnerActor,
+        command: crate::VoiceStartCommand,
         scope: &ExecutionScope,
         driver: D,
-    ) -> Result<(), CommandFailure<AgentFailure>>
+    ) -> Result<crate::VoiceStartCommandRecord, CommandFailure<AgentFailure>>
     where
         D: for<'a> FnOnce(
-                &'a VoiceController,
+                VoicePreparation<'a>,
             ) -> floe_execution::BoxFuture<'a, Result<(), AgentFailure>>
             + Send
             + 'static,
     {
-        binding.validate().map_err(CommandFailure::NotAdmitted)?;
-        self.check(&binding.actor)
-            .map_err(CommandFailure::NotAdmitted)?;
-        let record = self
-            .read_call(&binding.actor, binding.voice_session_id, scope)
+        command.validate().map_err(CommandFailure::NotAdmitted)?;
+        let owner = actor.clone();
+        let journal = self.journal.clone();
+        let conversation = self.conversation.clone();
+        let registry = self.controllers.clone();
+        let failure = self.controller_failure.clone();
+        let shutdown = self.shutdown.child_scope();
+        self.custody(actor, scope, async move {
+            let admission = crate::custody::retry_local(
+                || journal.reserve_start(&owner, command.clone()),
+                crate::custody::command_busy,
+            )
+            .await?;
+            if admission.replayed {
+                return Ok(admission.record);
+            }
+            let mut lease =
+                ControllerLease::claim(registry, failure, command.command_id, shutdown.clone())
+                    .map_err(CommandFailure::Admitted)?;
+            lease.started = true;
+            let preparation = VoicePreparation {
+                _task: &lease,
+                command: command.clone(),
+                actor: owner.clone(),
+                shutdown: shutdown.clone(),
+                journal: journal.clone(),
+                conversation,
+            };
+            // Cancellation can commit between admission and registration. Read
+            // custody after registration; later service cancellation fences the
+            // registered token before its caller receives the cancellation ACK.
+            let current = crate::custody::retry_local(
+                || journal.read_start(&owner, command.command_id),
+                crate::custody::busy,
+            )
             .await
-            .map_err(CommandFailure::NotAdmitted)?
-            .ok_or(CommandFailure::NotAdmitted(AgentFailure::NotFound))?;
-        if record.intent.binding != binding
-            || record.session.remote() != crate::RemoteState::NotStarted
-            || record.session.stop_requested()
-            || record.usage.is_some()
-        {
-            return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
-        }
-        let lease = ControllerLease::claim(
-            self.controllers.clone(),
-            self.controller_failure.clone(),
-            binding.voice_session_id,
-        )
-        .map_err(CommandFailure::NotAdmitted)?;
-        let actor = binding.actor.clone();
-        let mut controller = VoiceController {
-            binding,
-            shutdown: self.shutdown.child_scope(),
-            journal: self.journal.clone(),
-            conversation: self.conversation.clone(),
-            _lease: lease,
-        };
-        self.custody(&actor, scope, async move {
-            controller._lease.started = true;
-            let result = driver(&controller).await;
-            controller._lease.completed = result.is_ok();
-            // Release registration and fence the child before reporting completion.
-            drop(controller);
-            result.map_err(CommandFailure::Admitted)
+            .map_err(CommandFailure::Indeterminate)?
+            .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+            let result = if shutdown.is_cancelled()
+                || current.state != crate::VoiceStartCommandState::Preparing
+            {
+                Err(AgentFailure::Cancelled)
+            } else {
+                driver(preparation).await
+            };
+            // Fence preparation/provider lifetimes before waiting for final
+            // storage custody, including when no bound controller was created.
+            shutdown.cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
+            // No effect is retried here. An unbound command is explicitly
+            // cancelled; a bound call retains its ordinary Stop/usage custody.
+            let record = crate::custody::retry_local(
+                || journal.read_start(&owner, command.command_id),
+                crate::custody::busy,
+            )
+            .await
+            .map_err(CommandFailure::Indeterminate)?
+            .ok_or(CommandFailure::Indeterminate(AgentFailure::NotFound))?;
+            let record = if record.state == crate::VoiceStartCommandState::Preparing {
+                crate::custody::retry_local(
+                    || journal.cancel_start(&owner, command.clone()),
+                    crate::custody::command_busy,
+                )
+                .await?
+            } else {
+                record
+            };
+            lease.completed = result.is_ok();
+            drop(lease);
+            result.map(|()| record).map_err(CommandFailure::Admitted)
         })
         .await
     }
@@ -383,17 +420,73 @@ impl floe_inference::LiveDispatchCustody for VoiceService {
     }
 }
 
+/// Single-use capability issued only to the original fresh command's retained
+/// task. Planning may use its generation lifetime; binding consumes it. It is
+/// not a microphone permission or a native preparation acknowledgement.
+/// The capability cannot escape the registered task into detached work.
+///
+/// ```compile_fail
+/// fn detach(preparation: floe_voice::VoicePreparation<'_>) {
+///     tokio::spawn(async move { drop(preparation); });
+/// }
+/// ```
+pub struct VoicePreparation<'a> {
+    _task: &'a ControllerLease,
+    command: crate::VoiceStartCommand,
+    actor: OwnerActor,
+    shutdown: Cancellation,
+    journal: Arc<dyn VoiceOutboundJournal>,
+    conversation: Arc<dyn ConversationOwner>,
+}
+impl<'a> VoicePreparation<'a> {
+    pub fn cancellation(&self) -> &Cancellation {
+        &self.shutdown
+    }
+    pub async fn bind(self, intent: VoiceStartIntent) -> Result<VoiceController<'a>, AgentFailure> {
+        intent.validate()?;
+        if intent.binding.actor != self.actor
+            || intent.binding.voice_session_id != self.command.command_id
+            || intent.binding.surface_session_id != self.command.surface_session_id
+        {
+            return Err(AgentFailure::PolicyDenied);
+        }
+        if self.shutdown.is_cancelled() {
+            return Err(AgentFailure::Cancelled);
+        }
+        let admission = crate::custody::retry_local(
+            || self.journal.admit_start(&self.actor, intent.clone()),
+            crate::custody::command_busy,
+        )
+        .await
+        .map_err(CommandFailure::into_failure)?;
+        if admission.record.intent != intent
+            || admission.record.session.remote() != crate::RemoteState::NotStarted
+            || admission.record.session.stop_requested()
+            || admission.record.usage.is_some()
+        {
+            return Err(AgentFailure::Conflict);
+        }
+        Ok(VoiceController {
+            _task: self._task,
+            binding: intent.binding,
+            shutdown: self.shutdown,
+            journal: self.journal,
+            conversation: self.conversation,
+        })
+    }
+}
+
 /// A generation-owned driver borrows this capability only for its owned task.
 /// It cannot start another call or admit new input after retirement. Accounting
 /// remains valid during drain; it is never a native Stop acknowledgement.
-pub struct VoiceController {
+pub struct VoiceController<'a> {
+    _task: &'a ControllerLease,
     pub(crate) binding: crate::VoiceBinding,
     pub(crate) shutdown: Cancellation,
     pub(crate) journal: Arc<dyn VoiceOutboundJournal>,
     pub(crate) conversation: Arc<dyn ConversationOwner>,
-    _lease: ControllerLease,
 }
-impl VoiceController {
+impl VoiceController<'_> {
     pub fn binding(&self) -> &crate::VoiceBinding {
         &self.binding
     }
@@ -413,29 +506,36 @@ impl VoiceController {
         .await
     }
 }
-impl Drop for VoiceController {
+impl Drop for VoiceController<'_> {
     fn drop(&mut self) {
         self.shutdown
             .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
     }
 }
 struct ControllerLease {
+    shutdown: Cancellation,
     failure: Arc<AtomicBool>,
     started: bool,
     completed: bool,
-    registry: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+    registry: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, Cancellation>>>,
     voice: Uuid,
 }
 impl ControllerLease {
     fn claim(
-        registry: Arc<std::sync::Mutex<std::collections::HashSet<Uuid>>>,
+        registry: Arc<std::sync::Mutex<std::collections::HashMap<Uuid, Cancellation>>>,
         failure: Arc<AtomicBool>,
         voice: Uuid,
+        shutdown: Cancellation,
     ) -> Result<Self, AgentFailure> {
-        if !registry.lock().unwrap().insert(voice) {
-            return Err(AgentFailure::Conflict);
+        {
+            let mut entries = registry.lock().unwrap();
+            if entries.contains_key(&voice) {
+                return Err(AgentFailure::Conflict);
+            }
+            entries.insert(voice, shutdown.clone());
         }
         Ok(Self {
+            shutdown,
             registry,
             voice,
             failure,
@@ -446,6 +546,8 @@ impl ControllerLease {
 }
 impl Drop for ControllerLease {
     fn drop(&mut self) {
+        self.shutdown
+            .cancel_with_reason(floe_execution::CancelReason::OwnerDropped);
         if self.started && !self.completed {
             self.failure.store(true, Ordering::Release);
         }
@@ -500,13 +602,23 @@ mod controller_tests {
             (true, true, false),
             (true, false, true),
         ] {
-            let registry = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+            let registry = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             let failure = Arc::new(AtomicBool::new(false));
             let voice = Uuid::new_v4();
-            let mut lease =
-                ControllerLease::claim(registry.clone(), failure.clone(), voice).unwrap();
+            let mut lease = ControllerLease::claim(
+                registry.clone(),
+                failure.clone(),
+                voice,
+                Cancellation::new(),
+            )
+            .unwrap();
             assert!(matches!(
-                ControllerLease::claim(registry.clone(), failure.clone(), voice),
+                ControllerLease::claim(
+                    registry.clone(),
+                    failure.clone(),
+                    voice,
+                    Cancellation::new()
+                ),
                 Err(AgentFailure::Conflict)
             ));
             lease.started = started;

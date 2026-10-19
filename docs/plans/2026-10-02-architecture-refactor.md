@@ -3443,3 +3443,56 @@ This custody snapshot passes the final 636-input Rust gate: workspace/doctests
 subprocess-entry ignore, Linux FFI build and architecture boundaries (27 nodes,
 155 edges). The 25 Voice-journal tests passed twice and the focused App voice
 selection passed 14. No Apple/native/browser/provider qualification is inferred.
+
+
+### Retained Start preparation controller
+
+Voice now registers the whole user-command/preparation/binding/driver lifetime in
+one custody task. `run_start_controller` replaces the post-binding
+`run_controller`; the App retained-stream fixture now prepares its actual model
+and canonical Context prefix inside that task. Task-borrowed preparation binds
+once to the exact command/actor/Surface and becomes the existing live controller.
+Exact replay invokes neither planning nor native/provider work. Explicit
+pre-binding Cancel fences its registered lifetime; a post-registration read closes
+the earlier cancellation race. Late planning remains drain-owned and cannot bind
+after cancellation/retirement. Completed unbound preparation is cancelled in the
+canonical journal; bound Stop and usage remain owned by the existing call path.
+
+The retained-stream and accounting fixtures have migrated; no old controller
+entry remains. Regressions cover observer cancellation before admission and during
+preparation, read-only replay while preparation runs, explicit Cancel, retirement
+while planning ignores cancellation, rejected changed identity/Surface, failed
+preparation and error persistence through drain. A compile-fail contract prevents
+preparation capability escape into a detached task. Native physical Stop/process
+ownership, application/FFI/Flutter Start/status composition and actual provider or
+Apple audio qualification remain separate outstanding gates.
+
+Native follow-through evidence: the official LiveKitWebRTC 150.7871.03 release
+archive was downloaded for header inspection on Linux and its SHA-256 matched the
+pinned Package.swift checksum above. The shipped macOS and iOS-device audio-module
+headers are identical (SHA-256
+`2c3a3e27be6b2cc2410fb964e907d16268652871d6188f00bce1ed3ced7c18c3`).
+They actually declare recording/playout stop methods, engine availability,
+engine-running/input/output readback and always-prepared recording controls;
+these are no longer inferred solely from a moving upstream header. No binary was
+executed, Apple package dependency changed or physical Stop behavior qualified.
+
+The next native cutover must retain one process-owned audio factory/lease authority,
+keep all blocking SDK work and destruction off cooperative or immediate-fence
+paths, disable restart/recording availability before teardown and produce Stop
+receipts only from exact-lease completed backend observations. The existing
+installation file lock is not sufficient evidence for same-process generation
+replacement: it is held by Vault, whereas native SDK lifetime must outlive runtime
+epochs until actual teardown. A new process identity plus exclusive installation
+ownership must remain distinguishable from same-process native lease retirement.
+
+The controller snapshot passes all 636 frozen Rust/Cargo/architecture inputs:
+workspace including doctests 571 passed with one explicit cross-language ignore;
+App QA 104 passed with one intentional subprocess-entry ignore; Linux FFI build,
+architecture graph (27 nodes, 155 edges) and diff checks pass. Focused App Voice
+coverage passes 19 cases. The first new changed-Surface assertion incorrectly
+expected NotAdmitted; inspecting Vault's transaction-result contract established
+that it preserves Indeterminate(Conflict), and the exact assertion was corrected
+without changing or weakening the production rejection. Apple build remains
+blocked before compilation by the reported checkout/Flutter-cache permissions.
+No physical audio, real provider or browser qualification is implied.

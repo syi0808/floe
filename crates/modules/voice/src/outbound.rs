@@ -228,7 +228,7 @@ pub trait VoiceOutboundJournal: VoiceIngressJournal {
 }
 
 struct ControllerCustody<'a> {
-    controller: &'a crate::VoiceController,
+    controller: &'a crate::VoiceController<'a>,
     intent: std::sync::Mutex<Option<VoiceAppendIntent>>,
     fresh: std::sync::atomic::AtomicBool,
 }
@@ -263,7 +263,7 @@ impl floe_inference::LiveAppendCustody for ControllerCustody<'_> {
         })
     }
 }
-impl crate::VoiceController {
+impl crate::VoiceController<'_> {
     /// This future belongs inside the registered driver, not a UI observer.
     /// A durable receipt can outlive retirement; a replay never starts a write.
     pub async fn deliver_result(

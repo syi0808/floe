@@ -18,7 +18,7 @@ pub struct VoiceLiveCompletion {
     pub usage: ModelAttemptReceipt,
     pub failure: Option<AgentFailure>,
 }
-impl VoiceController {
+impl VoiceController<'_> {
     pub async fn consume_live(
         &self,
         mut call: AuthorizedLiveSession,

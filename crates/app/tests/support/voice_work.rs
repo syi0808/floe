@@ -495,6 +495,7 @@ fn voice_custody_outlives_observer_cancellation_and_retirement_drains_it() {
 /// A delayed read before the accounting mutation must already belong to the
 /// admitted custody task, rather than the UI observer's cancellable future.
 struct DelayedSettlementJournal {
+    start: std::sync::Mutex<Option<floe_voice::VoiceStartCommandRecord>>,
     pause_reads: std::sync::atomic::AtomicBool,
     record: std::sync::Mutex<VoiceCallRecord>,
     entered: tokio::sync::Notify,
@@ -504,13 +505,28 @@ struct DelayedSettlementJournal {
 impl floe_voice::VoiceJournal for DelayedSettlementJournal {
     fn reserve_start<'a>(
         &'a self,
-        _: &'a OwnerActor,
-        _: floe_voice::VoiceStartCommand,
+        actor: &'a OwnerActor,
+        command: floe_voice::VoiceStartCommand,
     ) -> floe_execution::BoxFuture<
         'a,
         Result<floe_voice::VoiceStartCommandAdmission, CommandFailure<AgentFailure>>,
     > {
-        Box::pin(async { panic!("this custody fixture must not prepare a call") })
+        Box::pin(async move {
+            let mut slot = self.start.lock().unwrap();
+            let replayed = slot.is_some();
+            let record = slot.get_or_insert_with(|| floe_voice::VoiceStartCommandRecord {
+                actor: actor.clone(),
+                command: command.clone(),
+                state: floe_voice::VoiceStartCommandState::Preparing,
+            });
+            if record.actor != *actor || record.command != command {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied));
+            }
+            Ok(floe_voice::VoiceStartCommandAdmission {
+                record: record.clone(),
+                replayed,
+            })
+        })
     }
     fn read_start<'a>(
         &'a self,
@@ -520,7 +536,7 @@ impl floe_voice::VoiceJournal for DelayedSettlementJournal {
         'a,
         Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
     > {
-        Box::pin(async { panic!("this custody fixture must not read preparation") })
+        Box::pin(async move { Ok(self.start.lock().unwrap().clone()) })
     }
     fn cancel_start<'a>(
         &'a self,
@@ -530,18 +546,40 @@ impl floe_voice::VoiceJournal for DelayedSettlementJournal {
         'a,
         Result<floe_voice::VoiceStartCommandRecord, CommandFailure<AgentFailure>>,
     > {
-        Box::pin(async { panic!("this custody fixture must not cancel preparation") })
+        Box::pin(async move {
+            let mut slot = self.start.lock().unwrap();
+            let record = slot.as_mut().unwrap();
+            if record.state == floe_voice::VoiceStartCommandState::Bound {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
+            }
+            record.state = floe_voice::VoiceStartCommandState::Cancelled;
+            Ok(record.clone())
+        })
     }
-
     fn admit_start<'a>(
         &'a self,
         _: &'a OwnerActor,
-        _: VoiceStartIntent,
+        intent: VoiceStartIntent,
     ) -> floe_execution::BoxFuture<
         'a,
         Result<floe_voice::VoiceStartAdmission, CommandFailure<AgentFailure>>,
     > {
-        Box::pin(async { panic!("settlement cannot start another call") })
+        Box::pin(async move {
+            let record = self.record.lock().unwrap().clone();
+            if record.intent != intent {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied));
+            }
+            let mut slot = self.start.lock().unwrap();
+            let start = slot.as_mut().unwrap();
+            if start.state != floe_voice::VoiceStartCommandState::Preparing {
+                return Err(CommandFailure::NotAdmitted(AgentFailure::Conflict));
+            }
+            start.state = floe_voice::VoiceStartCommandState::Bound;
+            Ok(floe_voice::VoiceStartAdmission {
+                record,
+                replayed: false,
+            })
+        })
     }
     fn read_call<'a>(
         &'a self,
@@ -634,6 +672,7 @@ fn admitted_voice_usage_settlement_survives_cancel_during_read_and_shutdown() {
         let actor = caller.owner_actor();
         services.execute_owner(async move {
             let journal = Arc::new(DelayedSettlementJournal {
+                start: Default::default(),
                 pause_reads: std::sync::atomic::AtomicBool::new(true),
                 record: std::sync::Mutex::new(call),
                 entered: Default::default(),
@@ -699,7 +738,12 @@ fn registered_voice_controller_outlives_observer_and_settles_after_retirement() 
     let (_profile, host) = create_ready_app(&model);
     let surface = start_session(&host);
     let call = VoiceCallRecord::prepare(capturing(&host, surface).intent).unwrap();
-    let binding = call.intent.binding.clone();
+    let intent = call.intent.clone();
+    let binding = intent.binding.clone();
+    let command = floe_voice::VoiceStartCommand {
+        command_id: binding.voice_session_id,
+        surface_session_id: surface,
+    };
     let receipt = floe_execution::budget::ModelAttemptReceipt {
         attempt_id: binding.plan_id,
         charged_tokens: 7,
@@ -716,6 +760,7 @@ fn registered_voice_controller_outlives_observer_and_settles_after_retirement() 
         let actor = caller.owner_actor();
         services.execute_owner(async move {
             let journal = Arc::new(DelayedSettlementJournal {
+                start: Default::default(),
                 pause_reads: AtomicBool::new(false),
                 record: std::sync::Mutex::new(call),
                 entered: Default::default(),
@@ -735,37 +780,43 @@ fn registered_voice_controller_outlives_observer_and_settles_after_retirement() 
             let cancellation = Cancellation::new();
             let scope = host_scope(Uuid::new_v4(), cancellation.clone(), WAIT_TIMEOUT);
             let child = voice.clone();
-            let driver_binding = binding.clone();
+            let driver_command = command.clone();
+            let driver_actor = actor.clone();
             let observer = tokio::spawn(async move {
                 child
-                    .run_controller(driver_binding, &scope, move |controller| {
-                        Box::pin(async move {
-                            driver_entered.notify_one();
-                            controller.cancellation().cancelled().await;
-                            assert_eq!(
-                                controller
-                                    .settle_usage(receipt)
-                                    .await
-                                    .map_err(CommandFailure::into_failure)?,
-                                receipt
-                            );
-                            Ok(())
-                        })
-                    })
+                    .run_start_controller(
+                        &driver_actor,
+                        driver_command,
+                        &scope,
+                        move |preparation| {
+                            Box::pin(async move {
+                                let controller = preparation.bind(intent).await?;
+                                driver_entered.notify_one();
+                                controller.cancellation().cancelled().await;
+                                assert_eq!(
+                                    controller
+                                        .settle_usage(receipt)
+                                        .await
+                                        .map_err(CommandFailure::into_failure)?,
+                                    receipt
+                                );
+                                Ok(())
+                            })
+                        },
+                    )
                     .await
             });
             tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
                 .await
                 .unwrap();
             let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
-            assert!(matches!(
-                voice
-                    .run_controller(binding.clone(), &scope, |_| Box::pin(async {
-                        panic!("duplicate driver must not start")
-                    }))
-                    .await,
-                Err(CommandFailure::NotAdmitted(AgentFailure::Conflict))
-            ));
+            let replay = voice
+                .run_start_controller(&actor, command.clone(), &scope, |_| {
+                    Box::pin(async { panic!("duplicate driver must not start") })
+                })
+                .await
+                .unwrap();
+            assert_eq!(replay.state, floe_voice::VoiceStartCommandState::Bound);
             cancellation.cancel();
             assert!(matches!(
                 observer.await.unwrap(),
@@ -775,7 +826,7 @@ fn registered_voice_controller_outlives_observer_and_settles_after_retirement() 
             voice.close_admission();
             assert!(matches!(
                 voice
-                    .run_controller(binding, &scope, |_| Box::pin(async {
+                    .run_start_controller(&actor, command, &scope, |_| Box::pin(async {
                         panic!("retired owner must not start another driver")
                     }))
                     .await,
@@ -809,11 +860,17 @@ fn voice_controller_failure_is_not_hidden_by_observer_delivery_or_later_drain() 
     let (_profile, host) = create_ready_app(&model);
     let surface = start_session(&host);
     let call = VoiceCallRecord::prepare(capturing(&host, surface).intent).unwrap();
-    let binding = call.intent.binding.clone();
+    let intent = call.intent.clone();
+    let binding = intent.binding.clone();
+    let command = floe_voice::VoiceStartCommand {
+        command_id: binding.voice_session_id,
+        surface_session_id: surface,
+    };
     support::with_ready(&host, |services, caller, owners| {
         let actor = caller.owner_actor();
         services.execute_owner(async move {
             let journal = Arc::new(DelayedSettlementJournal {
+                start: Default::default(),
                 pause_reads: AtomicBool::new(false),
                 record: std::sync::Mutex::new(call),
                 entered: Default::default(),
@@ -821,25 +878,29 @@ fn voice_controller_failure_is_not_hidden_by_observer_delivery_or_later_drain() 
                 writes: Default::default(),
             });
             let voice =
-                floe_voice::VoiceService::new(actor, journal, owners.conversation.clone()).unwrap();
+                floe_voice::VoiceService::new(actor.clone(), journal, owners.conversation.clone())
+                    .unwrap();
             let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
-            let mut foreign = binding.clone();
-            foreign.media_lease_id = Uuid::new_v4();
+            let mut foreign = actor.clone();
+            foreign.runtime_epoch += 1;
             assert!(matches!(
                 voice
-                    .run_controller(foreign, &scope, |_| Box::pin(async {
-                        panic!("mismatched lease cannot enter a driver")
+                    .run_start_controller(&foreign, command.clone(), &scope, |_| Box::pin(async {
+                        panic!("foreign actor cannot enter a driver")
                     }))
                     .await,
-                Err(CommandFailure::NotAdmitted(AgentFailure::Conflict))
+                Err(CommandFailure::NotAdmitted(AgentFailure::PolicyDenied))
             ));
             let (send, receive) = tokio::sync::oneshot::channel();
             assert!(matches!(
                 voice
-                    .run_controller(binding, &scope, move |controller| Box::pin(async move {
-                        send.send(controller.cancellation().clone()).unwrap();
-                        Err(AgentFailure::StorageUnavailable)
-                    }))
+                    .run_start_controller(&actor, command, &scope, move |preparation| Box::pin(
+                        async move {
+                            let controller = preparation.bind(intent).await?;
+                            send.send(controller.cancellation().clone()).unwrap();
+                            Err(AgentFailure::StorageUnavailable)
+                        }
+                    ))
                     .await,
                 Err(CommandFailure::Admitted(AgentFailure::StorageUnavailable))
             ));
@@ -943,4 +1004,336 @@ impl floe_voice::VoiceOutboundJournal for DelayedSettlementJournal {
     {
         Box::pin(async { panic!("fixture cannot read append") })
     }
+}
+
+// Exercise the real encrypted Start journal before any provider/native work.
+fn preparation_intent(
+    actor: OwnerActor,
+    command: &floe_voice::VoiceStartCommand,
+) -> VoiceStartIntent {
+    let plan = LiveModelPlan {
+        operation_id: Uuid::new_v4(),
+        actor: actor.clone(),
+        capabilities: LiveModelCapabilities::conversational(),
+        limits: LiveTransportLimits {
+            initial_context_bytes: 16384,
+            append_bytes: 500,
+            local_session_duration_ms: 60000,
+        },
+        boundary: ProcessingBoundary::Device,
+        binding_digest: ModelBindingDigest([1; 32]),
+        selection_commitment: ModelSelectionCommitment([2; 32]),
+    };
+    let projection = LiveContextProjection {
+        person_id: actor.person_id,
+        device_id: actor.device_id.clone(),
+        runtime_epoch: actor.runtime_epoch,
+        voice_session_id: command.command_id,
+        plan_id: plan.operation_id,
+        binding_digest: plan.binding_digest,
+        projection_id: Uuid::new_v4(),
+        projection_revision: 1,
+        source: LiveProjectionSource::SurfacePrefix {
+            through: floe_conversation::SurfaceAnchor::empty(command.surface_session_id).unwrap(),
+        },
+        coverage: DependencyCoverage::Independent,
+        memories: vec![],
+        input_data_classes: vec![DataClass::Synthetic],
+        payload: LiveContextPayload::new("Synthetic preparation only".into()).unwrap(),
+    };
+    VoiceStartIntent::prepare(
+        VoiceBinding {
+            actor,
+            voice_session_id: command.command_id,
+            surface_session_id: command.surface_session_id,
+            plan_id: plan.operation_id,
+            media_lease_id: Uuid::new_v4(),
+        },
+        &plan,
+        &projection,
+        floe_execution::budget::ModelReservationCeiling {
+            tokens: 10,
+            cost_micros: 10,
+        },
+    )
+    .unwrap()
+}
+
+fn preparation_survives_observer_and_fences_late_binding(retire: bool) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let voice = owners.voice.clone();
+            let command = floe_voice::VoiceStartCommand {
+                command_id: Uuid::new_v4(),
+                surface_session_id: surface,
+            };
+            let intent = preparation_intent(actor.clone(), &command);
+            let count = Arc::new(AtomicUsize::new(0));
+            let entered = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let (token_send, token_receive) = tokio::sync::oneshot::channel();
+            let cancel = Cancellation::new();
+            let observe = host_scope(Uuid::new_v4(), cancel.clone(), WAIT_TIMEOUT);
+            let child = voice.clone();
+            let owner = actor.clone();
+            let request = command.clone();
+            let child_count = count.clone();
+            let child_entered = entered.clone();
+            let child_release = release.clone();
+            let observer = tokio::spawn(async move {
+                child
+                    .run_start_controller(&owner, request, &observe, move |preparation| {
+                        Box::pin(async move {
+                            child_count.fetch_add(1, Ordering::SeqCst);
+                            token_send.send(preparation.cancellation().clone()).unwrap();
+                            child_entered.notify_one();
+                            // Deliberately ignores cancellation until released: late
+                            // planning must remain owned and must not bind a call.
+                            child_release.notified().await;
+                            assert_eq!(
+                                preparation.bind(intent).await.err(),
+                                Some(AgentFailure::Cancelled)
+                            );
+                            Ok(())
+                        })
+                    })
+                    .await
+            });
+            tokio::time::timeout(WAIT_TIMEOUT, entered.notified())
+                .await
+                .unwrap();
+            let lifetime = token_receive.await.unwrap();
+            cancel.cancel();
+            assert!(matches!(
+                observer.await.unwrap(),
+                Err(CommandFailure::Indeterminate(AgentFailure::Cancelled))
+            ));
+            assert!(
+                !lifetime.is_cancelled(),
+                "screen observer is not the preparation lifetime"
+            );
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            for _ in 0..3 {
+                let replay = voice
+                    .run_start_controller(&actor, command.clone(), &scope, |_| {
+                        Box::pin(async {
+                            panic!("exact replay must have no planning/native effect")
+                        })
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(replay.state, floe_voice::VoiceStartCommandState::Preparing);
+            }
+            if retire {
+                voice.close_admission();
+            } else {
+                let cancelled = voice
+                    .cancel_start(&actor, command.clone(), &scope)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    cancelled.state,
+                    floe_voice::VoiceStartCommandState::Cancelled
+                );
+            }
+            assert!(lifetime.is_cancelled());
+            let child = voice.clone();
+            let drain_scope = scope.clone();
+            let drain = tokio::spawn(async move { child.shutdown_and_drain(&drain_scope).await });
+            tokio::task::yield_now().await;
+            assert!(
+                !drain.is_finished(),
+                "late preparation must remain in generation drain"
+            );
+            release.notify_one();
+            tokio::time::timeout(WAIT_TIMEOUT, drain)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        });
+    });
+}
+#[test]
+fn voice_preparation_survives_observer_and_explicit_cancel_fences_late_binding() {
+    preparation_survives_observer_and_fences_late_binding(false);
+}
+#[test]
+fn voice_preparation_retirement_drains_late_planning_without_binding() {
+    preparation_survives_observer_and_fences_late_binding(true);
+}
+
+#[test]
+fn voice_preparation_failure_cancels_custody_and_replay_never_replans() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            let command = floe_voice::VoiceStartCommand {
+                command_id: Uuid::new_v4(),
+                surface_session_id: surface,
+            };
+            assert!(matches!(
+                owners
+                    .voice
+                    .run_start_controller(&actor, command.clone(), &scope, |_| Box::pin(async {
+                        Err(AgentFailure::ServerModelUnavailable)
+                    }))
+                    .await,
+                Err(CommandFailure::Admitted(
+                    AgentFailure::ServerModelUnavailable
+                ))
+            ));
+            let record = owners
+                .voice
+                .read_start(&actor, command.command_id, &scope)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.state, floe_voice::VoiceStartCommandState::Cancelled);
+            assert!(
+                owners
+                    .voice
+                    .read_call(&actor, command.command_id, &scope)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                owners
+                    .voice
+                    .run_start_controller(&actor, command, &scope, |_| Box::pin(async {
+                        panic!("failed preparation must not be reissued")
+                    }))
+                    .await
+                    .unwrap(),
+                record
+            );
+            assert_eq!(
+                owners.voice.shutdown_and_drain(&scope).await,
+                Err(AgentFailure::Interrupted)
+            );
+        });
+    });
+}
+
+#[test]
+fn voice_start_cancelled_observer_before_admission_has_no_custody_or_driver() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let command = floe_voice::VoiceStartCommand {
+                command_id: Uuid::new_v4(),
+                surface_session_id: surface,
+            };
+            let cancel = Cancellation::new();
+            cancel.cancel();
+            let scope = host_scope(Uuid::new_v4(), cancel, WAIT_TIMEOUT);
+            assert!(matches!(
+                owners
+                    .voice
+                    .run_start_controller(&actor, command.clone(), &scope, |_| Box::pin(async {
+                        panic!("cancelled admission cannot start preparation")
+                    }))
+                    .await,
+                Err(CommandFailure::NotAdmitted(AgentFailure::Cancelled))
+            ));
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            assert!(
+                owners
+                    .voice
+                    .read_start(&actor, command.command_id, &scope)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                owners
+                    .voice
+                    .read_call(&actor, command.command_id, &scope)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        });
+    });
+}
+
+#[test]
+fn voice_preparation_cannot_bind_another_command_and_changed_replay_has_no_driver() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let (_profile, host) = create_ready_app(&model);
+    let surface = start_session(&host);
+    let other_surface = start_session(&host);
+    support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let command = floe_voice::VoiceStartCommand {
+                command_id: Uuid::new_v4(),
+                surface_session_id: surface,
+            };
+            let mut different = command.clone();
+            different.command_id = Uuid::new_v4();
+            let intent = preparation_intent(actor.clone(), &different);
+            let scope = host_scope(Uuid::new_v4(), Cancellation::new(), WAIT_TIMEOUT);
+            let record = owners
+                .voice
+                .run_start_controller(&actor, command.clone(), &scope, move |preparation| {
+                    Box::pin(async move {
+                        assert_eq!(
+                            preparation.bind(intent).await.err(),
+                            Some(AgentFailure::PolicyDenied)
+                        );
+                        Ok(())
+                    })
+                })
+                .await
+                .unwrap();
+            assert_eq!(record.state, floe_voice::VoiceStartCommandState::Cancelled);
+            assert!(
+                owners
+                    .voice
+                    .read_call(&actor, different.command_id, &scope)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            let mut changed = command.clone();
+            changed.surface_session_id = other_surface;
+            assert!(matches!(
+                owners
+                    .voice
+                    .run_start_controller(&actor, changed, &scope, |_| Box::pin(async {
+                        panic!("changed replay cannot plan")
+                    }))
+                    .await,
+                Err(CommandFailure::Indeterminate(AgentFailure::Conflict))
+            ));
+            assert_eq!(
+                owners
+                    .voice
+                    .run_start_controller(&actor, command, &scope, |_| Box::pin(async {
+                        panic!("cancelled replay cannot plan")
+                    }))
+                    .await
+                    .unwrap(),
+                record
+            );
+        });
+    });
 }
