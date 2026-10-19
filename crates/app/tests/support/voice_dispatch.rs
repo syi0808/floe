@@ -22,8 +22,8 @@ use floe_inference::{
 };
 use floe_kernel::{PersonId, TraceContext};
 use floe_model_contract::{
-    LiveContextPayload, LiveModelCapabilities, LiveTransportLimits, LiveUsageObservation,
-    ModelBindingDigest, ModelSelectionCommitment, ProcessingBoundary,
+    LiveModelCapabilities, LiveTransportLimits, LiveUsageObservation, ModelBindingDigest,
+    ModelSelectionCommitment, ProcessingBoundary,
 };
 use floe_voice::{
     MediaState, RemoteState, VoiceBinding, VoiceMutation, VoiceMutationKind, VoiceStartIntent,
@@ -276,21 +276,20 @@ fn live_inference_consumes_exact_real_voice_start_once_and_does_not_fake_native_
                 .await
                 .unwrap();
             assert_eq!(through, SurfaceAnchor::empty(surface).unwrap());
-            let projection = LiveContextProjection {
-                person_id: actor.person_id,
-                device_id: actor.device_id.clone(),
-                runtime_epoch: actor.runtime_epoch,
-                voice_session_id: voice,
-                plan_id: plan.operation_id,
-                binding_digest: plan.binding_digest,
-                projection_id: Uuid::new_v4(),
-                projection_revision: 1,
-                source: LiveProjectionSource::SurfacePrefix { through },
-                coverage: DependencyCoverage::Independent,
-                memories: vec![],
-                input_data_classes: vec![DataClass::Synthetic],
-                payload: LiveContextPayload::new("Synthetic initial context".into()).unwrap(),
-            };
+            let source = LiveProjectionSource::SurfacePrefix { through };
+            let floe_context::LiveProjectionOutcome::Ready(projection) = owners
+                .live_context_projector
+                .project_prefix(floe_context::LivePrefixProjectionRequest {
+                    plan: &plan,
+                    voice_session_id: voice,
+                    surface_session_id: surface,
+                    projection_id: Uuid::new_v4(),
+                    source: &source,
+                    instructions: "Present the canonical conversation. Delegate work to Manager.",
+                }, &scope)
+                .await
+                .unwrap()
+            else { panic!("empty canonical prefix must be projectable") };
             let reservation = ModelReservationCeiling {
                 tokens: 40,
                 cost_micros: 60,
@@ -534,21 +533,20 @@ fn drive_retained_stream(
                 .await
                 .unwrap();
             assert_eq!(through, SurfaceAnchor::empty(surface).unwrap());
-            let projection = LiveContextProjection {
-                person_id: actor.person_id,
-                device_id: actor.device_id.clone(),
-                runtime_epoch: actor.runtime_epoch,
-                voice_session_id: voice,
-                plan_id: plan.operation_id,
-                binding_digest: plan.binding_digest,
-                projection_id: Uuid::new_v4(),
-                projection_revision: 1,
-                source: LiveProjectionSource::SurfacePrefix { through },
-                coverage: DependencyCoverage::Independent,
-                memories: vec![],
-                input_data_classes: vec![DataClass::Synthetic],
-                payload: LiveContextPayload::new("Synthetic initial context".into()).unwrap(),
-            };
+            let source = LiveProjectionSource::SurfacePrefix { through };
+            let floe_context::LiveProjectionOutcome::Ready(projection) = owners
+                .live_context_projector
+                .project_prefix(floe_context::LivePrefixProjectionRequest {
+                    plan: &plan,
+                    voice_session_id: voice,
+                    surface_session_id: surface,
+                    projection_id: Uuid::new_v4(),
+                    source: &source,
+                    instructions: "Present the canonical conversation. Delegate work to Manager.",
+                }, &scope)
+                .await
+                .unwrap()
+            else { panic!("empty canonical prefix must be projectable") };
             let reservation = ModelReservationCeiling {
                 tokens: 40,
                 cost_micros: 60,
@@ -704,7 +702,7 @@ fn drive_retained_stream(
                     }));
                 native_probe.changed.notify_one();
             });
-            let live_projector = owners.live_result_projector.clone();
+            let live_projector = owners.live_context_projector.clone();
             let live_voice = owners.voice.clone();
             let live_scope = scope.clone();
             let live_conversation = owners.conversation.clone();

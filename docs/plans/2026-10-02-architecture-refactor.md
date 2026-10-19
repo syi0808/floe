@@ -3373,3 +3373,50 @@ The shutdown correction passes the full default/development Go race suites
 All 634 Rust/Cargo/validation and 153 Dart/test/manifest inputs are unchanged
 from the qualified automatic-result and Flutter snapshots; no unrelated native
 or UI qualification is implied by the shutdown test.
+
+### Product Start admission cutover
+
+The next cutover moves the user command admission before model preparation. The
+current durable `VoiceStartIntent` already binds the selected plan and projected
+context, so it cannot alone deduplicate a retry that reaches the application
+before those values exist. Retain that dispatch intent and its existing receipt;
+do not reinterpret it as a user command or allow a status query to prepare a plan.
+
+Voice will own a stable Start command receipt keyed by the caller's command ID
+and exact Person/device/Surface identity. The encrypted Vault will atomically
+admit the command before any planning or native effect. Exact replay observes
+that original command and any bound call; changed input conflicts. A command
+admitted before a crash or lost response is not permission to replan. The owning
+controller must be registered before preparation, and an incomplete command must
+remain explicitly incomplete until conservative recovery settles it. Concurrent
+requests cannot each acquire a preparation/dispatch authority. The canonical
+Voice call journal remains the sole authority once the command binds a call.
+
+Verification must include concurrent identical Start commands, changed Surface
+replay, observer cancellation before and after admission, lost commit ACK,
+restart between command admission and plan binding, and late preparation after
+Stop. Assert provider preparation/start counts as well as durable receipts.
+Status/replay queries must have zero preparation/native effects. Native Stop
+confirmation and platform-backed old-process evidence remain separate gates;
+this command receipt cannot manufacture either.
+
+### Canonical startup projection composition
+
+App now composes one `LiveContextProjector` with real Vault prefix/result readers
+and the current dependency resolver. The former result-only projector is removed;
+both projection operations share the same authorization error classification.
+Registered live App tests now obtain initial context from the actual canonical
+Surface prefix rather than constructing synthetic startup payloads. Result
+presentation continues through the same Context owner and durable Voice custody.
+This composes startup projection only; the Start command admission cutover above
+and native/product coordinator are not yet implemented.
+
+On the restored Linux toolchain, Context 30 and Voice 12 unit tests pass; actual
+Vault Voice-journal tests pass 20 and focused App voice cases pass 14. The final
+634-input snapshot passes workspace/doctests (565, one explicit ignored test),
+App QA (99, one intentional subprocess ignore), Linux FFI build and architecture
+boundaries (27 nodes, 155 edges). Existing platform-only warnings remain. The
+initial Vault filter matched zero tests and is not counted; the corrected
+`vault::voice_journal::tests::` selection provided the 20-case result. Apple build
+was attempted on Castles but blocked before build by checkout/cache permissions;
+no new Apple, microphone, browser or real-provider qualification is claimed.

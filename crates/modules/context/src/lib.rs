@@ -14,9 +14,9 @@ mod application {
     pub mod history;
     pub mod learner_projection;
     pub mod leases;
+    pub mod live_context_projector;
     pub mod live_prefix;
     pub mod live_projection;
-    pub mod live_result_projector;
     pub mod model_coverage;
     pub mod model_projection;
     pub mod native_calendar;
@@ -187,4 +187,4 @@ pub use ports::live_prefix::{LivePrefixReader, LivePrefixSnapshot};
 
 pub use application::live_prefix::{LivePrefixProjectionRequest, prepare_live_prefix_projection};
 
-pub use application::live_result_projector::LiveResultProjector;
+pub use application::live_context_projector::LiveContextProjector;

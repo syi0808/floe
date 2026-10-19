@@ -237,7 +237,8 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             vault.clone(),
             conversation.clone(),
         )?);
-        let live_result_projector = Arc::new(floe_context::LiveResultProjector::new(
+        let live_context_projector = Arc::new(floe_context::LiveContextProjector::new(
+            vault.clone(),
             vault.clone(),
             sources.dependency_resolver.clone(),
         ));
@@ -246,7 +247,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             sources.connections.clone(),
             conversation,
             voice,
-            live_result_projector,
+            live_context_projector,
             experts.clone(),
             knowledge.clone(),
             calendar_operations,

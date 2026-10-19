@@ -22,7 +22,7 @@ impl VoiceController {
     pub async fn consume_live(
         &self,
         mut call: AuthorizedLiveSession,
-        projector: &floe_context::LiveResultProjector,
+        projector: &floe_context::LiveContextProjector,
     ) -> Result<VoiceLiveCompletion, AgentFailure> {
         if call.plan().actor != self.binding.actor
             || call.plan().operation_id != self.binding.plan_id
@@ -132,7 +132,7 @@ impl VoiceController {
     async fn deliver_pending(
         &self,
         call: &mut AuthorizedLiveSession,
-        projector: &floe_context::LiveResultProjector,
+        projector: &floe_context::LiveContextProjector,
         delegation: &str,
     ) -> Result<(), AgentFailure> {
         call.revalidate().await?;
@@ -159,7 +159,7 @@ impl VoiceController {
             delegation,
         )?;
         let projection = projector
-            .project(
+            .project_result(
                 floe_context::LiveResultProjectionRequest {
                     plan: call.plan(),
                     voice_session_id: self.binding.voice_session_id,

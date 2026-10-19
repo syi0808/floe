@@ -1492,10 +1492,11 @@ transaction. A result with any existing append intent is never redispatched,
 including unresolved or uncertain evidence. The source anchor is the publication's
 own immutable prefix, not a later UI head or cached message body.
 
-Voice now directly consumes Context's LiveResultProjector, composed by App from
-the existing Vault result reader and source dependency resolver. Context owns
-canonical result encoding, current source checks, processing review and capacity
-outcomes. Inference repeats live source/plan admission at append; Voice owns the
+App composes Context's LiveContextProjector from the existing Vault prefix and
+result readers and the source dependency resolver. Startup prefix and Manager
+result projections share the same current source authorization policy. Context
+owns canonical encoding, processing review and capacity outcomes; Voice directly
+consumes its result projection. Inference repeats live source/plan admission at append; Voice owns the
 existing durable intent/receipt. No provider caption or caller text substitutes
 for the Manager result. Required review/compaction is not silently bypassed or
 replaced by truncated text; live delivery fails closed while canonical text/Work
