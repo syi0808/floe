@@ -41,6 +41,9 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
         C::VoiceStart { surface_session_id } => ProductCommand::VoiceStart {
             surface_session_id: surface_session_id.get(),
         },
+        C::VoiceStartCancel { surface_session_id } => ProductCommand::VoiceStartCancel {
+            surface_session_id: surface_session_id.get(),
+        },
         command @ (C::ConversationSessionStart { .. }
         | C::ConversationSetCalendarPolicy { .. }
         | C::ConversationWorkSubmitText { .. }
@@ -161,6 +164,12 @@ fn command_out(
                 status: voice_start_status(status).map_err(structural_error)?,
             }
         }
+        (
+            ProductCommand::VoiceStartCancel { .. },
+            ProductCommandOutcome::VoiceStartCancelled(status),
+        ) => AppCommandResultDto::VoiceStartCancelled {
+            status: voice_start_status(status).map_err(structural_error)?,
+        },
         _ => return Err(internal_error()),
     })
 }
@@ -182,6 +191,7 @@ fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
         Q::VoiceStartStatus { command_id } => ProductQuery::VoiceStartStatus {
             command_id: command_id.get(),
         },
+        Q::VoiceStartRecoverable {} => ProductQuery::VoiceStartRecoverable,
         query @ (Q::ConversationSessionResume { .. }
         | Q::ConversationCalendarProposalPreview { .. }
         | Q::ConversationCalendarPolicy { .. }
@@ -301,6 +311,15 @@ fn query_out(
                     .map_err(structural_error)?,
             }
         }
+        (
+            ProductQuery::VoiceStartRecoverable,
+            ProductQueryOutcome::VoiceStartRecoverable(status),
+        ) => AppQueryResultDto::VoiceStartRecoverable {
+            status: status
+                .map(voice_start_status)
+                .transpose()
+                .map_err(structural_error)?,
+        },
         _ => return Err(internal_error()),
     })
 }

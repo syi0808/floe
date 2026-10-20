@@ -71,6 +71,8 @@ impl RuntimeQueryDto {
 pub enum AppProductQueryDto {
     #[serde(rename = "voice.start.status")]
     VoiceStartStatus { command_id: CommandIdDto },
+    #[serde(rename = "voice.start.recoverable")]
+    VoiceStartRecoverable {},
     #[serde(rename = "day.refresh.get")]
     DayRefreshGet { operation_ref: OperationRefDto },
     #[serde(rename = "day.snapshot")]
@@ -154,7 +156,7 @@ pub enum AppProductQueryDto {
 impl AppProductQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::VoiceStartStatus { .. } => return Ok(()),
+            Self::VoiceStartStatus { .. } | Self::VoiceStartRecoverable {} => return Ok(()),
             Self::DayRefreshGet { .. } => return Ok(()),
             Self::DaySnapshot { .. } => return Ok(()),
             Self::DayCalendarDestinations {} => return Ok(()),
@@ -222,6 +224,10 @@ impl AppProductQueryDto {
 pub enum AppQueryResultDto {
     #[serde(rename = "voice.start.status")]
     VoiceStartStatus {
+        status: Option<super::VoiceStartStatusDto>,
+    },
+    #[serde(rename = "voice.start.recoverable")]
+    VoiceStartRecoverable {
         status: Option<super::VoiceStartStatusDto>,
     },
     #[serde(rename = "conversation.calendar_proposal.preview")]

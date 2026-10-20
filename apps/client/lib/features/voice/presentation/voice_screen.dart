@@ -39,7 +39,32 @@ class _VoiceScreenState extends State<VoiceScreen> {
   @override
   void initState() {
     super.initState();
+    widget.ownerGateways.runtime?.addListener(_runtimeChanged);
     unawaited(_loadSessionAndStatus());
+  }
+
+  @override
+  void didUpdateWidget(covariant VoiceScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldRuntime = oldWidget.ownerGateways.runtime;
+    final nextRuntime = widget.ownerGateways.runtime;
+    if (oldRuntime != nextRuntime) {
+      oldRuntime?.removeListener(_runtimeChanged);
+      nextRuntime?.addListener(_runtimeChanged);
+      if (nextRuntime?.ready ?? false) unawaited(_loadSessionAndStatus());
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.ownerGateways.runtime?.removeListener(_runtimeChanged);
+    super.dispose();
+  }
+
+  void _runtimeChanged() {
+    if (!_loading && (widget.ownerGateways.runtime?.ready ?? false)) {
+      unawaited(_loadSessionAndStatus());
+    }
   }
 
   Future<void> _loadSessionAndStatus() async {
@@ -50,10 +75,11 @@ class _VoiceScreenState extends State<VoiceScreen> {
       if (mounted) setState(() => _message = error.toString());
     }
     VoiceStartStatus? status;
-    final commandId = _gateway?.pendingCommandId;
-    if (commandId != null) {
+    final gateway = _gateway;
+    final runtime = widget.ownerGateways.runtime;
+    if (gateway != null && (runtime == null || runtime.ready)) {
       try {
-        status = await _gateway!.readStatus(commandId);
+        status = await gateway.recoverPendingStart();
       } on Object catch (error) {
         if (mounted) setState(() => _message = error.toString());
       }
@@ -123,10 +149,46 @@ class _VoiceScreenState extends State<VoiceScreen> {
     }
   }
 
+  Future<void> _cancelStart() async {
+    final gateway = _gateway;
+    if (gateway == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final status = await gateway.cancelPendingStart();
+      if (!mounted) return;
+      setState(() {
+        _status = status;
+        _message = _messageFor(status);
+      });
+    } on Object catch (error) {
+      VoiceStartStatus? status;
+      final commandId = gateway.pendingCommandId;
+      if (commandId != null) {
+        try {
+          status = await gateway.readStatus(commandId);
+        } on Object {
+          // Keep the exact command identity until its cancellation is known.
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _status = status;
+        _message = status == null ? _errorMessage(error) : _messageFor(status);
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String _messageFor(VoiceStartStatus status) => switch (status.state) {
-    VoiceStartState.preparing => 'Voice Start is still preparing.',
+    VoiceStartState.preparing =>
+      'Voice Start is unresolved. Cancel it before trying another Start.',
     VoiceStartState.bound => 'A Voice call is bound to this conversation.',
-    VoiceStartState.cancelled => 'Voice Start was cancelled because native audio is unavailable in this build.',
+    VoiceStartState.cancelled =>
+      'Voice Start was cancelled. A later Start uses a new command ID.',
   };
 
   String _errorMessage(Object error) => switch (error) {
@@ -144,6 +206,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
         runtimeReady &&
         _session != null &&
         gateway != null &&
+        _status?.state != VoiceStartState.preparing &&
         _status?.state != VoiceStartState.bound;
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 20, 12, 36),
@@ -219,6 +282,14 @@ class _VoiceScreenState extends State<VoiceScreen> {
                     ),
                   ],
                 ),
+                if (_status?.state == VoiceStartState.preparing) ...[
+                  const SizedBox(height: 12),
+                  FloeButton.outlined(
+                    onPressed: !_busy ? _cancelStart : null,
+                    loading: _busy,
+                    child: const Text('Cancel pending Start'),
+                  ),
+                ],
               ],
             ),
           ),

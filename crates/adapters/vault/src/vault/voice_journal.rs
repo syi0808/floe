@@ -410,6 +410,25 @@ impl<Keys: VaultKeyProvider> VoiceJournal for EncryptedAgentVault<Keys> {
         })
     }
 
+    fn read_recoverable_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+    ) -> BoxFuture<'a, Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>> {
+        Box::pin(async move {
+            self.voice_actor(actor)?;
+            let mut c = self.connection()?;
+            let tx = c
+                .transaction_with_behavior(TransactionBehavior::Deferred)
+                .await
+                .map_err(sql)?;
+            schema(&tx).await?;
+            let record = self.recoverable_start_on(&tx, actor).await?;
+            tx.commit().await.map_err(sql)?;
+            self.check_access()?;
+            Ok(record)
+        })
+    }
+
     fn read_call<'a>(
         &'a self,
         actor: &'a OwnerActor,

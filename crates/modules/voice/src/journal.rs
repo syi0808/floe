@@ -493,6 +493,13 @@ pub trait VoiceJournal: Send + Sync {
         actor: &'a OwnerActor,
         command_id: Uuid,
     ) -> BoxFuture<'a, Result<Option<crate::VoiceStartCommandRecord>, AgentFailure>>;
+    /// Finds only the single pre-binding command or a call with a live local
+    /// media lease. Terminal starts remain addressable by exact ID, but are
+    /// never returned as candidates for recovery or reuse.
+    fn read_recoverable_start<'a>(
+        &'a self,
+        actor: &'a OwnerActor,
+    ) -> BoxFuture<'a, Result<Option<crate::VoiceStartCommandRecord>, AgentFailure>>;
     /// Cancels only pre-binding preparation. A bound call requires normal Stop.
     fn cancel_start<'a>(
         &'a self,

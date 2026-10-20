@@ -12,10 +12,59 @@ final class AppWireVoiceGateway implements VoiceGateway {
   String? get pendingCommandId => _pending?.commandId;
 
   @override
+  Future<VoiceStartStatus?> recoverPendingStart() async {
+    final result = await _transport.queryV2({
+      'schema_version': appWireProtocolVersion,
+      'request_id': newAgentRequestId(),
+      'query': {'kind': 'voice.start.recoverable'},
+    }, timeout: const Duration(seconds: 5));
+    if (result['kind'] != 'voice.start.recoverable' ||
+        !result.containsKey('status') ||
+        result.keys.toSet().difference(const {'kind', 'status'}).isNotEmpty) {
+      throw const FormatException('Invalid recoverable Voice status response.');
+    }
+    final raw = result['status'];
+    VoiceStartStatus? recovered;
+    if (raw != null) {
+      if (raw is! Map) {
+        throw const FormatException('Invalid recoverable Voice status body.');
+      }
+      recovered = _decodeStatus({
+        'kind': 'voice.start',
+        'status': raw,
+      }, raw['command_id']?.toString() ?? '');
+    }
+    if (recovered != null && !_isRecoverable(recovered)) {
+      throw const FormatException('Voice returned a terminal recovery record.');
+    }
+
+    final previous = _pending;
+    if (previous != null && previous.commandId != recovered?.commandId) {
+      final exact = await readStatus(previous.commandId);
+      if (exact != null && _isRecoverable(exact)) {
+        throw StateError('A different Voice Start is still unresolved.');
+      }
+      _pending = null;
+    }
+    if (recovered == null) {
+      _pending = null;
+      return null;
+    }
+    _pending = _PendingStart(
+      commandId: recovered.commandId,
+      surfaceSessionId: recovered.surfaceSessionId,
+      submitted: true,
+      restored: true,
+    );
+    return recovered;
+  }
+
+  @override
   Future<VoiceStartStatus> start(String surfaceSessionId) async {
     if (!_wireId(surfaceSessionId)) {
       throw const FormatException('Invalid Voice surface identity.');
     }
+    if (_pending == null) await recoverPendingStart();
     var pending = _pending;
     if (pending == null) {
       pending = _PendingStart(
@@ -56,6 +105,44 @@ final class AppWireVoiceGateway implements VoiceGateway {
   }
 
   @override
+  Future<VoiceStartStatus> cancelPendingStart() async {
+    if (_pending == null) await recoverPendingStart();
+    final pending = _pending;
+    if (pending == null) throw StateError('No recoverable Voice Start exists.');
+    if (pending.restored) {
+      final exact = await readStatus(pending.commandId);
+      if (exact == null) {
+        throw StateError('Voice Start disappeared during recovery.');
+      }
+      if (exact.state == VoiceStartState.cancelled) return exact;
+      if (exact.state == VoiceStartState.bound) {
+        throw StateError('Only an unbound Voice Start can be cancelled.');
+      }
+    }
+    final result = await _transport.commandV2({
+      'schema_version': appWireProtocolVersion,
+      'request_id': newAgentRequestId(),
+      'command_id': pending.commandId,
+      'command': {
+        'kind': 'voice.start.cancel',
+        'surface_session_id': pending.surfaceSessionId,
+      },
+    }, timeout: const Duration(seconds: 10));
+    final status = _decodeStatus(
+      result,
+      pending.commandId,
+      expectedKind: 'voice.start.cancel',
+    );
+    if (status.state != VoiceStartState.cancelled) {
+      throw const FormatException(
+        'Voice cancellation did not settle as cancelled.',
+      );
+    }
+    _pending = null;
+    return status;
+  }
+
+  @override
   Future<VoiceStartStatus?> readStatus(String commandId) async {
     if (!_wireId(commandId)) {
       throw const FormatException('Invalid Voice command identity.');
@@ -71,23 +158,34 @@ final class AppWireVoiceGateway implements VoiceGateway {
       throw const FormatException('Invalid Voice status response.');
     }
     final raw = result['status'];
-    if (raw == null) return null;
+    if (raw == null) {
+      if (_pending?.commandId == commandId) _pending = null;
+      return null;
+    }
     final status = _decodeStatus({
       'kind': 'voice.start',
       'status': raw,
     }, commandId);
-    if (status.state == VoiceStartState.cancelled &&
+    if ((status.state == VoiceStartState.cancelled ||
+            status.state == VoiceStartState.bound &&
+                status.localLeaseReleased == true) &&
         _pending?.commandId == commandId) {
       _pending = null;
     }
     return status;
   }
 
+  bool _isRecoverable(VoiceStartStatus status) =>
+      status.state == VoiceStartState.preparing ||
+      status.state == VoiceStartState.bound &&
+          status.localLeaseReleased == false;
+
   VoiceStartStatus _decodeStatus(
     Map<String, dynamic> value,
-    String expectedCommandId,
-  ) {
-    if (value['kind'] != 'voice.start' || value['status'] is! Map) {
+    String expectedCommandId, {
+    String expectedKind = 'voice.start',
+  }) {
+    if (value['kind'] != expectedKind || value['status'] is! Map) {
       throw const FormatException('Invalid Voice Start response.');
     }
     final raw = (value['status'] as Map).map(
@@ -160,11 +258,17 @@ final class AppWireVoiceGateway implements VoiceGateway {
 }
 
 final class _PendingStart {
-  _PendingStart({required this.commandId, required this.surfaceSessionId});
+  _PendingStart({
+    required this.commandId,
+    required this.surfaceSessionId,
+    this.submitted = false,
+    this.restored = false,
+  });
 
   final String commandId;
   final String surfaceSessionId;
-  bool submitted = false;
+  bool submitted;
+  final bool restored;
 }
 
 bool _wireId(Object? value) =>

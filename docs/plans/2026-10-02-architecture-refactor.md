@@ -3559,8 +3559,9 @@ cancels the unbound Start; the UI reports that the native audio backend is not
 implemented. Status reads do not invoke model or native work. Flutter has a
 Voice destination, resumes the existing Conversation Surface, retains a stable
 Start command identity across uncertain transport within the `AppRuntime`, and
-refreshes the exact journal status. The durable Vault command outlives the Dart
-screen; cross-app-process discovery of an unresolved command ID remains open.
+refreshes the exact journal status. At this checkpoint, the durable Vault command
+outlives the Dart screen but cross-app-process discovery of an unresolved command
+ID remains open; the following checkpoint closes that app-command identity gap.
 
 The App integration regressions exercise a real encrypted Vault Voice journal
 for App shutdown Stop receipt-before-lease-release and exercise Start admission,
@@ -3584,6 +3585,42 @@ and Gateway live inference owns live provider preparation. The product wire does
 not include provider credentials, SDP or audio. No compatibility route was
 introduced. Residual search must retain one Start controller path and document
 the unimplemented Apple bridge as the explicit boundary.
+
+### 2026-10-20 recovery of an unresolved Voice Start command
+
+The typed product API now exposes a read-only `voice.start.recoverable` query
+and an exact-ID `voice.start.cancel` command. Vault derives the sole unresolved
+Start from the existing encrypted command/session tables: an unbound Preparing
+command is recoverable, as is a Bound call only while its local media lease is
+still held. Multiple candidates or mismatched command/call identity fail closed.
+This adds no schema or recovery authority. The query reports the existing
+receipt; it never resumes planning or media. Explicit cancellation applies only
+before binding, fences a late bind, and keeps the original command ID and Surface.
+
+Flutter now discovers that durable identity before allocating a fresh Start ID,
+restores the existing status, offers explicit cancellation, and allocates a new
+ID only after the old request is terminal. Regressions cover exact identity after
+reopening App/Vault in a new runtime epoch, cancellation and repeat cancellation,
+duplicate Start, a fresh Start after cancellation, and an ended Bound request
+not being reused. Linux verification passes the App QA integration suite
+(69 tests), the workspace Rust/doctest gate (including 242 Vault and 12 Voice
+tests), the FFI production build, and all 246 Flutter tests; the focused Voice
+Flutter suite passes 9 tests. The architecture boundary check passes with 27
+nodes and 156 edges and no errors or warnings. Changed Rust files pass rustfmt,
+Dart files pass formatting, and `git diff --check` passes. `flutter analyze
+--no-pub` reports 91 info-only findings and exits 1 because informational lints
+count as issues; it reports no errors or warnings. Workspace-wide `cargo fmt
+--all -- --check` still reports formatting differences in unrelated files; the
+Rust files changed for this checkpoint pass the scoped check.
+
+The Apple implementation audit still finds no concrete audio path: the native
+Swift package declares no audio/WebRTC target or dependency; `NativeComposition`
+constructs no audio driver; `MainFlutterWindow` registers no Voice/audio channel;
+and the Rust process registry exposes only an abstract media lease. This Linux
+run cannot build the Apple targets or qualify microphone permission, capture,
+playback readback, interruption, physical Stop, or prior-OS-process media
+evidence. Those remain an explicit Apple-host/device follow-up and are not
+implied by the synthetic native registry or command-recovery tests.
 
 The next cutover is the Apple host bridge: implement and own the actual muted
 audio lease, bind it to the App process registry and host-instance identity,

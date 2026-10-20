@@ -55,6 +55,56 @@ impl<Keys: VaultKeyProvider> EncryptedAgentVault<Keys> {
             _ => Err(AgentFailure::StorageUnavailable),
         }
     }
+    pub(super) async fn recoverable_start_on(
+        &self,
+        c: &Connection,
+        actor: &OwnerActor,
+    ) -> Result<Option<VoiceStartCommandRecord>, AgentFailure> {
+        let mut rows = c
+            .query(
+                "SELECT command_id FROM voice_start_commands WHERE person_id = ?1 AND device_id = ?2 AND state = 'preparing' UNION ALL SELECT starts.command_id FROM voice_start_commands starts JOIN voice_sessions calls ON calls.voice_session_id = starts.command_id WHERE starts.person_id = ?3 AND starts.device_id = ?4 AND starts.state = 'bound' AND calls.lease_held = 1",
+                (
+                    actor.person_id.to_string(),
+                    actor.device_id.clone(),
+                    actor.person_id.to_string(),
+                    actor.device_id.clone(),
+                ),
+            )
+            .await
+            .map_err(sql)?;
+        let Some(row) = rows.next().await.map_err(sql)? else {
+            return Ok(None);
+        };
+        let command_id = row
+            .get::<String>(0)
+            .map_err(storage)?
+            .parse::<Uuid>()
+            .map_err(storage)?;
+        if rows.next().await.map_err(sql)?.is_some() {
+            // The schema permits at most one preparing Start and one live
+            // media lease. Both simultaneously indicate broken custody.
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        drop(rows);
+        let record = self
+            .voice_start_on(c, command_id)
+            .await?
+            .ok_or(AgentFailure::StorageUnavailable)?;
+        if record.actor.person_id != actor.person_id || record.actor.device_id != actor.device_id {
+            return Err(AgentFailure::StorageUnavailable);
+        }
+        self.check_start_link(c, &record).await?;
+        if record.state == VoiceStartCommandState::Bound {
+            let call = self
+                .voice_record_on(c, command_id)
+                .await?
+                .ok_or(AgentFailure::StorageUnavailable)?;
+            if call.session.local_lease_released() {
+                return Err(AgentFailure::StorageUnavailable);
+            }
+        }
+        Ok(Some(record))
+    }
     pub(super) async fn start_command_operation(
         &self,
         actor: &OwnerActor,

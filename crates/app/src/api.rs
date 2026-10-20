@@ -68,7 +68,14 @@ pub enum ProductCommand {
     Connections(ConnectionsCommand),
     Day(DayCommand),
     Memory(MemoryCommand),
-    VoiceStart { surface_session_id: Uuid },
+    VoiceStart {
+        surface_session_id: Uuid,
+    },
+    /// Cancels the pre-binding Start named by the request command ID. The
+    /// Surface is repeated for exact journal validation; bound calls use Stop.
+    VoiceStartCancel {
+        surface_session_id: Uuid,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -221,6 +228,7 @@ pub enum ProductQuery {
     Day(DayProductQuery),
     Memory(MemoryQuery),
     VoiceStartStatus { command_id: Uuid },
+    VoiceStartRecoverable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,6 +300,7 @@ pub enum ProductCommandOutcome {
     Day(DayCommandOutcome),
     Memory(MemoryCommandOutcome),
     VoiceStart(VoiceStartStatus),
+    VoiceStartCancelled(VoiceStartStatus),
 }
 
 #[derive(Clone, Debug)]
@@ -342,6 +351,7 @@ pub enum ProductQueryOutcome {
     Day(DayQueryOutcome),
     Memory(MemoryQueryResult),
     VoiceStartStatus(Option<VoiceStartStatus>),
+    VoiceStartRecoverable(Option<VoiceStartStatus>),
 }
 
 /// Read-only projection of durable Voice start and native media state. A

@@ -9,9 +9,12 @@ void main() {
       final transport = _Transport();
       final surface = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
       var calls = 0;
+      transport.onQuery = (request) async => {
+        'kind': request['query']['kind'],
+        'status': null,
+      };
       transport.onCommand = (request) async {
         calls++;
-        transport.commands.add(request);
         if (calls == 1) {
           throw const AppWireTransportException(
             'capability_unavailable',
@@ -79,6 +82,129 @@ void main() {
     });
   });
 
+  test(
+    'process restart recovers the journal command before allocating a new ID',
+    () async {
+      const commandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      final transport = _Transport()
+        ..onQuery = (request) async {
+          expect(request['query'], {'kind': 'voice.start.recoverable'});
+          return {
+            'kind': 'voice.start.recoverable',
+            'status': _startStatus(commandId, surfaceId, 'preparing'),
+          };
+        }
+        ..onCommand = (request) async => {
+          'kind': 'voice.start',
+          'status': _startStatus(request['command_id'], surfaceId, 'preparing'),
+        };
+      final gateway = AppWireVoiceGateway(transport);
+
+      final recovered = await gateway.recoverPendingStart();
+      expect(recovered?.commandId, commandId);
+      expect(gateway.pendingCommandId, commandId);
+      expect(
+        transport.commands,
+        isEmpty,
+        reason: 'recovery is a read-only query',
+      );
+
+      final replay = await gateway.start(surfaceId);
+      expect(replay.commandId, commandId);
+      expect(transport.commands.single['command_id'], commandId);
+      expect(transport.commands.single['command']['kind'], 'voice.start');
+    },
+  );
+
+  test(
+    'recovered cancellation is exact and the next Start gets a new ID',
+    () async {
+      const commandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      Map<String, Object?>? recoverable = _startStatus(
+        commandId,
+        surfaceId,
+        'preparing',
+      );
+      final transport = _Transport()
+        ..onQuery = (request) async {
+          final kind = request['query']['kind'];
+          if (kind == 'voice.start.recoverable') {
+            return {'kind': kind, 'status': recoverable};
+          }
+          if (kind == 'voice.start.status') {
+            return {
+              'kind': kind,
+              'status': _startStatus(commandId, surfaceId, 'preparing'),
+            };
+          }
+          throw StateError('Unexpected query kind: $kind');
+        }
+        ..onCommand = (request) async {
+          final kind = request['command']['kind'];
+          if (kind == 'voice.start.cancel') {
+            recoverable = null;
+            return {
+              'kind': kind,
+              'status': _startStatus(commandId, surfaceId, 'cancelled'),
+            };
+          }
+          return {
+            'kind': kind,
+            'status': _startStatus(
+              request['command_id'],
+              surfaceId,
+              'cancelled',
+            ),
+          };
+        };
+      final gateway = AppWireVoiceGateway(transport);
+
+      final cancelled = await gateway.cancelPendingStart();
+      expect(cancelled.commandId, commandId);
+      expect(cancelled.state.name, 'cancelled');
+      expect(transport.commands.single['command_id'], commandId);
+      expect(transport.commands.single['command'], {
+        'kind': 'voice.start.cancel',
+        'surface_session_id': surfaceId,
+      });
+      expect(gateway.pendingCommandId, isNull);
+
+      final fresh = await gateway.start(surfaceId);
+      expect(fresh.state.name, 'cancelled');
+      expect(transport.commands, hasLength(2));
+      expect(transport.commands.last['command']['kind'], 'voice.start');
+      expect(transport.commands.last['command_id'], isNot(commandId));
+    },
+  );
+
+  test('ended bound Start is not recovered for reuse', () async {
+    const endedCommandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+    final transport = _Transport()
+      ..onQuery = (request) async {
+        return {'kind': request['query']['kind'], 'status': null};
+      }
+      ..onCommand = (request) async => {
+        'kind': 'voice.start',
+        'status': _startStatus(
+          request['command_id'],
+          'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9',
+          'cancelled',
+        ),
+      };
+    final gateway = AppWireVoiceGateway(transport);
+    const surfaceId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+
+    final fresh = await gateway.start(surfaceId);
+
+    expect(fresh.state.name, 'cancelled');
+    expect(transport.queries.single['query'], {
+      'kind': 'voice.start.recoverable',
+    });
+    expect(transport.commands.single['command_id'], isNot(endedCommandId));
+  });
+
   test('bound status requires all call lifecycle fields', () async {
     final transport = _Transport()
       ..onQuery = (request) async => {
@@ -136,6 +262,7 @@ final class _Transport implements AppWireTransport {
     Map<String, dynamic> request, {
     Duration timeout = const Duration(seconds: 3),
   }) async {
+    commands.add(request);
     final handler = onCommand;
     if (handler == null) throw StateError('Unexpected command.');
     return handler(request);
@@ -161,3 +288,17 @@ final class _Transport implements AppWireTransport {
   @override
   Future<void> close() async {}
 }
+
+Map<String, Object?> _startStatus(
+  Object? commandId,
+  String surfaceId,
+  String state,
+) => {
+  'command_id': commandId,
+  'surface_session_id': surfaceId,
+  'state': state,
+  'media': null,
+  'remote': null,
+  'stop_requested': null,
+  'local_lease_released': null,
+};

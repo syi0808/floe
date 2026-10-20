@@ -334,6 +334,15 @@ impl floe_voice::VoiceJournal for DelayedJournal {
     > {
         Box::pin(async { panic!("this custody fixture must not read preparation") })
     }
+    fn read_recoverable_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
+    > {
+        Box::pin(async { panic!("this custody fixture must not recover preparation") })
+    }
     fn cancel_start<'a>(
         &'a self,
         _: &'a OwnerActor,
@@ -537,6 +546,22 @@ impl floe_voice::VoiceJournal for DelayedSettlementJournal {
         Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
     > {
         Box::pin(async move { Ok(self.start.lock().unwrap().clone()) })
+    }
+    fn read_recoverable_start<'a>(
+        &'a self,
+        _: &'a OwnerActor,
+    ) -> floe_execution::BoxFuture<
+        'a,
+        Result<Option<floe_voice::VoiceStartCommandRecord>, AgentFailure>,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .start
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|record| record.state == floe_voice::VoiceStartCommandState::Preparing))
+        })
     }
     fn cancel_start<'a>(
         &'a self,

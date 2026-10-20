@@ -128,6 +128,37 @@ fn route_command(
                 }
             })
         }
+        ProductCommand::VoiceStartCancel { surface_session_id } => {
+            let owners = app.ready_owners(caller).map_err(|failure| {
+                command_failure(
+                    ProductCommandDisposition::NotAdmitted,
+                    ProductFailure::Voice(failure),
+                )
+            })?;
+            let actor = caller.owner_actor();
+            let scope = command_scope();
+            let voice_command = floe_voice::VoiceStartCommand {
+                command_id: command_id.as_uuid(),
+                surface_session_id,
+            };
+            app.execute_owner(async move {
+                owners
+                    .voice
+                    .cancel_start(&actor, voice_command, &scope)
+                    .await
+                    .map_err(|failure| owner_command_failure(failure, ProductFailure::Voice))?;
+                read_voice_start_status(owners.voice.as_ref(), &actor, command_id.as_uuid(), &scope)
+                    .await
+                    .and_then(|status| status.ok_or(floe_kernel::AgentFailure::StorageUnavailable))
+                    .map(ProductCommandOutcome::VoiceStartCancelled)
+                    .map_err(|failure| {
+                        command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(failure),
+                        )
+                    })
+            })
+        }
         ProductCommand::Conversation(command) => {
             let owners = app.ready_owners(caller).map_err(|failure| {
                 command_failure(
@@ -712,6 +743,39 @@ fn route_query(
                     .await
                     .map(ProductQueryOutcome::VoiceStartStatus)
                     .map_err(ProductFailure::Voice)
+            })
+        }
+        ProductQuery::VoiceStartRecoverable => {
+            let owners = app.ready_owners(caller).map_err(ProductFailure::Voice)?;
+            let actor = caller.owner_actor();
+            let scope = scope();
+            app.execute_owner(async move {
+                let status = match owners
+                    .voice
+                    .read_recoverable_start(&actor, &scope)
+                    .await
+                    .map_err(ProductFailure::Voice)?
+                {
+                    Some(start) => read_voice_start_status(
+                        owners.voice.as_ref(),
+                        &actor,
+                        start.command.command_id,
+                        &scope,
+                    )
+                    .await
+                    .map_err(ProductFailure::Voice)?,
+                    None => None,
+                };
+                // Candidate discovery and status projection are separate
+                // read-only journal operations. If a concurrent Cancel or
+                // Stop settles the command between them, return no recovery
+                // candidate rather than surfacing a terminal record as active.
+                let status = status.filter(|status| match status.state {
+                    VoiceStartState::Preparing => true,
+                    VoiceStartState::Bound => status.local_lease_released == Some(false),
+                    VoiceStartState::Cancelled => false,
+                });
+                Ok(ProductQueryOutcome::VoiceStartRecoverable(status))
             })
         }
         ProductQuery::Conversation(query) => {

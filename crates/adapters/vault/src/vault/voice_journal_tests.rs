@@ -223,6 +223,16 @@ async fn start_and_dispatch_replay_are_read_only_and_never_fresh_twice() {
 async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
     let (f, vault) = fixture().await;
     let record = muted(&f, &vault).await;
+    let recoverable = vault
+        .read_recoverable_start(&f.actor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recoverable.command.command_id,
+        record.intent.binding.voice_session_id
+    );
+    assert_eq!(recoverable.state, floe_voice::VoiceStartCommandState::Bound);
     let other = intent(&f, &vault).await;
     assert!(matches!(
         vault.admit_test_start(&f.actor, other.clone()).await,
@@ -251,6 +261,15 @@ async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
         .unwrap();
     assert_eq!(ended.record.session.remote(), RemoteState::Unknown);
     assert!(!ended.record.session.local_lease_released());
+    assert_eq!(
+        vault
+            .read_recoverable_start(&f.actor)
+            .await
+            .unwrap()
+            .unwrap(),
+        recoverable,
+        "an active bound call remains discoverable while local media is held"
+    );
     assert!(
         vault
             .admit_test_start(&f.actor, other.clone())
@@ -278,11 +297,28 @@ async fn one_local_lease_requires_native_stop_but_remote_unknown_survives() {
         "unknown remote end cannot manufacture zero cost"
     );
     assert!(
-        !vault
-            .admit_test_start(&f.actor, other)
+        vault
+            .read_recoverable_start(&f.actor)
             .await
             .unwrap()
-            .replayed
+            .is_none(),
+        "a stopped bound Start is historical, not a recovery candidate"
+    );
+    let new_start = vault.admit_test_start(&f.actor, other).await.unwrap();
+    assert!(
+        !new_start.replayed,
+        "a fresh intent after Stop receives its own admission"
+    );
+    assert_eq!(
+        vault
+            .read_recoverable_start(&f.actor)
+            .await
+            .unwrap()
+            .unwrap()
+            .command
+            .command_id,
+        new_start.record.intent.binding.voice_session_id,
+        "the new admission owns the next recoverable command identity"
     );
 }
 #[tokio::test]
@@ -1632,6 +1668,11 @@ async fn lost_user_start_ack_reopens_as_observation_not_preparation_authority() 
         floe_voice::VoiceStartCommandState::Preparing
     );
     assert_eq!(replay.record.actor, f.actor);
+    assert_eq!(
+        vault.read_recoverable_start(&next).await.unwrap(),
+        Some(replay.record.clone()),
+        "a new App runtime recovers the exact persisted Start identity without re-admission"
+    );
     // A changed epoch cannot bind the old preparation even with a new plan.
     let mut changed = start;
     changed.binding.actor = next.clone();
@@ -1644,6 +1685,7 @@ async fn lost_user_start_ack_reopens_as_observation_not_preparation_authority() 
             .is_none()
     );
     vault.cancel_start(&next, command.clone()).await.unwrap();
+    assert!(vault.read_recoverable_start(&next).await.unwrap().is_none());
     drop(vault);
     let vault = EncryptedAgentVault::open(&f.root, f.actor.person_id, f.keys.clone())
         .await

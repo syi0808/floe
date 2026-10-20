@@ -1447,3 +1447,153 @@ fn app_voice_start_is_durable_and_status_reads_do_not_prepare_a_model() {
     );
     host.shutdown().expect("close the App host");
 }
+
+#[test]
+fn app_recovers_exact_pending_voice_start_after_process_restart_and_cancels_it() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let recorder = model.recorder();
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let surface = start_session(&host);
+    let command_id = Uuid::new_v4();
+
+    let original_epoch = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        services.execute_owner(async move {
+            let scope = ExecutionScope::root(
+                Cancellation::new(),
+                TokioInstant::now() + WAIT_TIMEOUT,
+                BudgetLedger::new(BudgetConfig::new(20, 20), ModelUsage::default()).root_lease(),
+                TraceContext::new(Uuid::new_v4()),
+            );
+            let command = floe_voice::VoiceStartCommand {
+                command_id,
+                surface_session_id: surface,
+            };
+            let first = owners
+                .voice
+                .reserve_start(&actor, command.clone(), &scope)
+                .await
+                .unwrap();
+            assert!(!first.replayed);
+            let replay = owners
+                .voice
+                .reserve_start(&actor, command, &scope)
+                .await
+                .unwrap();
+            assert!(replay.replayed);
+            assert_eq!(replay.record, first.record);
+            actor.runtime_epoch
+        })
+    });
+
+    let start_request = || ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+        command: ProductCommand::VoiceStart {
+            surface_session_id: surface,
+        },
+    };
+    let same_process_replay = host
+        .request(Uuid::new_v4())
+        .expect("admit exact duplicate Start")
+        .product_command(start_request())
+        .expect("duplicate Start is a read-only replay");
+    let ProductCommandOutcome::VoiceStart(same_process_status) = same_process_replay else {
+        panic!("duplicate Voice Start returned another outcome");
+    };
+    assert_eq!(same_process_status.command_id, command_id);
+    assert_eq!(
+        same_process_status.state,
+        floe_app::VoiceStartState::Preparing
+    );
+
+    host.shutdown().expect("close the first App process");
+    drop(host);
+
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    let reopened_epoch =
+        support::with_ready(&reopened, |_, caller, _| caller.owner_actor().runtime_epoch);
+    assert_ne!(reopened_epoch, original_epoch);
+    let recovered = reopened
+        .request(Uuid::new_v4())
+        .expect("admit read-only Voice recovery")
+        .product_query(ProductQuery::VoiceStartRecoverable)
+        .expect("recover the exact persisted Start after process restart");
+    let ProductQueryOutcome::VoiceStartRecoverable(Some(recovered_status)) = recovered else {
+        panic!("the pending Voice Start identity was not recovered");
+    };
+    assert_eq!(recovered_status.command_id, command_id);
+    assert_eq!(recovered_status.surface_session_id, surface);
+    assert_eq!(recovered_status.state, floe_app::VoiceStartState::Preparing);
+
+    let cancel_request = || ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+        command: ProductCommand::VoiceStartCancel {
+            surface_session_id: surface,
+        },
+    };
+    let cancelled = reopened
+        .request(Uuid::new_v4())
+        .expect("admit exact Start cancellation")
+        .product_command(cancel_request())
+        .expect("cancel recovered pre-binding Start");
+    let ProductCommandOutcome::VoiceStartCancelled(cancelled_status) = cancelled else {
+        panic!("Voice Start cancellation returned another outcome");
+    };
+    assert_eq!(cancelled_status.command_id, command_id);
+    assert_eq!(cancelled_status.state, floe_app::VoiceStartState::Cancelled);
+
+    let repeated_cancel = reopened
+        .request(Uuid::new_v4())
+        .expect("admit exact cancellation replay")
+        .product_command(cancel_request())
+        .expect("cancellation replay remains idempotent");
+    let ProductCommandOutcome::VoiceStartCancelled(repeated_status) = repeated_cancel else {
+        panic!("Voice cancellation replay returned another outcome");
+    };
+    assert_eq!(repeated_status, cancelled_status);
+    assert_eq!(
+        reopened
+            .request(Uuid::new_v4())
+            .unwrap()
+            .product_query(ProductQuery::VoiceStartRecoverable)
+            .unwrap(),
+        ProductQueryOutcome::VoiceStartRecoverable(None),
+        "cancelled requests are not returned for reuse"
+    );
+
+    let terminal_replay = reopened
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_command(start_request())
+        .expect("a terminal Start replay observes its cancellation");
+    let ProductCommandOutcome::VoiceStart(terminal_status) = terminal_replay else {
+        panic!("terminal Voice Start replay returned another outcome");
+    };
+    assert_eq!(terminal_status, cancelled_status);
+
+    let fresh_id = Uuid::new_v4();
+    let fresh = reopened
+        .request(Uuid::new_v4())
+        .unwrap()
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(fresh_id).unwrap(),
+            command: ProductCommand::VoiceStart {
+                surface_session_id: surface,
+            },
+        })
+        .expect("a new user intent receives a new Start identity");
+    let ProductCommandOutcome::VoiceStart(fresh_status) = fresh else {
+        panic!("fresh Voice Start returned another outcome");
+    };
+    assert_eq!(fresh_status.command_id, fresh_id);
+    assert_ne!(fresh_status.command_id, command_id);
+    assert_eq!(fresh_status.state, floe_app::VoiceStartState::Cancelled);
+
+    let model_calls = recorder.snapshot();
+    assert!(model_calls.plans.is_empty());
+    assert!(model_calls.generated.is_empty());
+    reopened.shutdown().expect("close the reopened App process");
+}

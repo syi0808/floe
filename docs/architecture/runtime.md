@@ -1564,10 +1564,18 @@ no migration, key reset or automatic data deletion is performed.
 VoiceService places command admission and the preparation-to-bound transition in
 one retained Start-controller task, as described above. Exact replay is status,
 not renewed planning authority. The typed FFI maps Voice Start and status DTOs to
-the App API, and Flutter retains one command identity over uncertain transport
-and offers a read-only status refresh. This cloud composition has no native audio
-factory: Start is durably recorded, then cancelled before model or media
-preparation. The screen states that it does not request microphone permission,
-capture audio or create a provider call. These
-receipts and the process registry do not implement Apple native audio,
-prior-process recovery or microphone permission.
+the App API. Flutter first performs a read-only query for the single durable
+recoverable Start, then retains that exact command ID after process restart and
+offers exact status refresh. A user may cancel only an unresolved pre-binding
+Start; cancellation reuses its original command ID and Surface, and a later Start
+uses a fresh ID. Completed, cancelled, or locally released commands are not
+recovered. Cancelled Starts and Bound calls whose local lease has been released
+are not returned. Recovery does not re-plan, bind, resume a provider, or touch
+media.
+
+This cloud composition has no native audio factory: Start is durably recorded,
+then cancelled before model or media preparation. The screen states that it does
+not request microphone permission, capture audio or create a provider call. The
+command journal and process registry do not implement an Apple audio backend,
+platform-backed evidence about media held by a prior OS process, or microphone
+permission behavior.

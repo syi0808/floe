@@ -127,6 +127,14 @@ impl VoiceService {
         self.check(actor)?;
         scope.run(self.journal.read_start(actor, id)).await
     }
+    pub async fn read_recoverable_start(
+        &self,
+        actor: &OwnerActor,
+        scope: &ExecutionScope,
+    ) -> Result<Option<crate::VoiceStartCommandRecord>, AgentFailure> {
+        self.check(actor)?;
+        scope.run(self.journal.read_recoverable_start(actor)).await
+    }
     pub async fn cancel_start(
         &self,
         actor: &OwnerActor,
