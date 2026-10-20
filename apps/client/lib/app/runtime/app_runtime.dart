@@ -20,6 +20,7 @@ import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/app/runtime/native_transport.dart';
 import 'package:floe_client/infrastructure/platform/client_support_directory.dart';
+import 'package:floe_client/features/voice/infrastructure/app_wire_voice_gateway.dart';
 
 /// Thrown when a request through the app transport fails.
 final class AppRuntimeException implements Exception {
@@ -70,6 +71,7 @@ final class AppRuntime {
   );
   late final assistantFeatures = AppWireAssistantFeatureGateway(_transport);
   late final memory = AppWireMemoryGateway(_transport);
+  late final voice = AppWireVoiceGateway(_transport);
   late final connections = AppWireConnectionsGateway(_transport);
   late final connectionsController = ConnectionsController(
     connections,
@@ -108,6 +110,7 @@ final class AppRuntime {
     assistantFeatures: assistantFeatureController,
     memory: memoryController,
     operationAuthorization: AppWireOperationAuthorizationGateway(_transport),
+    voice: voice,
   );
   late final NativeContextHostTransport nativeHostTransport =
       AppWireNativeContextHostTransport(_transport.nativeCallbacks);

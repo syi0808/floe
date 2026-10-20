@@ -38,6 +38,9 @@ pub(crate) fn command(
 fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
     use AppProductCommandDto as C;
     Ok(match value {
+        C::VoiceStart { surface_session_id } => ProductCommand::VoiceStart {
+            surface_session_id: surface_session_id.get(),
+        },
         command @ (C::ConversationSessionStart { .. }
         | C::ConversationSetCalendarPolicy { .. }
         | C::ConversationWorkSubmitText { .. }
@@ -153,6 +156,11 @@ fn command_out(
         (ProductCommand::Memory(request), ProductCommandOutcome::Memory(value)) => {
             return crate::memory_wire::command_out(request, command_id, value);
         }
+        (ProductCommand::VoiceStart { .. }, ProductCommandOutcome::VoiceStart(status)) => {
+            AppCommandResultDto::VoiceStart {
+                status: voice_start_status(status).map_err(structural_error)?,
+            }
+        }
         _ => return Err(internal_error()),
     })
 }
@@ -171,6 +179,9 @@ pub(crate) fn query(
 fn query_in(value: AppProductQueryDto) -> AppWireResult<ProductQuery> {
     use AppProductQueryDto as Q;
     Ok(match value {
+        Q::VoiceStartStatus { command_id } => ProductQuery::VoiceStartStatus {
+            command_id: command_id.get(),
+        },
         query @ (Q::ConversationSessionResume { .. }
         | Q::ConversationCalendarProposalPreview { .. }
         | Q::ConversationCalendarPolicy { .. }
@@ -282,6 +293,14 @@ fn query_out(
         (ProductQuery::Memory(request), ProductQueryOutcome::Memory(value)) => {
             return crate::memory_wire::query_out(request, value, caller);
         }
+        (ProductQuery::VoiceStartStatus { .. }, ProductQueryOutcome::VoiceStartStatus(status)) => {
+            AppQueryResultDto::VoiceStartStatus {
+                status: status
+                    .map(voice_start_status)
+                    .transpose()
+                    .map_err(structural_error)?,
+            }
+        }
         _ => return Err(internal_error()),
     })
 }
@@ -321,7 +340,45 @@ fn product_failure(failure: ProductFailure, correlation_id: Uuid) -> AppWireErro
             agent_failure(reason)
         }
         ProductFailure::Day(reason) => day_error(reason),
+        ProductFailure::Voice(reason) => agent_failure(reason),
     }
+}
+
+fn voice_start_status(
+    status: floe_app::VoiceStartStatus,
+) -> Result<VoiceStartStatusDto, floe_protocol::ErrorDto> {
+    Ok(VoiceStartStatusDto {
+        command_id: CommandIdDto::new(status.command_id).ok_or_else(|| {
+            floe_protocol::wire::invalid("voice.command_id", "invalid Voice command ID")
+        })?,
+        surface_session_id: SessionRefDto::new(status.surface_session_id).ok_or_else(|| {
+            floe_protocol::wire::invalid(
+                "voice.surface_session_id",
+                "invalid Voice surface session ID",
+            )
+        })?,
+        state: match status.state {
+            floe_app::VoiceStartState::Preparing => VoiceStartStateDto::Preparing,
+            floe_app::VoiceStartState::Bound => VoiceStartStateDto::Bound,
+            floe_app::VoiceStartState::Cancelled => VoiceStartStateDto::Cancelled,
+        },
+        media: status.media.map(|state| match state {
+            floe_app::VoiceMediaState::Preparing => VoiceMediaStateDto::Preparing,
+            floe_app::VoiceMediaState::Muted => VoiceMediaStateDto::Muted,
+            floe_app::VoiceMediaState::Capturing => VoiceMediaStateDto::Capturing,
+            floe_app::VoiceMediaState::Stopped => VoiceMediaStateDto::Stopped,
+        }),
+        remote: status.remote.map(|state| match state {
+            floe_app::VoiceRemoteState::NotStarted => VoiceRemoteStateDto::NotStarted,
+            floe_app::VoiceRemoteState::Dispatching => VoiceRemoteStateDto::Dispatching,
+            floe_app::VoiceRemoteState::Connected => VoiceRemoteStateDto::Connected,
+            floe_app::VoiceRemoteState::CloseRequested => VoiceRemoteStateDto::CloseRequested,
+            floe_app::VoiceRemoteState::Closed => VoiceRemoteStateDto::Closed,
+            floe_app::VoiceRemoteState::Unknown => VoiceRemoteStateDto::Unknown,
+        }),
+        stop_requested: status.stop_requested,
+        local_lease_released: status.local_lease_released,
+    })
 }
 
 #[cfg(test)]

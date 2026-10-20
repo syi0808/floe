@@ -89,6 +89,55 @@ pub struct AppComposition {
 }
 
 impl AppComposition {
+    /// Retain one platform-prepared muted lease only for the exact durable
+    /// Voice Start command awaiting its PrepareMuted receipt. This is the
+    /// Rust/native composition seam; it does not report the lease as ready.
+    pub fn register_live_media_lease(
+        &self,
+        caller: &crate::CallerContext,
+        lease: Arc<dyn floe_native::live_media::LiveMediaLease>,
+    ) -> Result<(), floe_kernel::AgentFailure> {
+        let owners = self.ready_owners(caller)?;
+        let actor = caller.owner_actor();
+        let binding = lease.binding().clone();
+        if binding.actor != actor {
+            return Err(floe_kernel::AgentFailure::PolicyDenied);
+        }
+        binding.validate()?;
+        lease.validate_current()?;
+        let registry = self.core.live_media_registry.clone();
+        self.execute_owner(async move {
+            let scope = crate::host_scope(
+                uuid::Uuid::new_v4(),
+                floe_execution::Cancellation::new(),
+                std::time::Duration::from_secs(5),
+            );
+            let record = owners
+                .voice
+                .read_call(&actor, binding.voice_session_id, &scope)
+                .await?
+                .ok_or(floe_kernel::AgentFailure::NotFound)?;
+            let start = &record.intent.binding;
+            let preparing = record
+                .session
+                .pending_media_command()
+                .is_some_and(|command| {
+                    command.kind == floe_voice::MediaCommandKind::PrepareMuted
+                        && &command.binding == start
+                });
+            if start.actor != binding.actor
+                || start.voice_session_id != binding.voice_session_id
+                || start.media_lease_id != binding.media_lease_id
+                || start.plan_id != binding.plan_id
+                || !preparing
+                || record.session.stop_requested()
+            {
+                return Err(floe_kernel::AgentFailure::PolicyDenied);
+            }
+            registry.register(lease)
+        })
+    }
+
     /// Read encrypted Conversation journal evidence in Linux App QA.
     #[cfg(all(feature = "qa-fixtures", target_os = "linux"))]
     #[doc(hidden)]
@@ -289,6 +338,7 @@ fn compose(
         lease_registry: Arc::new(floe_context::SourceLeaseRegistry::new()),
         day,
         product_gateway,
+        live_media_registry: Arc::new(floe_native::live_media::ProcessLiveMediaRegistry::new()),
     });
     let runtime_handle = runtime.handle().clone();
     let services = AppComposition {

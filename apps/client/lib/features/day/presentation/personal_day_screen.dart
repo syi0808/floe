@@ -39,6 +39,7 @@ import 'package:floe_client/features/conversation/application/conversation_contr
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
+import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 
 part 'personal_day/navigation.dart';
 part 'personal_day/tasks.dart';
@@ -46,10 +47,19 @@ part 'personal_day/notes.dart';
 part 'personal_day/day_row.dart';
 part 'personal_day/feedback.dart';
 
-enum _DestinationView { today, tasks, notes, activity, connections, settings }
+enum _DestinationView {
+  today,
+  voice,
+  tasks,
+  notes,
+  activity,
+  connections,
+  settings,
+}
 
 const _primaryDestinations = [
   _DestinationView.today,
+  _DestinationView.voice,
   _DestinationView.tasks,
   _DestinationView.notes,
   _DestinationView.activity,
@@ -216,7 +226,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       identity: selectedTaskId ?? destination,
       child: _workspace(narrow),
     );
-    if (destination == _DestinationView.settings) {
+    if (destination == _DestinationView.settings ||
+        destination == _DestinationView.voice) {
       return Padding(padding: padding, child: workspace);
     }
     if (destination != _DestinationView.today || selectedTaskId != null) {
@@ -229,6 +240,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       destination == _DestinationView.today ? Expanded(child: child) : child;
 
   Widget _workspace(bool narrow) {
+    if (destination == _DestinationView.voice) {
+      return VoiceScreen(
+        ownerGateways: widget.ownerGateways,
+        agentGateway: widget.agentGateway,
+        personId: widget.query.personId,
+      );
+    }
     if (destination == _DestinationView.connections) {
       return ConnectorScreen(
         controller: widget.connectionsController,
@@ -306,6 +324,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 onDelete: controller.deleteItem,
               ),
               _DestinationView.connections => SizedBox.shrink(),
+              _DestinationView.voice => SizedBox.shrink(),
               _DestinationView.activity => SizedBox.shrink(),
               _DestinationView.settings => SizedBox.shrink(),
               _DestinationView.notes => _NotesScreen(

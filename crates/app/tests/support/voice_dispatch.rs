@@ -25,6 +25,9 @@ use floe_model_contract::{
     LiveModelCapabilities, LiveTransportLimits, LiveUsageObservation, ModelBindingDigest,
     ModelSelectionCommitment, ProcessingBoundary,
 };
+use floe_native::live_media::{
+    LiveMediaBinding, LiveMediaLease, LiveMediaStopObservation, LiveSessionDescription,
+};
 use floe_voice::{
     MediaState, RemoteState, VoiceBinding, VoiceMutation, VoiceMutationKind, VoiceStartIntent,
 };
@@ -32,6 +35,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
+use tokio::time::Instant as TokioInstant;
 #[derive(Default)]
 struct Probe {
     starts: AtomicUsize,
@@ -1079,4 +1083,367 @@ fn owned_live_driver_automatically_projects_and_delivers_manager_result() {
 #[test]
 fn automatic_live_result_keeps_uncertain_write_without_reissuing_work() {
     drive_retained_stream(false, false, false, AppendMode::AutomaticUncertain);
+}
+
+/// Deterministic process-owned lease used to exercise App retirement. It
+/// confirms both tracks only after the App has fenced it; this is not device
+/// or Apple audio validation.
+struct ShutdownNativeLease {
+    binding: LiveMediaBinding,
+    fenced: AtomicBool,
+    stopped: AtomicBool,
+    cancellation: Cancellation,
+}
+
+impl LiveMediaLease for ShutdownNativeLease {
+    fn binding(&self) -> &LiveMediaBinding {
+        &self.binding
+    }
+
+    fn validate_current(&self) -> Result<(), AgentFailure> {
+        if self.cancellation.is_cancelled() {
+            Err(AgentFailure::Interrupted)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn offer<'a>(
+        &'a self,
+        _: TokioInstant,
+        _: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<LiveSessionDescription, AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+
+    fn apply_answer<'a>(
+        &'a self,
+        _: LiveSessionDescription,
+        _: TokioInstant,
+        _: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+
+    fn fence(&self) {
+        self.fenced.store(true, Ordering::SeqCst);
+    }
+
+    fn lifetime_cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
+
+    fn request_stop_once<'a>(
+        &'a self,
+        deadline: TokioInstant,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            if !self.fenced.load(Ordering::SeqCst) {
+                return Err(AgentFailure::Conflict);
+            }
+            if TokioInstant::now() >= deadline {
+                return Err(AgentFailure::DeadlineExceeded);
+            }
+            self.stopped.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+    }
+
+    fn observe_stop<'a>(
+        &'a self,
+        _: TokioInstant,
+    ) -> BoxFuture<'a, Result<LiveMediaStopObservation, AgentFailure>> {
+        Box::pin(async move {
+            let stopped = self.stopped.load(Ordering::SeqCst);
+            Ok(LiveMediaStopObservation {
+                binding: self.binding.clone(),
+                capture_stopped: stopped,
+                playback_stopped: stopped,
+            })
+        })
+    }
+}
+
+#[test]
+fn app_shutdown_persists_native_stop_receipt_before_releasing_process_lease() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let surface = start_session(&host);
+
+    let (voice_id, native_binding) = support::with_ready(&host, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let owners_for_start = owners.clone();
+        let (voice_id, native_binding, initial_record) = services.execute_owner(async move {
+            let scope = ExecutionScope::root(
+                Cancellation::new(),
+                TokioInstant::now() + WAIT_TIMEOUT,
+                BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default()).root_lease(),
+                TraceContext::new(Uuid::new_v4()),
+            );
+            let inference = floe_inference::InferenceService::new(
+                LiveProvider(Arc::new(Probe::default())),
+                Independent,
+                Independent,
+            );
+            let prepared = inference
+                .prepare_live(
+                    LiveModelPlanRequest {
+                        actor: actor.clone(),
+                        required_capabilities: LiveModelCapabilities::conversational(),
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap();
+            let plan = prepared.plan().clone();
+            let voice_id = Uuid::new_v4();
+            let media_lease_id = Uuid::new_v4();
+            let source = LiveProjectionSource::SurfacePrefix {
+                through: owners_for_start
+                    .conversation
+                    .surface_head(&actor, surface, &scope)
+                    .await
+                    .unwrap(),
+            };
+            let floe_context::LiveProjectionOutcome::Ready(projection) = owners_for_start
+                .live_context_projector
+                .project_prefix(
+                    floe_context::LivePrefixProjectionRequest {
+                        plan: &plan,
+                        voice_session_id: voice_id,
+                        surface_session_id: surface,
+                        projection_id: Uuid::new_v4(),
+                        source: &source,
+                        instructions:
+                            "Present the canonical conversation. Delegate work to Manager.",
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("empty canonical surface must be projectable");
+            };
+            let binding = VoiceBinding {
+                actor: actor.clone(),
+                surface_session_id: surface,
+                voice_session_id: voice_id,
+                media_lease_id,
+                plan_id: plan.operation_id,
+            };
+            owners_for_start
+                .voice
+                .reserve_start(
+                    &actor,
+                    floe_voice::VoiceStartCommand {
+                        command_id: voice_id,
+                        surface_session_id: surface,
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap();
+            let intent = VoiceStartIntent::prepare(
+                binding,
+                &plan,
+                &projection,
+                floe_execution::budget::ModelReservationCeiling {
+                    tokens: 100,
+                    cost_micros: 100,
+                },
+            )
+            .unwrap();
+            let record = owners_for_start
+                .voice
+                .admit_start(&actor, intent, &scope)
+                .await
+                .unwrap()
+                .record;
+            (
+                voice_id,
+                LiveMediaBinding {
+                    actor,
+                    voice_session_id: voice_id,
+                    media_lease_id,
+                    plan_id: plan.operation_id,
+                },
+                record,
+            )
+        });
+
+        let lease = Arc::new(ShutdownNativeLease {
+            binding: native_binding.clone(),
+            fenced: AtomicBool::new(false),
+            stopped: AtomicBool::new(false),
+            cancellation: Cancellation::new(),
+        });
+        services
+            .register_live_media_lease(caller, lease)
+            .expect("retain the exact pending muted lease");
+
+        let actor = caller.owner_actor();
+        let owners_for_receipt = owners.clone();
+        services.execute_owner(async move {
+            let scope = ExecutionScope::root(
+                Cancellation::new(),
+                TokioInstant::now() + WAIT_TIMEOUT,
+                BudgetLedger::new(BudgetConfig::new(100, 100), ModelUsage::default()).root_lease(),
+                TraceContext::new(Uuid::new_v4()),
+            );
+            let command = initial_record
+                .session
+                .pending_media_command()
+                .unwrap()
+                .clone();
+            owners_for_receipt
+                .voice
+                .mutate(
+                    &actor,
+                    VoiceMutation {
+                        voice_session_id: voice_id,
+                        command_id: Uuid::new_v4(),
+                        expected_revision: initial_record.revision,
+                        kind: VoiceMutationKind::NativeReceipt {
+                            command,
+                            state: MediaState::Muted,
+                        },
+                    },
+                    &scope,
+                )
+                .await
+                .unwrap();
+        });
+        (voice_id, native_binding)
+    });
+
+    host.shutdown()
+        .expect("drain the App process-owned Voice lease");
+    drop(host);
+
+    let reopened = profile.open(&model);
+    assert_eq!(prepare_runtime(&reopened), RuntimeReadinessState::Ready);
+    support::with_ready(&reopened, |services, caller, owners| {
+        let actor = caller.owner_actor();
+        let record = services.execute_owner(async move {
+            let scope = ExecutionScope::root(
+                Cancellation::new(),
+                TokioInstant::now() + WAIT_TIMEOUT,
+                BudgetLedger::new(BudgetConfig::new(20, 20), ModelUsage::default()).root_lease(),
+                TraceContext::new(Uuid::new_v4()),
+            );
+            owners
+                .voice
+                .read_call(&actor, voice_id, &scope)
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        assert_eq!(record.intent.binding.actor, native_binding.actor);
+        assert_eq!(
+            record.intent.binding.media_lease_id,
+            native_binding.media_lease_id
+        );
+        assert_eq!(record.session.media(), MediaState::Stopped);
+        assert!(record.session.stop_requested());
+        assert!(record.session.local_lease_released());
+    });
+    reopened.shutdown().expect("close the reopened App host");
+}
+
+#[test]
+fn app_voice_start_is_durable_and_status_reads_do_not_prepare_a_model() {
+    let model = ScriptedModel::new(PrimaryBehavior::NoGateway, USER_TEXT, ModelOutput::Answer);
+    let recorder = model.recorder();
+    let profile = IsolatedProfile::new();
+    let host = profile.open(&model);
+    assert_eq!(prepare_runtime(&host), RuntimeReadinessState::Ready);
+    let surface = start_session(&host);
+    let command_id = Uuid::new_v4();
+
+    let missing = host
+        .request(Uuid::new_v4())
+        .expect("admit initial Voice status read")
+        .product_query(ProductQuery::VoiceStartStatus {
+            command_id: Uuid::new_v4(),
+        })
+        .expect("missing Voice Start is a read-only empty result");
+    assert_eq!(
+        missing,
+        ProductQueryOutcome::VoiceStartStatus(None),
+        "an absent command has no status record"
+    );
+
+    let start_request = || ProductCommandRequest {
+        command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+        command: ProductCommand::VoiceStart {
+            surface_session_id: surface,
+        },
+    };
+    let started = host
+        .request(Uuid::new_v4())
+        .expect("admit durable Voice Start")
+        .product_command(start_request())
+        .expect("return the safely cancelled durable Voice Start record");
+    let ProductCommandOutcome::VoiceStart(start_status) = started else {
+        panic!("Voice Start returned another command outcome");
+    };
+    assert_eq!(start_status.state, floe_app::VoiceStartState::Cancelled);
+    assert_eq!(start_status.media, None);
+    assert_eq!(start_status.remote, None);
+
+    let status = host
+        .request(Uuid::new_v4())
+        .expect("admit Voice status query")
+        .product_query(ProductQuery::VoiceStartStatus { command_id })
+        .expect("observe the durable cancellation");
+    let ProductQueryOutcome::VoiceStartStatus(Some(status)) = status else {
+        panic!("Voice Start cancellation must remain queryable");
+    };
+    assert_eq!(status.command_id, command_id);
+    assert_eq!(status.surface_session_id, surface);
+    assert_eq!(status.state, floe_app::VoiceStartState::Cancelled);
+    assert_eq!(status.media, None);
+    assert_eq!(status.remote, None);
+
+    let replay = host
+        .request(Uuid::new_v4())
+        .expect("admit exact Voice Start replay")
+        .product_command(start_request())
+        .expect("exact replay observes the original durable command");
+    let ProductCommandOutcome::VoiceStart(replay_status) = replay else {
+        panic!("Voice Start returned another command outcome");
+    };
+    assert_eq!(replay_status, status);
+
+    let changed = host
+        .request(Uuid::new_v4())
+        .expect("admit changed Voice Start replay")
+        .product_command(ProductCommandRequest {
+            command_id: floe_kernel::CommandId::from_uuid(command_id).unwrap(),
+            command: ProductCommand::VoiceStart {
+                surface_session_id: Uuid::new_v4(),
+            },
+        })
+        .expect_err("a command ID cannot be rebound to another Surface");
+    assert_eq!(
+        changed.disposition,
+        ProductCommandDisposition::Indeterminate
+    );
+    assert!(matches!(
+        changed.failure,
+        ProductFailure::Voice(AgentFailure::Conflict)
+    ));
+
+    let model_calls = recorder.snapshot();
+    assert!(
+        model_calls.plans.is_empty(),
+        "Voice Start never planned a model"
+    );
+    assert!(
+        model_calls.generated.is_empty(),
+        "Voice Start never called a model"
+    );
+    host.shutdown().expect("close the App host");
 }

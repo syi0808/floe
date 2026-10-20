@@ -1101,6 +1101,16 @@ fn close_published(
     slot.closing |= permanent;
     let open = slot.current.take();
     drop(slot);
+    let retiring_actor = open
+        .as_ref()
+        .map(|(_, generation)| generation.owners().actor().clone());
+    let live_media = catch_unwind(AssertUnwindSafe(|| {
+        crate::live_media_shutdown::fence_retiring_media(
+            &core.live_media_registry,
+            retiring_actor.as_ref(),
+        )
+    }))
+    .unwrap_or(Err(AgentFailure::Interrupted));
     let gateway = catch_unwind(AssertUnwindSafe(|| {
         if permanent {
             core.product_gateway.close()
@@ -1113,7 +1123,11 @@ fn close_published(
         Some((_, open)) => open.owners().close_admission(),
         None => Ok(()),
     };
-    failure.map_or(Ok(()), Err).and(gateway).and(owners)
+    failure
+        .map_or(Ok(()), Err)
+        .and(live_media)
+        .and(gateway)
+        .and(owners)
 }
 
 fn retire(

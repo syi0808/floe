@@ -724,6 +724,7 @@ dependencies = [
  "floe-kernel",
  "floe-knowledge",
  "floe-model-contract",
+ "floe-native",
  "floe-provider-adapters",
  "floe-vault",
  "floe-voice",

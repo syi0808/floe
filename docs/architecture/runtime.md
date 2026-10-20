@@ -250,7 +250,8 @@ block new text admission. Core messages are used for execution detail cards,
 not as the Person timeline or as fabricated Surface turn IDs. An accepted input
 is never restored into the composer merely because its later Run failed.
 
-Voice provider/media/control adapters remain separate execution-plan gates.
+The product Voice command contract is composed; actual live provider/media
+control dispatch into a retained driver remains a separate execution-plan gate.
 Core recording, authority, external-effect ownership and budget limits are
 unchanged. [ADR 0036](../decisions/0036-live-surface-and-manager-work.md) records
 the target and the reasons for this cutover.
@@ -1147,10 +1148,12 @@ that physical Stop after an uncertain result. It issues a host-instance-bound
 receipt only after separate capture and playback readback both report stopped; the
 receipt remains until Voice's durable NativeReceipt is acknowledged. This is the
 host ownership contract and synthetic Rust qualification, not an Apple audio
-backend or proof that an earlier process has exited. App composition, Apple
-WebRTC/audio, OS-backed prior-process evidence and Flutter/FFI call controls
-remain explicit integration gates. Its task currently belongs to the host Tokio
-runtime; App shutdown drain is not yet composed with this registry. Actual native
+backend or proof that an earlier process has exited. App retains this registry
+across Runtime generations and launches exact Stop work before storage custody;
+it commits Voice's matching NativeReceipt before acknowledging lease release.
+Gateway live inference is composed per generation over the encrypted credential
+reader, dependency resolver and process registry. Apple WebRTC/audio and
+OS-backed prior-process evidence remain explicit integration gates. Actual native
 privacy Stop must occur independently of storage latency. New stored-layout
 families require an explicitly selected fresh development profile; no automatic
 migration, database deletion or key replacement occurs.
@@ -1560,6 +1563,11 @@ no migration, key reset or automatic data deletion is performed.
 
 VoiceService places command admission and the preparation-to-bound transition in
 one retained Start-controller task, as described above. Exact replay is status,
-not renewed planning authority. Product composition still must supply actual
-native preparation/teardown and connect Start/status to the UI. These receipts do
-not implement native process recovery or microphone permission.
+not renewed planning authority. The typed FFI maps Voice Start and status DTOs to
+the App API, and Flutter retains one command identity over uncertain transport
+and offers a read-only status refresh. This cloud composition has no native audio
+factory: Start is durably recorded, then cancelled before model or media
+preparation. The screen states that it does not request microphone permission,
+capture audio or create a provider call. These
+receipts and the process registry do not implement Apple native audio,
+prior-process recovery or microphone permission.

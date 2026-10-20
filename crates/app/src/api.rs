@@ -68,6 +68,7 @@ pub enum ProductCommand {
     Connections(ConnectionsCommand),
     Day(DayCommand),
     Memory(MemoryCommand),
+    VoiceStart { surface_session_id: Uuid },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,6 +220,7 @@ pub enum ProductQuery {
     Connections(ConnectionsQuery),
     Day(DayProductQuery),
     Memory(MemoryQuery),
+    VoiceStartStatus { command_id: Uuid },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -289,6 +291,7 @@ pub enum ProductCommandOutcome {
     Connections(ConnectionsCommandOutcome),
     Day(DayCommandOutcome),
     Memory(MemoryCommandOutcome),
+    VoiceStart(VoiceStartStatus),
 }
 
 #[derive(Clone, Debug)]
@@ -338,6 +341,45 @@ pub enum ProductQueryOutcome {
     Connections(ConnectionsQueryOutcome),
     Day(DayQueryOutcome),
     Memory(MemoryQueryResult),
+    VoiceStartStatus(Option<VoiceStartStatus>),
+}
+
+/// Read-only projection of durable Voice start and native media state. A
+/// missing call has no media status; a status query never starts preparation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VoiceStartStatus {
+    pub command_id: Uuid,
+    pub surface_session_id: Uuid,
+    pub state: VoiceStartState,
+    pub media: Option<VoiceMediaState>,
+    pub remote: Option<VoiceRemoteState>,
+    pub stop_requested: Option<bool>,
+    pub local_lease_released: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceStartState {
+    Preparing,
+    Bound,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceMediaState {
+    Preparing,
+    Muted,
+    Capturing,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VoiceRemoteState {
+    NotStarted,
+    Dispatching,
+    Connected,
+    CloseRequested,
+    Closed,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -408,6 +450,7 @@ pub enum ProductFailure {
     Connections(floe_kernel::AgentFailure),
     Memory(floe_kernel::AgentFailure),
     Day(crate::CoreError),
+    Voice(floe_kernel::AgentFailure),
 }
 
 #[derive(Debug)]

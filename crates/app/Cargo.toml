@@ -37,6 +37,7 @@ floe-experts-builtin = { path = "../experts/builtin" }
 floe-inference = { path = "../modules/inference" }
 floe-kernel = { path = "../contracts/kernel" }
 floe-knowledge = { path = "../modules/knowledge" }
+floe-native = { path = "../platform/native" }
 floe-provider-adapters = { path = "../adapters/providers" }
 floe-voice = { path = "../modules/voice" }
 floe-vault = { path = "../adapters/vault", default-features = false }

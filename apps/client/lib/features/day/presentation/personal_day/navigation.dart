@@ -91,6 +91,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
 
   String get label => switch (view) {
     _DestinationView.today => AppLocalizations.of(context).calendar,
+    _DestinationView.voice => 'Voice',
     _DestinationView.tasks => AppLocalizations.of(context).tasks,
     _DestinationView.notes => AppLocalizations.of(context).notes,
     _DestinationView.activity => 'Activity',
@@ -100,6 +101,7 @@ class _DestinationButtonState extends State<_DestinationButton> {
 
   IconData get icon => switch (view) {
     _DestinationView.today => LucideIcons.calendarDays,
+    _DestinationView.voice => LucideIcons.mic,
     _DestinationView.tasks => LucideIcons.listTodo,
     _DestinationView.notes => LucideIcons.notebookPen,
     _DestinationView.activity => LucideIcons.history,

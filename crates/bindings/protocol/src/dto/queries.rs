@@ -69,6 +69,8 @@ impl RuntimeQueryDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppProductQueryDto {
+    #[serde(rename = "voice.start.status")]
+    VoiceStartStatus { command_id: CommandIdDto },
     #[serde(rename = "day.refresh.get")]
     DayRefreshGet { operation_ref: OperationRefDto },
     #[serde(rename = "day.snapshot")]
@@ -152,6 +154,7 @@ pub enum AppProductQueryDto {
 impl AppProductQueryDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::VoiceStartStatus { .. } => return Ok(()),
             Self::DayRefreshGet { .. } => return Ok(()),
             Self::DaySnapshot { .. } => return Ok(()),
             Self::DayCalendarDestinations {} => return Ok(()),
@@ -217,6 +220,10 @@ impl AppProductQueryDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppQueryResultDto {
+    #[serde(rename = "voice.start.status")]
+    VoiceStartStatus {
+        status: Option<super::VoiceStartStatusDto>,
+    },
     #[serde(rename = "conversation.calendar_proposal.preview")]
     ConversationCalendarProposalPreview {
         preview: super::ActionProposalPreviewDto,

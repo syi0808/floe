@@ -37,6 +37,10 @@ impl<Keys: VaultKeyProvider> Drop for ActivationGuard<Keys> {
         if self.armed {
             let _seal = RetirementSeal(self.vault.as_ref());
             if let Some(owners) = &self.owners {
+                let _ = self
+                    .core
+                    .live_media_registry
+                    .fence_generation(owners.actor());
                 let _ = owners.close_admission();
             }
             if let Some(generation) = self.generation {
@@ -81,6 +85,15 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             generation: None,
         };
         let scope = crate::host_scope(operation_id, cancellation.clone(), Duration::from_secs(55));
+        crate::live_media_shutdown::fence_retiring_media(&core.live_media_registry, None)?;
+        scope
+            .run(crate::live_media_shutdown::drain_registered_media(
+                vault.clone(),
+                core.live_media_registry.clone(),
+                &actor,
+                scope.deadline(),
+            ))
+            .await?;
         // Tasks settle abandoned journals before any parent recovery. Conversation
         // subsequently reloads each exact receipt from its acknowledged intent.
         let task_repository = Arc::new(floe_vault::VaultTaskRepository::new(vault.clone()));
@@ -237,6 +250,15 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             vault.clone(),
             conversation.clone(),
         )?);
+        let live_provider = floe_provider_adapters::gateway::live::GatewayLiveModelProvider::new(
+            sources.gateway_credentials.as_ref().clone(),
+            core.live_media_registry.clone(),
+        );
+        let live_inference = Arc::new(floe_inference::InferenceService::new(
+            live_provider,
+            sources.dependency_resolver.clone(),
+            sources.gateway_credentials.clone(),
+        ));
         let live_context_projector = Arc::new(floe_context::LiveContextProjector::new(
             vault.clone(),
             vault.clone(),
@@ -247,6 +269,7 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             sources.connections.clone(),
             conversation,
             voice,
+            live_inference,
             live_context_projector,
             experts.clone(),
             knowledge.clone(),
@@ -305,10 +328,22 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
     pub(crate) async fn shutdown(&self, operation_id: Uuid) -> Result<(), AgentFailure> {
         let _seal = RetirementSeal(self.vault.as_ref());
         self.retired.store(true, Ordering::Release);
+        let fence = isolate_sync(|| {
+            crate::live_media_shutdown::fence_retiring_media(
+                &self.core.live_media_registry,
+                Some(self.owners.actor()),
+            )
+        });
         let close = self.owners.close_admission();
         let gateway = isolate_sync(|| self.core.product_gateway.retire(self.generation));
         let scope = crate::host_scope(operation_id, Cancellation::new(), Duration::from_secs(34));
-        let (voice, conversation, connections, calendar_operations, experts, knowledge) = tokio::join!(
+        let (native, voice, conversation, connections, calendar_operations, experts, knowledge) = tokio::join!(
+            drain_owner(|| crate::live_media_shutdown::drain_registered_media(
+                self.vault.clone(),
+                self.core.live_media_registry.clone(),
+                self.owners.actor(),
+                scope.deadline(),
+            )),
             drain_owner(|| self.owners.voice.shutdown_and_drain(&scope)),
             drain_owner(|| self.owners.conversation.shutdown(&scope)),
             drain_owner(|| self.owners.connections.shutdown_and_drain(&scope)),
@@ -317,8 +352,10 @@ impl<Keys: VaultKeyProvider + 'static> ReadyGeneration<Keys> {
             drain_owner(|| self.owners.knowledge.shutdown()),
         );
         self.vault.seal();
-        let result = close
+        let result = fence
+            .and(close)
             .and(gateway)
+            .and(native)
             .and(voice)
             .and(conversation)
             .and(connections)
@@ -335,6 +372,10 @@ impl<Keys: VaultKeyProvider> Drop for ReadyGeneration<Keys> {
     fn drop(&mut self) {
         let _seal = RetirementSeal(self.vault.as_ref());
         self.retired.store(true, Ordering::Release);
+        let _ = self
+            .core
+            .live_media_registry
+            .fence_generation(self.owners.actor());
         let _ = self.owners.close_admission();
         let _ = isolate_sync(|| self.core.product_gateway.retire(self.generation));
     }

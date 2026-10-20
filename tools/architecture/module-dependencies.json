@@ -366,6 +366,7 @@
         "day",
         "builtin",
         "providers",
+        "native",
         "vault",
         "diagnostics",
         "execution"

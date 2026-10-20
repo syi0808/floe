@@ -13,11 +13,20 @@ use std::sync::{
 use std::time::Duration;
 use uuid::Uuid;
 
+/// Live Gateway planning shares the generation's trusted credential view and
+/// dependency resolver while resolving native leases through the App process.
+pub type GatewayLiveInference = floe_inference::InferenceService<
+    floe_provider_adapters::gateway::live::GatewayLiveModelProvider,
+    Arc<dyn floe_access::DependencyResolver>,
+    Arc<floe_provider_adapters::gateway::GatewayCredentialStore>,
+>;
+
 pub struct ReadyOwners {
     actor: OwnerActor,
     available: AtomicBool,
     pub connections: Arc<floe_connections::ConnectionsService>,
     pub voice: Arc<floe_voice::VoiceService>,
+    pub live_inference: Arc<GatewayLiveInference>,
     pub live_context_projector: Arc<floe_context::LiveContextProjector>,
     pub conversation: Arc<dyn floe_conversation::ConversationOwner>,
     pub experts: Arc<dyn floe_experts::ExpertsOwner>,
@@ -30,6 +39,7 @@ impl ReadyOwners {
         connections: Arc<floe_connections::ConnectionsService>,
         conversation: Arc<dyn floe_conversation::ConversationOwner>,
         voice: Arc<floe_voice::VoiceService>,
+        live_inference: Arc<GatewayLiveInference>,
         live_context_projector: Arc<floe_context::LiveContextProjector>,
         experts: Arc<dyn floe_experts::ExpertsOwner>,
         knowledge: Arc<dyn floe_knowledge::KnowledgeOwner>,
@@ -41,6 +51,7 @@ impl ReadyOwners {
             connections,
             conversation,
             voice,
+            live_inference,
             live_context_projector,
             experts,
             knowledge,
@@ -72,6 +83,9 @@ impl ReadyOwners {
             .and(knowledge)
             .and(calendar_operations)
             .and(connections)
+    }
+    pub(crate) fn actor(&self) -> &floe_kernel::OwnerActor {
+        &self.actor
     }
 }
 fn close_owner(close: impl FnOnce()) -> Result<(), AgentFailure> {

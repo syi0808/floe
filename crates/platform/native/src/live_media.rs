@@ -83,6 +83,7 @@ impl LiveMediaStopReceipt {
     pub fn host_instance_id(&self) -> Uuid {
         self.host_instance_id
     }
+
     pub fn binding(&self) -> &LiveMediaBinding {
         &self.binding
     }
@@ -165,6 +166,16 @@ impl ProcessLiveMediaRegistry {
 
     pub fn host_instance_id(&self) -> Uuid {
         self.host_instance_id
+    }
+
+    /// Snapshot exact process-held leases for application shutdown custody.
+    /// Callers must still fence and stop each returned binding through this
+    /// registry; the snapshot is never proof that a lease is still active.
+    pub fn registered_bindings(&self) -> Vec<LiveMediaBinding> {
+        lock_recover(&self.leases)
+            .values()
+            .map(|entry| entry.lease.binding().clone())
+            .collect()
     }
 
     /// Retain a lease that the platform already prepared muted after the

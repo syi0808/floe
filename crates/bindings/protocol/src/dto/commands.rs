@@ -65,6 +65,8 @@ impl RuntimeCommandDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum AppProductCommandDto {
+    #[serde(rename = "voice.start")]
+    VoiceStart { surface_session_id: SessionRefDto },
     #[serde(rename = "connections.pairing.start")]
     ConnectionsPairingStart { address_text: String },
     #[serde(rename = "connections.pairing.cancel")]
@@ -220,6 +222,7 @@ pub enum AppProductCommandDto {
 impl AppProductCommandDto {
     fn validate(&self) -> Result<(), &'static str> {
         match self {
+            Self::VoiceStart { .. } => Ok(()),
             Self::ConnectionsPairingStart { address_text } => {
                 if !valid_text(address_text, 2048) || !valid_gateway_setup_address(address_text) {
                     Err("command.address_text")
@@ -515,6 +518,8 @@ pub enum AppCancelRunOutcomeDto {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AppCommandResultDto {
+    #[serde(rename = "voice.start")]
+    VoiceStart { status: super::VoiceStartStatusDto },
     #[serde(rename = "registered")]
     NativeHostRegistered {
         registration: super::NativeHostRegistrationDto,

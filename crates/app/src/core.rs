@@ -1,5 +1,6 @@
 use crate::{CoreError, ErrorCode};
 use floe_context::SourceLeaseRegistry;
+use floe_native::live_media::ProcessLiveMediaRegistry;
 use floe_vault::TursoStore;
 use std::sync::Arc;
 
@@ -9,6 +10,10 @@ pub struct FloeCore {
     pub(crate) lease_registry: Arc<SourceLeaseRegistry>,
     pub(crate) day: Arc<floe_day::DayService>,
     pub(crate) product_gateway: Arc<floe_provider_adapters::gateway::ProductGatewayLeaseRegistry>,
+    /// Physical live-media custody belongs to this App process, not to an
+    /// encrypted runtime generation. A retired Voice call can therefore be
+    /// stopped and acknowledged before its Vault is sealed.
+    pub(crate) live_media_registry: Arc<ProcessLiveMediaRegistry>,
 }
 pub use floe_day::Classification;
 impl FloeCore {

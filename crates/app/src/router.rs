@@ -66,6 +66,68 @@ fn route_command(
         || crate::host_scope(command_id.as_uuid(), Cancellation::new(), PRODUCT_SCOPE);
 
     match request.command {
+        ProductCommand::VoiceStart { surface_session_id } => {
+            let owners = app.ready_owners(caller).map_err(|failure| {
+                command_failure(
+                    ProductCommandDisposition::NotAdmitted,
+                    ProductFailure::Voice(failure),
+                )
+            })?;
+            let actor = caller.owner_actor();
+            let scope = command_scope();
+            let voice_command = floe_voice::VoiceStartCommand {
+                command_id: command_id.as_uuid(),
+                surface_session_id,
+            };
+            app.execute_owner(async move {
+                let started = owners
+                    .voice
+                    .run_start_controller(&actor, voice_command, &scope, |_preparation| {
+                        // The App coordinator deliberately has no audio backend
+                        // in this build. It does not prepare a model or perform
+                        // an effect; Voice will durably cancel the unbound Start.
+                        Box::pin(async { Ok(()) })
+                    })
+                    .await;
+                match started {
+                    Ok(_) => read_voice_start_status(
+                        owners.voice.as_ref(),
+                        &actor,
+                        command_id.as_uuid(),
+                        &scope,
+                    )
+                    .await
+                    .and_then(|status| status.ok_or(floe_kernel::AgentFailure::StorageUnavailable))
+                    .map(ProductCommandOutcome::VoiceStart)
+                    .map_err(|failure| {
+                        command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(failure),
+                        )
+                    }),
+                    Err(failure) => {
+                        let disposition = match failure {
+                            floe_kernel::CommandFailure::NotAdmitted(_) => {
+                                ProductCommandDisposition::NotAdmitted
+                            }
+                            floe_kernel::CommandFailure::NotApplied(_) => {
+                                ProductCommandDisposition::NotApplied
+                            }
+                            floe_kernel::CommandFailure::Admitted(_) => {
+                                ProductCommandDisposition::Admitted
+                            }
+                            floe_kernel::CommandFailure::Indeterminate(_) => {
+                                ProductCommandDisposition::Indeterminate
+                            }
+                        };
+                        Err(command_failure(
+                            disposition,
+                            ProductFailure::Voice(failure.into_failure()),
+                        ))
+                    }
+                }
+            })
+        }
         ProductCommand::Conversation(command) => {
             let owners = app.ready_owners(caller).map_err(|failure| {
                 command_failure(
@@ -641,6 +703,17 @@ fn route_query(
 ) -> Result<ProductQueryOutcome, ProductFailure> {
     let scope = || crate::host_scope(request_id, Cancellation::new(), PRODUCT_SCOPE);
     match query {
+        ProductQuery::VoiceStartStatus { command_id } => {
+            let owners = app.ready_owners(caller).map_err(ProductFailure::Voice)?;
+            let actor = caller.owner_actor();
+            let scope = scope();
+            app.execute_owner(async move {
+                read_voice_start_status(owners.voice.as_ref(), &actor, command_id, &scope)
+                    .await
+                    .map(ProductQueryOutcome::VoiceStartStatus)
+                    .map_err(ProductFailure::Voice)
+            })
+        }
         ProductQuery::Conversation(query) => {
             let owners = app
                 .ready_owners(caller)
@@ -830,6 +903,54 @@ fn route_query(
             })
         }
     }
+}
+
+async fn read_voice_start_status(
+    voice: &floe_voice::VoiceService,
+    actor: &floe_kernel::OwnerActor,
+    command_id: Uuid,
+    scope: &floe_execution::ExecutionScope,
+) -> Result<Option<VoiceStartStatus>, floe_kernel::AgentFailure> {
+    let Some(start) = voice.read_start(actor, command_id, scope).await? else {
+        return Ok(None);
+    };
+    let call = if start.state == floe_voice::VoiceStartCommandState::Bound {
+        Some(
+            voice
+                .read_call(actor, command_id, scope)
+                .await?
+                .ok_or(floe_kernel::AgentFailure::StorageUnavailable)?,
+        )
+    } else {
+        None
+    };
+    Ok(Some(VoiceStartStatus {
+        command_id,
+        surface_session_id: start.command.surface_session_id,
+        state: match start.state {
+            floe_voice::VoiceStartCommandState::Preparing => VoiceStartState::Preparing,
+            floe_voice::VoiceStartCommandState::Bound => VoiceStartState::Bound,
+            floe_voice::VoiceStartCommandState::Cancelled => VoiceStartState::Cancelled,
+        },
+        media: call.as_ref().map(|record| match record.session.media() {
+            floe_voice::MediaState::Preparing => VoiceMediaState::Preparing,
+            floe_voice::MediaState::Muted => VoiceMediaState::Muted,
+            floe_voice::MediaState::Capturing => VoiceMediaState::Capturing,
+            floe_voice::MediaState::Stopped => VoiceMediaState::Stopped,
+        }),
+        remote: call.as_ref().map(|record| match record.session.remote() {
+            floe_voice::RemoteState::NotStarted => VoiceRemoteState::NotStarted,
+            floe_voice::RemoteState::Dispatching => VoiceRemoteState::Dispatching,
+            floe_voice::RemoteState::Connected => VoiceRemoteState::Connected,
+            floe_voice::RemoteState::CloseRequested => VoiceRemoteState::CloseRequested,
+            floe_voice::RemoteState::Closed => VoiceRemoteState::Closed,
+            floe_voice::RemoteState::Unknown => VoiceRemoteState::Unknown,
+        }),
+        stop_requested: call.as_ref().map(|record| record.session.stop_requested()),
+        local_lease_released: call
+            .as_ref()
+            .map(|record| record.session.local_lease_released()),
+    }))
 }
 
 fn route_observation(

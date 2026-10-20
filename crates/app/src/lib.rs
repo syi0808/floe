@@ -17,6 +17,8 @@ mod day_context_evidence;
 mod diagnostics;
 mod error;
 mod host;
+#[cfg(unix)]
+mod live_media_shutdown;
 mod local_context;
 mod native_lane;
 #[cfg(unix)]
@@ -60,6 +62,7 @@ pub use api::{
     OperationAuthorizationPolicy, OperationPolicyMode, ProductCommand, ProductCommandDisposition,
     ProductCommandFailure, ProductCommandOutcome, ProductCommandRequest, ProductFailure,
     ProductObservation, ProductObservationOutcome, ProductQuery, ProductQueryOutcome,
+    VoiceMediaState, VoiceRemoteState, VoiceStartState, VoiceStartStatus,
 };
 #[cfg(unix)]
 pub use api::{CallerContext, HostError, HostServices, LocalIdentityClaim, LocalIdentityProvider};

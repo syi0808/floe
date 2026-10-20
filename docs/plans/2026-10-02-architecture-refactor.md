@@ -3536,3 +3536,61 @@ Start/status path or App shutdown drain is composed with the registry. The
 registry cannot produce a physical Stop receipt without backend readback. No
 Apple SDK build, physical audio, real provider or Apple device behavior was
 exercised in this cloud run.
+
+
+### 2026-10-20 App media custody and Voice product controls
+
+`FloeCore` now owns one `ProcessLiveMediaRegistry` outside Runtime-generation
+lifetime. A generation composes `GatewayLiveModelProvider` over the current
+Connections credential view, dependency resolver and that registry. The App
+lease-registration seam verifies the caller actor, exact Voice/lease/plan
+binding, active Start call and pending muted-preparation command before the
+registry accepts a lease. Generation retirement fences it synchronously. Stop
+tasks start before Vault journal I/O; App persists the exact Voice Stop intent,
+waits for capture and playback readback, persists the matching `Stopped`
+NativeReceipt and only then acknowledges lease release. Any storage/native
+failure leaves the exact lease or Stop receipt retained and reports incomplete
+retirement.
+
+The typed App router, protocol DTOs and FFI now expose `voice.start` and the
+read-only `voice.start.status` query. In this cloud build the retained Start
+controller deliberately does no model/media preparation, and Voice durably
+cancels the unbound Start; the UI reports that the native audio backend is not
+implemented. Status reads do not invoke model or native work. Flutter has a
+Voice destination, resumes the existing Conversation Surface, retains a stable
+Start command identity across uncertain transport within the `AppRuntime`, and
+refreshes the exact journal status. The durable Vault command outlives the Dart
+screen; cross-app-process discovery of an unresolved command ID remains open.
+
+The App integration regressions exercise a real encrypted Vault Voice journal
+for App shutdown Stop receipt-before-lease-release and exercise Start admission,
+read-only missing/cancelled status, exact replay, changed-Surface conflict and
+zero model-plan/model-call counts. The native shutdown fixture supplies a
+synthetic exact lease; it is not an Apple backend. A focused Flutter gateway
+test covers stable exact retry, null/unbound status shape, read-only queries and
+partial lifecycle rejection. The focused Voice Flutter suite passes 5 tests;
+the full Flutter suite passes 242 tests. The App-specific QA integration suite
+passes 68 tests. `CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast`
+passed, including the 242-test Vault suite and Voice suite (12 passed), with no
+failed or ignored tests reported in those suites; doctests passed. The FFI
+production build (`CARGO_INCREMENTAL=0 cargo build -p floe-ffi`) passed. Both
+Cargo commands emitted warning-level diagnostics in unrelated existing modules.
+`flutter analyze --no-pub` reports 91 info-level lint findings and no errors or
+warnings; it exits 1 because the analyzer counts info findings as issues.
+
+The final topology has one canonical Voice owner/journal; the App router only
+adapts Start/status, the native registry owns process-local lease/Stop evidence,
+and Gateway live inference owns live provider preparation. The product wire does
+not include provider credentials, SDP or audio. No compatibility route was
+introduced. Residual search must retain one Start controller path and document
+the unimplemented Apple bridge as the explicit boundary.
+
+The next cutover is the Apple host bridge: implement and own the actual muted
+audio lease, bind it to the App process registry and host-instance identity,
+then replace the unavailable Start driver with current live-plan preparation,
+canonical Surface projection, exact Voice binding and retained event/Stop
+custody. Add a Stop/hangup control once that path exists. Test the Swift bridge,
+permission denial/revocation, process/generation replacement, capture and
+playback readback, interrupted signaling and exact Stop receipt on macOS and an
+iOS device. Do not treat the current synthetic receipt or cloud UI test as that
+qualification.
