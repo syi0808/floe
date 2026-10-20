@@ -3496,3 +3496,43 @@ that it preserves Indeterminate(Conflict), and the exact assertion was corrected
 without changing or weakening the production rejection. Apple build remains
 blocked before compilation by the reported checkout/Flutter-cache permissions.
 No physical audio, real provider or browser qualification is implied.
+
+
+### 2026-10-20 process-scoped native media lease authority
+
+`floe-native` now owns a `ProcessLiveMediaRegistry` intended to be retained by
+the native host across Rust Runtime generations. It accepts one exact prepared
+lease at a time, rejects foreign binding/runtime-epoch lookups, and fences a
+retiring generation without waiting for storage. A Stop request runs in a
+host-runtime task after its observer drops. The registry marks the exact Stop
+issued before crossing the backend boundary and, after uncertain completion,
+only observes; it does not resubmit physical Stop. A host-instance-bound Stop
+receipt requires separate backend evidence that capture and playback have both stopped.
+That receipt remains attached to its lease until the caller has committed the
+matching durable Voice NativeReceipt and acknowledges it.
+
+Focused tests cover exact lease replay, foreign epoch rejection, late admission
+after generation retirement, single active lease admission, Stop-observer
+cancellation, incomplete capture/playback observation, no repeat physical Stop
+after uncertainty, exact receipt replay and post-ACK release. The Gateway live
+adapter fixture now exercises this real registry instead of a test-only map.
+`cargo test -p floe-native --lib` passes 15 cases. The final
+`CARGO_INCREMENTAL=0 cargo test --workspace --no-fail-fast` run completed 65
+test suites with 573 passed, 0 failed and 1 ignored; the ignored case is the
+explicit Go/Rust live fixture. `cargo test -p floe-provider-adapters --tests`
+also passed 20 with that one fixture ignored. The explicit
+`FLOE_LIVE_RUN_RUST_E2E=1 go test ./internal/transport/http -run
+TestRustLiveControlToGoSyntheticTransport -count=1` gate passed in 5.1 seconds.
+Its initial cold attempt hit the Go fixture's 5-minute timeout while its nested
+Cargo build was compiling dependencies; rerunning against the already-built
+workspace Cargo target reached and passed the fixture. Rust formatting,
+`git diff --check`, and the architecture boundary check passed (27 nodes, 155
+edges, no errors or warnings).
+
+This is the native owner contract plus synthetic Rust qualification. App does
+not yet construct/inject the registry or compose `GatewayLiveModelProvider`; no
+Swift/LiveKit WebRTC backend, OS-backed prior-process evidence, Flutter/FFI
+Start/status path or App shutdown drain is composed with the registry. The
+registry cannot produce a physical Stop receipt without backend readback. No
+Apple SDK build, physical audio, real provider or Apple device behavior was
+exercised in this cloud run.

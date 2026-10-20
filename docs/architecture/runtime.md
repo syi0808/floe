@@ -1139,9 +1139,19 @@ already-received usage receipt. Retirement rejects new settlement requests but
 drains ones already admitted before closing the journal.
 Retirement fences new custody and drains the owned tasks. These are storage and
 queue lifetimes, not a provider reader, native media driver, or permission grant.
-Actual native privacy Stop must occur independently of storage latency. Live
-transport, source revalidation at dispatch, accounting/append settlement and
-Flutter/native call controls remain explicit integration gates. New stored-layout
+`floe-native` provides a process-scoped `ProcessLiveMediaRegistry`, intended to
+outlive Runtime generations. It admits one exact muted lease, fences only the
+matching actor generation, retains Stop execution after an observer disappears,
+records Stop submission before crossing the native boundary, and never resends
+that physical Stop after an uncertain result. It issues a host-instance-bound
+receipt only after separate capture and playback readback both report stopped; the
+receipt remains until Voice's durable NativeReceipt is acknowledged. This is the
+host ownership contract and synthetic Rust qualification, not an Apple audio
+backend or proof that an earlier process has exited. App composition, Apple
+WebRTC/audio, OS-backed prior-process evidence and Flutter/FFI call controls
+remain explicit integration gates. Its task currently belongs to the host Tokio
+runtime; App shutdown drain is not yet composed with this registry. Actual native
+privacy Stop must occur independently of storage latency. New stored-layout
 families require an explicitly selected fresh development profile; no automatic
 migration, database deletion or key replacement occurs.
 

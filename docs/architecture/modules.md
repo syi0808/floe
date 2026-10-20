@@ -22,7 +22,7 @@ Direct Day display has a separate Access product-read admission over the configu
 | Module | `floe-access` — `crates/modules/access` | source grants and immutable reviews/receipts; operation authorization policy, immutable operation subject/review reference/decision receipt; source-processing/model dispatch fences and separate product Calendar read permits |
 | Module | `floe-connections` — `crates/modules/connections` | Connection, OAuth and pairing lifecycle; durable Calendar and standing personal source identity, resources, local configuration CAS, `SourceAuthority` and trusted native subject identity |
 | Module | `floe-inference` — `crates/modules/inference` | Gateway-primary preparation with one verified-absence selector for generation/live plans, owned prepared handles and Access-consumed generation attempt dispatch/accounting |
-| Module | `floe-voice` — `crates/modules/voice` | Live session lifecycle policy and exact native media intent/receipt correlation; production composition remains pending |
+| Module | `floe-voice` — `crates/modules/voice` | Live session lifecycle policy and exact native media intent/receipt correlation; App/provider/product composition remains pending |
 | Module | `floe-knowledge` — `crates/modules/knowledge` | Memory/Playbook semantics, safe memory review and user decisions, explicit learning discovery, claim journals and common-Engine Learner lifecycle |
 | Module | `floe-day` — `crates/modules/day` | bounded Day selections and local manual commands, immutable command replay, durable refresh, multisource Calendar cache and mirror CAS, Action result collection, and a typed inward port for direct external Calendar commands |
 | Module | `floe-context` — `crates/modules/context` | authorized source reads/projections, source review evidence, metadata-only cache inspection, provenance, coverage and freshness |
@@ -31,7 +31,7 @@ Direct Day display has a separate Access product-read admission over the configu
 | Module | `floe-conversation` — `crates/modules/conversation` | Session, root Run, transcript, exact validated-batch continuation and coverage reauthorization, finalization and durable user interactions (origin, reviewed target, lifecycle, decision intent, resume linkage) |
 | Extension | `floe-experts-builtin` — `crates/experts/builtin` | pure package roles, source-tool schemas, domain judgment and final payload construction |
 | Platform | `floe-diagnostics` — `crates/platform/diagnostics` | privacy-safe tracing, correlation and diagnostic export |
-| Platform | `floe-native` — `crates/platform/native` | native host drivers and secure-key/platform access |
+| Platform | `floe-native` — `crates/platform/native` | native host drivers, secure-key/platform access and a process-scoped exact live-media lease registry |
 | Adapter | `floe-provider-adapters` — `crates/adapters/providers` | model/source/control transports and OS/HTTP adapter implementations |
 | Adapter | `floe-vault` — `crates/adapters/vault` | encrypted storage engine and owner-specific repository adapters |
 | Composition | `floe-app` — `crates/app` | concrete service construction and typed service handles |

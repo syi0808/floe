@@ -14,12 +14,12 @@ use floe_execution::{
 use floe_inference::{LiveEventTransport, LiveSessionControl};
 use floe_kernel::{PersonId, TraceContext};
 use floe_model_contract::{LiveAppendKind, LiveAppendPayload, LiveContextPayload, LiveModelPlan};
-use floe_native::live_media::{LiveMediaLease, LiveSessionDescription};
+use floe_native::live_media::{
+    LiveMediaLease, LiveMediaRegistry, LiveMediaStopObservation, LiveSessionDescription,
+    ProcessLiveMediaRegistry,
+};
 use std::{
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 use uuid::Uuid;
@@ -115,16 +115,29 @@ impl LiveMediaLease for Native {
     fn lifetime_cancellation(&self) -> Cancellation {
         self.ended.clone()
     }
+    fn request_stop_once<'a>(&'a self, _: Instant) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            self.fence();
+            Ok(())
+        })
+    }
+    fn observe_stop<'a>(
+        &'a self,
+        _: Instant,
+    ) -> BoxFuture<'a, Result<LiveMediaStopObservation, AgentFailure>> {
+        Box::pin(async move {
+            Ok(LiveMediaStopObservation {
+                binding: self.binding.clone(),
+                capture_stopped: true,
+                playback_stopped: true,
+            })
+        })
+    }
 }
-struct Media(Mutex<Option<Arc<Native>>>);
+struct Media(Arc<ProcessLiveMediaRegistry>);
 impl LiveMediaRegistry for Media {
     fn lease(&self, binding: &LiveMediaBinding) -> Result<Arc<dyn LiveMediaLease>, AgentFailure> {
-        let guard = self.0.lock().unwrap();
-        let value = guard.as_ref().ok_or(AgentFailure::CapabilityUnavailable)?;
-        if &value.binding != binding {
-            return Err(AgentFailure::PolicyDenied);
-        };
-        Ok(value.clone())
+        self.0.lease(binding)
     }
 }
 #[test]
@@ -168,7 +181,7 @@ async fn rust_live_control_to_go_e2e() {
         bearer: std::env::var("FLOE_LIVE_BEARER").unwrap(),
     };
     let store = GatewayCredentialStore::new(Arc::new(Trust), Arc::new(reader), &actor).unwrap();
-    let media = Arc::new(Media(Mutex::new(None)));
+    let media = Arc::new(Media(Arc::new(ProcessLiveMediaRegistry::new())));
     let provider = GatewayLiveModelProvider::new(store, media.clone());
     let budget = BudgetLedger::new(BudgetConfig::new(10000, 10000), ModelUsage::default());
     let scope = ExecutionScope::root(
@@ -209,7 +222,7 @@ async fn rust_live_control_to_go_e2e() {
         ended: Cancellation::new(),
         answer: AtomicBool::new(false),
     });
-    *media.0.lock().unwrap() = Some(native.clone());
+    media.0.register(native.clone()).unwrap();
     let start = CanonicalLiveStart {
         actor,
         voice_session_id: voice,
