@@ -3681,6 +3681,36 @@ notices and embeds them into the copied framework. This muted lease does not
 request microphone permission, create an audio source or capture audio, so no
 microphone usage-description or permission-state change is part of this cut.
 Real capture, user-granted permission, provider interoperability, OS audio
-readback on hardware, route changes/interruption, iOS Xcode app packaging and
-device-level Stop remain unverified; actual input still requires separate
-user confirmation.
+readback on hardware, route changes/interruption and device-level Stop remain
+unverified; actual input still requires separate user confirmation.
+
+
+### 2026-10-21 iOS Simulator package verification
+
+The full Flutter/Xcode Simulator package succeeds with
+`flutter build ios --simulator --debug --no-codesign --no-pub`. The build
+helper now skips architectures already present in each LiveKit framework slice;
+the pinned SwiftPM XCFramework returns both `arm64` and `x86_64` from either
+target build, so attempting to `lipo -create` those results duplicated the
+same architectures. The helper also places notices in the flat iOS framework's
+root `ThirdPartyLicenses` directory, which allows the framework to be ad-hoc
+signed and pass `codesign --verify --strict`.
+
+The output `apps/client/build/ios/iphonesimulator/Runner.app` contains universal
+`arm64`/`x86_64` Runner, Rust FFI, local Swift library and LiveKit framework
+binaries. `vtool` marks both slices as `IOSSIMULATOR`; the framework includes
+the MIT, BSD-3-Clause and notice README files. The focused Flutter Voice suite
+passes all 10 tests, the two shell scripts pass `zsh -n`, and `git diff --check`
+passes. This was a compile/package check only: the app was not launched and no
+microphone permission, capture or network transmission was used.
+
+The audio-path audit still finds no local `RTCAudioSource`/`RTCAudioTrack`,
+sender track attachment or recording start. The `.sendRecv` transceiver only
+provides the negotiation m-line. The peer connection is created with no
+delegate, and Floe has no remote-audio callback or explicit playback/readback
+path, so remote playback is not verified either. The current native feature is
+therefore a muted offer/answer lease with Stop/readback control, not working
+two-way voice. The next implementation cut is to add a permission-gated local
+audio-track lifecycle bound to the exact Voice lease, then wire remote audio
+receipt/playback and synthetic readback tests. Hardware capture still needs
+separate user approval; none was requested or accepted for this checkpoint.

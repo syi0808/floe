@@ -111,7 +111,7 @@ floe_native_embed_framework() {
   if [[ -d "${temporary}/Versions/A" ]]; then
     notices_directory="${temporary}/Versions/A/Resources/ThirdPartyLicenses"
   else
-    notices_directory="${temporary}/Resources/ThirdPartyLicenses"
+    notices_directory="${temporary}/ThirdPartyLicenses"
   fi
   mkdir -p "${notices_directory}"
   cp "${SRCROOT}/../native/FloeNative/ThirdPartyLicenses/LiveKitWebRTC-MIT.txt" \
@@ -126,6 +126,7 @@ floe_native_embed_framework() {
   else
     destination_binary="${temporary}/LiveKitWebRTC"
   fi
+  local -a destination_architectures=( ${(z)"$(xcrun lipo -archs "${destination_binary}")"} )
   shift
   for framework in "$@"; do
     local source_binary
@@ -134,9 +135,18 @@ floe_native_embed_framework() {
     else
       source_binary="${framework}/LiveKitWebRTC"
     fi
-    local merged="${destination_binary}.merged"
-    xcrun lipo -create "${destination_binary}" "${source_binary}" -output "${merged}"
-    mv -f "${merged}" "${destination_binary}"
+    local -a source_architectures=( ${(z)"$(xcrun lipo -archs "${source_binary}")"} )
+    for architecture in "${source_architectures[@]}"; do
+      if [[ " ${destination_architectures[*]} " == *" ${architecture} "* ]]; then
+        continue
+      fi
+      local slice="${temporary_directory}/LiveKitWebRTC-${architecture}"
+      local merged="${destination_binary}.merged"
+      xcrun lipo -thin "${architecture}" "${source_binary}" -output "${slice}"
+      xcrun lipo -create "${destination_binary}" "${slice}" -output "${merged}"
+      mv -f "${merged}" "${destination_binary}"
+      destination_architectures+=("${architecture}")
+    done
   done
   codesign --force --sign "${NATIVE_SIGNING_IDENTITY}" --timestamp=none "${temporary}"
   mkdir -p "${destination:h}"
