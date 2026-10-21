@@ -3830,6 +3830,18 @@ before and during the test; the final state is checked again after the suite.
 Existing `LiveMediaHostTests` separately cover a delayed permission callback,
 Stop-once behavior, and old-lease receiver callbacks after a replacement lease.
 
+The follow-up `testStopFenceWinsAgainstBlockedSyntheticAudioCallback` uses a
+semaphore inside the injected SDK render callback to hold a synthetic PCM frame
+before it is copied into WebRTC. While that callback is in flight, the test
+fences the lease, detaches the sender, requests module Stop, and closes the
+memory device's capture gate before releasing the callback. The callback then
+rejects the frame; no frame is counted as accepted, a new callback is rejected,
+and neither activation nor a late receiver callback can revive the fenced lease.
+The overlap is controlled with callback-entry and release semaphores rather than
+sleep-based race assertions. This exercises the injected local callback and
+lease gate; it does not simulate an OS-scheduled hardware callback or acoustic
+device Stop.
+
 This qualifies only local synthetic PCM traversal and teardown. It does not
 qualify Codex subscription entitlement, provider interoperability,
 public-network ICE/NAT traversal, device routing, or real microphone privacy

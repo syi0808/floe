@@ -4,6 +4,8 @@ import Foundation
 import LiveKitWebRTC
 import XCTest
 
+@testable import FloeNativeHost
+
 /// Verifies local ICE negotiation using an injected memory-only device. Both
 /// peers receive only private/link-local host candidates assigned to this
 /// machine. No PCM is driven, and no provider, STUN/TURN service, microphone,
@@ -179,6 +181,142 @@ final class LocalWebRTCSignalingTests: XCTestCase {
         XCTAssertFalse(
             rightAudio.capturePlayoutPCM(frameCount: 480), "Stop must reject later playout")
     }
+
+    func testStopFenceWinsAgainstBlockedSyntheticAudioCallback() throws {
+        guard LKRTCInitializeSSL() else { throw LocalWebRTCFailure.stackUnavailable }
+
+        let leftAudio = MemoryOnlyRTCAudioDevice()
+        let rightAudio = MemoryOnlyRTCAudioDevice()
+        let leftFactory = LKRTCPeerConnectionFactory(
+            encoderFactory: nil,
+            decoderFactory: nil,
+            audioDevice: leftAudio
+        )
+        let rightFactory = LKRTCPeerConnectionFactory(
+            encoderFactory: nil,
+            decoderFactory: nil,
+            audioDevice: rightAudio
+        )
+        let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        guard
+            let left = leftFactory.peerConnection(
+                with: localOnlyConfiguration(),
+                constraints: constraints,
+                delegate: nil
+            ),
+            let right = rightFactory.peerConnection(
+                with: localOnlyConfiguration(),
+                constraints: constraints,
+                delegate: nil
+            )
+        else {
+            throw LocalWebRTCFailure.peerUnavailable
+        }
+        defer {
+            left.close()
+            right.close()
+            left.delegate = nil
+            right.delegate = nil
+            _ = leftFactory.audioDeviceModule.stopRecording()
+            _ = leftFactory.audioDeviceModule.stopPlayout()
+            _ = rightFactory.audioDeviceModule.stopRecording()
+            _ = rightFactory.audioDeviceModule.stopPlayout()
+        }
+
+        let leftInit = LKRTCRtpTransceiverInit()
+        leftInit.direction = .sendOnly
+        let rightInit = LKRTCRtpTransceiverInit()
+        rightInit.direction = .recvOnly
+        guard
+            let leftTransceiver = left.addTransceiver(of: .audio, init: leftInit),
+            right.addTransceiver(of: .audio, init: rightInit) != nil
+        else {
+            throw LocalWebRTCFailure.transceiverUnavailable
+        }
+
+        let source = leftFactory.audioSource(with: nil)
+        let track = leftFactory.audioTrack(with: source, trackId: "stop-race-local-pcm")
+        track.isEnabled = false
+        let leaseGate = LiveAudioTrackGate()
+        XCTAssertTrue(
+            leaseGate.installLocalTrack(id: "stop-race-local-pcm") { [weak track] enabled in
+                track?.isEnabled = enabled
+            })
+        leftTransceiver.sender.track = track
+        XCTAssertTrue(leaseGate.activate())
+
+        let offer = try makeLocalDescription(on: left, type: .offer, constraints: constraints)
+        try setRemoteDescription(offer, on: right)
+        let answer = try makeLocalDescription(on: right, type: .answer, constraints: constraints)
+        try setRemoteDescription(answer, on: left)
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                isConnected(left.iceConnectionState) && isConnected(right.iceConnectionState)
+            })
+
+        let leftAudioModule = leftFactory.audioDeviceModule
+        let rightAudioModule = rightFactory.audioDeviceModule
+        if !leftAudioModule.isRecording {
+            let result =
+                leftAudioModule.isRecordingInitialized
+                ? leftAudioModule.startRecording()
+                : leftAudioModule.initAndStartRecording(audioProcessingOptions: nil)
+            XCTAssertEqual(result, 0)
+        }
+        if !rightAudioModule.isPlayoutInitialized {
+            XCTAssertEqual(rightAudioModule.initPlayout(), 0)
+        }
+        if !rightAudioModule.isPlaying {
+            XCTAssertEqual(rightAudioModule.startPlayout(), 0)
+        }
+        XCTAssertTrue(leftAudio.isRecording)
+        XCTAssertTrue(rightAudio.isPlaying)
+
+        let renderBarrier = RenderCallbackBarrier()
+        defer { renderBarrier.release() }
+        let deliveryResult = AsyncResult<Bool>()
+        DispatchQueue.global().async {
+            deliveryResult.resolve(
+                .success(
+                    leftAudio.deliverSyntheticPCM(frameCount: 480, renderBarrier: renderBarrier))
+            )
+        }
+        XCTAssertTrue(
+            renderBarrier.waitUntilEntered(timeout: 5),
+            "PCM must be held inside WebRTC's render callback")
+
+        leaseGate.fence()
+        XCTAssertFalse(track.isEnabled)
+        leftTransceiver.sender.track = nil
+
+        let stopInvocationStarted = DispatchSemaphore(value: 0)
+        let stopResult = AsyncResult<Int>()
+        let audioModuleStopper = AudioModuleStopper(module: leftAudioModule)
+        DispatchQueue.global().async {
+            stopInvocationStarted.signal()
+            stopResult.resolve(.success(audioModuleStopper.stopRecording()))
+        }
+        XCTAssertEqual(stopInvocationStarted.wait(timeout: .now() + .seconds(5)), .success)
+        XCTAssertTrue(leftAudio.stopRecording(), "the memory device must fence input during Stop")
+
+        renderBarrier.release()
+        let accepted = try deliveryResult.wait(timeout: 5)
+        XCTAssertFalse(accepted, "PCM held before delivery must be rejected after the Stop fence")
+        XCTAssertEqual(try stopResult.wait(timeout: 5), 0)
+        XCTAssertEqual(leftAudio.syntheticFrameCount, 0)
+        XCTAssertFalse(leftAudio.isRecording)
+        XCTAssertFalse(
+            leftAudio.deliverSyntheticPCM(frameCount: 480), "new PCM is rejected after Stop")
+        XCTAssertNil(leftTransceiver.sender.track)
+        XCTAssertTrue(leaseGate.isTerminal)
+        XCTAssertFalse(leaseGate.activate(), "a fenced lease cannot be revived")
+
+        var lateTrackEnabled = true
+        leaseGate.receiveRemoteTrack(id: "late-stop-race-receiver") { lateTrackEnabled = $0 }
+        XCTAssertFalse(lateTrackEnabled, "late receiver callbacks stay disabled on the old lease")
+        XCTAssertTrue(rightAudio.capturePlayoutPCM(frameCount: 480))
+        XCTAssertEqual(rightAudio.nonzeroPlayoutSampleCount, 0)
+    }
 }
 
 /// Test-only device: all input samples are synthesized in memory and all output
@@ -271,7 +409,7 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
         }
     }
 
-    func deliverSyntheticPCM(frameCount: Int) -> Bool {
+    func deliverSyntheticPCM(frameCount: Int, renderBarrier: RenderCallbackBarrier? = nil) -> Bool {
         guard frameCount > 0 else { return false }
         guard
             let (delegate, sampleStart) = lock.withLock({ () -> (LKRTCAudioDeviceDelegate, Int)? in
@@ -293,6 +431,7 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
             samples[offset] = sample
             samples[offset + 1] = sample
         }
+        let pcmData = samples.withUnsafeBytes { Data($0) }
 
         return samples.withUnsafeMutableBufferPointer { sampleBuffer in
             guard let baseAddress = sampleBuffer.baseAddress else { return false }
@@ -306,20 +445,52 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
             var timestamp = AudioTimeStamp()
             timestamp.mSampleTime = Double(sampleStart)
             timestamp.mFlags = .sampleTimeValid
-            let status = withUnsafePointer(to: &audioBufferList) { bufferList in
-                delegate.deliverRecordedData(
+            let status: OSStatus
+            if let renderBarrier {
+                status = delegate.deliverRecordedData(
                     &actionFlags,
                     &timestamp,
                     0,
                     UInt32(frameCount),
-                    bufferList,
                     nil,
                     nil
-                )
+                ) { _, _, _, renderedFrameCount, inputData, _ in
+                    guard renderBarrier.holdUntilReleased(timeout: 5), self.isRecording,
+                        let destination = inputData.pointee.mBuffers.mData
+                    else {
+                        return -1
+                    }
+                    let byteCount = min(
+                        Int(inputData.pointee.mBuffers.mDataByteSize),
+                        Int(renderedFrameCount) * self.inputNumberOfChannels
+                            * MemoryLayout<Int16>.size,
+                        pcmData.count
+                    )
+                    pcmData.withUnsafeBytes { source in
+                        guard let sourceAddress = source.baseAddress else { return }
+                        memcpy(destination, sourceAddress, byteCount)
+                    }
+                    return noErr
+                }
+            } else {
+                status = withUnsafePointer(to: &audioBufferList) { bufferList in
+                    delegate.deliverRecordedData(
+                        &actionFlags,
+                        &timestamp,
+                        0,
+                        UInt32(frameCount),
+                        bufferList,
+                        nil,
+                        nil
+                    )
+                }
             }
             if status == noErr {
-                lock.withLock { recordedFrameTotal += frameCount }
-                return true
+                return lock.withLock {
+                    guard recording else { return false }
+                    recordedFrameTotal += frameCount
+                    return true
+                }
             }
             return false
         }
@@ -364,6 +535,36 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
             nonzeroPlayoutSampleTotal += nonzero
         }
         return true
+    }
+}
+
+private final class RenderCallbackBarrier: @unchecked Sendable {
+    private let entered = DispatchSemaphore(value: 0)
+    private let releaseSignal = DispatchSemaphore(value: 0)
+
+    func waitUntilEntered(timeout: TimeInterval) -> Bool {
+        entered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func holdUntilReleased(timeout: TimeInterval) -> Bool {
+        entered.signal()
+        return releaseSignal.wait(timeout: .now() + timeout) == .success
+    }
+
+    func release() {
+        releaseSignal.signal()
+    }
+}
+
+private final class AudioModuleStopper: @unchecked Sendable {
+    private let module: LKRTCAudioDeviceModule
+
+    init(module: LKRTCAudioDeviceModule) {
+        self.module = module
+    }
+
+    func stopRecording() -> Int {
+        module.stopRecording()
     }
 }
 
