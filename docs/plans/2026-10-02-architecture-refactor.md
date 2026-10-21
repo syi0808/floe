@@ -3809,21 +3809,31 @@ that accepts recorded PCM and yields playout PCM. The new
 `LocalWebRTCSignalingTests` test uses a memory-only device, disables STUN/TURN,
 filters remote SDP to private/link-local host addresses assigned to this host,
 and verifies the two local peers reach ICE-connected state without a provider.
-It does not create a source track or exchange PCM frames.
+The initial signaling test did not create a source track or exchange PCM
+frames. The pinned release's `RTCPeerConnectionFactory` header confirms that a
+custom `RTCAudioDevice` can be injected, and its `RTCAudioDeviceDelegate`
+provides the capture and playout PCM callbacks. A follow-up test now drives that
+interface with synthetic 48 kHz stereo PCM and stores received PCM only in a
+memory buffer. The fake owns no `AudioUnit` or `AVAudioSession`; it does not
+access microphone or speaker hardware.
 
-A deterministic PCM loopback remains blocked. The WebRTC audio-device module
-must be initialized and started to deliver PCM callbacks into a peer. Under
-the current no-hardware scope, explicit module `initAndStartRecording` and
-`startPlayout` calls cannot be treated as safe because they may activate Apple
-audio hardware; no such calls were executed. The minimum safe implementation
-is a test-only native audio-device module whose start, recording and playout
-paths are proven to stay in memory, then injected into the local peers. If the
-pinned Objective-C SDK cannot inject that module, use a separate WebRTC native
-test harness rather than an Apple audio device.
+On 2026-10-21, `LocalWebRTCSignalingTests.testSyntheticPCMTraversesLocalPeerAndMemoryDeviceStops`
+passed on the macOS host. It uses two local peers, no ICE servers, no TCP
+candidates, and remote SDP restricted to private/link-local host addresses
+assigned to this machine. The sender injects a synthetic 440 Hz PCM signal
+through the pinned SDK callback; the receiving memory sink asserts that more
+than 64 non-zero decoded samples arrive. The test then closes both peers,
+stops capture/playout, and verifies that the memory-only device rejects later
+input and output callbacks. It does not prove acoustic hardware capture or
+playback. System Settings showed output mute enabled and output volume at 0%
+before and during the test; the final state is checked again after the suite.
+Existing `LiveMediaHostTests` separately cover a delayed permission callback,
+Stop-once behavior, and old-lease receiver callbacks after a replacement lease.
 
-The signaling test does not qualify Codex subscription entitlement, provider
-interoperability, public-network ICE/NAT traversal, device routing, or real
-microphone privacy behavior. Actual provider testing requires separate approval
-to connect to the named OpenAI Codex endpoint and may consume account usage;
-actual speech additionally requires explicit microphone-permission and
-voice-transmission approval.
+This qualifies only local synthetic PCM traversal and teardown. It does not
+qualify Codex subscription entitlement, provider interoperability,
+public-network ICE/NAT traversal, device routing, or real microphone privacy
+behavior. Actual provider testing requires separate approval to connect to the
+named OpenAI Codex endpoint and may consume account usage; actual speech
+additionally requires explicit microphone-permission and voice-transmission
+approval.

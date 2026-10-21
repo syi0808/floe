@@ -1,3 +1,4 @@
+import AudioToolbox
 import Darwin
 import Foundation
 import LiveKitWebRTC
@@ -65,10 +66,123 @@ final class LocalWebRTCSignalingTests: XCTestCase {
                 isConnected(left.iceConnectionState) && isConnected(right.iceConnectionState)
             })
     }
+
+    func testSyntheticPCMTraversesLocalPeerAndMemoryDeviceStops() throws {
+        guard LKRTCInitializeSSL() else { throw LocalWebRTCFailure.stackUnavailable }
+
+        let leftAudio = MemoryOnlyRTCAudioDevice()
+        let rightAudio = MemoryOnlyRTCAudioDevice()
+        let leftFactory = LKRTCPeerConnectionFactory(
+            encoderFactory: nil,
+            decoderFactory: nil,
+            audioDevice: leftAudio
+        )
+        let rightFactory = LKRTCPeerConnectionFactory(
+            encoderFactory: nil,
+            decoderFactory: nil,
+            audioDevice: rightAudio
+        )
+        let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        guard
+            let left = leftFactory.peerConnection(
+                with: localOnlyConfiguration(),
+                constraints: constraints,
+                delegate: nil
+            ),
+            let right = rightFactory.peerConnection(
+                with: localOnlyConfiguration(),
+                constraints: constraints,
+                delegate: nil
+            )
+        else {
+            throw LocalWebRTCFailure.peerUnavailable
+        }
+        defer {
+            left.close()
+            right.close()
+            left.delegate = nil
+            right.delegate = nil
+            _ = leftFactory.audioDeviceModule.stopRecording()
+            _ = leftFactory.audioDeviceModule.stopPlayout()
+            _ = rightFactory.audioDeviceModule.stopRecording()
+            _ = rightFactory.audioDeviceModule.stopPlayout()
+        }
+
+        let leftInit = LKRTCRtpTransceiverInit()
+        leftInit.direction = .sendOnly
+        let rightInit = LKRTCRtpTransceiverInit()
+        rightInit.direction = .recvOnly
+        guard
+            let leftTransceiver = left.addTransceiver(of: .audio, init: leftInit),
+            right.addTransceiver(of: .audio, init: rightInit) != nil
+        else {
+            throw LocalWebRTCFailure.transceiverUnavailable
+        }
+
+        let source = leftFactory.audioSource(with: nil)
+        let track = leftFactory.audioTrack(with: source, trackId: "synthetic-local-pcm")
+        track.isEnabled = true
+        leftTransceiver.sender.track = track
+
+        let offer = try makeLocalDescription(on: left, type: .offer, constraints: constraints)
+        try setRemoteDescription(offer, on: right)
+        let answer = try makeLocalDescription(on: right, type: .answer, constraints: constraints)
+        try setRemoteDescription(answer, on: left)
+        XCTAssertTrue(
+            waitUntil(timeout: 10) {
+                isConnected(left.iceConnectionState) && isConnected(right.iceConnectionState)
+            })
+
+        let leftAudioModule = leftFactory.audioDeviceModule
+        let rightAudioModule = rightFactory.audioDeviceModule
+        if !leftAudioModule.isRecording {
+            let result =
+                leftAudioModule.isRecordingInitialized
+                ? leftAudioModule.startRecording()
+                : leftAudioModule.initAndStartRecording(audioProcessingOptions: nil)
+            XCTAssertEqual(result, 0, "the injected memory-only capture device must start")
+        }
+        if !rightAudioModule.isPlayoutInitialized {
+            XCTAssertEqual(rightAudioModule.initPlayout(), 0)
+        }
+        if !rightAudioModule.isPlaying {
+            XCTAssertEqual(rightAudioModule.startPlayout(), 0)
+        }
+        XCTAssertTrue(leftAudio.isRecording)
+        XCTAssertTrue(rightAudio.isPlaying)
+
+        for _ in 0..<200 {
+            XCTAssertTrue(leftAudio.deliverSyntheticPCM(frameCount: 480))
+            _ = rightAudio.capturePlayoutPCM(frameCount: 480)
+            if rightAudio.nonzeroPlayoutSampleCount > 64 { break }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTAssertGreaterThan(leftAudio.syntheticFrameCount, 0)
+        XCTAssertGreaterThan(rightAudio.playoutCallbackCount, 0)
+        XCTAssertGreaterThan(
+            rightAudio.nonzeroPlayoutSampleCount,
+            64,
+            "decoded remote PCM should reach the memory-only playout sink"
+        )
+
+        track.isEnabled = false
+        leftTransceiver.sender.track = nil
+        left.close()
+        right.close()
+        XCTAssertEqual(leftAudioModule.stopRecording(), 0)
+        XCTAssertEqual(rightAudioModule.stopPlayout(), 0)
+        XCTAssertEqual(left.signalingState, .closed)
+        XCTAssertEqual(right.signalingState, .closed)
+        XCTAssertFalse(leftAudio.isRecording)
+        XCTAssertFalse(rightAudio.isPlaying)
+        XCTAssertFalse(leftAudio.deliverSyntheticPCM(frameCount: 480), "Stop must reject later PCM")
+        XCTAssertFalse(
+            rightAudio.capturePlayoutPCM(frameCount: 480), "Stop must reject later playout")
+    }
 }
 
-/// This test-only device owns no AudioUnit or AVAudioSession. Its lifecycle
-/// methods only record state; the test never calls the module's start methods.
+/// Test-only device: all input samples are synthesized in memory and all output
+/// samples end in a memory buffer. It owns no AudioUnit or AVAudioSession.
 private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unchecked Sendable {
     private let lock = NSLock()
     private var audioDelegate: LKRTCAudioDeviceDelegate?
@@ -77,6 +191,11 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
     private var recordingInitialized = false
     private var playing = false
     private var recording = false
+    private var captureSampleCursor = 0
+    private var playoutSampleCursor = 0
+    private var recordedFrameTotal = 0
+    private var playoutCallbackTotal = 0
+    private var nonzeroPlayoutSampleTotal = 0
 
     var deviceInputSampleRate: Double { 48_000 }
     var inputIOBufferDuration: TimeInterval { 0.01 }
@@ -91,6 +210,9 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
     var isRecordingInitialized: Bool { lock.withLock { recordingInitialized } }
     var isPlaying: Bool { lock.withLock { playing } }
     var isRecording: Bool { lock.withLock { recording } }
+    var syntheticFrameCount: Int { lock.withLock { recordedFrameTotal } }
+    var playoutCallbackCount: Int { lock.withLock { playoutCallbackTotal } }
+    var nonzeroPlayoutSampleCount: Int { lock.withLock { nonzeroPlayoutSampleTotal } }
 
     func initialize(with delegate: LKRTCAudioDeviceDelegate) -> Bool {
         lock.withLock {
@@ -104,6 +226,8 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
         lock.withLock {
             audioDelegate = nil
             initialized = false
+            recordingInitialized = false
+            playoutInitialized = false
             recording = false
             playing = false
             return true
@@ -145,6 +269,101 @@ private final class MemoryOnlyRTCAudioDevice: NSObject, LKRTCAudioDevice, @unche
             recording = false
             return true
         }
+    }
+
+    func deliverSyntheticPCM(frameCount: Int) -> Bool {
+        guard frameCount > 0 else { return false }
+        guard
+            let (delegate, sampleStart) = lock.withLock({ () -> (LKRTCAudioDeviceDelegate, Int)? in
+                guard recording, let audioDelegate else { return nil }
+                let start = captureSampleCursor
+                captureSampleCursor += frameCount
+                return (audioDelegate, start)
+            })
+        else {
+            return false
+        }
+
+        var samples = [Int16](repeating: 0, count: frameCount * inputNumberOfChannels)
+        for frame in 0..<frameCount {
+            let phase =
+                2.0 * Double.pi * 440.0 * Double(sampleStart + frame) / deviceInputSampleRate
+            let sample = Int16(sin(phase) * 8_000)
+            let offset = frame * inputNumberOfChannels
+            samples[offset] = sample
+            samples[offset + 1] = sample
+        }
+
+        return samples.withUnsafeMutableBufferPointer { sampleBuffer in
+            guard let baseAddress = sampleBuffer.baseAddress else { return false }
+            let audioBuffer = AudioBuffer(
+                mNumberChannels: UInt32(inputNumberOfChannels),
+                mDataByteSize: UInt32(sampleBuffer.count * MemoryLayout<Int16>.size),
+                mData: UnsafeMutableRawPointer(baseAddress)
+            )
+            var audioBufferList = AudioBufferList(mNumberBuffers: 1, mBuffers: audioBuffer)
+            var actionFlags: AudioUnitRenderActionFlags = []
+            var timestamp = AudioTimeStamp()
+            timestamp.mSampleTime = Double(sampleStart)
+            timestamp.mFlags = .sampleTimeValid
+            let status = withUnsafePointer(to: &audioBufferList) { bufferList in
+                delegate.deliverRecordedData(
+                    &actionFlags,
+                    &timestamp,
+                    0,
+                    UInt32(frameCount),
+                    bufferList,
+                    nil,
+                    nil
+                )
+            }
+            if status == noErr {
+                lock.withLock { recordedFrameTotal += frameCount }
+                return true
+            }
+            return false
+        }
+    }
+
+    func capturePlayoutPCM(frameCount: Int) -> Bool {
+        guard frameCount > 0 else { return false }
+        guard let delegate = lock.withLock({ playing ? audioDelegate : nil }) else { return false }
+
+        var samples = [Int16](repeating: 0, count: frameCount * outputNumberOfChannels)
+        let status = samples.withUnsafeMutableBufferPointer { sampleBuffer -> OSStatus in
+            guard let baseAddress = sampleBuffer.baseAddress else { return -1 }
+            let audioBuffer = AudioBuffer(
+                mNumberChannels: UInt32(outputNumberOfChannels),
+                mDataByteSize: UInt32(sampleBuffer.count * MemoryLayout<Int16>.size),
+                mData: UnsafeMutableRawPointer(baseAddress)
+            )
+            var audioBufferList = AudioBufferList(mNumberBuffers: 1, mBuffers: audioBuffer)
+            var actionFlags: AudioUnitRenderActionFlags = []
+            var timestamp = AudioTimeStamp()
+            timestamp.mSampleTime = Double(playoutSampleCursor)
+            timestamp.mFlags = .sampleTimeValid
+            return withUnsafeMutablePointer(to: &audioBufferList) { bufferList in
+                delegate.getPlayoutData(
+                    &actionFlags,
+                    &timestamp,
+                    0,
+                    UInt32(frameCount),
+                    bufferList
+                )
+            }
+        }
+        guard status == noErr else { return false }
+
+        let nonzero = samples.reduce(into: 0) { count, sample in
+            if sample != 0 { count += 1 }
+        }
+        lock.withLock {
+            guard playing else { return }
+            playoutSampleCursor += frameCount
+            playoutCallbackTotal += 1
+            nonzeroPlayoutSampleTotal += nonzero
+        }
+        return true
     }
 }
 
