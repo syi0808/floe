@@ -95,6 +95,77 @@ floe_native_artifact() {
   return "${build_status}"
 }
 
+# SwiftPM's live model product links LiveKitWebRTC dynamically. Embed the
+# selected platform framework beside that product, merging simulator slices.
+floe_native_embed_framework() {
+  local destination="$1"
+  shift
+  if (( $# == 0 )); then
+    print -u2 "No LiveKitWebRTC framework was produced"
+    return 1
+  fi
+  local temporary_directory="$(mktemp -d "${NATIVE_CACHE_DIRECTORY}/framework.XXXXXX")"
+  local temporary="${temporary_directory}/LiveKitWebRTC.framework"
+  ditto "$1" "${temporary}"
+  local notices_directory
+  if [[ -d "${temporary}/Versions/A" ]]; then
+    notices_directory="${temporary}/Versions/A/Resources/ThirdPartyLicenses"
+  else
+    notices_directory="${temporary}/Resources/ThirdPartyLicenses"
+  fi
+  mkdir -p "${notices_directory}"
+  cp "${SRCROOT}/../native/FloeNative/ThirdPartyLicenses/LiveKitWebRTC-MIT.txt" \
+    "${notices_directory}/LiveKitWebRTC-MIT.txt"
+  cp "${SRCROOT}/../native/FloeNative/ThirdPartyLicenses/WebRTC-BSD-3-Clause.txt" \
+    "${notices_directory}/WebRTC-BSD-3-Clause.txt"
+  cp "${SRCROOT}/../native/FloeNative/ThirdPartyLicenses/README.md" \
+    "${notices_directory}/README.md"
+  local destination_binary
+  if [[ -f "${temporary}/Versions/A/LiveKitWebRTC" ]]; then
+    destination_binary="${temporary}/Versions/A/LiveKitWebRTC"
+  else
+    destination_binary="${temporary}/LiveKitWebRTC"
+  fi
+  shift
+  for framework in "$@"; do
+    local source_binary
+    if [[ -f "${framework}/Versions/A/LiveKitWebRTC" ]]; then
+      source_binary="${framework}/Versions/A/LiveKitWebRTC"
+    else
+      source_binary="${framework}/LiveKitWebRTC"
+    fi
+    local merged="${destination_binary}.merged"
+    xcrun lipo -create "${destination_binary}" "${source_binary}" -output "${merged}"
+    mv -f "${merged}" "${destination_binary}"
+  done
+  codesign --force --sign "${NATIVE_SIGNING_IDENTITY}" --timestamp=none "${temporary}"
+  mkdir -p "${destination:h}"
+  rm -rf "${destination}"
+  mv "${temporary}" "${destination}"
+  rm -rf "${temporary_directory}"
+}
+
+floe_native_package_framework() {
+  local target_triple="$1"
+  local target_sdk="$2"
+  local package_root="${SRCROOT}/../native/FloeNative"
+  local package_scratch="${NATIVE_CACHE_DIRECTORY}/swiftpm-${target_triple}"
+  local package_host_sdk="$(xcrun --sdk macosx --show-sdk-path)"
+  local package_bin
+  package_bin="$(SDKROOT="${package_host_sdk}" xcrun --sdk macosx swift build \
+    --package-path "${package_root}" \
+    --scratch-path "${package_scratch}" \
+    --cache-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-cache" \
+    --config-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-config" \
+    --security-path "${NATIVE_CACHE_DIRECTORY}/swiftpm-security" \
+    --configuration debug \
+    --triple "${target_triple}" \
+    --sdk "${target_sdk}" \
+    --product floe_local_model \
+    --show-bin-path)"
+  print -r -- "${package_bin}/LiveKitWebRTC.framework"
+}
+
 # Every transitive source of the local native package participates in the cache
 # key. Live hosts are linked only into this dynamic product, never into Runner.
 floe_native_model_package() {
@@ -104,6 +175,8 @@ floe_native_model_package() {
   local package_root="${SRCROOT}/../native/FloeNative"
   local -a package_inputs=(
     "${package_root}/Package.swift"
+    "${package_root}/Package.resolved"
+    "${package_root}"/ThirdPartyLicenses/*(N.)
     "${package_root}"/Sources/**/*.swift(N.)
   )
   floe_native_artifact "${destination}" swift-package \

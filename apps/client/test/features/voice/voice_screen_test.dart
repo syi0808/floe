@@ -5,7 +5,7 @@ import 'package:floe_client/features/voice/application/voice_gateway.dart';
 import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 
 void main() {
-  testWidgets('Voice screen presents the native backend boundary cleanly', (
+  testWidgets('Voice screen describes the muted native audio boundary', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -24,7 +24,7 @@ void main() {
     expect(find.text('Live presentation'), findsOneWidget);
     expect(find.text('Start voice'), findsOneWidget);
     expect(
-      find.textContaining('This build has no native audio backend.'),
+      find.textContaining('does not attach a microphone track'),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
@@ -100,6 +100,9 @@ final class _RecoverableVoiceGateway implements VoiceGateway {
     _state = VoiceStartState.cancelled;
     return _status();
   }
+
+  @override
+  Future<VoiceStartStatus> stop() async => _status();
 
   @override
   Future<VoiceStartStatus?> readStatus(String commandId) async => _status();

@@ -143,6 +143,33 @@ final class AppWireVoiceGateway implements VoiceGateway {
   }
 
   @override
+  Future<VoiceStartStatus> stop() async {
+    if (_pending == null) await recoverPendingStart();
+    final pending = _pending;
+    if (pending == null) throw StateError('No bound Voice call exists.');
+    final result = await _transport.commandV2({
+      'schema_version': appWireProtocolVersion,
+      'request_id': newAgentRequestId(),
+      'command_id': newAgentRequestId(),
+      'command': {
+        'kind': 'voice.stop',
+        'voice_session_id': pending.commandId,
+        'surface_session_id': pending.surfaceSessionId,
+      },
+    }, timeout: const Duration(seconds: 10));
+    final status = _decodeStatus(
+      result,
+      pending.commandId,
+      expectedKind: 'voice.stop',
+    );
+    if (status.localLeaseReleased == true &&
+        _pending?.commandId == pending.commandId) {
+      _pending = null;
+    }
+    return status;
+  }
+
+  @override
   Future<VoiceStartStatus?> readStatus(String commandId) async {
     if (!_wireId(commandId)) {
       throw const FormatException('Invalid Voice command identity.');

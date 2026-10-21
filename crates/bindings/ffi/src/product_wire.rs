@@ -44,6 +44,13 @@ fn command_in(value: AppProductCommandDto) -> AppWireResult<ProductCommand> {
         C::VoiceStartCancel { surface_session_id } => ProductCommand::VoiceStartCancel {
             surface_session_id: surface_session_id.get(),
         },
+        C::VoiceStop {
+            voice_session_id,
+            surface_session_id,
+        } => ProductCommand::VoiceStop {
+            voice_session_id: voice_session_id.get(),
+            surface_session_id: surface_session_id.get(),
+        },
         command @ (C::ConversationSessionStart { .. }
         | C::ConversationSetCalendarPolicy { .. }
         | C::ConversationWorkSubmitText { .. }
@@ -170,6 +177,11 @@ fn command_out(
         ) => AppCommandResultDto::VoiceStartCancelled {
             status: voice_start_status(status).map_err(structural_error)?,
         },
+        (ProductCommand::VoiceStop { .. }, ProductCommandOutcome::VoiceStopped(status)) => {
+            AppCommandResultDto::VoiceStopped {
+                status: voice_start_status(status).map_err(structural_error)?,
+            }
+        }
         _ => return Err(internal_error()),
     })
 }

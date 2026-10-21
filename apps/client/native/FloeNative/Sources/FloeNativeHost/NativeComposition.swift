@@ -8,3 +8,9 @@ enum NativeComposition {
     static let deviceModelHost = DeviceModelHost(model: deviceModel)
     static let healthTransformHost = HealthTransformHost(model: deviceModel)
 }
+
+// Live media lives in this bundled image so Rust reaches the same process-local
+// lease owner that creates and stops each PeerConnection.
+extension NativeComposition {
+    static let liveMediaHost = LiveMediaHost(factory: WebRTCMediaPeerFactory())
+}

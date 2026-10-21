@@ -3631,3 +3631,56 @@ permission denial/revocation, process/generation replacement, capture and
 playback readback, interrupted signaling and exact Stop receipt on macOS and an
 iOS device. Do not treat the current synthetic receipt or cloud UI test as that
 qualification.
+
+
+### 2026-10-21 Apple muted lease and App Voice driver
+
+`FloeNativeHost` now pins LiveKit's `webrtc-xcframework` release 150.7871.03
+and owns one exact-binding WebRTC lease. It creates a send/receive audio
+transceiver with no local audio track, exposes bounded offer/answer operations,
+fences stale calls, issues Stop once, verifies capture/playback stopped state,
+and only then releases the lease. `NativeComposition` exports this owner over a
+bounded C ABI. The Rust Apple adapter verifies the host instance and complete
+Voice binding on every reply and connects the physical lease to
+`ProcessLiveMediaRegistry`.
+
+The App Start driver now prepares the live plan, projects the canonical
+Conversation Surface, binds the durable Voice intent, registers and receipts
+the muted native lease, then starts the retained Gateway event consumer. The
+App command returns after the lease has been durably bound; the Voice owner
+retains the live driver and Stop settlement. The typed App/FFI/Flutter path now
+includes exact Voice Stop, durable Stop intent, registry fencing, native
+stop-once, capture/playback readback, `Stopped` receipt and release
+acknowledgement. Non-Apple targets continue to fail closed as
+`CapabilityUnavailable`.
+
+The native host's two synthetic tests pass, covering exact host/binding fences,
+offer/answer, no audio capture, idempotent Stop, readback and release. The
+Apple-host `cargo check -p floe-app -p floe-ffi` passes. The App development
+storage Voice dispatch regression set passes 12 tests, the protocol and FFI
+test packages pass 13 and 11 tests, and the focused durable App Start/status
+case passes. Scoped Rust formatting passes.
+
+After the user approved the previously blocked SDK-cache access, Flutter 3.47.6
+was available. The focused Voice Flutter suite passes all 10 tests, and Dart
+analysis of the five changed Voice files reports no issues. `flutter build
+macos --debug --no-pub` succeeds; the output app contains the signed universal
+arm64/x86_64 `LiveKitWebRTC.framework` plus both license notices, and passes
+strict deep code-sign verification. The standalone Swift package tests pass 2
+synthetic cases. The `FloeNativeHost` package also builds for arm64 iOS
+Simulator; `vtool` confirms `IOSSIMULATOR`, minimum OS 15.0 and SDK 26.0. That
+build emits a Clang MacOSX-sysroot warning while targeting iOS Simulator, but
+does produce the correctly marked simulator binary. Xcode also reports three
+pre-existing non-optional `??` warnings in `MainFlutterWindow.swift`; Cargo
+reports warnings in unrelated modules. Shell syntax and `git diff --check`
+pass.
+
+The pinned package's release license is MIT; its WebRTC SDK source identifies
+the WebRTC implementation as BSD-3-Clause. The repository now retains both
+notices and embeds them into the copied framework. This muted lease does not
+request microphone permission, create an audio source or capture audio, so no
+microphone usage-description or permission-state change is part of this cut.
+Real capture, user-granted permission, provider interoperability, OS audio
+readback on hardware, route changes/interruption, iOS Xcode app packaging and
+device-level Stop remain unverified; actual input still requires separate
+user confirmation.

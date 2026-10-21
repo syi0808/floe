@@ -183,9 +183,45 @@ class _VoiceScreenState extends State<VoiceScreen> {
     }
   }
 
+  Future<void> _stop() async {
+    final gateway = _gateway;
+    if (gateway == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    try {
+      final status = await gateway.stop();
+      if (!mounted) return;
+      setState(() {
+        _status = status;
+        _message = _messageFor(status);
+      });
+    } on Object catch (error) {
+      VoiceStartStatus? status;
+      final commandId = gateway.pendingCommandId;
+      if (commandId != null) {
+        try {
+          status = await gateway.readStatus(commandId);
+        } on Object {
+          // Keep the exact call identity until its Stop is confirmed.
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _status = status;
+        _message = status == null ? _errorMessage(error) : _messageFor(status);
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String _messageFor(VoiceStartStatus status) => switch (status.state) {
     VoiceStartState.preparing =>
       'Voice Start is unresolved. Cancel it before trying another Start.',
+    VoiceStartState.bound when status.localLeaseReleased == true =>
+      'The Voice media lease is stopped.',
     VoiceStartState.bound => 'A Voice call is bound to this conversation.',
     VoiceStartState.cancelled =>
       'Voice Start was cancelled. A later Start uses a new command ID.',
@@ -200,6 +236,9 @@ class _VoiceScreenState extends State<VoiceScreen> {
   Widget build(BuildContext context) {
     final gateway = _gateway;
     final runtimeReady = widget.ownerGateways.runtime?.ready ?? false;
+    final callActive =
+        _status?.state == VoiceStartState.bound &&
+        _status?.localLeaseReleased != true;
     final canStart =
         !_loading &&
         !_busy &&
@@ -207,7 +246,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
         _session != null &&
         gateway != null &&
         _status?.state != VoiceStartState.preparing &&
-        _status?.state != VoiceStartState.bound;
+        !callActive;
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 20, 12, 36),
       children: [
@@ -233,9 +272,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'This build has no native audio backend. A Start attempt is '
-                  'durably cancelled; it does not request microphone permission, '
-                  'start capture, or create a provider call.',
+                  'Voice prepares a muted WebRTC lease and negotiates the '
+                  'configured Gateway. This build does not attach a microphone '
+                  'track or request microphone permission. Stop closes the '
+                  'lease and waits for native readback.',
                   style: FloeType.body,
                 ),
                 if (_status != null) ...[
@@ -288,6 +328,14 @@ class _VoiceScreenState extends State<VoiceScreen> {
                     onPressed: !_busy ? _cancelStart : null,
                     loading: _busy,
                     child: const Text('Cancel pending Start'),
+                  ),
+                ],
+                if (callActive) ...[
+                  const SizedBox(height: 12),
+                  FloeButton.outlined(
+                    onPressed: !_busy ? _stop : null,
+                    loading: _busy,
+                    child: const Text('Stop voice'),
                   ),
                 ],
               ],

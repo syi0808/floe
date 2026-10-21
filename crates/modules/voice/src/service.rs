@@ -341,7 +341,12 @@ impl VoiceService {
             } else {
                 record
             };
-            lease.completed = result.is_ok();
+            // A failed pre-bind driver is still a clean completion when the
+            // durable Start cancellation above succeeded. The pending
+            // controller flag is reserved for work that may have left bound
+            // Voice/native custody unresolved.
+            lease.completed =
+                result.is_ok() || record.state == crate::VoiceStartCommandState::Cancelled;
             drop(lease);
             result.map(|()| record).map_err(CommandFailure::Admitted)
         })

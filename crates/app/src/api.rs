@@ -76,6 +76,10 @@ pub enum ProductCommand {
     VoiceStartCancel {
         surface_session_id: Uuid,
     },
+    VoiceStop {
+        voice_session_id: Uuid,
+        surface_session_id: Uuid,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -301,6 +305,7 @@ pub enum ProductCommandOutcome {
     Memory(MemoryCommandOutcome),
     VoiceStart(VoiceStartStatus),
     VoiceStartCancelled(VoiceStartStatus),
+    VoiceStopped(VoiceStartStatus),
 }
 
 #[derive(Clone, Debug)]

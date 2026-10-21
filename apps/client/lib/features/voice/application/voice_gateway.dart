@@ -43,6 +43,9 @@ abstract interface class VoiceGateway {
   /// Cancels only a pre-binding Start and uses the recovered command ID.
   Future<VoiceStartStatus> cancelPendingStart();
 
+  /// Fences the bound media lease and waits for its exact native Stop receipt.
+  Future<VoiceStartStatus> stop();
+
   /// A read-only Voice journal query. It never prepares a model or native audio.
   Future<VoiceStartStatus?> readStatus(String commandId);
 }

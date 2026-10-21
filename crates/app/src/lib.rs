@@ -19,6 +19,8 @@ mod error;
 mod host;
 #[cfg(unix)]
 mod live_media_shutdown;
+#[cfg(unix)]
+mod live_voice;
 mod local_context;
 mod native_lane;
 #[cfg(unix)]

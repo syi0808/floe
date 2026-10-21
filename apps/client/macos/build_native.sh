@@ -11,3 +11,7 @@ floe_native_artifact "${FRAMEWORKS_DIRECTORY}/libfloe_eventkit.dylib" swift \
   "${SRCROOT}/Runner/CalendarObservationFingerprint.swift"
 floe_native_model_package "${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib" \
   "${SWIFT_TARGET}" "$(xcrun --sdk macosx --show-sdk-path)"
+LIVEKIT_FRAMEWORK="$(floe_native_package_framework \
+  "${SWIFT_TARGET}" "$(xcrun --sdk macosx --show-sdk-path)")"
+floe_native_embed_framework "${FRAMEWORKS_DIRECTORY}/LiveKitWebRTC.framework" \
+  "${LIVEKIT_FRAMEWORK}"

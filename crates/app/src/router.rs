@@ -75,57 +75,125 @@ fn route_command(
             })?;
             let actor = caller.owner_actor();
             let scope = command_scope();
+            let start_scope = crate::live_voice::live_scope(
+                command_id.as_uuid(),
+                Cancellation::new(),
+                Duration::from_secs(70),
+            );
+            let registry = app.core.live_media_registry.clone();
             let voice_command = floe_voice::VoiceStartCommand {
                 command_id: command_id.as_uuid(),
                 surface_session_id,
             };
             app.execute_owner(async move {
-                let started = owners
-                    .voice
-                    .run_start_controller(&actor, voice_command, &scope, |_preparation| {
-                        // The App coordinator deliberately has no audio backend
-                        // in this build. It does not prepare a model or perform
-                        // an effect; Voice will durably cancel the unbound Start.
-                        Box::pin(async { Ok(()) })
-                    })
-                    .await;
-                match started {
-                    Ok(_) => read_voice_start_status(
+                if let Some(status) = read_voice_start_status(
+                    owners.voice.as_ref(),
+                    &actor,
+                    command_id.as_uuid(),
+                    &scope,
+                )
+                .await
+                .map_err(|failure| {
+                    command_failure(
+                        ProductCommandDisposition::Indeterminate,
+                        ProductFailure::Voice(failure),
+                    )
+                })? {
+                    if status.surface_session_id != surface_session_id {
+                        return Err(command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(floe_kernel::AgentFailure::Conflict),
+                        ));
+                    }
+                    return Ok(ProductCommandOutcome::VoiceStart(status));
+                }
+
+                let (sender, receiver) = tokio::sync::oneshot::channel();
+                let bound = std::sync::Arc::new(std::sync::Mutex::new(Some(sender)));
+                let task_owners = owners.clone();
+                let driver_owners = owners.clone();
+                let task_registry = registry.clone();
+                let task_actor = actor.clone();
+                let driver_actor = actor.clone();
+                let task_scope = start_scope.clone();
+                let driver_scope = start_scope.clone();
+                let signal = bound.clone();
+                tokio::spawn(async move {
+                    let result = task_owners
+                        .voice
+                        .run_start_controller(
+                            &task_actor,
+                            voice_command,
+                            &task_scope,
+                            move |preparation| {
+                                let bound = bound.clone();
+                                Box::pin(async move {
+                                    let result = crate::live_voice::drive_start(
+                                        preparation,
+                                        driver_owners,
+                                        task_registry,
+                                        driver_actor,
+                                        surface_session_id,
+                                        command_id.as_uuid(),
+                                        driver_scope,
+                                        bound.clone(),
+                                    )
+                                    .await;
+                                    if let Err(failure) = &result {
+                                        crate::live_voice::signal_start_failure(
+                                            &bound,
+                                            failure.clone(),
+                                        );
+                                    }
+                                    result
+                                })
+                            },
+                        )
+                        .await;
+                    if let Err(failure) = result {
+                        crate::live_voice::signal_start_failure(&signal, failure.into_failure());
+                    }
+                });
+
+                // Return once the exact muted lease is bound. The Voice owner
+                // retains Gateway events and Stop handling in its own task.
+                let observed = tokio::time::timeout(Duration::from_secs(8), receiver).await;
+                if let Ok(Ok(Err(failure))) = observed {
+                    if let Some(status) = read_voice_start_status(
                         owners.voice.as_ref(),
                         &actor,
                         command_id.as_uuid(),
                         &scope,
                     )
                     .await
-                    .and_then(|status| status.ok_or(floe_kernel::AgentFailure::StorageUnavailable))
-                    .map(ProductCommandOutcome::VoiceStart)
+                    .map_err(|read| {
+                        command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(read),
+                        )
+                    })? {
+                        return Ok(ProductCommandOutcome::VoiceStart(status));
+                    }
+                    return Err(command_failure(
+                        ProductCommandDisposition::Admitted,
+                        ProductFailure::Voice(failure),
+                    ));
+                }
+                read_voice_start_status(owners.voice.as_ref(), &actor, command_id.as_uuid(), &scope)
+                    .await
                     .map_err(|failure| {
                         command_failure(
                             ProductCommandDisposition::Indeterminate,
                             ProductFailure::Voice(failure),
                         )
-                    }),
-                    Err(failure) => {
-                        let disposition = match failure {
-                            floe_kernel::CommandFailure::NotAdmitted(_) => {
-                                ProductCommandDisposition::NotAdmitted
-                            }
-                            floe_kernel::CommandFailure::NotApplied(_) => {
-                                ProductCommandDisposition::NotApplied
-                            }
-                            floe_kernel::CommandFailure::Admitted(_) => {
-                                ProductCommandDisposition::Admitted
-                            }
-                            floe_kernel::CommandFailure::Indeterminate(_) => {
-                                ProductCommandDisposition::Indeterminate
-                            }
-                        };
-                        Err(command_failure(
-                            disposition,
-                            ProductFailure::Voice(failure.into_failure()),
-                        ))
-                    }
-                }
+                    })?
+                    .map(ProductCommandOutcome::VoiceStart)
+                    .ok_or_else(|| {
+                        command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(floe_kernel::AgentFailure::StorageUnavailable),
+                        )
+                    })
             })
         }
         ProductCommand::VoiceStartCancel { surface_session_id } => {
@@ -151,6 +219,47 @@ fn route_command(
                     .await
                     .and_then(|status| status.ok_or(floe_kernel::AgentFailure::StorageUnavailable))
                     .map(ProductCommandOutcome::VoiceStartCancelled)
+                    .map_err(|failure| {
+                        command_failure(
+                            ProductCommandDisposition::Indeterminate,
+                            ProductFailure::Voice(failure),
+                        )
+                    })
+            })
+        }
+        ProductCommand::VoiceStop {
+            voice_session_id,
+            surface_session_id,
+        } => {
+            let owners = app.ready_owners(caller).map_err(|failure| {
+                command_failure(
+                    ProductCommandDisposition::NotAdmitted,
+                    ProductFailure::Voice(failure),
+                )
+            })?;
+            let actor = caller.owner_actor();
+            let scope = command_scope();
+            let registry = app.core.live_media_registry.clone();
+            app.execute_owner(async move {
+                crate::live_voice::stop_bound_call(
+                    owners.as_ref(),
+                    registry,
+                    &actor,
+                    voice_session_id,
+                    surface_session_id,
+                    &scope,
+                )
+                .await
+                .map_err(|failure| {
+                    command_failure(
+                        ProductCommandDisposition::Indeterminate,
+                        ProductFailure::Voice(failure),
+                    )
+                })?;
+                read_voice_start_status(owners.voice.as_ref(), &actor, voice_session_id, &scope)
+                    .await
+                    .and_then(|status| status.ok_or(floe_kernel::AgentFailure::StorageUnavailable))
+                    .map(ProductCommandOutcome::VoiceStopped)
                     .map_err(|failure| {
                         command_failure(
                             ProductCommandDisposition::Indeterminate,

@@ -242,6 +242,14 @@ impl ProcessLiveMediaRegistry {
         Ok(())
     }
 
+    /// Fence one exact lease before its Voice Stop intent is journaled. The
+    /// following stop_and_confirm call still owns physical Stop and readback.
+    pub fn fence_binding(&self, binding: &LiveMediaBinding) -> Result<(), AgentFailure> {
+        let entry = self.entry(binding)?;
+        fence_entry(&entry);
+        Ok(())
+    }
+
     /// Rejoin the exact Stop operation. The spawned owner task survives a
     /// dropped observer; successful evidence stays available until ACKed after
     /// the Voice journal commits its NativeReceipt.
@@ -600,3 +608,8 @@ mod tests {
         assert_eq!(lease.stop_observations.load(Ordering::SeqCst), 1);
     }
 }
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub use apple::AppleLiveMediaLease;

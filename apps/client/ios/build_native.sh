@@ -4,6 +4,7 @@ set -euo pipefail
 source "${SRCROOT}/../apple/native_build.sh"
 FRAMEWORKS_DIRECTORY="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 MODEL_LIBRARIES=()
+LIVEKIT_FRAMEWORKS=()
 TARGETS=()
 for architecture in ${(s: :)ARCHS}; do
   case "${architecture}:${PLATFORM_NAME}" in
@@ -38,7 +39,10 @@ for target in ${(u)TARGETS}; do
   MODEL_LIBRARY="${NATIVE_CACHE_DIRECTORY}/libfloe_local_model_${target}.dylib"
   floe_native_model_package "${MODEL_LIBRARY}" "${SWIFT_TARGET}" "${IOS_SDK}"
   MODEL_LIBRARIES+=("${MODEL_LIBRARY}")
+  LIVEKIT_FRAMEWORKS+=("$(floe_native_package_framework "${SWIFT_TARGET}" "${IOS_SDK}")")
 done
 
 MODEL_LIBRARY="${FRAMEWORKS_DIRECTORY}/libfloe_local_model.dylib"
 floe_native_artifact "${MODEL_LIBRARY}" embed "${MODEL_LIBRARIES[@]}"
+floe_native_embed_framework "${FRAMEWORKS_DIRECTORY}/LiveKitWebRTC.framework" \
+  "${LIVEKIT_FRAMEWORKS[@]}"

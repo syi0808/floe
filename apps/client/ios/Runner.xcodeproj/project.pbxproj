@@ -217,10 +217,15 @@
 				"$(SRCROOT)/build_native.sh",
 				"$(SRCROOT)/../apple/native_build.sh",
 				"$(SRCROOT)/../native/FloeNative",
+				"$(SRCROOT)/../native/FloeNative/Package.resolved",
+				"$(SRCROOT)/../native/FloeNative/ThirdPartyLicenses/LiveKitWebRTC-MIT.txt",
+				"$(SRCROOT)/../native/FloeNative/ThirdPartyLicenses/WebRTC-BSD-3-Clause.txt",
+				"$(SRCROOT)/../native/FloeNative/ThirdPartyLicenses/README.md",
 			);
 			name = "Build Swift Libraries";
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libfloe_local_model.dylib",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/LiveKitWebRTC.framework",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/zsh;

@@ -11,6 +11,9 @@ let package = Package(
         .library(name: "FloeHealthTransform", targets: ["FloeHealthTransform"]),
         .library(name: "FloeHealthTransformBridge", targets: ["FloeHealthTransformBridge"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/livekit/webrtc-xcframework.git", exact: "150.7871.03"),
+    ],
     targets: [
         .target(name: "FloeModelExecution"),
         .target(name: "FloeTransforms"),
@@ -19,7 +22,9 @@ let package = Package(
         .target(name: "FloeFoundationModels", dependencies: ["FloeModelExecution"]),
         .target(name: "FloeNativeHost", dependencies: [
             "FloeModelExecution", "FloeFoundationModels", "FloeHealthTransform", "FloeHealthTransformBridge",
+            .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
         ]),
+        .testTarget(name: "FloeNativeHostTests", dependencies: ["FloeNativeHost"]),
     ],
     swiftLanguageModes: [.v6]
 )

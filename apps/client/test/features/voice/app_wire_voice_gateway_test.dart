@@ -83,6 +83,54 @@ void main() {
   });
 
   test(
+    'Stop carries the exact bound call and clears it only after readback',
+    () async {
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      final transport = _Transport();
+      transport.onQuery = (request) async => {
+        'kind': request['query']['kind'],
+        'status': null,
+      };
+      transport.onCommand = (request) async {
+        final kind = request['command']['kind'];
+        final startId = kind == 'voice.start'
+            ? request['command_id']
+            : request['command']['voice_session_id'];
+        return {
+          'kind': kind,
+          'status': {
+            'command_id': startId,
+            'surface_session_id': surfaceId,
+            'state': 'bound',
+            'media': kind == 'voice.stop' ? 'stopped' : 'muted',
+            'remote': kind == 'voice.stop' ? 'closed' : 'connected',
+            'stop_requested': kind == 'voice.stop',
+            'local_lease_released': kind == 'voice.stop',
+          },
+        };
+      };
+      final gateway = AppWireVoiceGateway(transport);
+
+      final started = await gateway.start(surfaceId);
+      final stopped = await gateway.stop();
+
+      expect(started.state.name, 'bound');
+      expect(stopped.localLeaseReleased, isTrue);
+      expect(gateway.pendingCommandId, isNull);
+      expect(transport.commands, hasLength(2));
+      expect(transport.commands.last['command']['kind'], 'voice.stop');
+      expect(
+        transport.commands.last['command']['voice_session_id'],
+        started.commandId,
+      );
+      expect(
+        transport.commands.last['command']['surface_session_id'],
+        surfaceId,
+      );
+    },
+  );
+
+  test(
     'process restart recovers the journal command before allocating a new ID',
     () async {
       const commandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
