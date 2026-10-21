@@ -274,12 +274,17 @@ live model field without a generation test button. Saving a route does not grant
 microphone permission or start audio. Generation inventory/requests keep their
 separate existing contract.
 
-Call creation, event/ACK, append and close are not public Gateway routes yet.
-Per-client live control ownership, durable one-shot transport custody, Rust
-control and native media composition remain required. Rust source/budget fences
-are already qualified separately. No running account or microphone was used in the
-fixture tests. The paid public GPT-Live API and the experimental Codex subscription
-wire are distinct providers; their event names and limits are not interchangeable.
+The paired-client routes for prepare, start, status/event reads, event ACK,
+append, close and release are implemented behind the Gateway's authenticated
+Inference handler. They are private control endpoints, not public provider APIs.
+Go owns per-client ticket and transport custody; the Rust adapter owns the paired
+control flow and native signaling/media lease. The repository fixtures use
+synthetic sessions only; no live Codex account or microphone was used. The Apple
+peer currently configures no ICE/STUN/TURN service, so connectivity through
+ordinary NAT/firewall networks is not qualified. Select and provision an
+authorized ICE service before claiming general Internet call readiness. The
+paid public GPT-Live API and experimental Codex subscription wire are distinct
+providers; their event names, limits and pricing are not interchangeable.
 
 Protocol references: [pinned Codex call create](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_call.rs),
 [pinned sideband parser](https://github.com/openai/codex/blob/0df4aa67781ae45a3c97befa4db48b734afe46d9/codex-rs/codex-api/src/endpoint/realtime_websocket/protocol_frameless_bidi.rs),

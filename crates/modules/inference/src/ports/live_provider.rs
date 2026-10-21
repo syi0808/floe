@@ -16,6 +16,16 @@ pub struct LiveModelPlanRequest {
     pub required_capabilities: LiveModelCapabilities,
 }
 impl LiveModelPlanRequest {
+    /// Build the standard Voice presentation request using Inference's
+    /// canonical capability contract. Composition roots select the route but
+    /// do not need to depend on the neutral model wire types.
+    pub fn conversational(actor: OwnerActor) -> Self {
+        Self {
+            actor,
+            required_capabilities: LiveModelCapabilities::conversational(),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), AgentFailure> {
         self.actor.validate()?;
         self.required_capabilities
@@ -64,4 +74,25 @@ pub trait LiveModelProvider: Send + Sync {
         'a,
         Result<LocalObservation<PreparedLiveModelProfile<Self::Transport>>, ModelObservationError>,
     >;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use floe_agent_contract::PersonId;
+
+    #[test]
+    fn conversational_request_owns_the_standard_voice_capability_set() {
+        let request = LiveModelPlanRequest::conversational(OwnerActor {
+            person_id: PersonId::new(),
+            device_id: "fixture-device".into(),
+            runtime_epoch: 1,
+        });
+
+        assert_eq!(
+            request.required_capabilities,
+            LiveModelCapabilities::conversational()
+        );
+        assert!(request.validate().is_ok());
+    }
 }

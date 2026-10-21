@@ -24,7 +24,10 @@ void main() {
     expect(find.text('Live presentation'), findsOneWidget);
     expect(find.text('Start voice'), findsOneWidget);
     expect(find.textContaining('checks microphone permission'), findsOneWidget);
-    expect(find.textContaining('sending microphone audio'), findsOneWidget);
+    expect(
+      find.textContaining('OpenAI’s experimental Codex live service'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 

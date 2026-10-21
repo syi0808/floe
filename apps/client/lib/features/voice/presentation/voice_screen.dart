@@ -274,8 +274,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
                 Text(
                   'Voice prepares a muted WebRTC lease. When you press Start, '
                   'Floe checks microphone permission and may ask before sending '
-                  'microphone audio to your configured Gateway. Replies play on '
-                  'this device. Stop immediately mutes and closes the local lease.',
+                  'microphone audio over WebRTC to OpenAI’s experimental Codex '
+                  'live service selected in Gateway settings. The Gateway also '
+                  'sends session context to that service. Replies play on this '
+                  'device. Stop immediately mutes and closes the local lease.',
                   style: FloeType.body,
                 ),
                 if (_status != null) ...[

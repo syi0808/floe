@@ -3750,9 +3750,69 @@ the local synthetic Go/Rust live transport integration test passed; and the
 macOS Debug app plus unsigned iOS Simulator Debug app builds passed. Plist and
 entitlement linting, Rust formatting, changed Dart formatting, and `git diff
 --check` passed. `flutter analyze --no-pub` exited nonzero with 91 info-level
-diagnostics and no errors or warnings. The architecture boundary checker still
-reports the existing `floe-app -> floe-model-contract` direct dependency; that
-dependency and the checker were unchanged in this work. No app was launched and
-no permission dialog was accepted. Real microphone authorization/capture,
-provider interoperability, audible playback, route/interruption behavior, and
-physical Stop still need a separately approved device run.
+diagnostics and no errors or warnings. The initial architecture boundary check
+reported the production `floe-app -> floe-model-contract` edge; the next
+checkpoint records its source and correction. No app was launched and no
+permission dialog was accepted. Real microphone authorization/capture, provider
+interoperability, audible playback, route/interruption behavior, and physical
+Stop still need a separately approved device run.
+
+
+### 2026-10-21 Inference boundary correction and call-readiness review
+
+The production `floe-app -> floe-model-contract` dependency was introduced in
+`04e32a8c` on 2026-10-21. `crates/app/src/live_voice.rs` used it only to fill
+`LiveModelPlanRequest.required_capabilities`; that request and preparation
+policy belong to Inference. `LiveModelPlanRequest::conversational(actor)` now
+owns the standard Voice capability set, and App constructs the request through
+that API. The test-only app dependency from the earlier Voice fixtures remains
+dev-only. The checker policy was not changed. Verification passed:
+`python3 tools/architecture/check_boundaries.py` reports 27 nodes, 156 edges,
+zero errors/warnings; `cargo test -p floe-inference --lib` passed 35 tests;
+`cargo test -p floe-app --lib` passed 8; Go Codex/live HTTP synthetic tests
+passed; and changed Rust files passed rustfmt.
+
+The compiled live adapter accepts the experimental `codex_oauth` target
+`gpt-live-1-codex`; the user's current route selection was not queried. Server
+code creates calls at
+`chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas`
+and uses `api.openai.com/v1/live/{call_id}` for its sideband control channel.
+The app sends its SDP offer, instructions and initial context to its selected
+Gateway; the Gateway forwards those signaling/context values to OpenAI. Live
+audio samples use the WebRTC peer negotiated by that service, rather than the
+Gateway's JSON control requests. The exact remote ICE address is not known until
+the provider's answer SDP exists. The Voice screen now names the OpenAI Codex
+live service as the audio recipient; it no longer implies the Gateway itself
+receives the RTP stream.
+
+The route requires a live Gateway pairing, an enabled `live_presentation`
+selection, and a valid stored Codex OAuth account. Status, account readiness and
+credential contents were not queried in this review. The app's local budget
+uses ceilings of 409,600 tokens and 50,000 `cost_micros`; this is an internal
+admission/accounting bound, not an external price quote. The current server event
+codec does not expose provider usage for the live route, so cost remains unknown
+and is accounted conservatively. The public Realtime API rate card does not
+apply to this private Codex model endpoint. No live call, account refresh,
+microphone request or audio transmission was attempted.
+
+One runtime connectivity gap remains: `WebRTCMediaPeerFactory` uses a default
+`LKRTCConfiguration` without configured ICE servers, and signaling waits for
+local ICE gathering instead of exchanging trickled candidates. There is no
+TURN/STUN service selection or credential delivery in the current route. A
+public STUN service was not added implicitly. Before a real provider/device run,
+select an authorized ICE service and pass only its scoped configuration through
+the native lease owner; otherwise reachability is limited to favorable direct
+network topologies and must not be claimed generally.
+
+The pinned WebRTC framework does expose an injectable `RTCAudioDevice` interface
+that accepts recorded PCM and yields playout PCM. A local two-peer loopback with
+a deterministic PCM source and collecting playout device can validate track
+binding, encoding/decoding, remote playback callbacks, and fence/Stop leakage
+without requesting microphone permission or contacting the provider. That
+loopback is not implemented yet: current Swift tests use track/auth doubles and
+assert lease gating only. It would not qualify Codex subscription entitlement,
+provider interoperability, public-network ICE/NAT traversal, device routing,
+or real microphone privacy behavior. Actual provider testing requires separate
+approval to connect to the named OpenAI Codex endpoint and may consume account
+usage; actual speech additionally requires explicit microphone-permission and
+voice-transmission approval.

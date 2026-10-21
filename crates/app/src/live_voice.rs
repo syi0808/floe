@@ -5,7 +5,6 @@ use floe_execution::{
     budget::{BudgetConfig, BudgetLedger, ModelUsage},
 };
 use floe_kernel::{AgentFailure, OwnerActor, TraceContext};
-use floe_model_contract::LiveModelCapabilities;
 use floe_native::live_media::{
     LiveMediaBinding, LiveMediaLease, LiveMediaStopReceipt, ProcessLiveMediaRegistry,
 };
@@ -73,10 +72,7 @@ pub(crate) async fn drive_start<'a>(
         let prepared = owners
             .live_inference
             .prepare_live(
-                floe_inference::LiveModelPlanRequest {
-                    actor: actor.clone(),
-                    required_capabilities: LiveModelCapabilities::conversational(),
-                },
+                floe_inference::LiveModelPlanRequest::conversational(actor.clone()),
                 &scope,
             )
             .await?;
