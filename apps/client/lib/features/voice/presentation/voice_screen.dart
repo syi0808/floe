@@ -272,10 +272,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'Voice prepares a muted WebRTC lease and negotiates the '
-                  'configured Gateway. This build does not attach a microphone '
-                  'track or request microphone permission. Stop closes the '
-                  'lease and waits for native readback.',
+                  'Voice prepares a muted WebRTC lease. When you press Start, '
+                  'Floe checks microphone permission and may ask before sending '
+                  'microphone audio to your configured Gateway. Replies play on '
+                  'this device. Stop immediately mutes and closes the local lease.',
                   style: FloeType.body,
                 ),
                 if (_status != null) ...[

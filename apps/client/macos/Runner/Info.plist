@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Floe uses your microphone during a voice session you start to send audio to your configured Gateway.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
     <string>Show calendar events in your day. Create, edit, or delete calendar events only through actions you authorize.</string>
     <key>NSCalendarsUsageDescription</key>

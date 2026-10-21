@@ -32,7 +32,9 @@
 	<string>Floe reads calendars you select to show your day and prepare scheduling suggestions on this device.</string>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Floe reads calendars you select to show your day and prepare scheduling suggestions on this device.</string>
-	<key>NSHealthShareUsageDescription</key>
+	<key>NSMicrophoneUsageDescription</key>
+    <string>Floe uses your microphone during a voice session you start to send audio to your configured Gateway.</string>
+    <key>NSHealthShareUsageDescription</key>
 	<string>Floe reads selected health data to derive a short-lived capacity and recovery summary on this device.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>

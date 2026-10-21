@@ -23,10 +23,8 @@ void main() {
 
     expect(find.text('Live presentation'), findsOneWidget);
     expect(find.text('Start voice'), findsOneWidget);
-    expect(
-      find.textContaining('does not attach a microphone track'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('checks microphone permission'), findsOneWidget);
+    expect(find.textContaining('sending microphone audio'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

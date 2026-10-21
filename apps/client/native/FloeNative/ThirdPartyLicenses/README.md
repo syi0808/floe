@@ -16,7 +16,8 @@ notices; re-audit them when changing the pinned release.
 - [Pinned package README](https://github.com/livekit/webrtc-xcframework/blob/150.7871.03/README.md)
 - [WebRTC SDK BSD-3-Clause license](https://github.com/webrtc-sdk/webrtc/blob/m150_release/LICENSE)
 
-The current muted lease creates an offer-capable audio transceiver without an
-audio source or track. It does not request microphone authorization or capture
-audio. A future capture implementation must add its actual permission-purpose
-string and user-facing authorization path before enabling capture.
+The prepared lease creates an offer-capable audio transceiver without a local
+audio source or track and does not request microphone authorization. Only an
+explicit Voice Start checks authorization, then creates and attaches the local
+audio track. Received audio is enabled for native WebRTC playout only while that
+same lease remains active; fence and Stop disable both directions.

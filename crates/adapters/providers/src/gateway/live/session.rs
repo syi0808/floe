@@ -142,6 +142,8 @@ pub(super) async fn start(
     let deadline = request
         .deadline
         .min(Instant::now() + Duration::from_secs(35));
+    native.start_audio(deadline, &request.cancellation).await?;
+    native.validate_current()?;
     let offer = native.offer(deadline, &request.cancellation).await?;
     native.validate_current()?;
     prepared.ticket.control.current().await?;

@@ -35,11 +35,14 @@ enum LiveMediaHostFailure: String, Error {
     case notFound = "not_found"
     case deadlineExceeded = "deadline_exceeded"
     case capabilityUnavailable = "capability_unavailable"
+    case microphonePermissionDenied = "microphone_permission_denied"
 }
 
 protocol LiveMediaPeer: AnyObject, Sendable {
+    func startAudio(deadlineMilliseconds: Int64) throws
     func createOffer(deadlineMilliseconds: Int64) throws -> String
     func applyAnswer(_ sdp: String, deadlineMilliseconds: Int64) throws
+    func fence()
     func stop(deadlineMilliseconds: Int64) throws
     func observeStop() -> (captureStopped: Bool, playbackStopped: Bool)
 }
@@ -59,6 +62,15 @@ final class LiveMediaHost: @unchecked Sendable {
         let lock = NSLock()
         var fenced = false
         var stopIssued = false
+        var audioState = AudioState.prepared
+        var offerCreated = false
+
+        enum AudioState: Equatable {
+            case prepared
+            case starting
+            case active
+            case fenced
+        }
 
         init(binding: LiveMediaBindingWire, hostInstanceID: String, peer: any LiveMediaPeer) {
             self.binding = binding
@@ -109,18 +121,58 @@ final class LiveMediaHost: @unchecked Sendable {
                 guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
             }
             return reply(command)
+        case "start_audio":
+            let lease = try exactLease(command)
+            let shouldStart = try lease.lock.withLock { () throws -> Bool in
+                guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
+                switch lease.audioState {
+                case .prepared:
+                    lease.audioState = .starting
+                    return true
+                case .active:
+                    return false
+                case .starting, .fenced:
+                    throw LiveMediaHostFailure.conflict
+                }
+            }
+            guard shouldStart else { return reply(command) }
+            do {
+                try lease.peer.startAudio(deadlineMilliseconds: deadline(command))
+                let committed = lease.lock.withLock { () -> Bool in
+                    guard !lease.fenced, !lease.stopIssued, lease.audioState == .starting else {
+                        return false
+                    }
+                    lease.audioState = .active
+                    return true
+                }
+                guard committed else {
+                    lease.peer.fence()
+                    throw LiveMediaHostFailure.conflict
+                }
+                return reply(command)
+            } catch {
+                lease.lock.withLock {
+                    if lease.audioState == .starting { lease.audioState = .prepared }
+                }
+                throw error
+            }
         case "offer":
             let lease = try exactLease(command)
             let deadline = try deadline(command)
             try lease.lock.withLock {
-                guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
+                guard !lease.fenced, !lease.stopIssued, lease.audioState == .active else {
+                    throw LiveMediaHostFailure.conflict
+                }
             }
             let sdp = try lease.peer.createOffer(deadlineMilliseconds: deadline)
             guard sdp.utf8.count <= 65_536, sdp.hasPrefix("v=0\r\n") else {
                 throw LiveMediaHostFailure.invalidInput
             }
             try lease.lock.withLock {
-                guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
+                guard !lease.fenced, !lease.stopIssued, lease.audioState == .active else {
+                    throw LiveMediaHostFailure.conflict
+                }
+                lease.offerCreated = true
             }
             return reply(command, offerSDP: sdp)
         case "apply_answer":
@@ -131,26 +183,35 @@ final class LiveMediaHost: @unchecked Sendable {
                   answer.hasPrefix("v=0\r\n"),
                   !answer.contains("\0") else { throw LiveMediaHostFailure.invalidInput }
             try lease.lock.withLock {
-                guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
+                guard !lease.fenced, !lease.stopIssued, lease.audioState == .active,
+                      lease.offerCreated else { throw LiveMediaHostFailure.conflict }
             }
             try lease.peer.applyAnswer(answer, deadlineMilliseconds: deadline)
             try lease.lock.withLock {
-                guard !lease.fenced, !lease.stopIssued else { throw LiveMediaHostFailure.conflict }
+                guard !lease.fenced, !lease.stopIssued, lease.audioState == .active else {
+                    throw LiveMediaHostFailure.conflict
+                }
             }
             return reply(command)
         case "fence":
             let lease = try exactLease(command)
-            lease.lock.withLock { lease.fenced = true }
+            lease.lock.withLock {
+                lease.fenced = true
+                lease.audioState = .fenced
+            }
+            lease.peer.fence()
             return reply(command)
         case "stop_once":
             let lease = try exactLease(command)
             let shouldStop = lease.lock.withLock { () -> Bool in
                 guard !lease.stopIssued else { return false }
                 lease.fenced = true
+                lease.audioState = .fenced
                 lease.stopIssued = true
                 return true
             }
             if shouldStop {
+                lease.peer.fence()
                 try lease.peer.stop(deadlineMilliseconds: try deadline(command))
             }
             return reply(command)

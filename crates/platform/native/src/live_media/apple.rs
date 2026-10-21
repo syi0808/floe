@@ -202,6 +202,23 @@ impl LiveMediaLease for AppleLiveMediaLease {
         self.invoke("validate", None, None).map(|_| ())
     }
 
+    fn start_audio<'a>(
+        &'a self,
+        deadline: Instant,
+        cancellation: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            if cancellation.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(AgentFailure::Cancelled),
+                result = self.spawn_call("start_audio", deadline, None, false) => result.map(|_| ()),
+            }
+        })
+    }
+
     fn offer<'a>(
         &'a self,
         deadline: Instant,
@@ -332,6 +349,20 @@ fn map_failure(code: Option<&str>) -> AgentFailure {
         Some("deadline_exceeded") => AgentFailure::DeadlineExceeded,
         Some("cancelled") => AgentFailure::Cancelled,
         Some("policy_denied") => AgentFailure::PolicyDenied,
+        Some("microphone_permission_denied") => AgentFailure::CapabilityDenied,
         _ => AgentFailure::CapabilityUnavailable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn microphone_permission_denial_is_a_capability_denial() {
+        assert_eq!(
+            map_failure(Some("microphone_permission_denied")),
+            AgentFailure::CapabilityDenied
+        );
     }
 }

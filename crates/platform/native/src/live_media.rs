@@ -1,5 +1,6 @@
-//! Private native WebRTC signaling/handle boundary. No Dart JSON, provider
-//! credential, automatic permission prompt or unmute is part of this port.
+//! Private native WebRTC signaling/handle boundary. No Dart JSON or provider
+//! credential is part of this port. Audio permission is gated by an explicit
+//! Voice Start on the exact process-local lease; preparation stays muted.
 use floe_execution::{BoxFuture, Cancellation};
 use floe_kernel::{AgentFailure, OwnerActor};
 use std::{
@@ -97,7 +98,14 @@ pub trait LiveMediaRegistry: Send + Sync {
 pub trait LiveMediaLease: Send + Sync {
     fn binding(&self) -> &LiveMediaBinding;
     fn validate_current(&self) -> Result<(), AgentFailure>;
-    /// Offer creation stays muted and must never ask for microphone permission.
+    /// Activate this exact lease after explicit Voice Start and before its SDP
+    /// offer can leave the device. Preparation and read-only recovery never call it.
+    fn start_audio<'a>(
+        &'a self,
+        deadline: Instant,
+        cancellation: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>>;
+    /// Offer creation is allowed only after the exact lease passed start_audio.
     fn offer<'a>(
         &'a self,
         deadline: Instant,
@@ -439,6 +447,13 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+        fn start_audio<'a>(
+            &'a self,
+            _: Instant,
+            _: &'a Cancellation,
+        ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+            Box::pin(async { Ok(()) })
         }
         fn offer<'a>(
             &'a self,

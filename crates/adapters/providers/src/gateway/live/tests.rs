@@ -73,6 +73,7 @@ impl GatewayPrivateReader for Reader {
 struct Native {
     binding: LiveMediaBinding,
     ended: Cancellation,
+    audio_started: AtomicBool,
     answer: AtomicBool,
 }
 impl LiveMediaLease for Native {
@@ -86,6 +87,19 @@ impl LiveMediaLease for Native {
             Ok(())
         }
     }
+    fn start_audio<'a>(
+        &'a self,
+        _: Instant,
+        c: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async move {
+            if c.is_cancelled() || self.ended.is_cancelled() {
+                return Err(AgentFailure::Cancelled);
+            }
+            self.audio_started.store(true, Ordering::Release);
+            Ok(())
+        })
+    }
     fn offer<'a>(
         &'a self,
         _: Instant,
@@ -93,6 +107,9 @@ impl LiveMediaLease for Native {
     ) -> BoxFuture<'a, Result<LiveSessionDescription, AgentFailure>> {
         Box::pin(async move {
             assert!(!c.is_cancelled());
+            if !self.audio_started.load(Ordering::Acquire) {
+                return Err(AgentFailure::Conflict);
+            }
             LiveSessionDescription::new("v=0\r\ns=synthetic-native-offer\r\n".into())
         })
     }
@@ -220,6 +237,7 @@ async fn rust_live_control_to_go_e2e() {
             plan_id: plan.operation_id,
         },
         ended: Cancellation::new(),
+        audio_started: AtomicBool::new(false),
         answer: AtomicBool::new(false),
     });
     media.0.register(native.clone()).unwrap();
@@ -241,6 +259,7 @@ async fn rust_live_control_to_go_e2e() {
     // This test targets the actual Rust/Go/native-port transport composition; the
     // separate registered Voice/App tests own durable intent and Access admission.
     let session = session::start(profile.transport, start).await.unwrap();
+    assert!(native.audio_started.load(Ordering::Acquire));
     assert!(native.answer.load(Ordering::Acquire));
     let first = session.observe(&scope).await.unwrap();
     let replay = session.observe(&scope).await.unwrap();

@@ -1089,8 +1089,9 @@ applies current derived-history coverage authorization and keeps internal source
 proof apart from provider-facing text. Result projection point-reads the original
 published body/completeness and cannot substitute a UI cache or a newer active
 Run. Source-processing review is shared with generation; prepared live context is
-not dispatch, microphone, playback or action authority. Live-host compaction and
-provider/media composition remain execution-plan work.
+not dispatch, microphone, playback or action authority. Live-host compaction
+remains execution-plan work; native audio activation still belongs to an explicit
+Start on the exact process-local Voice lease.
 
 ### Voice local-media versus remote-finalization state
 
@@ -1139,24 +1140,29 @@ one custody task, so cancellation during its initial read cannot discard the
 already-received usage receipt. Retirement rejects new settlement requests but
 drains ones already admitted before closing the journal.
 Retirement fences new custody and drains the owned tasks. These are storage and
-queue lifetimes, not a provider reader, native media driver, or permission grant.
+queue lifetimes, not provider reader, media driver, or permission grant.
 `floe-native` provides a process-scoped `ProcessLiveMediaRegistry`, intended to
-outlive Runtime generations. It admits one exact muted lease, fences only the
-matching actor generation, retains Stop execution after an observer disappears,
-records Stop submission before crossing the native boundary, and never resends
-that physical Stop after an uncertain result. It issues a host-instance-bound
-receipt only after separate capture and playback readback both report stopped; the
-receipt remains until Voice's durable NativeReceipt is acknowledged. This is the
-host ownership contract and synthetic Rust qualification, not an Apple audio
-backend or proof that an earlier process has exited. App retains this registry
-across Runtime generations and launches exact Stop work before storage custody;
-it commits Voice's matching NativeReceipt before acknowledging lease release.
-Gateway live inference is composed per generation over the encrypted credential
-reader, dependency resolver and process registry. Apple WebRTC/audio and
-OS-backed prior-process evidence remain explicit integration gates. Actual native
-privacy Stop must occur independently of storage latency. New stored-layout
-families require an explicitly selected fresh development profile; no automatic
-migration, database deletion or key replacement occurs.
+outlive Runtime generations. It admits one exact prepared lease with no local
+source or sender track, fences only the matching actor generation, retains Stop
+execution after an observer disappears, records Stop submission before crossing
+the native boundary, and never resends that physical Stop after an uncertain
+result. It issues a host-instance-bound receipt only after separate capture and
+playback readback both report stopped; the receipt remains until Voice's durable
+NativeReceipt is acknowledged. App retains this registry across Runtime
+generations and launches exact Stop work before storage custody; it commits Voice's
+matching NativeReceipt before acknowledging lease release. Gateway live inference
+is composed per generation over the encrypted credential reader, dependency
+resolver and process registry. The Apple WebRTC peer asks for microphone
+authorization only from the explicit Start operation, then creates and attaches a
+local audio track. A lease gate enables received audio for native playout only
+while that lease is active; fence/Stop disables and detaches the sender track,
+disables remote tracks, and stops the WebRTC audio device module. iOS interruption
+fences the lease and never auto-resumes it. OS-backed prior-process evidence and
+real-device capture, route, playback, interruption, and physical Stop qualification
+remain open. Actual native privacy Stop must occur independently of storage
+latency. New stored-layout families require an explicitly selected fresh
+development profile; no automatic migration, database deletion or key
+replacement occurs.
 
 
 ### Experimental Codex live transport edge
@@ -1476,12 +1482,14 @@ The original generation framing ceiling remains unchanged; live has explicit
 separate request/response ceilings.
 
 The selected adapter looks up an already-prepared muted native lease with exact
-actor/runtime, Voice, media-lease and plan identity. SDP is a bounded redacted
-native/adapter value, not Dart JSON, Context, journal data or a credential. Offer
-and answer operations cannot prompt for permission or unmute. Native preparation,
-actual microphone permission, media commands and Stop receipts remain native/Voice
-responsibilities. The current port and synthetic lease exercise this boundary;
-an Apple WebRTC implementation and product composition are not yet present.
+actor/runtime, Voice, media-lease and plan identity. On the fresh user Start path
+it asks that exact lease to pass its permission gate before creating the SDP offer;
+only then may the provider Start request carry the offer. Preparation, read-only
+recovery and status never request permission. SDP is a bounded redacted
+native/adapter value, not Dart JSON, Context, journal data or a credential. The
+Apple peer attaches its local source/track to the pre-created audio transceiver and
+enables remote audio only while the same lease is active. Raw audio remains in
+WebRTC's native media path, outside Dart JSON and the Voice event journal.
 
 Canonical live dispatch now carries the actual projected input data classes
 alongside provider-facing context; the adapter cannot label real context as
@@ -1573,9 +1581,10 @@ recovered. Cancelled Starts and Bound calls whose local lease has been released
 are not returned. Recovery does not re-plan, bind, resume a provider, or touch
 media.
 
-This cloud composition has no native audio factory: Start is durably recorded,
-then cancelled before model or media preparation. The screen states that it does
-not request microphone permission, capture audio or create a provider call. The
-command journal and process registry do not implement an Apple audio backend,
-platform-backed evidence about media held by a prior OS process, or microphone
-permission behavior.
+This cloud composition has no Apple native audio factory: Start is durably
+recorded, then cancelled before model or media preparation. The local Apple app
+composition includes the lease-bound audio path described above. Its screen tells
+the user that a fresh Start checks microphone permission and may send authorized
+audio to the configured Gateway. Neither this cloud composition nor the command
+journal supplies Apple device qualification or platform-backed evidence about
+media held by a prior OS process.

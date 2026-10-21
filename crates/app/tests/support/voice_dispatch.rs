@@ -1108,6 +1108,14 @@ impl LiveMediaLease for ShutdownNativeLease {
         }
     }
 
+    fn start_audio<'a>(
+        &'a self,
+        _: TokioInstant,
+        _: &'a Cancellation,
+    ) -> BoxFuture<'a, Result<(), AgentFailure>> {
+        Box::pin(async { Err(AgentFailure::CapabilityUnavailable) })
+    }
+
     fn offer<'a>(
         &'a self,
         _: TokioInstant,

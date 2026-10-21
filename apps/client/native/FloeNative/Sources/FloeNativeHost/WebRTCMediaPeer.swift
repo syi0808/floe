@@ -1,7 +1,20 @@
 import Foundation
 import LiveKitWebRTC
+#if os(iOS)
+import AVFAudio
+#endif
 
 struct WebRTCMediaPeerFactory: LiveMediaPeerFactory, @unchecked Sendable {
+    private let microphoneAuthorization: MicrophoneAuthorizationGate
+
+    init(
+        microphoneAuthorization: MicrophoneAuthorizationGate = MicrophoneAuthorizationGate(
+            provider: AppleMicrophoneAuthorizationProvider()
+        )
+    ) {
+        self.microphoneAuthorization = microphoneAuthorization
+    }
+
     func makeMutedPeer() throws -> any LiveMediaPeer {
         guard LKRTCInitializeSSL() else { throw LiveMediaHostFailure.capabilityUnavailable }
         let factory = LKRTCPeerConnectionFactory()
@@ -14,27 +27,91 @@ struct WebRTCMediaPeerFactory: LiveMediaPeerFactory, @unchecked Sendable {
             delegate: nil
         ) else { throw LiveMediaHostFailure.capabilityUnavailable }
 
-        // A send/receive m-line lets the existing Gateway offer/answer path
-        // negotiate audio, while the sender has no local track. No capture
-        // source, permission request or microphone start occurs in this lease.
-        let transceiver = LKRTCRtpTransceiverInit()
-        transceiver.direction = .sendRecv
-        guard connection.addTransceiver(of: .audio, init: transceiver) != nil else {
+        // Preparation creates only a negotiation slot. It does not create a
+        // source, attach a sender track, request permission, or start audio.
+        let initOptions = LKRTCRtpTransceiverInit()
+        initOptions.direction = .sendRecv
+        guard let transceiver = connection.addTransceiver(of: .audio, init: initOptions) else {
             connection.close()
             throw LiveMediaHostFailure.capabilityUnavailable
         }
-        return WebRTCMediaPeer(factory: factory, connection: connection)
+
+        let peer = WebRTCMediaPeer(
+            factory: factory,
+            connection: connection,
+            audioTransceiver: transceiver,
+            microphoneAuthorization: microphoneAuthorization
+        )
+        connection.delegate = peer
+        return peer
     }
 }
 
-private final class WebRTCMediaPeer: LiveMediaPeer, @unchecked Sendable {
+private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectionDelegate, @unchecked Sendable {
     private let factory: LKRTCPeerConnectionFactory
     private let connection: LKRTCPeerConnection
+    private let audioTransceiver: LKRTCRtpTransceiver
+    private let microphoneAuthorization: MicrophoneAuthorizationGate
+    private let audioGate = LiveAudioTrackGate()
     private let lock = NSLock()
+    private var localAudioSource: LKRTCAudioSource?
+    private var localAudioTrack: LKRTCAudioTrack?
 
-    init(factory: LKRTCPeerConnectionFactory, connection: LKRTCPeerConnection) {
+    #if os(iOS)
+    private let interruptionLock = NSLock()
+    private var interruptionObserver: NSObjectProtocol?
+    #endif
+
+    init(
+        factory: LKRTCPeerConnectionFactory,
+        connection: LKRTCPeerConnection,
+        audioTransceiver: LKRTCRtpTransceiver,
+        microphoneAuthorization: MicrophoneAuthorizationGate
+    ) {
         self.factory = factory
         self.connection = connection
+        self.audioTransceiver = audioTransceiver
+        self.microphoneAuthorization = microphoneAuthorization
+        super.init()
+    }
+
+    func startAudio(deadlineMilliseconds: Int64) throws {
+        // This is reached only from the fresh, explicit Voice Start path. The
+        // permission decision precedes source creation and sender attachment.
+        try microphoneAuthorization.requireAccess(deadlineMilliseconds: deadlineMilliseconds)
+        guard !audioGate.isTerminal else { throw LiveMediaHostFailure.conflict }
+
+        let source = factory.audioSource(with: nil)
+        let trackID = "floe-audio-\(UUID().uuidString.lowercased())"
+        let track = factory.audioTrack(with: source, trackId: trackID)
+        track.isEnabled = false
+
+        try lock.withLock {
+            guard !audioGate.isTerminal else { throw LiveMediaHostFailure.conflict }
+            guard audioGate.installLocalTrack(id: trackID, setEnabled: { [weak track] enabled in
+                track?.isEnabled = enabled
+            }) else {
+                throw LiveMediaHostFailure.conflict
+            }
+
+            audioTransceiver.sender.track = track
+            localAudioSource = source
+            localAudioTrack = track
+            #if os(iOS)
+            installInterruptionObserver()
+            #endif
+
+            guard audioGate.activate() else {
+                audioTransceiver.sender.track = nil
+                track.isEnabled = false
+                localAudioTrack = nil
+                localAudioSource = nil
+                #if os(iOS)
+                removeInterruptionObserver()
+                #endif
+                throw LiveMediaHostFailure.conflict
+            }
+        }
     }
 
     func createOffer(deadlineMilliseconds: Int64) throws -> String {
@@ -68,20 +145,34 @@ private final class WebRTCMediaPeer: LiveMediaPeer, @unchecked Sendable {
         }
     }
 
+    func fence() {
+        // The gate is fenced before touching WebRTC objects, so an in-flight
+        // Start or a late receiver callback cannot re-enable either direction.
+        audioGate.fence()
+        stopAudioDevices()
+        #if os(iOS)
+        removeInterruptionObserver()
+        #endif
+        lock.withLock {
+            audioTransceiver.sender.track = nil
+            localAudioTrack?.isEnabled = false
+            localAudioTrack = nil
+            localAudioSource = nil
+        }
+    }
+
     func stop(deadlineMilliseconds: Int64) throws {
+        fence()
         try lock.withLock {
             guard deadlineMilliseconds > 0 else { throw LiveMediaHostFailure.deadlineExceeded }
             connection.close()
-            let audio = factory.audioDeviceModule
-            if audio.isRecording, audio.stopRecording() != 0 {
-                throw LiveMediaHostFailure.capabilityUnavailable
-            }
-            if audio.isPlaying, audio.stopPlayout() != 0 {
-                throw LiveMediaHostFailure.capabilityUnavailable
-            }
+            connection.delegate = nil
+            stopAudioDevices()
+            audioGate.stop()
             guard connection.signalingState == .closed,
-                  !audio.isRecording,
-                  !audio.isPlaying else {
+                  !factory.audioDeviceModule.isRecording,
+                  !factory.audioDeviceModule.isPlaying,
+                  audioGate.hasStoppedAudio else {
                 throw LiveMediaHostFailure.capabilityUnavailable
             }
         }
@@ -91,10 +182,75 @@ private final class WebRTCMediaPeer: LiveMediaPeer, @unchecked Sendable {
         lock.withLock {
             let audio = factory.audioDeviceModule
             let closed = connection.signalingState == .closed
-            return (captureStopped: closed && !audio.isRecording,
-                    playbackStopped: closed && !audio.isPlaying)
+            return (
+                captureStopped: closed && !audio.isRecording && audioGate.hasStoppedAudio,
+                playbackStopped: closed && !audio.isPlaying && audioGate.hasStoppedAudio
+            )
         }
     }
+
+    private func stopAudioDevices() {
+        let audio = factory.audioDeviceModule
+        if audio.isRecording { _ = audio.stopRecording() }
+        if audio.isPlaying { _ = audio.stopPlayout() }
+    }
+
+    #if os(iOS)
+    private func installInterruptionObserver() {
+        interruptionLock.withLock {
+            guard interruptionObserver == nil else { return }
+            interruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: AVAudioSession.sharedInstance(),
+                queue: nil
+            ) { [weak self] notification in
+                guard let value = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber,
+                      AVAudioSession.InterruptionType(rawValue: value.uintValue) == .began else {
+                    return
+                }
+                // Interruption is a one-way privacy fence. A later system
+                // interruption-ended event never resumes a stale Voice lease.
+                self?.fence()
+            }
+        }
+    }
+
+    private func removeInterruptionObserver() {
+        interruptionLock.withLock {
+            guard let interruptionObserver else { return }
+            NotificationCenter.default.removeObserver(interruptionObserver)
+            self.interruptionObserver = nil
+        }
+    }
+    #endif
+
+    // WebRTC's native audio device module renders enabled remote audio tracks.
+    // The delegate controls only the lease-bound enable gate; no raw samples
+    // cross this native owner or enter the Flutter event journal.
+    func peerConnection(
+        _ peerConnection: LKRTCPeerConnection,
+        didAdd rtpReceiver: LKRTCRtpReceiver,
+        streams mediaStreams: [LKRTCMediaStream]
+    ) {
+        guard let track = rtpReceiver.track as? LKRTCAudioTrack else { return }
+        audioGate.receiveRemoteTrack(id: rtpReceiver.receiverId) { [weak track] enabled in
+            track?.isEnabled = enabled
+        }
+    }
+
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove rtpReceiver: LKRTCRtpReceiver) {
+        audioGate.removeRemoteTrack(id: rtpReceiver.receiverId)
+    }
+
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange stateChanged: LKRTCSignalingState) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didAdd stream: LKRTCMediaStream) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove stream: LKRTCMediaStream) {}
+    func peerConnectionShouldNegotiate(_ peerConnection: LKRTCPeerConnection) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove candidates: [LKRTCIceCandidate]) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {}
 
     private func waitForValue<T>(
         deadline: Date,

@@ -3714,3 +3714,45 @@ two-way voice. The next implementation cut is to add a permission-gated local
 audio-track lifecycle bound to the exact Voice lease, then wire remote audio
 receipt/playback and synthetic readback tests. Hardware capture still needs
 separate user approval; none was requested or accepted for this checkpoint.
+
+
+### 2026-10-21 Lease-bound Voice sender and receiver lifecycle
+
+The Apple peer now owns the permission-gated local audio source, track and sender
+for the exact process-local Voice lease. Muted preparation still creates only the
+audio negotiation transceiver. The new start_audio operation is called only from
+the durable fresh-Start Gateway path and before the offer can leave the device.
+It checks current Apple microphone authorization, requests access only when the
+user starts Voice and status is not determined, and fails closed on
+denied/restricted access. No source or sender track is created before that gate.
+A denied or timed-out request cannot produce an offer or activate a late callback.
+
+The peer delegate tracks remote audio receivers under the same lease gate. Enabled
+remote audio uses WebRTC's native audio device module for playout; raw audio stays
+on the native media path. Fence, Stop, and iOS audio interruption disable both
+directions, detach the sender, stop capture/playout, and reject late receiver
+callbacks. Interruption-ended does not reactivate a lease. The Rust Gateway
+adapter starts audio before generating/sending SDP, and preserves exact lease
+validation and cancellation. There is no new package dependency. Apple usage
+descriptions and the macOS audio-input entitlement now match the explicit Start
+path.
+
+Synthetic tests cover prepared silence, not-determined request only on Start,
+denied/restricted/denied-after-request cases, delayed grant after Stop, remote
+receiver callbacks after fence, interruption as an irreversible fence, a new
+lease beside stale callbacks, and exactly-once Stop. They use authorization
+providers and track controls implemented as test doubles; they do not call the
+Apple authorization API, record audio, or prove acoustic/network media behavior.
+
+Verification on 2026-10-21: the six FloeNative host tests passed; the Rust
+workspace test suite and `floe-ffi` build passed; all 247 Flutter tests passed;
+the local synthetic Go/Rust live transport integration test passed; and the
+macOS Debug app plus unsigned iOS Simulator Debug app builds passed. Plist and
+entitlement linting, Rust formatting, changed Dart formatting, and `git diff
+--check` passed. `flutter analyze --no-pub` exited nonzero with 91 info-level
+diagnostics and no errors or warnings. The architecture boundary checker still
+reports the existing `floe-app -> floe-model-contract` direct dependency; that
+dependency and the checker were unchanged in this work. No app was launched and
+no permission dialog was accepted. Real microphone authorization/capture,
+provider interoperability, audible playback, route/interruption behavior, and
+physical Stop still need a separately approved device run.
