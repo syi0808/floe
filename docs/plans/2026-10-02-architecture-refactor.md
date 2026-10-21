@@ -3804,15 +3804,26 @@ select an authorized ICE service and pass only its scoped configuration through
 the native lease owner; otherwise reachability is limited to favorable direct
 network topologies and must not be claimed generally.
 
-The pinned WebRTC framework does expose an injectable `RTCAudioDevice` interface
-that accepts recorded PCM and yields playout PCM. A local two-peer loopback with
-a deterministic PCM source and collecting playout device can validate track
-binding, encoding/decoding, remote playback callbacks, and fence/Stop leakage
-without requesting microphone permission or contacting the provider. That
-loopback is not implemented yet: current Swift tests use track/auth doubles and
-assert lease gating only. It would not qualify Codex subscription entitlement,
-provider interoperability, public-network ICE/NAT traversal, device routing,
-or real microphone privacy behavior. Actual provider testing requires separate
-approval to connect to the named OpenAI Codex endpoint and may consume account
-usage; actual speech additionally requires explicit microphone-permission and
+The pinned WebRTC framework exposes an injectable `RTCAudioDevice` interface
+that accepts recorded PCM and yields playout PCM. The new
+`LocalWebRTCSignalingTests` test uses a memory-only device, disables STUN/TURN,
+filters remote SDP to private/link-local host addresses assigned to this host,
+and verifies the two local peers reach ICE-connected state without a provider.
+It does not create a source track or exchange PCM frames.
+
+A deterministic PCM loopback remains blocked. The WebRTC audio-device module
+must be initialized and started to deliver PCM callbacks into a peer. Under
+the current no-hardware scope, explicit module `initAndStartRecording` and
+`startPlayout` calls cannot be treated as safe because they may activate Apple
+audio hardware; no such calls were executed. The minimum safe implementation
+is a test-only native audio-device module whose start, recording and playout
+paths are proven to stay in memory, then injected into the local peers. If the
+pinned Objective-C SDK cannot inject that module, use a separate WebRTC native
+test harness rather than an Apple audio device.
+
+The signaling test does not qualify Codex subscription entitlement, provider
+interoperability, public-network ICE/NAT traversal, device routing, or real
+microphone privacy behavior. Actual provider testing requires separate approval
+to connect to the named OpenAI Codex endpoint and may consume account usage;
+actual speech additionally requires explicit microphone-permission and
 voice-transmission approval.

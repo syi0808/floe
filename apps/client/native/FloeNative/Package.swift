@@ -24,7 +24,10 @@ let package = Package(
             "FloeModelExecution", "FloeFoundationModels", "FloeHealthTransform", "FloeHealthTransformBridge",
             .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
         ]),
-        .testTarget(name: "FloeNativeHostTests", dependencies: ["FloeNativeHost"]),
+        .testTarget(name: "FloeNativeHostTests", dependencies: [
+            "FloeNativeHost",
+            .product(name: "LiveKitWebRTC", package: "webrtc-xcframework"),
+        ]),
     ],
     swiftLanguageModes: [.v6]
 )
