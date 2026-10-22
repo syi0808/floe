@@ -40,6 +40,8 @@ A time-specific suggestion appears first as one 52×52 white `sq-md` button with
 
 Use a single scrolling Schedule list by default: source coverage, Now/Next when applicable, all-day and remaining events, collapsible Earlier events, then tasks. A visible Timeline switch preserves the full interactive grid; do not squeeze it above a fixed 30% task panel. In compact Timeline, show incomplete/stale status in the fixed Day toolbar beside Refresh. The warning icon exposes the full localized status as its accessible name and opens the existing Day details destination. When the agenda owns the empty-status notice, omit the toolbar warning, keep its single normal Day details opener, and do not repeat the status. Keep the warning initially visible and actionable at supported large-text sizes without a hidden-header swipe or focus traversal. Keep both modes available and preserve the selected view during ordinary destination changes.
 
+Keep the selected civil date visually complete when its localized weekday form fits. When it does not fit, display the localized month/day form and retain the full weekday/date as the Text semantics label. Format directly from the selected civil date.
+
 Now/Next follow the owner snapshot IDs and observation time, never a new UI prioritization policy. Other overlapping and tied events remain visible in the list. Suppress live focus labels after a failed latest read, even if its error is dismissed. All-day membership comes from the owner-selected civil-date projection, not UTC instant filtering. Empty or stale coverage must not imply an unoccupied day.
 
 ## Interaction

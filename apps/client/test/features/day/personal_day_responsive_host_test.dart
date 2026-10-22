@@ -2,17 +2,20 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/features/actions/application/calendar_action_gateway.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/preview/product_fixture.dart';
+import 'package:intl/intl.dart';
 
 const _personId = 'responsive-host-fixture';
 final _date = DateTime(2026, 9, 4, 14, 28);
@@ -79,13 +82,14 @@ Future<void> _loadBundledFonts() async {
 Widget _app({
   required FakeDayGateway gateway,
   LocalOwnerGateways owners = const LocalOwnerGateways(),
+  DayQuery? query,
   double textScale = 1,
   Key captureKey = const Key('responsive-host-capture'),
 }) => previewAppearance(
   FloeApp(
     personId: _personId,
     gateway: gateway,
-    query: _query,
+    query: query ?? _query,
     ownerGateways: owners,
     builder: (context, child) => MediaQuery(
       data: MediaQuery.of(context)
@@ -94,6 +98,46 @@ Widget _app({
     ),
   ),
 );
+
+void _expectCompactDockLabelsFit(WidgetTester tester) {
+  final dock = find.byKey(const Key('compact-navigation-dock'));
+  for (final label in ['Today', 'Tasks', 'Notes', 'Floe']) {
+    final text = find.descendant(of: dock, matching: find.text(label));
+    expect(text, findsOneWidget);
+    final paragraph = tester.renderObject<RenderParagraph>(text);
+    expect(
+      paragraph.size.height,
+      lessThanOrEqualTo(paragraph.preferredLineHeight + 1),
+      reason: '$label should stay on one line at large text',
+    );
+    final context = tester.element(text);
+    final style = DefaultTextStyle.of(context).style.merge(FloeType.caption);
+    final naturalText = TextPainter(
+      text: TextSpan(text: label, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      locale: Localizations.localeOf(context),
+      maxLines: 1,
+    )..layout();
+    final button = find
+        .ancestor(of: text, matching: find.byType(TextButton))
+        .first;
+    final target = tester.getRect(button);
+    final padding = tester
+        .widget<TextButton>(button)
+        .style!
+        .padding!
+        .resolve(const <WidgetState>{})!;
+    expect(
+      naturalText.width,
+      lessThanOrEqualTo(target.width - padding.horizontal),
+      reason: '$label should fit its actual text constraints',
+    );
+    expect(target.width, greaterThanOrEqualTo(44));
+    expect(target.height, greaterThanOrEqualTo(44));
+    naturalText.dispose();
+  }
+}
 
 bool _hasKeyAncestor(BuildContext? context, Key key) {
   var found = false;
@@ -263,6 +307,7 @@ void main() {
     expect(find.byTooltip('Today').hitTestable(), findsOneWidget);
     expect(find.byTooltip('Tasks').hitTestable(), findsOneWidget);
     expect(find.byTooltip('Notes').hitTestable(), findsOneWidget);
+    _expectCompactDockLabelsFit(tester);
 
     await tester.tap(find.text('Timeline'));
     await tester.pumpAndSettle();
@@ -279,6 +324,171 @@ void main() {
     expect(statusRect.height, greaterThanOrEqualTo(44));
     expect(tester.getSemantics(status).flagsCollection.isLiveRegion, isTrue);
     expect(tester.getSemantics(status).label, 'Calendar status unavailable');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final width in [320.0, 390.0]) {
+    for (final scale in [1.0, 2.0]) {
+      for (final isToday in [true, false]) {
+        testWidgets(
+          'compact labels and selected date fit at $width px, ${scale}x, today=$isToday',
+          (tester) async {
+            final now = DateTime.now();
+            final selectedDate = isToday
+                ? now
+                : DateTime(now.year, now.month - 1, 30, 12);
+            final query = DayQuery.local(
+              personId: _personId,
+              date: selectedDate,
+              now: now,
+            );
+            _setViewport(tester, width: width, height: 844, textScale: scale);
+            await tester.pumpWidget(
+              _app(gateway: FakeDayGateway(), query: query, textScale: scale),
+            );
+            await tester.pumpAndSettle();
+
+            _expectCompactDockLabelsFit(tester);
+            final semantics = tester.ensureSemantics();
+            try {
+              expect(
+                tester
+                    .getSemantics(find.byTooltip('Today'))
+                    .flagsCollection
+                    .isSelected,
+                ui.Tristate.isTrue,
+              );
+
+              final dateFinder = find.byKey(const Key('day-selected-date'));
+              final dateText = tester.widget<Text>(dateFinder);
+              final locale = Localizations.localeOf(tester.element(dateFinder));
+              final fullDate = DateFormat.MMMEd(locale.toString())
+                  .format(query.date);
+              final shortDate = DateFormat.MMMd(locale.toString())
+                  .format(query.date);
+              final dateContext = tester.element(dateFinder);
+              final dateStyle = DefaultTextStyle.of(dateContext).style
+                  .merge(FloeType.headline);
+              final fullDatePainter = TextPainter(
+                text: TextSpan(text: fullDate, style: dateStyle),
+                textDirection: Directionality.of(dateContext),
+                textScaler: MediaQuery.textScalerOf(dateContext),
+                locale: locale,
+                maxLines: 1,
+              )..layout();
+              final dateWidth = tester.getSize(dateFinder).width;
+              expect(
+                dateText.data,
+                fullDatePainter.width > dateWidth ? shortDate : fullDate,
+              );
+              expect(dateText.semanticsLabel, fullDate);
+              expect(tester.getSemantics(dateFinder).label, fullDate);
+              fullDatePainter.dispose();
+              final displayedDatePainter = TextPainter(
+                text: TextSpan(text: dateText.data, style: dateStyle),
+                textDirection: Directionality.of(dateContext),
+                textScaler: MediaQuery.textScalerOf(dateContext),
+                locale: locale,
+                maxLines: 1,
+              )..layout();
+              expect(displayedDatePainter.width, lessThanOrEqualTo(dateWidth));
+              displayedDatePainter.dispose();
+
+              final dayViewport = find.byKey(
+                const Key('personal-day-middle-viewport'),
+              );
+              final todayText = find.descendant(
+                of: dayViewport,
+                matching: find.text('Today'),
+              );
+              final toolbarToday = find
+                  .ancestor(of: todayText, matching: find.byType(TextButton))
+                  .first;
+              expect(
+                tester.widget<TextButton>(toolbarToday).onPressed == null,
+                isToday,
+                reason: 'toolbar Today is disabled only on the current day',
+              );
+            } finally {
+              semantics.dispose();
+            }
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox.shrink());
+          },
+        );
+      }
+    }
+  }
+
+  testWidgets('compact dock keeps destination focus and selected semantics', (
+    tester,
+  ) async {
+    _setViewport(tester, width: 320, height: 844, textScale: 2);
+    await tester.pumpWidget(_app(gateway: FakeDayGateway(), textScale: 2));
+    await tester.pumpAndSettle();
+    final semantics = tester.ensureSemantics();
+    try {
+      expect(
+        tester.getSemantics(find.byTooltip('Today')).flagsCollection.isSelected,
+        ui.Tristate.isTrue,
+      );
+      var dockFocused = false;
+      for (var tab = 0; tab < 32 && !dockFocused; tab++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pumpAndSettle();
+        dockFocused = _hasKeyAncestor(
+          FocusManager.instance.primaryFocus?.context,
+          const Key('compact-navigation-dock'),
+        );
+      }
+      expect(dockFocused, isTrue, reason: 'Tab reaches the compact dock');
+
+      await tester.tap(find.byTooltip('Tasks'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSemantics(find.byTooltip('Tasks')).flagsCollection.isSelected,
+        ui.Tristate.isTrue,
+      );
+      await tester.tap(find.byTooltip('Notes'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSemantics(find.byTooltip('Notes')).flagsCollection.isSelected,
+        ui.Tristate.isTrue,
+      );
+      _expectCompactDockLabelsFit(tester);
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('desktop rail retains its 8px button insets', (tester) async {
+    _setViewport(tester, width: 1200, height: 1000);
+    await tester.pumpWidget(_app(gateway: FakeDayGateway()));
+    await tester.pumpAndSettle();
+
+    final rail = find.byKey(const Key('desktop-navigation-scroll'));
+    final tasks = find.descendant(of: rail, matching: find.text('Tasks'));
+    final tasksButton = find
+        .ancestor(of: tasks, matching: find.byType(TextButton))
+        .first;
+    final tasksStyle = tester.widget<TextButton>(tasksButton).style!;
+    expect(
+      tasksStyle.padding!.resolve(const <WidgetState>{}),
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    );
+
+    final assistant = find.byKey(const Key('assistant-entry'));
+    final assistantButton = find
+        .descendant(of: assistant, matching: find.byType(TextButton))
+        .first;
+    final assistantStyle = tester.widget<TextButton>(assistantButton).style!;
+    expect(
+      assistantStyle.padding!.resolve(const <WidgetState>{}),
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

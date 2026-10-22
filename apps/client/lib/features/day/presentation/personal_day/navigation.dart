@@ -32,15 +32,15 @@ class _AdaptiveNavigation {
     ],
   );
 
-  Widget _assistant() => FloeButton.text(
+  Widget _assistant({bool compact = false}) => FloeButton.text(
     key: const Key('assistant-entry'),
     focusNode: assistantFocus,
     onPressed: onAssistant,
-    style: const ButtonStyle(
+    style: ButtonStyle(
       padding: WidgetStatePropertyAll(
-        EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        EdgeInsets.symmetric(horizontal: compact ? 4 : 8, vertical: 8),
       ),
-      minimumSize: WidgetStatePropertyAll(Size(72, 56)),
+      minimumSize: const WidgetStatePropertyAll(Size(72, 56)),
     ),
     child: const Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
@@ -82,9 +82,10 @@ class _AdaptiveNavigation {
                 view: view,
                 selected: selected == view,
                 onPressed: () => onSelected(view),
+                compact: true,
               ),
             ),
-          Expanded(child: _assistant()),
+          Expanded(child: _assistant(compact: true)),
         ],
       ),
     ),
@@ -128,10 +129,12 @@ class _DestinationButton extends StatelessWidget {
     required this.view,
     required this.selected,
     required this.onPressed,
+    this.compact = false,
   });
   final _DestinationView view;
   final bool selected;
   final VoidCallback onPressed;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -172,8 +175,8 @@ class _DestinationButton extends StatelessWidget {
             foregroundColor: WidgetStatePropertyAll(
               selected ? FloePalette.primary700 : FloeColor.textSecondary,
             ),
-            padding: const WidgetStatePropertyAll(
-              EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            padding: WidgetStatePropertyAll(
+              EdgeInsets.symmetric(horizontal: compact ? 4 : 8, vertical: 8),
             ),
             minimumSize: const WidgetStatePropertyAll(Size(72, 56)),
           ),
@@ -215,11 +218,32 @@ class _DayToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final copy = AppLocalizations.of(context);
-    final date = Text(
-      _date(context, controller.query.date),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: FloeType.headline,
+    final date = LayoutBuilder(
+      builder: (context, constraints) {
+        final fullDate = _date(context, controller.query.date);
+        final dateStyle = DefaultTextStyle.of(context).style
+            .merge(FloeType.headline);
+        final fullDatePainter = TextPainter(
+          text: TextSpan(text: fullDate, style: dateStyle),
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
+          locale: Localizations.localeOf(context),
+          maxLines: 1,
+        )..layout();
+        final fullDateFits = fullDatePainter.width <= constraints.maxWidth;
+        fullDatePainter.dispose();
+        return Text(
+          key: const Key('day-selected-date'),
+          fullDateFits
+              ? fullDate
+              : DateFormat.MMMd(AppLocalizations.of(context).localeName)
+                    .format(controller.query.date),
+          semanticsLabel: fullDate,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: dateStyle,
+        );
+      },
     );
     final today = FloeButton.text(
       onPressed:
