@@ -33,6 +33,7 @@ class FloeSelect<T> extends StatelessWidget {
     required this.options,
     required this.onChanged,
     this.enabled = true,
+    this.deferSelectionUntilConfirmed = false,
     this.placeholder = 'Choose an option',
     this.description,
     this.validator,
@@ -45,6 +46,12 @@ class FloeSelect<T> extends StatelessWidget {
   final List<FloeSelectOption<T>> options;
   final ValueChanged<T?> onChanged;
   final bool enabled;
+
+  /// Keeps the selected display bound to [value] until its owner confirms an
+  /// asynchronous selection. By default, this behaves like a form field and
+  /// stages the selected value locally.
+  final bool deferSelectionUntilConfirmed;
+
   final String placeholder;
   final String? description;
   final FormFieldValidator<T>? validator;
@@ -59,14 +66,14 @@ class FloeSelect<T> extends StatelessWidget {
     autovalidateMode: autovalidateMode,
     builder: (field) => _FloeSelectionAnchor<T>(
       label: label,
-      value: field.value,
+      value: deferSelectionUntilConfirmed ? value : field.value,
       options: options,
       enabled: enabled,
       placeholder: placeholder,
       description: description,
       errorText: field.errorText,
       onSelected: (nextValue) {
-        field.didChange(nextValue);
+        if (!deferSelectionUntilConfirmed) field.didChange(nextValue);
         onChanged(nextValue);
       },
     ),

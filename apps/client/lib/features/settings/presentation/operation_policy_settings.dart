@@ -1,63 +1,9 @@
 part of 'settings_screen.dart';
 
-enum _ActionPermissionPreset { all, customize }
-
-class _OperationPolicySettings extends StatefulWidget {
+class _OperationPolicySettings extends StatelessWidget {
   const _OperationPolicySettings({required this.controller});
 
   final OperationPolicyController controller;
-
-  @override
-  State<_OperationPolicySettings> createState() =>
-      _OperationPolicySettingsState();
-}
-
-class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
-  OperationPolicyController get controller => widget.controller;
-  late _ActionPermissionPreset? _selectedPreset;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedPreset = _presetFor(controller.authority?.calendarCreate);
-  }
-
-  @override
-  void didUpdateWidget(_OperationPolicySettings oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller != controller) {
-      _selectedPreset = _presetFor(controller.authority?.calendarCreate);
-    }
-  }
-
-  _ActionPermissionPreset? _presetFor(ActionAuthorityMode? mode) => mode == null
-      ? null
-      : mode == ActionAuthorityMode.allow
-      ? _ActionPermissionPreset.all
-      : _ActionPermissionPreset.customize;
-
-  _ActionPermissionPreset? get preset =>
-      _selectedPreset ?? _presetFor(controller.authority?.calendarCreate);
-
-  Future<void> selectPreset(_ActionPermissionPreset? nextPreset) async {
-    if (nextPreset == null ||
-        controller.busy ||
-        controller.hasPendingChange ||
-        controller.authority == null ||
-        controller.error != null) {
-      return;
-    }
-    setState(() => _selectedPreset = nextPreset);
-    if (nextPreset == _ActionPermissionPreset.all) {
-      try {
-        await controller.setAuthority(ActionAuthorityMode.allow);
-      } on Object {
-        if (mounted) {
-          setState(() => _selectedPreset = _ActionPermissionPreset.customize);
-        }
-      }
-    }
-  }
 
   Future<void> selectMode(ActionAuthorityMode? mode) async {
     if (mode == null ||
@@ -87,44 +33,16 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
             const Text('Expert Calendar policy', style: FloeType.titleLarge),
             const SizedBox(height: FloeSpace.sm),
             Text(
-              'Choose whether Floe can create Calendar events suggested by Experts. Calendar permissions still apply.',
+              'Choose whether Floe can create events suggested by Experts. Calendar permissions still apply; direct changes use your current permissions.',
               style: FloeType.body.copyWith(color: FloePalette.neutral600),
             ),
             const SizedBox(height: 20),
-            FloeRadioGroup<_ActionPermissionPreset>(
-              value: preset,
-              onChanged: selectPreset,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  FloeRadioTile<_ActionPermissionPreset>(
-                    value: _ActionPermissionPreset.all,
-                    enabled:
-                        !controller.busy &&
-                        !controller.hasPendingChange &&
-                        controller.authority != null &&
-                        controller.error == null,
-                    title: const Text('Allow Calendar event creation'),
-                  ),
-                  FloeRadioTile<_ActionPermissionPreset>(
-                    value: _ActionPermissionPreset.customize,
-                    enabled:
-                        !controller.busy &&
-                        !controller.hasPendingChange &&
-                        controller.authority != null &&
-                        controller.error == null,
-                    title: const Text('Customize permissions'),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: FloeSpace.base),
             if (controller.authority case final authority?)
               FloeSelect<ActionAuthorityMode>(
                 label: 'Create Calendar events',
                 value: authority.calendarCreate,
+                deferSelectionUntilConfirmed: true,
                 enabled:
-                    preset == _ActionPermissionPreset.customize &&
                     !controller.busy &&
                     !controller.hasPendingChange &&
                     controller.error == null,
@@ -151,14 +69,6 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                         ? 'Calendar creation authority is unavailable.'
                         : 'Load Access to view the Expert Calendar policy.'),
               ),
-            const SizedBox(height: FloeSpace.sm),
-            Text(
-              'This setting covers Expert suggestions. Changes you request directly still use your current Calendar permissions.',
-              style: FloeType.body.copyWith(
-                color: FloePalette.neutral600,
-                height: 1.4,
-              ),
-            ),
             if (controller.hasPendingChange) ...[
               const SizedBox(height: FloeSpace.md),
               const Text(
@@ -171,13 +81,6 @@ class _OperationPolicySettingsState extends State<_OperationPolicySettings> {
                     : () async {
                         try {
                           await controller.retryPendingChange();
-                          if (mounted) {
-                            setState(
-                              () => _selectedPreset = _presetFor(
-                                controller.authority?.calendarCreate,
-                              ),
-                            );
-                          }
                         } on Object {
                           // Keep the exact pending command and owner failure visible.
                         }

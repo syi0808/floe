@@ -271,7 +271,9 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          final oldAction = find.text('Allow Calendar event creation');
+          final oldAction = find.byKey(
+            const ValueKey('floe-selection-trigger'),
+          );
           final oldPosition = tester.getCenter(oldAction);
           await tester.tap(find.text('Remote server'));
           await tester.pump();
@@ -285,11 +287,15 @@ void main() {
           expect(nav.hasAction(ui.SemanticsAction.tap), isTrue);
           await tester.tapAt(oldPosition);
           await tester.pump();
+          expect(
+            find.byKey(const ValueKey('floe-selection-popup')),
+            findsNothing,
+          );
           expect(gateway.calls, isEmpty);
           expect(controller.authority!.calendarCreate, ActionAuthorityMode.ask);
           expect(
             _liveLabels(tester).join('\n'),
-            isNot(contains('Allow Calendar event creation')),
+            isNot(contains('Create Calendar events')),
           );
           final swap = tester.widget<AnimatedSwitcher>(
             find.byType(AnimatedSwitcher),
