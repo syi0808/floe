@@ -29,6 +29,7 @@ class CalendarAgenda extends StatefulWidget {
     required this.query,
     required this.onConnections,
     required this.onRefresh,
+    required this.observationCurrent,
     this.onCreateEvent,
     this.draftStartsAt,
     this.loading = false,
@@ -40,6 +41,7 @@ class CalendarAgenda extends StatefulWidget {
   final DayQuery query;
   final VoidCallback onConnections;
   final VoidCallback? onRefresh;
+  final bool observationCurrent;
   final ValueChanged<DateTime>? onCreateEvent;
   final DateTime? draftStartsAt;
   final bool loading;
@@ -266,7 +268,9 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     );
     final empty = events.isEmpty && !widget.loading;
     final confirmedEmpty =
-        empty && hasCompleteCalendarCoverage(snapshot, widget.query);
+        empty &&
+        widget.observationCurrent &&
+        hasCompleteCalendarCoverage(snapshot, widget.query);
     final axis = CalendarDayAxis(
       snapshot.date,
       snapshot.timezoneOffsetSeconds,
@@ -745,12 +749,17 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               child: _EmptyDayStatus(
                                 onConnections: widget.onConnections,
                                 onRefresh: widget.onRefresh,
-                                hasSources:
-                                    snapshot
-                                        .calendarCoverage
-                                        ?.sources
-                                        .isNotEmpty ==
-                                    true,
+                                status:
+                                    !widget.observationCurrent ||
+                                        snapshot
+                                                .calendarCoverage
+                                                ?.sources
+                                                .isNotEmpty ==
+                                            true
+                                    ? AppLocalizations.of(context)
+                                          .dayStatusNeedsRefresh
+                                    : AppLocalizations.of(context)
+                                          .dayCalendarStatusUnavailable,
                               ),
                             ),
                         ],
@@ -778,48 +787,24 @@ class _EmptyDayStatus extends StatelessWidget {
   const _EmptyDayStatus({
     required this.onConnections,
     required this.onRefresh,
-    required this.hasSources,
+    required this.status,
   });
 
   final VoidCallback onConnections;
   final VoidCallback? onRefresh;
-  final bool hasSources;
+  final String status;
 
   @override
   Widget build(BuildContext context) {
     final strings = AppLocalizations.of(context);
-    final message = Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          hasSources
-              ? 'Calendar coverage is incomplete for this date'
-              : 'No Calendar coverage was returned for this date',
-          style: FloeType.controlLabel,
-        ),
-        const SizedBox(height: FloeSpace.xxs),
-        Text(
-          hasSources
-              ? 'Refresh this date to observe the sources again.'
-              : strings.emptyDayConnectHint,
-          style: FloeType.bodySmall.copyWith(
-            fontSize: 12,
-            color: FloePalette.neutral600,
-          ),
-        ),
-      ],
-    );
+    final message = Text(status, style: FloeType.controlLabel);
     final actions = Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (onRefresh != null)
-          FloeTextLink(label: 'Refresh date', onPressed: onRefresh),
-        FloeTextLink(
-          label: strings.viewConnectedCalendars,
-          onPressed: onConnections,
-        ),
+          FloeTextLink(label: strings.refreshCalendar, onPressed: onRefresh),
+        FloeTextLink(label: strings.connections, onPressed: onConnections),
       ],
     );
     return Semantics(
@@ -889,13 +874,16 @@ class _EmptyDayBanner extends StatelessWidget {
             Expanded(
               child: Row(
                 children: [
-                  Text(
-                    strings.aLittleBreathingRoom,
-                    maxLines: 1,
-                    style: FloeType.caption.copyWith(
-                      height: 1.3,
-                      fontWeight: FontWeight.w600,
-                      color: FloePalette.neutral950,
+                  Flexible(
+                    child: Text(
+                      strings.aLittleBreathingRoom,
+                      maxLines: compact ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: FloeType.caption.copyWith(
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                        color: FloePalette.neutral950,
+                      ),
                     ),
                   ),
                   if (!compact) ...[

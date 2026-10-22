@@ -44,6 +44,7 @@ Future<void> showTimeline(
       home: Scaffold(
         body: CalendarAgenda(
           query: selected,
+          observationCurrent: true,
           snapshot: DaySnapshot(
             personId: selected.personId,
             date: selected.date,

@@ -381,6 +381,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       snapshot: snapshot,
       query: controller.query,
       loading: controller.loadState == DayLoadState.loading,
+      observationCurrent: controller.hasCurrentObservation,
       onConnections: () => _selectDestination(_DestinationView.connections),
       onRefresh: controller.canRefresh ? controller.refresh : null,
       onCreateEvent: !calendarChangesAvailable

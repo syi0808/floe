@@ -2770,6 +2770,12 @@ abstract class AppLocalizations {
   /// **'Calendar status needs refresh'**
   String get dayStatusNeedsRefresh;
 
+  /// No description provided for @dayCalendarStatusUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar status unavailable'**
+  String get dayCalendarStatusUnavailable;
+
   /// No description provided for @dayOtherEvents.
   ///
   /// In en, this message translates to:
