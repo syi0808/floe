@@ -233,9 +233,18 @@ void main() {
             ),
           ],
         ),
+        textScale: 2,
       ),
     );
     await tester.pumpAndSettle();
+
+    final timelineLabel = find.text('Timeline');
+    expect(timelineLabel, findsOneWidget);
+    expect(
+      MediaQuery.textScalerOf(tester.element(timelineLabel)).scale(1),
+      2,
+      reason: 'the rendered Day control should use the requested 200% scale',
+    );
 
     final host = find.byKey(const Key('personal-day-middle-viewport'));
     final header = find.byKey(const Key('compact-navigation-header'));
@@ -259,7 +268,24 @@ void main() {
     await tester.pumpAndSettle();
     final status = find.byKey(const Key('day-status-details'));
     expect(status, findsOneWidget);
+    // At 200%, the warning wraps into the bounded header scroll view. Moving
+    // keyboard focus to it must reveal the whole action in the middle host.
+    var statusFocused = false;
+    for (var tab = 0; tab < 40 && !statusFocused; tab++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+      statusFocused = _hasKeyAncestor(
+        FocusManager.instance.primaryFocus?.context,
+        const Key('day-status-details'),
+      );
+    }
+    expect(
+      statusFocused,
+      isTrue,
+      reason: 'the status action should be tabbable',
+    );
     final statusRect = tester.getRect(status);
+    expect(status.hitTestable(), findsOneWidget);
     expect(statusRect.top, greaterThanOrEqualTo(tester.getRect(host).top));
     expect(statusRect.bottom, lessThanOrEqualTo(tester.getRect(host).bottom));
     expect(tester.takeException(), isNull);
@@ -369,9 +395,13 @@ void main() {
     expect(remoteSection, findsOneWidget);
     await tester.tap(remoteSection);
     await tester.pumpAndSettle();
+    expect(
+      find.text('Connections are available in the native Floe app.'),
+      findsOneWidget,
+    );
     final semantics = tester.ensureSemantics();
     try {
-      expect(
+      void expectRemoteServerSelected() => expect(
         tester
             .getSemantics(remoteSection)
             .getSemanticsData()
@@ -379,26 +409,25 @@ void main() {
             .isSelected,
         ui.Tristate.isTrue,
       );
+
+      expectRemoteServerSelected();
+      for (final width in [900.0, 390.0]) {
+        tester.view.physicalSize = Size(width, 844);
+        await tester.pumpAndSettle();
+        expect(tester.element(host), same(hostElement));
+        expectRemoteServerSelected();
+        expect(
+          find.text('Connections are available in the native Floe app.'),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-content-scroll')),
+          findsOneWidget,
+        );
+      }
     } finally {
       semantics.dispose();
     }
-
-    tester.view.physicalSize = const Size(900, 844);
-    await tester.pumpAndSettle();
-    expect(tester.element(host), same(hostElement));
-    expect(find.byKey(const ValueKey('settings-remoteServer')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('settings-content-scroll')),
-      findsOneWidget,
-    );
-    tester.view.physicalSize = const Size(390, 844);
-    await tester.pumpAndSettle();
-    expect(tester.element(host), same(hostElement));
-    expect(find.byKey(const ValueKey('settings-remoteServer')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('settings-content-scroll')),
-      findsOneWidget,
-    );
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -426,6 +455,7 @@ final class _SyntheticPolicyGateway implements OperationAuthorizationGateway {
     required String commandId,
     required ActionAuthorityMode mode,
     required int expectedRevision,
-  }) async =>
-      ActionAuthority(revision: expectedRevision + 1, calendarCreate: mode);
+  }) async => throw StateError(
+    'Unexpected authority mutation in the responsive host test.',
+  );
 }

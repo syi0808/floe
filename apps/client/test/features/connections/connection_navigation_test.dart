@@ -89,10 +89,12 @@ void main() {
       await tester.tap(find.text('Back to connections'));
       await tester.pumpAndSettle();
       expect(find.text(sourceName), findsOneWidget);
+      final hostRect = tester.getRect(host);
+      final sourceRect = tester.getRect(source);
       expect(
-        _visible(tester.getRect(source), 390, 844),
+        sourceRect.top >= hostRect.top && sourceRect.bottom <= hostRect.bottom,
         isTrue,
-        reason: 'the detail return should retain its source list position',
+        reason: 'the returned source must remain in the usable middle viewport',
       );
       expect(fixture.gateway.unexpectedCalls, isEmpty);
       expect(tester.takeException(), isNull);

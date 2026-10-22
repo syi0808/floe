@@ -44,7 +44,6 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.view.resetViewInsets);
-    addTearDown(tester.view.resetViewInsets);
     final h = await _Harness.create();
     addTearDown(h.dispose);
     final now = DateTime(2026, 10, 22, 12);
