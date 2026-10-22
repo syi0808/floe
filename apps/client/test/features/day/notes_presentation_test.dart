@@ -71,7 +71,7 @@ void main() {
       await openNotes(tester);
       await tester.tap(find.byTooltip('Tasks'));
       await tester.pumpAndSettle();
-      expect(find.text('Tasks'), findsOneWidget);
+      expect(find.text('Tasks'), findsNWidgets(2));
       expect(find.text('New task'), findsNothing);
       expect(find.byType(FloeCheckbox), findsOneWidget);
       await tester.tap(find.text('Prepare launch brief'));

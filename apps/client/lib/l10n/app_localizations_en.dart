@@ -1504,4 +1504,26 @@ class AppLocalizationsEn extends AppLocalizations {
   String notesMatchingCount(int count) {
     return 'Matching notes · $count';
   }
+
+  @override
+  String get navigationMore => 'More';
+
+  @override
+  String get connectedServices => 'Connected services';
+
+  @override
+  String get viewAll => 'View all';
+
+  @override
+  String get back => 'Back';
+
+  @override
+  String get conversationUnavailable =>
+      'Conversation is unavailable in this session.';
+
+  @override
+  String get voiceBackToFloe => 'Back to Floe';
+
+  @override
+  String get voiceStopBeforeClosing => 'Stop voice before closing';
 }

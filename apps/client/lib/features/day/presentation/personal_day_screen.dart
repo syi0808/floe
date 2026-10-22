@@ -8,11 +8,11 @@ import 'dart:async';
 
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
-import 'package:floe_client/app/floe_action_card.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_input.dart';
@@ -47,23 +47,12 @@ part 'personal_day/notes.dart';
 part 'personal_day/day_row.dart';
 part 'personal_day/feedback.dart';
 
-enum _DestinationView {
-  today,
-  voice,
-  tasks,
-  notes,
-  activity,
-  connections,
-  settings,
-}
+enum _DestinationView { today, tasks, notes, activity, connections, settings }
 
 const _primaryDestinations = [
   _DestinationView.today,
-  _DestinationView.voice,
   _DestinationView.tasks,
   _DestinationView.notes,
-  _DestinationView.activity,
-  _DestinationView.connections,
 ];
 
 class PersonalDayScreen extends StatefulWidget {
@@ -206,6 +195,29 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                   narrow: narrow,
                   selected: destination,
                   onSelected: _selectDestination,
+                  onAssistant: _openAssistant,
+                  assistantFocus: assistantEntryFocus,
+                ),
+                Positioned(
+                  top: narrow ? 56 : 16,
+                  right: 12,
+                  bottom: narrow ? 96 : 16,
+                  width: constraints.maxWidth <= 960
+                      ? constraints.maxWidth - (narrow ? 24 : 132)
+                      : 420,
+                  child: FloePanelPresence(
+                    visible: assistantOpen,
+                    child: CallbackShortcuts(
+                      bindings: {
+                        const SingleActivator(LogicalKeyboardKey.escape):
+                            _closeAssistant,
+                      },
+                      child: FocusScope(
+                        autofocus: true,
+                        child: _assistantPanel(_closeAssistant),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -218,7 +230,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Widget _page(bool narrow) {
     final padding = EdgeInsets.fromLTRB(
       narrow ? FloeSpace.md : 120,
-      narrow ? 16 : 24,
+      narrow ? 64 : 24,
       narrow ? FloeSpace.md : 36,
       narrow ? 96 : 24,
     );
@@ -226,12 +238,17 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       identity: selectedTaskId ?? destination,
       child: _workspace(narrow),
     );
-    if (destination == _DestinationView.settings ||
-        destination == _DestinationView.voice) {
+    if (destination == _DestinationView.settings) {
       return Padding(padding: padding, child: workspace);
     }
     if (destination != _DestinationView.today || selectedTaskId != null) {
-      return SingleChildScrollView(padding: padding, child: workspace);
+      return SingleChildScrollView(
+        key: PageStorageKey(
+          'workspace-${destination.name}-${selectedTaskId ?? 'list'}',
+        ),
+        padding: padding,
+        child: workspace,
+      );
     }
     return Padding(padding: padding, child: workspace);
   }
@@ -240,13 +257,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       destination == _DestinationView.today ? Expanded(child: child) : child;
 
   Widget _workspace(bool narrow) {
-    if (destination == _DestinationView.voice) {
-      return VoiceScreen(
-        ownerGateways: widget.ownerGateways,
-        agentGateway: widget.agentGateway,
-        personId: widget.query.personId,
-      );
-    }
     if (destination == _DestinationView.connections) {
       return ConnectorScreen(
         controller: widget.connectionsController,
@@ -286,12 +296,29 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         );
     final selectedTask = _taskById(snapshot, selectedTaskId);
     if (selectedTask != null) {
-      return _TaskDetailScreen(
-        task: selectedTask,
-        snapshot: snapshot,
-        narrow: narrow,
-
-        onComplete: _setTaskCompleted,
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FloeButton.text(
+              onPressed: () {
+                setState(() => selectedTaskId = null);
+                _updateRefreshVisibility();
+              },
+              icon: const Icon(LucideIcons.arrowLeft, size: 18),
+              child: Text(AppLocalizations.of(context).back),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _TaskDetailScreen(
+            task: selectedTask,
+            snapshot: snapshot,
+            narrow: narrow,
+            disabled: controller.commandPending,
+            onComplete: _setTaskCompleted,
+          ),
+        ],
       );
     }
     return Column(
@@ -324,7 +351,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 onDelete: controller.deleteItem,
               ),
               _DestinationView.connections => SizedBox.shrink(),
-              _DestinationView.voice => SizedBox.shrink(),
               _DestinationView.activity => SizedBox.shrink(),
               _DestinationView.settings => SizedBox.shrink(),
               _DestinationView.notes => _NotesScreen(
@@ -369,33 +395,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           onTasks: () => _selectDestination(_DestinationView.tasks),
           onOpenTask: _openTask,
         ),
-        if (agentController != null) ...[
-          const SizedBox(height: FloeSpace.lg),
-          FloeActionCard(
-            focusNode: assistantEntryFocus,
-            onPressed: _openAssistant,
-            leading: const FloeMascot(size: 32),
-            title: Text(AppLocalizations.of(context).agentEntry),
-            description: Text(AppLocalizations.of(context).agentEntryHint),
-            trailing: const Icon(LucideIcons.arrowRight),
-          ),
-        ],
       ],
     );
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (MediaQuery.sizeOf(context).width <= 960) {
-          if (assistantOpen && agentController != null) {
-            return AgentPanel(
-              controller: agentController!,
-              dayGateway: widget.gateway,
-              onOpenConnections: () =>
-                  _selectDestination(_DestinationView.connections),
-              onOpenSourceReview: _openAgentSourceReview,
-              onOpenAssistantFeatureSettings: _openAssistantFeatureSettings,
-              onClose: _closeAssistant,
-            );
-          }
+        if (constraints.maxWidth <= 800) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -415,18 +419,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 288,
                 double.infinity,
               ),
-              child: assistantOpen && agentController != null
-                  ? AgentPanel(
-                      controller: agentController!,
-                      dayGateway: widget.gateway,
-                      onOpenConnections: () =>
-                          _selectDestination(_DestinationView.connections),
-                      onOpenSourceReview: _openAgentSourceReview,
-                      onOpenAssistantFeatureSettings:
-                          _openAssistantFeatureSettings,
-                      onClose: _closeAssistant,
-                    )
-                  : SingleChildScrollView(child: rail),
+              child: SingleChildScrollView(child: rail),
             ),
           ],
         );
@@ -453,11 +446,79 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     _updateRefreshVisibility();
   }
 
-  Future<void> _openAssistant() async {
+  Widget _assistantPanel(VoidCallback close) {
     final agent = agentController;
-    if (agent == null) return;
-    agent.attachView();
+    if (agent == null) {
+      return FloeCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(child: Text('Floe', style: FloeType.titleLarge)),
+                FloeButton.icon(
+                  tooltip: 'Close',
+                  onPressed: close,
+                  icon: const Icon(LucideIcons.x),
+                ),
+              ],
+            ),
+            const Spacer(),
+            Text(
+              AppLocalizations.of(context).conversationUnavailable,
+              style: FloeType.body,
+            ),
+            const SizedBox(height: 16),
+            FloeButton.outlined(
+              onPressed: () {
+                close();
+                _selectDestination(_DestinationView.settings);
+              },
+              icon: const Icon(LucideIcons.settings, size: 18),
+              child: Text(AppLocalizations.of(context).settings),
+            ),
+            const Spacer(),
+          ],
+        ),
+      );
+    }
+    return AgentPanel(
+      controller: agent,
+      dayGateway: widget.gateway,
+      onOpenVoice: _openVoice,
+      onOpenConnections: () => _openAgentSourceReview(null),
+      onOpenSourceReview: _openAgentSourceReview,
+      onOpenAssistantFeatureSettings: _openAssistantFeatureSettings,
+      onClose: close,
+    );
+  }
+
+  Future<void> _openVoice() async {
+    await showFloeDialog<void>(
+      context,
+      (context) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 640),
+          child: VoiceScreen(
+            ownerGateways: widget.ownerGateways,
+            agentGateway: widget.agentGateway,
+            personId: widget.query.personId,
+            onClose: () => Navigator.of(context).pop(),
+          ),
+        ),
+      ),
+      barrierDismissible: false,
+    );
+  }
+
+  Future<void> _openAssistant() async {
+    if (assistantOpen) {
+      _closeAssistant();
+      return;
+    }
     if (MediaQuery.sizeOf(context).width > 960) {
+      agentController?.attachView();
       setState(() => assistantOpen = true);
       return;
     }
@@ -465,20 +526,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       context,
       (context) => SizedBox(
         height: MediaQuery.sizeOf(context).height * .88,
-        child: AgentPanel(
-          controller: agent,
-          dayGateway: widget.gateway,
-          onOpenConnections: () =>
-              _selectDestination(_DestinationView.connections),
-          onOpenSourceReview: _openAgentSourceReview,
-          onOpenAssistantFeatureSettings: _openAssistantFeatureSettings,
-          onClose: () {
-            agent.detachView();
-            Navigator.pop(context);
-          },
-        ),
+        child: _assistantPanel(() => Navigator.pop(context)),
       ),
     );
+    if (mounted) assistantEntryFocus.requestFocus();
   }
 
   void _openAgentSourceReview(AgentInteractionTarget? target) {
@@ -525,7 +576,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     agentController?.detachView();
     setState(() => assistantOpen = false);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && destination == _DestinationView.today) {
+      if (mounted) {
         assistantEntryFocus.requestFocus();
       }
     });

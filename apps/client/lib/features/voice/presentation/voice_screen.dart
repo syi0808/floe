@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
-import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
@@ -19,11 +19,13 @@ class VoiceScreen extends StatefulWidget {
     required this.ownerGateways,
     required this.agentGateway,
     required this.personId,
+    this.onClose,
   });
 
   final LocalOwnerGateways ownerGateways;
   final AgentConversationGateway? agentGateway;
   final String personId;
+  final VoidCallback? onClose;
 
   @override
   State<VoiceScreen> createState() => _VoiceScreenState();
@@ -286,146 +288,148 @@ class _VoiceScreenState extends State<VoiceScreen> {
     final messageIsError =
         _message != null &&
         (_status == null || _message != _messageFor(_status!));
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 20, 12, 36),
-      children: [
-        Align(
-          alignment: Alignment.topLeft,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(_copy.voiceTitle, style: FloeType.display),
-                const SizedBox(height: FloeSpace.sm),
-                Text(
-                  _copy.voiceSubtitle,
-                  style: FloeType.body.copyWith(color: FloeColor.textSecondary),
-                ),
-                const SizedBox(height: FloeSpace.lg),
-                FloeCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+    // Never hide an active microphone or unresolved start behind another surface.
+    final canClose =
+        !_loading &&
+        !_busy &&
+        !callActive &&
+        _status?.state != VoiceStartState.preparing &&
+        !(gateway?.pendingCommandId != null && _status == null);
+    return PopScope(
+      canPop: canClose,
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): () {
+            if (canClose) widget.onClose?.call();
+          },
+        },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
+              child: Row(
+                children: [
+                  const Icon(
+                    LucideIcons.mic,
+                    size: 20,
+                    color: FloePalette.primary600,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _copy.voiceConversation,
+                      style: FloeType.headline,
+                    ),
+                  ),
+                  if (widget.onClose != null)
+                    FloeButton.icon(
+                      tooltip: canClose
+                          ? _copy.voiceBackToFloe
+                          : _copy.voiceStopBeforeClosing,
+                      onPressed: canClose ? widget.onClose : null,
+                      icon: const Icon(LucideIcons.x, size: 20),
+                    ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                children: [
+                  if (_status != null) ...[
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        _statusLabel(_status!),
+                        style: FloeType.title,
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.sm),
+                    Text(_mediaLabel(_status!.media), style: FloeType.body),
+                    if (_status!.remote != null)
+                      Text(
+                        _remoteLabel(_status!.remote!),
+                        style: FloeType.body.copyWith(
+                          color: FloeColor.textSecondary,
+                        ),
+                      ),
+                    const SizedBox(height: FloeSpace.md),
+                  ],
+                  if (_message != null &&
+                      (messageIsError ||
+                          _status?.state == VoiceStartState.preparing)) ...[
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        _message!,
+                        style: FloeType.body.copyWith(
+                          color: messageIsError
+                              ? Theme.of(context).colorScheme.error
+                              : FloeColor.textSecondary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.md),
+                  ],
+                  if (setupMessage != null &&
+                      !callActive &&
+                      _status?.state != VoiceStartState.preparing) ...[
+                    Text(
+                      setupMessage,
+                      style: FloeType.body.copyWith(
+                        color: FloeColor.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.lg),
+                  ],
+                  if (!callActive &&
+                      _status?.state != VoiceStartState.preparing) ...[
+                    const _VoiceDisclosure(),
+                    const SizedBox(height: FloeSpace.lg),
+                  ],
+                  Wrap(
+                    spacing: FloeSpace.md,
+                    runSpacing: FloeSpace.sm,
                     children: [
-                      Row(
-                        children: [
-                          FloeSquircle(
-                            size: FloeSquircleSize.sm,
-                            fill: FloePalette.primary50,
-                            borderWidth: 0,
-                            padding: const EdgeInsets.all(12),
-                            child: const Icon(
-                              LucideIcons.mic,
-                              size: 22,
-                              color: FloePalette.primary600,
-                            ),
-                          ),
-                          const SizedBox(width: FloeSpace.md),
-                          Expanded(
-                            child: Text(
-                              _copy.voiceConversation,
-                              style: FloeType.headline,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: FloeSpace.lg),
-                      if (_status != null) ...[
-                        Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            _statusLabel(_status!),
-                            style: FloeType.title,
-                          ),
+                      if (callActive)
+                        FloeButton.filled(
+                          onPressed: !_busy ? _stop : null,
+                          loading: _busy,
+                          icon: const Icon(LucideIcons.square, size: 18),
+                          child: Text(_copy.voiceStop),
+                        )
+                      else if (_status?.state == VoiceStartState.preparing)
+                        FloeButton.outlined(
+                          onPressed: !_busy ? _cancelStart : null,
+                          loading: _busy,
+                          child: Text(_copy.voiceCancelConnection),
+                        )
+                      else
+                        FloeButton.filled(
+                          onPressed: canStart ? _start : null,
+                          loading: _busy,
+                          icon: const Icon(LucideIcons.mic, size: 18),
+                          child: Text(_copy.voiceStart),
                         ),
-                        const SizedBox(height: FloeSpace.sm),
-                        Text(_mediaLabel(_status!.media), style: FloeType.body),
-                        if (_status!.remote != null)
-                          Text(
-                            _remoteLabel(_status!.remote!),
-                            style: FloeType.body.copyWith(
-                              color: FloeColor.textSecondary,
-                            ),
-                          ),
-                        const SizedBox(height: FloeSpace.md),
-                      ],
-                      if (_message != null &&
-                          (messageIsError ||
-                              _status?.state == VoiceStartState.preparing)) ...[
-                        Semantics(
-                          liveRegion: true,
-                          child: Text(
-                            _message!,
-                            style: FloeType.body.copyWith(
-                              color: messageIsError
-                                  ? Theme.of(context).colorScheme.error
-                                  : FloeColor.textSecondary,
-                            ),
-                          ),
+                      if (gateway?.pendingCommandId != null)
+                        FloeButton.text(
+                          onPressed: !_busy ? _refresh : null,
+                          child: Text(_copy.voiceCheckStatus),
                         ),
-                        const SizedBox(height: FloeSpace.md),
-                      ],
-                      if (setupMessage != null &&
-                          !callActive &&
-                          _status?.state != VoiceStartState.preparing) ...[
-                        Text(
-                          setupMessage,
-                          style: FloeType.body.copyWith(
-                            color: FloeColor.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: FloeSpace.md),
-                      ],
-                      if (!callActive &&
-                          _status?.state != VoiceStartState.preparing) ...[
-                        const SizedBox(height: FloeSpace.md),
-                        const _VoiceDisclosure(),
-                        const SizedBox(height: FloeSpace.lg),
-                      ],
-                      Wrap(
-                        spacing: FloeSpace.md,
-                        runSpacing: FloeSpace.sm,
-                        children: [
-                          if (callActive)
-                            FloeButton.filled(
-                              onPressed: !_busy ? _stop : null,
-                              loading: _busy,
-                              icon: const Icon(LucideIcons.square, size: 18),
-                              child: Text(_copy.voiceStop),
-                            )
-                          else if (_status?.state == VoiceStartState.preparing)
-                            FloeButton.outlined(
-                              onPressed: !_busy ? _cancelStart : null,
-                              loading: _busy,
-                              child: Text(_copy.voiceCancelConnection),
-                            )
-                          else
-                            FloeButton.filled(
-                              onPressed: canStart ? _start : null,
-                              loading: _busy,
-                              icon: const Icon(LucideIcons.mic, size: 18),
-                              child: Text(_copy.voiceStart),
-                            ),
-                          if (gateway?.pendingCommandId != null)
-                            FloeButton.text(
-                              onPressed: !_busy ? _refresh : null,
-                              child: Text(_copy.voiceCheckStatus),
-                            ),
-                        ],
-                      ),
-                      if (callActive ||
-                          _status?.state == VoiceStartState.preparing) ...[
-                        const SizedBox(height: FloeSpace.lg),
-                        const _VoiceDisclosure(),
-                      ],
                     ],
                   ),
-                ),
-              ],
+                  if (callActive ||
+                      _status?.state == VoiceStartState.preparing) ...[
+                    const SizedBox(height: FloeSpace.lg),
+                    const _VoiceDisclosure(),
+                  ],
+                ],
+              ),
             ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }

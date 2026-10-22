@@ -30,6 +30,7 @@ class AgentPanel extends StatefulWidget {
     required this.dayGateway,
     required this.onClose,
     this.onOpenSourceReview,
+    this.onOpenVoice,
     this.onOpenConnections,
     this.onOpenAssistantFeatureSettings,
   });
@@ -37,6 +38,7 @@ class AgentPanel extends StatefulWidget {
   final ConversationController controller;
   final DayGateway dayGateway;
   final VoidCallback onClose;
+  final VoidCallback? onOpenVoice;
   final void Function(AgentInteractionTarget? target)? onOpenSourceReview;
   final VoidCallback? onOpenConnections;
   final void Function(
@@ -215,6 +217,12 @@ class _AgentPanelState extends State<AgentPanel> {
                       const Expanded(
                         child: Text('Floe', style: FloeType.titleLarge),
                       ),
+                      if (widget.onOpenVoice != null)
+                        FloeButton.icon(
+                          tooltip: 'Voice',
+                          onPressed: widget.onOpenVoice,
+                          icon: const Icon(LucideIcons.mic, size: 18),
+                        ),
                       FloeButton.icon(
                         tooltip: strings.agentNewConversation,
                         onPressed: controller.canStartConversation

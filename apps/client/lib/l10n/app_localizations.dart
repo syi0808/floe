@@ -2679,6 +2679,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Matching notes · {count}'**
   String notesMatchingCount(int count);
+
+  /// No description provided for @navigationMore.
+  ///
+  /// In en, this message translates to:
+  /// **'More'**
+  String get navigationMore;
+
+  /// No description provided for @connectedServices.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected services'**
+  String get connectedServices;
+
+  /// No description provided for @viewAll.
+  ///
+  /// In en, this message translates to:
+  /// **'View all'**
+  String get viewAll;
+
+  /// No description provided for @back.
+  ///
+  /// In en, this message translates to:
+  /// **'Back'**
+  String get back;
+
+  /// No description provided for @conversationUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Conversation is unavailable in this session.'**
+  String get conversationUnavailable;
+
+  /// No description provided for @voiceBackToFloe.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to Floe'**
+  String get voiceBackToFloe;
+
+  /// No description provided for @voiceStopBeforeClosing.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop voice before closing'**
+  String get voiceStopBeforeClosing;
 }
 
 class _AppLocalizationsDelegate

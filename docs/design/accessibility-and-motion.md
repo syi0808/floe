@@ -48,3 +48,7 @@ Reduced-motion mode removes translation, parallax, scale, bounce, and spring. Sh
 - Test reduced motion, increased contrast, and color-vision simulations.
 - Test 320px logical width, 760×560 desktop minimum, and a wide desktop split.
 - Verify empty, loading, stale, offline, conflict, overdue, error, and destructive states.
+
+## Assistant continuity
+
+The wide conversation panel uses a short, reversible fade/translation transition; narrow layouts use the shared sheet duration. Reduced motion removes translation and sheet movement. Invocation and dismissal retain the underlying destination, filters and scroll context. Escape closes the conversation panel and returns focus to its invocation; Voice consumes Escape while microphone state is active or unresolved. Animation never postpones Stop or cancellation commands.

@@ -18,6 +18,25 @@ class _NotesScreen extends StatefulWidget {
 class _NotesScreenState extends State<_NotesScreen> {
   final search = TextEditingController();
   bool personalOnly = false;
+  bool _restored = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_restored) return;
+    _restored = true;
+    final saved = PageStorage.maybeOf(context)
+        ?.readState(context, identifier: 'notes-filters');
+    if (saved is (String, bool)) {
+      search.text = saved.$1;
+      personalOnly = saved.$2;
+    }
+  }
+
+  void _rememberFilters() => PageStorage.maybeOf(context)?.writeState(context, (
+    search.text,
+    personalOnly,
+  ), identifier: 'notes-filters');
 
   Future<void> _create() async {
     final saved = await showFloeDialog<bool>(
@@ -29,6 +48,7 @@ class _NotesScreenState extends State<_NotesScreen> {
       setState(() {
         search.clear();
         personalOnly = false;
+        _rememberFilters();
       });
     }
   }
@@ -74,7 +94,10 @@ class _NotesScreenState extends State<_NotesScreen> {
               child: FloeSearchInput(
                 controller: search,
                 placeholder: AppLocalizations.of(context).searchNotes,
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) {
+                  setState(() {});
+                  _rememberFilters();
+                },
               ),
             ),
           ],
@@ -93,7 +116,10 @@ class _NotesScreenState extends State<_NotesScreen> {
               BorderSide(color: FloePalette.neutral200),
             ),
           ),
-          onPressed: () => setState(() => personalOnly = !personalOnly),
+          onPressed: () {
+            setState(() => personalOnly = !personalOnly);
+            _rememberFilters();
+          },
           icon: Icon(
             personalOnly ? LucideIcons.check : LucideIcons.filter,
             size: 18,
@@ -176,6 +202,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                       onPressed: () => setState(() {
                         search.clear();
                         personalOnly = false;
+                        _rememberFilters();
                       }),
                       child: Text(AppLocalizations.of(context).clearFilters),
                     ),

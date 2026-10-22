@@ -231,3 +231,81 @@ final class FloeAnimatedSwap extends StatelessWidget {
     );
   }
 }
+
+/// Keeps one child alive while reversing an interrupted panel transition.
+/// Unlike an AnimatedSwitcher, rapid reopen never mounts two controller views.
+final class FloePanelPresence extends StatefulWidget {
+  const FloePanelPresence({
+    required this.visible,
+    required this.child,
+    super.key,
+  });
+  final bool visible;
+  final Widget child;
+  @override
+  State<FloePanelPresence> createState() => _FloePanelPresenceState();
+}
+
+final class _FloePanelPresenceState extends State<FloePanelPresence>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation = AnimationController(
+    vsync: this,
+    value: widget.visible ? 1 : 0,
+    duration: FloeMotion.dialogDuration,
+    reverseDuration: FloeMotion.pressDuration,
+  );
+  bool _reduced = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reduced = FloeMotion.reduceMotion(context);
+    if (_reduced) _animation.value = widget.visible ? 1 : 0;
+  }
+
+  @override
+  void didUpdateWidget(FloePanelPresence oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.visible == widget.visible) return;
+    if (_reduced) {
+      _animation.value = widget.visible ? 1 : 0;
+    } else if (widget.visible) {
+      _animation.forward();
+    } else {
+      _animation.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _animation,
+    builder: (context, _) {
+      if (_animation.isDismissed && !widget.visible) {
+        return const SizedBox.shrink();
+      }
+      final progress = FloeMotion.easeOut.transform(_animation.value);
+      return IgnorePointer(
+        ignoring: !widget.visible,
+        child: ExcludeFocus(
+          excluding: !widget.visible,
+          child: ExcludeSemantics(
+            excluding: !widget.visible,
+            child: Opacity(
+              opacity: progress,
+              child: Transform.translate(
+                offset: Offset(_reduced ? 0 : 10 * (1 - progress), 0),
+                child: widget.child,
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+}

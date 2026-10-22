@@ -8,6 +8,40 @@ import 'package:floe_client/features/voice/application/voice_gateway.dart';
 import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 
 void main() {
+  testWidgets('voice cannot be dismissed before confirmed local Stop', (
+    tester,
+  ) async {
+    final gateway = _RecoverableVoiceGateway(VoiceStartState.bound);
+    var closed = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: VoiceScreen(
+            ownerGateways: LocalOwnerGateways(voice: gateway),
+            agentGateway: null,
+            personId: 'fixture',
+            onClose: () => closed++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isFalse);
+    await tester.tap(find.byTooltip('Stop voice before closing'));
+    await tester.pumpAndSettle();
+    expect(closed, 0);
+    await tester.tap(find.text('Stop voice'));
+    await tester.pumpAndSettle();
+    expect(gateway.stopCalls, 1);
+    expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
+    await tester.tap(find.byTooltip('Back to Floe'));
+    await tester.pumpAndSettle();
+    expect(closed, 1);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('Voice screen describes the muted native audio boundary', (
     tester,
   ) async {
@@ -182,6 +216,8 @@ final class _RecoverableVoiceGateway implements VoiceGateway {
   VoiceStartState _state;
   int recoverCalls = 0;
   int cancelCalls = 0;
+  int stopCalls = 0;
+  bool released = false;
 
   @override
   String? get pendingCommandId =>
@@ -191,6 +227,7 @@ final class _RecoverableVoiceGateway implements VoiceGateway {
     commandId: _commandId,
     surfaceSessionId: _surfaceId,
     state: _state,
+    localLeaseReleased: released,
   );
 
   @override
@@ -210,7 +247,11 @@ final class _RecoverableVoiceGateway implements VoiceGateway {
   }
 
   @override
-  Future<VoiceStartStatus> stop() async => _status();
+  Future<VoiceStartStatus> stop() async {
+    stopCalls++;
+    released = true;
+    return _status();
+  }
 
   @override
   Future<VoiceStartStatus?> readStatus(String commandId) async => _status();

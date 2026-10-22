@@ -899,65 +899,83 @@ class CalendarEventCard extends StatelessWidget {
                     color: tone.accent,
                   ),
                 )
-              : Padding(
-                  padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: tone.accent,
-                          shape: BoxShape.circle,
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth < 100) {
+                      return Padding(
+                        padding: const EdgeInsets.only(left: 6, right: 24),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            event.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: FloeType.caption,
+                          ),
                         ),
-                      ),
-                      SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              event.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: FloeType.label.copyWith(height: 1.2),
+                      );
+                    }
+                    return Padding(
+                      padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: tone.accent,
+                              shape: BoxShape.circle,
                             ),
-                            if (height >= 42 * textScale) ...[
-                              SizedBox(height: 3),
-                              Text(
-                                calendarRange(
-                                  context,
-                                  event,
-                                  snapshot.timezoneOffsetSeconds,
-                                  date: snapshot.date,
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  event.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: FloeType.label.copyWith(height: 1.2),
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: FloeType.caption.copyWith(
-                                  height: 1.2,
-                                  color: FloePalette.neutral600,
-                                ),
-                              ),
-                            ],
-                            if (height >= 58 * textScale &&
-                                event.calendarLabel != null) ...[
-                              SizedBox(height: 3),
-                              Text(
-                                event.calendarLabel!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: FloeType.micro.copyWith(
-                                  height: 1.2,
-                                  color: FloePalette.neutral600,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
+                                if (height >= 42 * textScale) ...[
+                                  SizedBox(height: 3),
+                                  Text(
+                                    calendarRange(
+                                      context,
+                                      event,
+                                      snapshot.timezoneOffsetSeconds,
+                                      date: snapshot.date,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: FloeType.caption.copyWith(
+                                      height: 1.2,
+                                      color: FloePalette.neutral600,
+                                    ),
+                                  ),
+                                ],
+                                if (height >= 58 * textScale &&
+                                    event.calendarLabel != null) ...[
+                                  SizedBox(height: 3),
+                                  Text(
+                                    event.calendarLabel!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: FloeType.micro.copyWith(
+                                      height: 1.2,
+                                      color: FloePalette.neutral600,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
         ),
       ),

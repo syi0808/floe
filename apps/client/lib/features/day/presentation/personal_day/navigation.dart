@@ -5,152 +5,196 @@ class _AdaptiveNavigation extends StatelessWidget {
     required this.narrow,
     required this.selected,
     required this.onSelected,
+    required this.onAssistant,
+    required this.assistantFocus,
   });
   final bool narrow;
   final _DestinationView selected;
   final ValueChanged<_DestinationView> onSelected;
+  final VoidCallback onAssistant;
+  final FocusNode assistantFocus;
+
+  Widget _more(BuildContext context) => PopupMenuButton<_DestinationView>(
+    tooltip: AppLocalizations.of(context).navigationMore,
+    icon: const Icon(LucideIcons.ellipsis, size: 20),
+    onSelected: onSelected,
+    itemBuilder: (context) => [
+      const PopupMenuItem(
+        value: _DestinationView.activity,
+        child: Text('Activity'),
+      ),
+      PopupMenuItem(
+        value: _DestinationView.connections,
+        child: Text(AppLocalizations.of(context).connectedServices),
+      ),
+      PopupMenuItem(
+        value: _DestinationView.settings,
+        child: Text(AppLocalizations.of(context).settings),
+      ),
+    ],
+  );
+
+  Widget _assistant() => FloeButton.text(
+    focusNode: assistantFocus,
+    onPressed: onAssistant,
+    child: const Padding(
+      padding: EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ExcludeSemantics(child: FloeMascot(size: 24)),
+          SizedBox(height: 4),
+          Text('Floe'),
+        ],
+      ),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
-    final settings = _DestinationButton(
-      view: _DestinationView.settings,
-      selected: selected == _DestinationView.settings,
-      onPressed: () => onSelected(_DestinationView.settings),
-    );
     if (narrow) {
-      return Positioned(
-        right: FloeSpace.md,
-        bottom: 10,
-        left: FloeSpace.md,
-        child: FloeSquircle(
-          size: FloeSquircleSize.lg,
-          elevation: 4,
-          padding: EdgeInsets.all(7),
-          child: Row(
-            children: [
-              for (final view in _primaryDestinations)
-                Expanded(
-                  child: _DestinationButton(
-                    view: view,
-                    selected: selected == view,
-                    onPressed: () => onSelected(view),
-                  ),
-                ),
-              Expanded(child: settings),
-            ],
+      return Stack(
+        children: [
+          Positioned(
+            top: 4,
+            left: 16,
+            right: 8,
+            child: Row(
+              children: [
+                const Text('Floe', style: FloeType.title),
+                const Spacer(),
+                _more(context),
+              ],
+            ),
           ),
-        ),
+          Positioned(
+            right: 12,
+            bottom: 8,
+            left: 12,
+            child: FloeSquircle(
+              size: FloeSquircleSize.lg,
+              elevation: 2,
+              padding: const EdgeInsets.all(4),
+              child: Row(
+                children: [
+                  for (final view in _primaryDestinations)
+                    Expanded(
+                      child: _DestinationButton(
+                        view: view,
+                        selected: selected == view,
+                        onPressed: () => onSelected(view),
+                      ),
+                    ),
+                  Expanded(child: _assistant()),
+                ],
+              ),
+            ),
+          ),
+        ],
       );
     }
     return Positioned(
-      top: 28,
-      bottom: 28,
-      left: 18,
-      width: 64,
+      top: 24,
+      bottom: 20,
+      left: 16,
+      width: 80,
       child: Column(
         children: [
-          SizedBox(height: FloeSpace.xs),
-          FloeMascot(size: 40),
-          SizedBox(height: FloeSpace.xl),
+          const Padding(
+            padding: EdgeInsets.only(bottom: 32),
+            child: Text('Floe', style: FloeType.title),
+          ),
           for (final view in _primaryDestinations) ...[
             _DestinationButton(
               view: view,
               selected: selected == view,
               onPressed: () => onSelected(view),
             ),
-            SizedBox(height: FloeSpace.sm),
+            const SizedBox(height: 8),
           ],
-          Spacer(),
-          settings,
+          const SizedBox(height: 20),
+          _assistant(),
+          const Spacer(),
+          _more(context),
         ],
       ),
     );
   }
 }
 
-class _DestinationButton extends StatefulWidget {
+class _DestinationButton extends StatelessWidget {
   const _DestinationButton({
     required this.view,
     required this.selected,
     required this.onPressed,
   });
-
   final _DestinationView view;
   final bool selected;
   final VoidCallback onPressed;
 
   @override
-  State<_DestinationButton> createState() => _DestinationButtonState();
-}
-
-class _DestinationButtonState extends State<_DestinationButton> {
-  bool hovered = false;
-  bool focused = false;
-  bool get selected => widget.selected;
-  _DestinationView get view => widget.view;
-
-  String get label => switch (view) {
-    _DestinationView.today => AppLocalizations.of(context).calendar,
-    _DestinationView.voice => 'Voice',
-    _DestinationView.tasks => AppLocalizations.of(context).tasks,
-    _DestinationView.notes => AppLocalizations.of(context).notes,
-    _DestinationView.activity => 'Activity',
-    _DestinationView.connections => AppLocalizations.of(context).connect,
-    _DestinationView.settings => AppLocalizations.of(context).settings,
-  };
-
-  IconData get icon => switch (view) {
-    _DestinationView.today => LucideIcons.calendarDays,
-    _DestinationView.voice => LucideIcons.mic,
-    _DestinationView.tasks => LucideIcons.listTodo,
-    _DestinationView.notes => LucideIcons.notebookPen,
-    _DestinationView.activity => LucideIcons.history,
-    _DestinationView.connections => LucideIcons.link,
-    _DestinationView.settings => LucideIcons.settings,
-  };
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    selected: selected,
-    label: label,
-    button: true,
-    child: PressableScale(
-      scale: 0.98,
-      builder: (states) => FloeSquircle(
-        size: FloeSquircleSize.md,
-        fill: selected
-            ? FloePalette.primary100
-            : hovered
-            ? FloePalette.neutral100
-            : Colors.transparent,
-        borderColor: focused ? FloePalette.primary600 : Colors.transparent,
-        borderWidth: focused ? 2 : 0,
-        child: FloePressable(
-          size: FloeSquircleSize.md,
-          statesController: states,
-          onPressed: widget.onPressed,
-          onHover: (value) => setState(() => hovered = value),
-          onFocusChange: (value) => setState(() => focused = value),
-          child: SizedBox(
-            width: MediaQuery.sizeOf(context).width <= 780 ? null : 58,
-            height: 40 + MediaQuery.textScalerOf(context).scale(20),
-            child: FloeTooltip(
-              message: label,
-              child: Center(
-                child: Icon(
-                  icon,
-                  size: 20,
-                  color: selected
-                      ? FloePalette.primary600
-                      : FloePalette.neutral600,
-                ),
+  Widget build(BuildContext context) {
+    final copy = AppLocalizations.of(context);
+    final label = switch (view) {
+      _DestinationView.today => copy.today,
+      _DestinationView.tasks => copy.tasks,
+      _DestinationView.notes => copy.notes,
+      _ => '',
+    };
+    final icon = switch (view) {
+      _DestinationView.today => LucideIcons.calendarDays,
+      _DestinationView.tasks => LucideIcons.listTodo,
+      _ => LucideIcons.notebookPen,
+    };
+    return Semantics(
+      selected: selected,
+      child: FloeTooltip(
+        message: label,
+        child: FloeButton.text(
+          onPressed: onPressed,
+          style: ButtonStyle(
+            backgroundColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.hovered)
+                  ? FloePalette.neutral100
+                  : selected
+                  ? FloePalette.primary100
+                  : Colors.transparent,
+            ),
+            side: WidgetStateProperty.resolveWith(
+              (states) => BorderSide(
+                color: states.contains(WidgetState.focused)
+                    ? FloePalette.primary600
+                    : Colors.transparent,
+                width: 2,
               ),
             ),
+            foregroundColor: WidgetStatePropertyAll(
+              selected ? FloePalette.primary700 : FloeColor.textSecondary,
+            ),
+            padding: const WidgetStatePropertyAll(
+              EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            ),
+            minimumSize: const WidgetStatePropertyAll(Size(72, 56)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                style: FloeType.caption.copyWith(
+                  color: selected
+                      ? FloePalette.primary700
+                      : FloeColor.textSecondary,
+                ),
+              ),
+            ],
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _DayToolbar extends StatelessWidget {
@@ -165,97 +209,89 @@ class _DayToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width <= 430;
-    final leading = Row(
-      children: [
-        for (final direction in [-1, 1]) ...[
-          FloeSquircle(
-            size: FloeSquircleSize.md,
-            child: FloeButton.icon(
-              tooltip: direction == -1
-                  ? AppLocalizations.of(context).previousDay
-                  : AppLocalizations.of(context).nextDay,
-              onPressed: () => controller.moveDay(direction),
-              icon: Icon(
-                direction == -1
-                    ? LucideIcons.chevronLeft
-                    : LucideIcons.chevronRight,
-                size: 20,
-              ),
-            ),
-          ),
-          SizedBox(width: compact ? 6 : 12),
-        ],
-        SizedBox(width: narrow ? 2 : 14),
-        Flexible(
-          child: Text(
-            _date(context, controller.query.date),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: FloeType.headline.copyWith(
-              fontSize: compact ? 17 : 20,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        SizedBox(width: narrow ? 8 : 12),
-        FloeButton.text(
-          style: ButtonStyle(
-            padding: const WidgetStatePropertyAll(EdgeInsets.zero),
-            minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: WidgetStatePropertyAll(
-              FloeType.body.copyWith(fontSize: compact ? 12 : 16),
-            ),
-          ),
-          onPressed:
-              DateUtils.isSameDay(controller.query.date, controller.query.now)
-              ? null
-              : controller.goToday,
-          child: Text(
-            DateUtils.isSameDay(controller.query.date, controller.query.now)
-                ? AppLocalizations.of(context).today
-                : AppLocalizations.of(context).goToToday,
-          ),
-        ),
-      ],
+    final copy = AppLocalizations.of(context);
+    final date = Text(
+      _date(context, controller.query.date),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: FloeType.headline,
     );
-    return Padding(
-      padding: EdgeInsets.only(top: 12, bottom: 16),
-      child: Row(
-        children: [
-          Expanded(child: leading),
-          FloeButton.icon(
-            tooltip: AppLocalizations.of(context).createEvent,
-            onPressed: onCreateEvent,
-            icon: const Icon(LucideIcons.plus, size: 18),
+    final today = FloeButton.text(
+      onPressed:
+          DateUtils.isSameDay(controller.query.date, controller.query.now)
+          ? null
+          : controller.goToday,
+      child: Text(copy.today),
+    );
+    final arrows = [
+      for (final direction in [-1, 1])
+        FloeButton.icon(
+          tooltip: direction == -1 ? copy.previousDay : copy.nextDay,
+          onPressed: () => controller.moveDay(direction),
+          icon: Icon(
+            direction == -1
+                ? LucideIcons.chevronLeft
+                : LucideIcons.chevronRight,
+            size: 20,
           ),
-          if (controller.canRefresh)
-            FloeButton.icon(
-              tooltip: AppLocalizations.of(context).refreshCalendar,
-              loading: controller.loadState == DayLoadState.loading,
-              onPressed: () async {
-                await controller.refresh();
-                if (!context.mounted ||
-                    controller.loadState != DayLoadState.ready ||
-                    controller.errorMessage != null ||
-                    controller.snapshot == null) {
-                  return;
-                }
-                final complete = hasCompleteCalendarCoverage(
-                  controller.snapshot!,
-                  controller.query,
-                );
-                FloeToastHost.of(context).show(
-                  title: complete
-                      ? AppLocalizations.of(context).calendarsRefreshed
-                      : 'Refresh completed; Calendar coverage remains incomplete for this date.',
-                );
-              },
-              icon: Icon(LucideIcons.refreshCw, size: 18),
+        ),
+    ];
+    final actions = [
+      if (onCreateEvent != null)
+        FloeButton.icon(
+          tooltip: copy.createEvent,
+          onPressed: onCreateEvent,
+          icon: const Icon(LucideIcons.plus, size: 18),
+        ),
+      if (controller.canRefresh)
+        FloeButton.icon(
+          tooltip: copy.refreshCalendar,
+          loading: controller.loadState == DayLoadState.loading,
+          onPressed: () async {
+            await controller.refresh();
+            if (!context.mounted ||
+                controller.loadState != DayLoadState.ready ||
+                controller.errorMessage != null ||
+                controller.snapshot == null) {
+              return;
+            }
+            final complete = hasCompleteCalendarCoverage(
+              controller.snapshot!,
+              controller.query,
+            );
+            FloeToastHost.of(context).show(
+              title: complete ? copy.calendarsRefreshed : 'Refresh completed; Calendar coverage remains incomplete for this date.',
+            );
+          },
+          icon: const Icon(LucideIcons.refreshCw, size: 18),
+        ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 12),
+      child: narrow
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: date),
+                    today,
+                  ],
+                ),
+                Row(children: [...arrows, const Spacer(), ...actions]),
+              ],
+            )
+          : Row(
+              children: [
+                ...arrows,
+                const SizedBox(width: 16),
+                Flexible(child: date),
+                const SizedBox(width: 12),
+                today,
+                const Spacer(),
+                ...actions,
+              ],
             ),
-        ],
-      ),
     );
   }
 }

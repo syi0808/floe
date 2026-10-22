@@ -8,7 +8,7 @@ Let a user understand, edit, decompose, and complete a task while preserving the
 
 ## Wide composition
 
-The primary column contains task type, title, description, due context, time context, source calendar, and subtasks. The contextual rail contains one relevant Floe suggestion and related notes or provenance. Both rail regions use the standard card system.
+Use one readable primary column for title, relevant description, due state and completion. Related context appears only when available. A secondary panel is reserved for actual selected context or a policy-qualified proposal, not generic advice. Do not surround every field group with a card.
 
 ## Local toolbar
 
@@ -20,12 +20,12 @@ Show a contextual back action such as `Back to today`, then object actions in an
 - Editable fields have explicit labels and preserve unsaved input on recoverable errors.
 - Due and time context are separate values.
 - Calendar or source relationship is a link with text, not color alone.
-- Subtasks use open rows, `sq-xs` checkboxes, duration metadata, and a final `Add subtask` action.
+- Subtasks use open rows. Editable checkboxes and Add subtask require a connected mutation owner; preview-only context is read-only.
 - Task completion is reversible; deletion requires a named confirmation.
 
 ## Contextual rail
 
-A suggestion may reference the task and a future event, for example reviewing a brief before a meeting. It uses the standard `Floe suggests` anatomy and does not float independently. Related notes appear in the same `sq-lg` card system.
+A real suggestion may reference the task and a future event. It uses the standard Floe suggestion anatomy and appears only when intervention policy qualifies it. Related notes remain quiet readable content; they do not require a colored card.
 
 ## Narrow composition
 
@@ -42,6 +42,10 @@ Place summary and required fields first, then subtasks, related notes, and an op
 ## Acceptance criteria
 
 - The task remains the visual protagonist.
-- Suggestion and notes align to one rail system.
+- Only relevant, source-backed context competes with the task.
 - Task semantics remain usable with no assistant available.
-- The screen supports keyboard completion, editing, reordering, and back navigation.
+- Completion and back navigation work by keyboard. Editing and reordering appear only when supported by an owning service.
+
+## Content and action integrity
+
+Use a single readable content column with title, relevant description, due state and the real completion action. Omit empty metadata sections, invented update timestamps and generic assistant advice. Preview-only subtasks and notes may supply visual context, but must not expose mutation controls without an owning service. Review and snooze controls require real proposals and durable behavior; hiding a card is neither review nor snooze. The completion action reflects pending state and ignores repeat input until the owner responds. Back restores the originating day or task collection.

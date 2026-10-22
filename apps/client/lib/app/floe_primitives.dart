@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/floe_switch.dart';
@@ -10,6 +11,12 @@ Future<T?> showFloeSheet<T>(BuildContext context, WidgetBuilder builder) =>
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      sheetAnimationStyle: FloeMotion.reduceMotion(context)
+          ? AnimationStyle.noAnimation
+          : const AnimationStyle(
+              duration: FloeMotion.dialogDuration,
+              reverseDuration: FloeMotion.pressDuration,
+            ),
       backgroundColor: Colors.transparent,
       builder: builder,
     );

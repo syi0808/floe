@@ -545,5 +545,12 @@
         "type": "int"
       }
     }
-  }
+  },
+  "navigationMore": "More",
+  "connectedServices": "Connected services",
+  "viewAll": "View all",
+  "back": "Back",
+  "conversationUnavailable": "Conversation is unavailable in this session.",
+  "voiceBackToFloe": "Back to Floe",
+  "voiceStopBeforeClosing": "Stop voice before closing"
 }
