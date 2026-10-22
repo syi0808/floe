@@ -1,5 +1,6 @@
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
@@ -23,6 +24,7 @@ import 'package:floe_client/features/conversation/application/conversation_contr
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_client.dart';
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
+import 'package:floe_client/features/conversation/presentation/conversation_composer_draft.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
@@ -746,8 +748,10 @@ void main() {
       );
       addTearDown(original.dispose);
       addTearDown(replacement.dispose);
+      final draft = ConversationComposerDraft();
+      addTearDown(draft.dispose);
 
-      await tester.pumpWidget(_panelApp(original.controller));
+      await tester.pumpWidget(_panelApp(original.controller, draft: draft));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byType(TextFormField),
@@ -767,7 +771,7 @@ void main() {
             .text,
         'old conversation draft',
       );
-      await tester.pumpWidget(_panelApp(replacement.controller));
+      await tester.pumpWidget(_panelApp(replacement.controller, draft: draft));
       await tester.pumpAndSettle();
 
       original.transport.pendingStartTurn.completeError(
@@ -823,6 +827,138 @@ void main() {
     );
   });
 
+  testWidgets('failed send while dismissed retains the draft for reopen', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final harness = await _Harness.create();
+    addTearDown(harness.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+
+    await tester.pumpWidget(
+      _draftPresenceApp(harness.controller, draft: draft),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'retain on failure');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Ask Floe'));
+    await tester.pump();
+    expect(harness.transport.startTurnRequested.isCompleted, isTrue);
+    await harness.transport.startTurnRequested.future.timeout(
+      const Duration(seconds: 1),
+    );
+
+    await tester.tap(find.text('Dismiss panel'));
+    await tester.pumpAndSettle();
+    harness.transport.pendingStartTurn.completeError(
+      const AppWireTransportException(
+        'synthetic_failure',
+        'Synthetic delayed send failure.',
+        commandOutcome: CommandOutcome.notAdmitted,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open panel'));
+    await tester.pumpAndSettle();
+
+    expect(harness.controller.failure, isNotNull);
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).controller!.text,
+      'retain on failure',
+    );
+    expect(
+      harness.transport.commands.where(
+        (command) => command['kind'] == 'conversation.work.submit_text',
+      ),
+      hasLength(1),
+    );
+  });
+
+  testWidgets('accepted send while dismissed clears the stale draft', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final harness = await _Harness.create();
+    addTearDown(harness.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+    final originalSession = harness.controller.session!;
+    harness.transport.terminalSession = _session(
+      revision: originalSession.revision + 1,
+      messages: [_message(_m5), _message(_m6)],
+    );
+
+    await tester.pumpWidget(
+      _draftPresenceApp(harness.controller, draft: draft),
+    );
+    await tester.pumpAndSettle();
+    expect(harness.controller.canSend, isTrue);
+    await tester.enterText(find.byType(TextFormField), 'accepted before close');
+    await tester.pump();
+    expect(draft.controller.text, 'accepted before close');
+    expect(harness.controller.busy, isFalse);
+    expect(
+      tester
+          .widget<FloeButton>(
+            find.byKey(const Key('conversation-composer-action')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byTooltip('Ask Floe'));
+    await tester.pump();
+    expect(harness.transport.startTurnRequested.isCompleted, isTrue);
+    expect(
+      harness.transport.commands.where(
+        (command) => command['kind'] == 'conversation.work.submit_text',
+      ),
+      hasLength(1),
+    );
+
+    await tester.tap(find.text('Dismiss panel'));
+    await tester.pumpAndSettle();
+    harness.transport.returnTerminalFailure = true;
+    harness.transport.completePendingStartTurnAsAccepted();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open panel'));
+    await tester.pumpAndSettle();
+
+    expect(harness.transport.admittedText, 'accepted before close');
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).controller!.text,
+      isEmpty,
+    );
+    expect(
+      harness.transport.commands.where(
+        (command) => command['kind'] == 'conversation.work.submit_text',
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('accepted completion does not clear a newer draft revision', () async {
+    final harness = await _Harness.create();
+    addTearDown(harness.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+    draft.reconcile(harness.controller);
+    draft.controller.text = 'submitted text';
+    final submission = draft.capture(harness.controller)!;
+    expect(submission.text, 'submitted text');
+
+    draft.controller.text = 'intermediate edit';
+    draft.controller.text = 'submitted text';
+
+    expect(draft.clearAccepted(submission), isFalse);
+    expect(draft.controller.text, 'submitted text');
+
+    final latestSubmission = draft.capture(harness.controller)!;
+    draft.controller.selection = const TextSelection.collapsed(offset: 3);
+    expect(draft.clearAccepted(latestSubmission), isTrue);
+    expect(draft.controller.text, isEmpty);
+  });
+
   testWidgets(
     'accepted Work failure does not restore an already submitted draft',
     (tester) async {
@@ -864,6 +1000,110 @@ void main() {
       );
     },
   );
+
+  testWidgets('dismissed panel restores exact multiline draft and selection', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final harness = await _Harness.create();
+    addTearDown(harness.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+
+    await tester.pumpWidget(
+      _draftPresenceApp(harness.controller, draft: draft),
+    );
+    await tester.pumpAndSettle();
+    const text = 'First line\nSecond line';
+    await tester.enterText(find.byType(TextFormField), text);
+    final selection = const TextSelection(baseOffset: 4, extentOffset: 16);
+    draft.controller.selection = selection;
+    await tester.pump();
+
+    await tester.tap(find.text('Dismiss panel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(AgentPanel), findsNothing);
+
+    await tester.tap(find.text('Open panel'));
+    await tester.pumpAndSettle();
+    final restored = tester
+        .widget<TextFormField>(find.byType(TextFormField))
+        .controller!;
+    expect(restored.text, text);
+    expect(restored.selection.baseOffset, selection.baseOffset);
+    expect(restored.selection.extentOffset, selection.extentOffset);
+    expect(harness.transport.commands, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dismissed draft is cleared after the session changes', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final harness = await _Harness.create();
+    addTearDown(harness.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+
+    await tester.pumpWidget(
+      _draftPresenceApp(harness.controller, draft: draft),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'old session draft');
+    await tester.tap(find.text('Dismiss panel'));
+    await tester.pumpAndSettle();
+
+    harness.transport.replacementSession = _session(
+      id: _replacementSessionId,
+      messages: [_message(_replacementMessageId)],
+    );
+    await harness.controller.load(newSession: true);
+    expect(harness.controller.session?.id, _replacementSessionId);
+    final commandsBeforeOpen = harness.transport.commands.length;
+
+    await tester.tap(find.text('Open panel'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).controller!.text,
+      isEmpty,
+    );
+    expect(harness.transport.commands, hasLength(commandsBeforeOpen));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('dismissed draft is cleared for a replacement controller', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final original = await _Harness.create();
+    final replacement = await _Harness.create();
+    addTearDown(original.dispose);
+    addTearDown(replacement.dispose);
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
+    const hostKey = ValueKey('draft-presence-host');
+
+    await tester.pumpWidget(
+      _draftPresenceApp(original.controller, draft: draft, key: hostKey),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), 'old owner draft');
+    await tester.tap(find.text('Dismiss panel'));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(
+      _draftPresenceApp(replacement.controller, draft: draft, key: hostKey),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Open panel'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).controller!.text,
+      isEmpty,
+    );
+    expect(replacement.transport.commands, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('Load earlier shows pending and ignores repeated taps', (
     tester,
@@ -930,6 +1170,8 @@ void main() {
     addTearDown(harness.dispose);
     final response = Completer<Map<String, dynamic>>();
     final requested = Completer<void>();
+    final draft = ConversationComposerDraft();
+    addTearDown(draft.dispose);
     harness.transport.enqueuePendingPage(response, requested);
     var panelVisible = true;
 
@@ -942,6 +1184,7 @@ void main() {
             builder: (context, setState) => panelVisible
                 ? AgentPanel(
                     controller: harness.controller,
+                    composerDraft: draft,
                     dayGateway: _UnusedDayGateway(),
                     onClose: () => setState(() => panelVisible = false),
                   )
@@ -1202,18 +1445,136 @@ void _usePanelViewport(WidgetTester tester) {
   addTearDown(tester.view.resetDevicePixelRatio);
 }
 
-Widget _panelApp(ConversationController controller, {VoidCallback? onClose}) =>
-    MaterialApp(
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      home: Scaffold(
-        body: AgentPanel(
-          controller: controller,
-          dayGateway: _UnusedDayGateway(),
-          onClose: onClose ?? () {},
+Widget _panelApp(
+  ConversationController controller, {
+  ConversationComposerDraft? draft,
+  VoidCallback? onClose,
+}) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+  home: _PanelAppOwner(
+    controller: controller,
+    composerDraft: draft,
+    onClose: onClose ?? () {},
+  ),
+);
+
+final class _PanelAppOwner extends StatefulWidget {
+  const _PanelAppOwner({
+    required this.controller,
+    required this.composerDraft,
+    required this.onClose,
+  });
+
+  final ConversationController controller;
+  final ConversationComposerDraft? composerDraft;
+  final VoidCallback onClose;
+
+  @override
+  State<_PanelAppOwner> createState() => _PanelAppOwnerState();
+}
+
+final class _PanelAppOwnerState extends State<_PanelAppOwner> {
+  ConversationComposerDraft? _ownedDraft;
+
+  ConversationComposerDraft get _composerDraft =>
+      widget.composerDraft ?? (_ownedDraft ??= ConversationComposerDraft());
+
+  @override
+  void didUpdateWidget(_PanelAppOwner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.composerDraft != widget.composerDraft) {
+      _ownedDraft?.dispose();
+      _ownedDraft = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ownedDraft?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: AgentPanel(
+      controller: widget.controller,
+      composerDraft: _composerDraft,
+      dayGateway: _UnusedDayGateway(),
+      onClose: widget.onClose,
+    ),
+  );
+}
+
+Widget _draftPresenceApp(
+  ConversationController controller, {
+  required ConversationComposerDraft draft,
+  Key? key,
+}) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: AppLocalizations.supportedLocales,
+  home: _DraftPresenceHost(
+    key: key,
+    controller: controller,
+    composerDraft: draft,
+  ),
+);
+
+final class _DraftPresenceHost extends StatefulWidget {
+  const _DraftPresenceHost({
+    super.key,
+    required this.controller,
+    required this.composerDraft,
+  });
+
+  final ConversationController controller;
+  final ConversationComposerDraft composerDraft;
+
+  @override
+  State<_DraftPresenceHost> createState() => _DraftPresenceHostState();
+}
+
+final class _DraftPresenceHostState extends State<_DraftPresenceHost> {
+  bool _visible = true;
+
+  void _close() {
+    widget.controller.detachView();
+    setState(() => _visible = false);
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: Column(
+      children: [
+        Row(
+          children: [
+            TextButton(
+              onPressed: _visible ? _close : null,
+              child: const Text('Dismiss panel'),
+            ),
+            TextButton(
+              onPressed: _visible
+                  ? null
+                  : () => setState(() => _visible = true),
+              child: const Text('Open panel'),
+            ),
+          ],
         ),
-      ),
-    );
+        Expanded(
+          child: FloePanelPresence(
+            visible: _visible,
+            child: AgentPanel(
+              controller: widget.controller,
+              composerDraft: widget.composerDraft,
+              dayGateway: _UnusedDayGateway(),
+              onClose: _close,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 final class _Harness {
   _Harness(this.runtime, this.readModel, this.transport, this.controller);
@@ -1314,6 +1675,31 @@ final class _ConversationTransport implements AppWireTransport {
     _historyReplies.add(() {
       if (!requested.isCompleted) requested.complete();
       return response.future;
+    });
+  }
+
+  void completePendingStartTurnAsAccepted() {
+    final command = commands.lastWhere(
+      (command) => command['kind'] == 'conversation.work.submit_text',
+    );
+    final expected = Map<String, dynamic>.from(command['expected'] as Map);
+    final commandId = commandIds.last;
+    admittedText = command['text'] as String;
+    admittedWork = {
+      'command_id': commandId,
+      'work_id': _m4,
+      'execution_command_id': _turnId,
+      'input_id': commandId,
+      'anchor': _surfaceAnchor(
+        expected['session_id'] as String,
+        (expected['sequence'] as int) + 1,
+      ),
+      'origin': {'kind': 'text'},
+      'runtime_epoch': 1,
+    };
+    pendingStartTurn.complete({
+      'kind': 'conversation.work.receipt',
+      'receipt': admittedWork,
     });
   }
 

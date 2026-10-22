@@ -18,6 +18,7 @@ import 'package:floe_client/features/conversation/infrastructure/app_wire_conver
     show AppRunStateTerminal;
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
+import 'package:floe_client/features/conversation/presentation/conversation_composer_draft.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
@@ -26,6 +27,7 @@ class AgentPanel extends StatefulWidget {
   const AgentPanel({
     super.key,
     required this.controller,
+    required this.composerDraft,
     required this.dayGateway,
     required this.onClose,
     this.onOpenSourceReview,
@@ -35,6 +37,7 @@ class AgentPanel extends StatefulWidget {
   });
 
   final ConversationController controller;
+  final ConversationComposerDraft composerDraft;
   final DayGateway dayGateway;
   final VoidCallback onClose;
   final VoidCallback? onOpenVoice;
@@ -54,7 +57,7 @@ class _AgentPanelState extends State<AgentPanel> {
   final _scroll = ScrollController();
   final _actionFocus = FocusNode();
   final _messageFocus = FocusNode();
-  final _composerText = TextEditingController();
+  late TextEditingController _composerText;
   bool _wasBusy = false;
   bool _wasReady = false;
   bool _sessionRequested = false;
@@ -64,6 +67,9 @@ class _AgentPanelState extends State<AgentPanel> {
   @override
   void initState() {
     super.initState();
+    widget.composerDraft.reconcile(widget.controller);
+    _composerText = widget.composerDraft.controller;
+    _composerText.addListener(_composerChanged);
     _wasBusy = widget.controller.busy;
     widget.controller.addListener(_changed);
     widget.controller.attachView();
@@ -73,12 +79,20 @@ class _AgentPanelState extends State<AgentPanel> {
   @override
   void didUpdateWidget(AgentPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final ownerChanged =
+        oldWidget.composerDraft != widget.composerDraft ||
+        oldWidget.controller != widget.controller;
+    if (ownerChanged) _composerText.removeListener(_composerChanged);
+    if (oldWidget.composerDraft != widget.composerDraft) {
+      widget.composerDraft.reconcile(widget.controller);
+      _composerText = widget.composerDraft.controller;
+    }
     if (oldWidget.controller != widget.controller) {
       _historyLoadGeneration++;
       _loadingHistory = false;
       oldWidget.controller.removeListener(_changed);
       oldWidget.controller.detachView();
-      _composerText.clear();
+      widget.composerDraft.reconcile(widget.controller);
       widget.controller.addListener(_changed);
       _wasBusy = widget.controller.busy;
       _wasReady = false;
@@ -86,6 +100,7 @@ class _AgentPanelState extends State<AgentPanel> {
       widget.controller.attachView();
       _ensureConversationWhenReady();
     }
+    if (ownerChanged) _composerText.addListener(_composerChanged);
   }
 
   void _ensureConversationWhenReady() {
@@ -111,6 +126,7 @@ class _AgentPanelState extends State<AgentPanel> {
   }
 
   void _changed() {
+    widget.composerDraft.reconcile(widget.controller);
     _ensureConversationWhenReady();
     final restoreFocus = _wasBusy && !widget.controller.busy;
     _wasBusy = widget.controller.busy;
@@ -130,6 +146,10 @@ class _AgentPanelState extends State<AgentPanel> {
         }
       }
     });
+  }
+
+  void _composerChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadEarlier() async {
@@ -187,7 +207,7 @@ class _AgentPanelState extends State<AgentPanel> {
     _scroll.dispose();
     _actionFocus.dispose();
     _messageFocus.dispose();
-    _composerText.dispose();
+    _composerText.removeListener(_composerChanged);
     super.dispose();
   }
 
@@ -767,7 +787,6 @@ class _AgentPanelState extends State<AgentPanel> {
                           inputFormatters: [
                             LengthLimitingTextInputFormatter(8192),
                           ],
-                          onChanged: (_) => setState(() {}),
                         ),
                       ),
                     ),
@@ -798,18 +817,12 @@ class _AgentPanelState extends State<AgentPanel> {
   }
 
   Future<void> _sendText(ConversationController controller) async {
-    final text = _composerText.text;
     if (!controller.canSend) return;
-    final sessionId = controller.session?.id;
-    final accepted = await controller.sendText(text);
-    if (accepted &&
-        mounted &&
-        identical(controller, widget.controller) &&
-        sessionId == controller.session?.id &&
-        _composerText.text == text) {
-      _composerText.clear();
-      setState(() {});
-    }
+    final composerDraft = widget.composerDraft;
+    final submission = composerDraft.capture(controller);
+    if (submission == null) return;
+    final accepted = await controller.sendText(submission.text);
+    if (accepted) composerDraft.clearAccepted(submission);
   }
 
   String? _status(AppLocalizations strings, ConversationController controller) {

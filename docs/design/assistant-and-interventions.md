@@ -53,6 +53,12 @@ Keep the panel header and Close control outside the compact transcript scroller.
 
 The composer is one squircle surface containing the text field and its trailing action, not a floating-label form field beside a separate button. Use one visible `Message Floe` prompt and retain that accessible field name after typing. Keep the action target at least 44px. Empty or whitespace-only drafts disable Send, but never disable Stop, reload, or recovery solely because the draft is empty. Preserve multiline entry, draft ownership, and the existing length limit.
 
+Keep an unsent draft and its selection in memory when the panel or sheet is
+temporarily dismissed. Scope it to its controller, person and session; replacing
+any of those starts with a blank composer. Reopening never sends the draft. Failed
+admission retains it, while accepted submission clears only the exact submitted
+text revision, not newer edits made while the result was pending.
+
 Do not render private chain-of-thought. Show observable calls, sources, decisions and
 errors. A model disconnect preserves completed turns and offers retry without
 duplicating tool execution.

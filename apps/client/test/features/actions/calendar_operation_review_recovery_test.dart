@@ -13,6 +13,7 @@ import 'package:floe_client/features/conversation/infrastructure/app_wire_conver
 import 'package:floe_client/features/conversation/infrastructure/app_wire_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
+import 'package:floe_client/features/conversation/presentation/conversation_composer_draft.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -196,6 +197,8 @@ void main() {
         },
       );
       addTearDown(harness.dispose);
+      final composerDraft = ConversationComposerDraft();
+      addTearDown(composerDraft.dispose);
       var panelOpen = true;
 
       Widget app() => MaterialApp(
@@ -206,6 +209,7 @@ void main() {
             builder: (context, setState) => panelOpen
                 ? AgentPanel(
                     controller: harness.controller,
+                    composerDraft: composerDraft,
                     dayGateway: _UnusedDayGateway(),
                     onClose: () {
                       harness.controller.detachView();

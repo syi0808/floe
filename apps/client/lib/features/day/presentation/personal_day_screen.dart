@@ -40,6 +40,7 @@ import 'package:floe_client/features/conversation/application/conversation_contr
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/conversation/presentation/agent_panel.dart';
+import 'package:floe_client/features/conversation/presentation/conversation_composer_draft.dart';
 import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 
 part 'personal_day/navigation.dart';
@@ -79,6 +80,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   late final PersonalDayController controller;
   OperationPolicyController? operationPolicyController;
   ConversationController? agentController;
+  late final ConversationComposerDraft conversationComposerDraft =
+      ConversationComposerDraft();
   bool assistantOpen = false;
   bool compactTimeline = false;
   SourceRef? selectedConnectionSource;
@@ -135,6 +138,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     controller.dispose();
     operationPolicyController?.dispose();
     agentController?.dispose();
+    conversationComposerDraft.dispose();
     assistantEntryFocus.dispose();
     super.dispose();
   }
@@ -648,6 +652,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     }
     return AgentPanel(
       controller: agent,
+      composerDraft: conversationComposerDraft,
       dayGateway: widget.gateway,
       onOpenVoice: _openVoice,
       onOpenConnections: () => _openAgentSourceReview(null),
