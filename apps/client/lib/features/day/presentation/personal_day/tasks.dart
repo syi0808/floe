@@ -29,7 +29,7 @@ class _TasksScreen extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    AppLocalizations.of(context).task,
+                    AppLocalizations.of(context).tasks,
                     style: FloeType.display,
                   ),
                   SizedBox(height: FloeSpace.xs),
@@ -40,11 +40,6 @@ class _TasksScreen extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-            FloeButton.filled(
-              onPressed: () => _showComingSoon(context),
-              icon: Icon(Icons.add),
-              child: Text(AppLocalizations.of(context).newTask),
             ),
           ],
         ),
@@ -228,21 +223,6 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                   ],
                 ),
               ),
-            SizedBox(height: FloeSpace.sm),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FloeButton.text(
-                onPressed: () => _showComingSoon(context),
-                style: const ButtonStyle(
-                  padding: WidgetStatePropertyAll(EdgeInsets.zero),
-                  foregroundColor: WidgetStatePropertyAll(
-                    FloePalette.primary600,
-                  ),
-                ),
-                icon: Icon(LucideIcons.plus, size: 18),
-                child: Text(AppLocalizations.of(context).addASubtask),
-              ),
-            ),
           ],
         ),
       ),

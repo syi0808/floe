@@ -394,12 +394,6 @@ class _NoteDetail extends StatelessWidget {
             AppLocalizations.of(context).thisIsYourOriginalNoteEditingIs,
             style: FloeType.bodyLarge,
           ),
-          SizedBox(height: FloeSpace.xl),
-          FloeButton.outlined(
-            onPressed: () => _showComingSoon(context),
-            icon: FloeMascot(size: 24),
-            child: Text(AppLocalizations.of(context).reviewWithFloe),
-          ),
         ],
       ),
     ),

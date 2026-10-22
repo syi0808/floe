@@ -44,6 +44,10 @@ material disclosure.
 - Show neutral outcomes neutrally. Use error styling only for a failure or an
   unconfirmed outcome that needs attention.
 
+Do not style a placeholder as an available action. If a control only opens a
+not-available notice, omit it until the real flow exists. Retain genuine
+unavailable states when they explain an existing operation or a recovery path.
+
 ## Truth and consent are not optional detail
 
 Keep the recipient, transmitted data, microphone permission and playback/Stop

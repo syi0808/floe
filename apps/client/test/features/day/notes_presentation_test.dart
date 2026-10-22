@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/preview/calendar_fixture.dart';
@@ -43,6 +44,39 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(find.text('A place for your thoughts'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+  testWidgets(
+    'note details close cleanly without a placeholder review action',
+    (tester) async {
+      await openNotes(tester);
+      for (var repeat = 0; repeat < 2; repeat++) {
+        await tester.tap(find.text('Launch plan'));
+        await tester.pumpAndSettle();
+        expect(find.text('Review with Floe'), findsNothing);
+        expect(find.textContaining('Editing is not available'), findsOneWidget);
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pumpAndSettle();
+        expect(find.text('All notes · 1'), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+  testWidgets(
+    'task collection and details expose no pretend creation actions',
+    (tester) async {
+      await openNotes(tester);
+      await tester.tap(find.byTooltip('Tasks'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tasks'), findsOneWidget);
+      expect(find.text('New task'), findsNothing);
+      expect(find.byType(FloeCheckbox), findsOneWidget);
+      await tester.tap(find.text('Prepare launch brief'));
+      await tester.pumpAndSettle();
+      expect(find.text('Add a subtask'), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },

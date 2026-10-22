@@ -61,13 +61,6 @@ class _ErrorNotice extends StatelessWidget {
   );
 }
 
-void _showComingSoon(BuildContext context) {
-  FloeToastHost.of(context).show(
-    title: AppLocalizations.of(context).thisFeatureIsNotAvailableYet,
-    tone: FloeToastTone.info,
-  );
-}
-
 String _time(BuildContext context, DateTime value) =>
     MaterialLocalizations.of(context).formatTimeOfDay(
       TimeOfDay.fromDateTime(value.toLocal()),
