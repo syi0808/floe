@@ -320,6 +320,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
       if (artifact.id == artifactId) selectedArtifact = artifact;
     }
     final statusText = _statusText(strings, currentAction);
+    final hasReadyProposal =
+        currentAction == null && proposalDetails is ReadyActionProposal;
     return FloeSquircle(
       padding: const EdgeInsets.all(12),
       child: Form(
@@ -327,14 +329,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(strings.agentProposalTitle, style: FloeType.controlLabel),
-            if (currentAction == null) ...[
-              const SizedBox(height: 8),
-              Text(
-                strings.agentProposalReviewReminder,
-                style: FloeType.bodySmall.copyWith(fontSize: 12),
-              ),
-            ],
+            if (!hasReadyProposal)
+              Text(strings.agentProposalTitle, style: FloeType.controlLabel),
             if (statusText != null) ...[
               const SizedBox(height: 8),
               Semantics(
@@ -369,7 +365,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 child: const Text('Review proposal'),
               ),
             ] else ...[
-              const SizedBox(height: 12),
+              if (!hasReadyProposal || artifacts.length > 1)
+                const SizedBox(height: 12),
               if (artifacts.length > 1)
                 FloeSelect<String>(
                   label: 'Proposal',
@@ -411,6 +408,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 if (destinations.length == 1)
                   Text(
                     '${strings.actionDestination}: ${destinations.single.label}',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
                   )
                 else
                   FloeSelect<String>(
@@ -522,6 +522,12 @@ final class _ProposalPresentation extends StatelessWidget {
       return '${dateFormat.format(value)} · $clock';
     }
 
+    final sameLocalDay =
+        start.year == end.year &&
+        start.month == end.month &&
+        start.day == end.day;
+    final sameOffset = start.timeZoneOffset == end.timeZoneOffset;
+
     return Semantics(
       container: true,
       liveRegion: true,
@@ -532,8 +538,17 @@ final class _ProposalPresentation extends StatelessWidget {
           children: [
             Text(title, style: FloeType.title, softWrap: true),
             const SizedBox(height: 4),
-            Text(strings.agentProposalStartsLocal(dateTime(start))),
-            Text(strings.agentProposalEndsLocal(dateTime(end))),
+            if (sameLocalDay && sameOffset)
+              Text(
+                strings.agentProposalInterval(
+                  '${dateFormat.format(start)} · ${time(start)}',
+                  time(end),
+                ),
+              )
+            else ...[
+              Text(strings.agentProposalStartsLocal(dateTime(start))),
+              Text(strings.agentProposalEndsLocal(dateTime(end))),
+            ],
           ],
         ),
       ),

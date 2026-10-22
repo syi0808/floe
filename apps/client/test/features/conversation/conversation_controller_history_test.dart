@@ -1,6 +1,7 @@
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
@@ -796,6 +797,11 @@ void main() {
           tester.getRect(source).right,
           lessThanOrEqualTo(tester.view.physicalSize.width),
         );
+        expect(find.text('Calendar proposal'), findsOneWidget);
+        expect(
+          find.text('Review the details before adding this event.'),
+          findsNothing,
+        );
         expect(find.text('Review proposal'), findsOneWidget);
         expect(find.text('Add to calendar'), findsNothing);
         expect(tester.takeException(), isNull);
@@ -812,6 +818,7 @@ void main() {
         expect(h.transport.proposalQueries.single['artifact_id'], _m3);
         final summaryText = _normalizedText(tester);
         expect(find.text(longTitle), findsOneWidget);
+        expect(find.text('Calendar proposal'), findsNothing);
         expect(
           summaryText,
           contains(
@@ -824,6 +831,10 @@ void main() {
         );
         expect(summaryText, isNot(contains('UTC')));
         expect(find.text('Event timezone: Asia/Seoul'), findsNothing);
+        expect(
+          find.text('Destination calendar: Personal calendar'),
+          findsOneWidget,
+        );
         expect(find.text('Add to calendar'), findsOneWidget);
         await tester.ensureVisible(find.text(longTitle));
         expect(find.text(longTitle).hitTestable(), findsOneWidget);
@@ -839,6 +850,149 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'ready proposal shows one local date and a localized same-day range',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final localStart = DateTime(2026, 10, 22, 8, 30);
+      final localEnd = DateTime(2026, 10, 22, 9, 30);
+      final startUtc = localStart.toUtc();
+      final endUtc = localEnd.toUtc();
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+        _readyProposal(
+          'Personal calendar',
+          title: 'Launch brief focus block',
+          startsAt: startUtc.toIso8601String(),
+          endsAt: endUtc.toIso8601String(),
+          timezone: 'Asia/Seoul',
+        ),
+      );
+
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pumpWidget(
+          _proposalApp(h.controller, _proposalMessage(_m3)),
+        );
+        expect(find.text('Review proposal'), findsOneWidget);
+        expect(find.text('Calendar proposal'), findsOneWidget);
+        expect(
+          find.text('Review the details before adding this event.'),
+          findsNothing,
+        );
+        await tester.tap(find.text('Review proposal'));
+        await tester.pumpAndSettle();
+
+        final expected = _proposalSameDayInterval(tester, startUtc, endUtc);
+        final summaryText = _normalizedText(tester);
+        expect(summaryText, contains(expected));
+        final localDate = DateFormat.yMMMEd(
+          AppLocalizations.of(tester.element(find.byType(AgentProposalCard)))
+              .localeName,
+        ).format(startUtc.toLocal());
+        expect(localDate.allMatches(summaryText).length, 1);
+        expect(summaryText, isNot(contains('Starts:')));
+        expect(summaryText, isNot(contains('Ends:')));
+        expect(find.text('Calendar proposal'), findsNothing);
+        expect(find.text('Launch brief focus block'), findsOneWidget);
+        expect(summaryText, isNot(contains('Asia/Seoul')));
+        expect(summaryText, isNot(contains('UTC')));
+        expect(h.transport.commands, isEmpty);
+
+        final summary = tester.getSemantics(find.text(expected));
+        expect(summary.label, contains(expected));
+        expect(summary.label, contains('8:30 AM'));
+        expect(summary.label, contains('9:30 AM'));
+        final destination = tester.getSemantics(
+          find.text('Destination calendar: Personal calendar'),
+        );
+        expect(destination.label, 'Destination calendar: Personal calendar');
+        expect(
+          tester
+              .widget<Text>(
+                find.text('Destination calendar: Personal calendar'),
+              )
+              .style
+              ?.color,
+          FloePalette.neutral600,
+        );
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'same-day proposal remains readable and Add reachable at narrow width and 200% text',
+    (tester) async {
+      tester.view.physicalSize = const Size(388, 718);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      const longTitle =
+          'A carefully planned launch brief focus block with a long title that must wrap at narrow widths';
+      final localStart = DateTime(2026, 10, 22, 8, 30);
+      final localEnd = DateTime(2026, 10, 22, 9, 30);
+      final startUtc = localStart.toUtc();
+      final endUtc = localEnd.toUtc();
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+        _readyProposal(
+          'Personal calendar',
+          title: longTitle,
+          startsAt: startUtc.toIso8601String(),
+          endsAt: endUtc.toIso8601String(),
+          timezone: 'Asia/Seoul',
+        ),
+      );
+
+      final semantics = tester.ensureSemantics();
+      try {
+        for (final scale in [1.0, 2.0]) {
+          await tester.pumpWidget(
+            _proposalApp(
+              h.controller,
+              _proposalMessage(_m3, messageId: scale == 1 ? _m1 : _m2),
+              textScale: scale,
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(find.text('Review proposal'), findsOneWidget);
+          await tester.ensureVisible(find.text('Review proposal'));
+          expect(find.text('Review proposal').hitTestable(), findsOneWidget);
+          await tester.tap(find.text('Review proposal'));
+          await tester.pumpAndSettle();
+
+          expect(find.text(longTitle), findsOneWidget);
+          expect(
+            _normalizedText(tester),
+            contains(_proposalSameDayInterval(tester, startUtc, endUtc)),
+          );
+          await tester.ensureVisible(find.text('Add to calendar'));
+          await tester.pumpAndSettle();
+          final addButton = find.ancestor(
+            of: find.text('Add to calendar'),
+            matching: find.byType(FilledButton),
+          );
+          expect(addButton.hitTestable(), findsOneWidget);
+          expect(tester.getRect(addButton).width, lessThanOrEqualTo(388));
+          expect(tester.getRect(addButton).height, greaterThanOrEqualTo(44));
+          expect(
+            tester.getRect(find.text(longTitle)).right,
+            lessThanOrEqualTo(388),
+          );
+          expect(_addToCalendarOnPressed(tester), isNotNull);
+          expect(h.transport.commands, isEmpty);
+          expect(tester.takeException(), isNull);
+        }
       } finally {
         semantics.dispose();
       }
@@ -873,21 +1027,31 @@ void main() {
       await tester.pumpAndSettle();
 
       final summaryText = _normalizedText(tester);
-      expect(
-        summaryText,
-        contains('Starts: ${_proposalLocalDateTime(tester, startUtc, endUtc)}'),
-      );
-      expect(
-        summaryText,
-        contains('Ends: ${_proposalLocalDateTime(tester, endUtc, startUtc)}'),
-      );
       expect(summaryText, isNot(contains('UTC')));
+      expect(summaryText, isNot(contains('AM')));
+      expect(summaryText, isNot(contains('PM')));
       final localStart = startUtc.toLocal();
       final localEnd = endUtc.toLocal();
       if (localStart.timeZoneOffset != localEnd.timeZoneOffset) {
+        expect(
+          summaryText,
+          contains(
+            'Starts: ${_proposalLocalDateTime(tester, startUtc, endUtc)}',
+          ),
+        );
+        expect(
+          summaryText,
+          contains('Ends: ${_proposalLocalDateTime(tester, endUtc, startUtc)}'),
+        );
         expect(summaryText, contains(localStart.timeZoneName));
         expect(summaryText, contains(localEnd.timeZoneName));
+      } else {
+        expect(
+          summaryText,
+          contains(_proposalSameDayInterval(tester, startUtc, endUtc)),
+        );
       }
+      expect(summaryText, isNot(contains('Calendar proposal')));
       expect(find.text('Event timezone: America/New_York'), findsNothing);
       expect(h.transport.commands, isEmpty);
       expect(tester.takeException(), isNull);
@@ -1177,13 +1341,11 @@ void main() {
       expect(
         _normalizedText(tester),
         contains(
-          'Starts: ${_proposalLocalDateTime(tester, DateTime.utc(2026, 10, 12, 10), DateTime.utc(2026, 10, 12, 11))}',
-        ),
-      );
-      expect(
-        _normalizedText(tester),
-        contains(
-          'Ends: ${_proposalLocalDateTime(tester, DateTime.utc(2026, 10, 12, 11), DateTime.utc(2026, 10, 12, 10))}',
+          _proposalSameDayInterval(
+            tester,
+            DateTime.utc(2026, 10, 12, 10),
+            DateTime.utc(2026, 10, 12, 11),
+          ),
         ),
       );
       expect(
@@ -2884,12 +3046,15 @@ Widget _proposalApp(
   ConversationController controller,
   AgentCapabilityMessage message, {
   bool? alwaysUse24HourFormat,
+  double textScale = 1,
 }) => MaterialApp(
   localizationsDelegates: AppLocalizations.localizationsDelegates,
   supportedLocales: AppLocalizations.supportedLocales,
   builder: (context, child) => MediaQuery(
-    data: MediaQuery.of(context)
-        .copyWith(alwaysUse24HourFormat: alwaysUse24HourFormat ?? false),
+    data: MediaQuery.of(context).copyWith(
+      alwaysUse24HourFormat: alwaysUse24HourFormat ?? false,
+      textScaler: TextScaler.linear(textScale),
+    ),
     child: child!,
   ),
   home: Scaffold(
@@ -2935,6 +3100,27 @@ String _proposalLocalDateTime(
   final date = DateFormat.yMMMEd(AppLocalizations.of(context).localeName)
       .format(local);
   return '$date · $clock$suffix';
+}
+
+String _proposalSameDayInterval(
+  WidgetTester tester,
+  DateTime startInstant,
+  DateTime endInstant,
+) {
+  final context = tester.element(find.byType(AgentProposalCard));
+  final localStart = startInstant.toLocal();
+  final localEnd = endInstant.toLocal();
+  final strings = AppLocalizations.of(context);
+  final date = DateFormat.yMMMEd(strings.localeName).format(localStart);
+  String clock(DateTime value) =>
+      MaterialLocalizations.of(context).formatTimeOfDay(
+        TimeOfDay.fromDateTime(value),
+        alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+      );
+  return strings.agentProposalInterval(
+    '$date · ${clock(localStart)}',
+    clock(localEnd),
+  );
 }
 
 String _proposalOffsetLabel(int seconds) {

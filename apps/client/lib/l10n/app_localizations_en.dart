@@ -1329,10 +1329,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentProposalTitle => 'Calendar proposal';
 
   @override
-  String get agentProposalReviewReminder =>
-      'Review the details before adding this event.';
-
-  @override
   String agentProposalStartsLocal(String dateTime) {
     return 'Starts: $dateTime';
   }

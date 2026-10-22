@@ -479,7 +479,6 @@
   "assistantFeatureLoadSources": "Review sources",
   "assistantFeatureRetryPending": "Retry pending assistant feature change",
   "agentProposalTitle": "Calendar proposal",
-  "agentProposalReviewReminder": "Review the details before adding this event.",
   "agentProposalStartsLocal": "Starts: {dateTime}",
   "@agentProposalStartsLocal": {"placeholders": {"dateTime": {"type": "String"}}},
   "agentProposalEndsLocal": "Ends: {dateTime}",

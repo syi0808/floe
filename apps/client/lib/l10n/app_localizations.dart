@@ -2380,12 +2380,6 @@ abstract class AppLocalizations {
   /// **'Calendar proposal'**
   String get agentProposalTitle;
 
-  /// No description provided for @agentProposalReviewReminder.
-  ///
-  /// In en, this message translates to:
-  /// **'Review the details before adding this event.'**
-  String get agentProposalReviewReminder;
-
   /// No description provided for @agentProposalStartsLocal.
   ///
   /// In en, this message translates to:
