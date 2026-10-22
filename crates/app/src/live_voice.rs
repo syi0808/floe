@@ -119,8 +119,12 @@ pub(crate) async fn drive_start<'a>(
         // Own the muted candidate before durably binding Voice. If the Apple
         // backend is unavailable, Voice can still cancel the unbound Start
         // without leaving a bound call that has no physical lease to stop.
-        let lease =
-            prepare_apple_lease(native_binding.clone(), registry.host_instance_id()).await?;
+        let lease = prepare_apple_lease(
+            native_binding.clone(),
+            registry.host_instance_id(),
+            floe_native::live_media::LiveIceConfiguration::empty(),
+        )
+        .await?;
         let lease: Arc<dyn LiveMediaLease> = lease;
         if lease.binding() != &native_binding {
             let _ = direct_stop(lease.clone(), scope.deadline()).await;
@@ -518,19 +522,24 @@ fn deterministic_command_id(voice: Uuid, domain: &[u8]) -> Uuid {
 async fn prepare_apple_lease(
     binding: LiveMediaBinding,
     host_instance_id: Uuid,
+    ice_configuration: floe_native::live_media::LiveIceConfiguration,
 ) -> Result<Arc<dyn LiveMediaLease>, AgentFailure> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         tokio::task::spawn_blocking(move || {
-            floe_native::live_media::AppleLiveMediaLease::prepare_muted(binding, host_instance_id)
-                .map(|lease| lease as Arc<dyn LiveMediaLease>)
+            floe_native::live_media::AppleLiveMediaLease::prepare_muted(
+                binding,
+                host_instance_id,
+                ice_configuration,
+            )
+            .map(|lease| lease as Arc<dyn LiveMediaLease>)
         })
         .await
         .map_err(|_| AgentFailure::Interrupted)?
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     {
-        let _ = (binding, host_instance_id);
+        let _ = (binding, host_instance_id, ice_configuration);
         Err(AgentFailure::CapabilityUnavailable)
     }
 }

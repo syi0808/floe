@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct LiveMediaBindingWire: Codable, Equatable, Sendable {
@@ -9,6 +10,16 @@ struct LiveMediaBindingWire: Codable, Equatable, Sendable {
     let plan_id: String
 }
 
+struct LiveMediaIceServerWire: Codable, Equatable, Sendable, CustomDebugStringConvertible {
+    let urls: [String]
+    let username: String?
+    let credential: String?
+
+    var debugDescription: String {
+        "LiveMediaIceServerWire(url_count: \(urls.count), credentials: [redacted])"
+    }
+}
+
 struct LiveMediaCommandWire: Codable, Sendable {
     let schema_version: Int
     let operation: String
@@ -16,6 +27,7 @@ struct LiveMediaCommandWire: Codable, Sendable {
     let binding: LiveMediaBindingWire
     let deadline_ms: Int64?
     let answer_sdp: String?
+    let ice_servers: [LiveMediaIceServerWire]?
 }
 
 struct LiveMediaReplyWire: Codable, Sendable {
@@ -48,7 +60,7 @@ protocol LiveMediaPeer: AnyObject, Sendable {
 }
 
 protocol LiveMediaPeerFactory: Sendable {
-    func makeMutedPeer() throws -> any LiveMediaPeer
+    func makeMutedPeer(iceServers: [LiveMediaIceServerWire]) throws -> any LiveMediaPeer
 }
 
 /// Process-local native owner for exact Voice bindings. The initial peer has
@@ -106,7 +118,7 @@ final class LiveMediaHost: @unchecked Sendable {
     private func execute(_ command: LiveMediaCommandWire) throws -> LiveMediaReplyWire {
         switch command.operation {
         case "prepare_muted":
-            let peer = try factory.makeMutedPeer()
+            let peer = try factory.makeMutedPeer(iceServers: command.ice_servers ?? [])
             let lease = Lease(binding: command.binding, hostInstanceID: command.host_instance_id, peer: peer)
             lock.lock()
             defer { lock.unlock() }
@@ -291,7 +303,8 @@ final class LiveMediaHost: @unchecked Sendable {
                 voice_session_id: "", media_lease_id: "", plan_id: ""
             ),
             deadline_ms: nil,
-            answer_sdp: nil
+            answer_sdp: nil,
+            ice_servers: nil
         )
         let reply = LiveMediaReplyWire(
             schema_version: 1,
@@ -314,8 +327,100 @@ final class LiveMediaHost: @unchecked Sendable {
               UUID(uuidString: command.binding.plan_id) != nil,
               !command.binding.device_id.isEmpty,
               command.binding.device_id.utf8.count <= 128,
-              command.binding.runtime_epoch > 0 else { return false }
+              command.binding.runtime_epoch > 0,
+              validIceConfiguration(command) else { return false }
         return true
+    }
+
+    private static func validIceConfiguration(_ command: LiveMediaCommandWire) -> Bool {
+        guard command.operation == "prepare_muted" else {
+            return command.ice_servers == nil
+        }
+        guard let servers = command.ice_servers, servers.count <= 8 else { return false }
+        var seenURLs = Set<String>()
+        for server in servers {
+            guard !server.urls.isEmpty, server.urls.count <= 4 else { return false }
+            let schemes = server.urls.compactMap(validIceURL)
+            guard schemes.count == server.urls.count else { return false }
+            guard server.urls.allSatisfy({ seenURLs.insert($0).inserted }) else { return false }
+            guard (server.username == nil) == (server.credential == nil) else { return false }
+            if let username = server.username, let credential = server.credential {
+                guard validIceSecret(username, maximumBytes: 512),
+                      validIceSecret(credential, maximumBytes: 4_096),
+                      schemes.allSatisfy({ $0 == "turn" || $0 == "turns" }) else {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private static func validIceSecret(_ value: String, maximumBytes: Int) -> Bool {
+        !value.isEmpty
+            && value.utf8.count <= maximumBytes
+            && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+    }
+
+    private static func validIceURL(_ value: String) -> String? {
+        guard !value.isEmpty, value.utf8.count <= 2_048,
+              value.utf8.allSatisfy({ (33...126).contains($0) }) else { return nil }
+        let parts = value.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        let scheme = String(parts[0])
+        guard ["stun", "stuns", "turn", "turns"].contains(scheme) else { return nil }
+        let remainder = String(parts[1])
+        let queryParts = remainder.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let authority = String(queryParts[0])
+        guard validIceAuthority(authority) else { return nil }
+        if queryParts.count == 2 {
+            let query = String(queryParts[1])
+            guard !query.contains("?"),
+                  scheme == "turn" || scheme == "turns",
+                  query == "transport=udp" || query == "transport=tcp",
+                  !(scheme == "turns" && query == "transport=udp") else {
+                return nil
+            }
+        }
+        return scheme
+    }
+
+    private static func validIceAuthority(_ authority: String) -> Bool {
+        guard !authority.isEmpty,
+              !authority.hasPrefix("//"),
+              !authority.contains(where: { "/\\\\@#%?".contains($0) }) else { return false }
+        if authority.hasPrefix("[") {
+            guard let close = authority.firstIndex(of: "]") else { return false }
+            let address = String(authority[authority.index(after: authority.startIndex)..<close])
+            var parsed = in6_addr()
+            guard address.withCString({ inet_pton(AF_INET6, $0, &parsed) }) == 1 else { return false }
+            let suffix = String(authority[authority.index(after: close)...])
+            if suffix.isEmpty { return true }
+            return suffix.first == ":" && validIcePort(String(suffix.dropFirst()))
+        }
+
+        let parts = authority.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count <= 2 else { return false }
+        let host = String(parts[0])
+        guard !host.isEmpty, host.utf8.count <= 253 else { return false }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.allSatisfy({ label in
+            guard !label.isEmpty, label.utf8.count <= 63,
+                  let first = label.first, let last = label.last,
+                  isASCIIAlphaNumeric(first), isASCIIAlphaNumeric(last) else { return false }
+            return label.allSatisfy { isASCIIAlphaNumeric($0) || $0 == "-" }
+        }) else { return false }
+        return parts.count == 1 || validIcePort(String(parts[1]))
+    }
+
+    private static func validIcePort(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.utf8.allSatisfy({ (48...57).contains($0) })
+            && UInt16(value).map { $0 > 0 } == true
+    }
+
+    private static func isASCIIAlphaNumeric(_ character: Character) -> Bool {
+        guard let byte = character.asciiValue else { return false }
+        return (48...57).contains(byte) || (65...90).contains(byte) || (97...122).contains(byte)
     }
 }
 

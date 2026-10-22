@@ -1,4 +1,5 @@
 import Foundation
+import LiveKitWebRTC
 import XCTest
 @testable import FloeNativeHost
 
@@ -50,6 +51,95 @@ final class LiveMediaHostTests: XCTestCase {
         XCTAssertEqual(observation.capture_stopped, true)
         XCTAssertEqual(observation.playback_stopped, true)
         XCTAssertEqual(peer.stopCount, 1)
+        XCTAssertEqual(try invoke(host, "release", hostID, binding).status, "ok")
+    }
+
+    func testTypedIceConfigurationIsValidatedAndScopedToLeaseCreation() throws {
+        let permission = FakePermissionProvider(status: .authorized)
+        let peer = FakePeer(authorization: MicrophoneAuthorizationGate(provider: permission))
+        let factory = FakeFactory(peer: peer)
+        let host = LiveMediaHost(factory: factory)
+        let binding = makeBinding()
+        let hostID = UUID().uuidString.lowercased()
+        let iceServer = LiveMediaIceServerWire(
+            urls: ["turn:turn.example.test:3478?transport=udp"],
+            username: "fixture-turn-user",
+            credential: "fixture-ephemeral-secret"
+        )
+
+        XCTAssertEqual(
+            try invoke(host, "prepare_muted", hostID, binding, ice_servers: [iceServer]).status,
+            "ok"
+        )
+        XCTAssertEqual(factory.receivedIceServers, [iceServer])
+        XCTAssertFalse(peer.captureStarted)
+        XCTAssertEqual(permission.requestCount, 0)
+        let response = String(decoding: host.invoke(try commandData("validate", hostID, binding)), as: UTF8.self)
+        XCTAssertFalse(response.contains("fixture-ephemeral-secret"))
+
+        let rejectedFactory = FakeFactory(peer: FakePeer(
+            authorization: MicrophoneAuthorizationGate(provider: FakePermissionProvider(status: .authorized))
+        ))
+        let rejectedHost = LiveMediaHost(factory: rejectedFactory)
+        let rejected = try invoke(
+            rejectedHost,
+            "prepare_muted",
+            UUID().uuidString.lowercased(),
+            makeBinding(),
+            ice_servers: [LiveMediaIceServerWire(
+                urls: ["https://ice.example.test"],
+                username: "fixture-turn-user",
+                credential: "fixture-ephemeral-secret"
+            )]
+        )
+        XCTAssertEqual(rejected.failure, LiveMediaHostFailure.invalidInput.rawValue)
+        XCTAssertEqual(rejectedFactory.makeCount, 0)
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(rejected), as: UTF8.self).contains("fixture-ephemeral-secret"))
+    }
+
+    func testWebRTCConfigurationReceivesOnlyExplicitICEServers() {
+        let empty = WebRTCMediaPeerFactory.makeRTCConfiguration(iceServers: [])
+        XCTAssertTrue(empty.iceServers.isEmpty)
+
+        let input = LiveMediaIceServerWire(
+            urls: ["turns:turn.example.test:5349?transport=tcp"],
+            username: "fixture-user",
+            credential: "fixture-secret"
+        )
+        XCTAssertFalse(String(reflecting: input).contains("fixture-user"))
+        XCTAssertFalse(String(reflecting: input).contains("fixture-secret"))
+        let configuration = WebRTCMediaPeerFactory.makeRTCConfiguration(iceServers: [input])
+        XCTAssertEqual(configuration.iceServers.count, 1)
+        XCTAssertEqual(configuration.iceServers[0].urlStrings, input.urls)
+        XCTAssertEqual(configuration.iceServers[0].username, input.username)
+        XCTAssertEqual(configuration.iceServers[0].credential, input.credential)
+    }
+
+    func testLateGatheredOfferIsDiscardedAfterLeaseFence() throws {
+        let peer = BlockingOfferPeer()
+        let host = LiveMediaHost(factory: FakeFactory(peer: peer))
+        let binding = makeBinding()
+        let hostID = UUID().uuidString.lowercased()
+        XCTAssertEqual(try invoke(host, "prepare_muted", hostID, binding).status, "ok")
+        XCTAssertEqual(try invoke(host, "start_audio", hostID, binding, deadline: 1_000).status, "ok")
+
+        let pendingOffer = try commandData("offer", hostID, binding, deadline: 5_000)
+        let result = AsyncDataResult()
+        DispatchQueue.global().async { result.set(host.invoke(pendingOffer)) }
+        XCTAssertEqual(peer.waitForOffer(), .success)
+        XCTAssertEqual(try invoke(host, "fence", hostID, binding).status, "ok")
+        XCTAssertEqual(try invoke(host, "stop_once", hostID, binding, deadline: 1_000).status, "ok")
+        peer.releaseOffer()
+
+        XCTAssertTrue(result.wait())
+        let lateOffer = try JSONDecoder().decode(LiveMediaReplyWire.self, from: result.value)
+        XCTAssertEqual(lateOffer.failure, LiveMediaHostFailure.conflict.rawValue)
+        XCTAssertNil(lateOffer.offer_sdp)
+        XCTAssertEqual(
+            try invoke(host, "offer", hostID, binding, deadline: 1_000).failure,
+            LiveMediaHostFailure.conflict.rawValue
+        )
+        XCTAssertEqual(try invoke(host, "observe_stop", hostID, binding).capture_stopped, true)
         XCTAssertEqual(try invoke(host, "release", hostID, binding).status, "ok")
     }
 
@@ -187,11 +277,14 @@ final class LiveMediaHostTests: XCTestCase {
         _ hostID: String,
         _ binding: LiveMediaBindingWire,
         deadline: Int64? = nil,
-        answer: String? = nil
+        answer: String? = nil,
+        ice_servers: [LiveMediaIceServerWire]? = nil
     ) throws -> LiveMediaReplyWire {
         try JSONDecoder().decode(
             LiveMediaReplyWire.self,
-            from: host.invoke(commandData(operation, hostID, binding, deadline: deadline, answer: answer))
+            from: host.invoke(commandData(
+                operation, hostID, binding, deadline: deadline, answer: answer, ice_servers: ice_servers
+            ))
         )
     }
 
@@ -200,7 +293,8 @@ final class LiveMediaHostTests: XCTestCase {
         _ hostID: String,
         _ binding: LiveMediaBindingWire,
         deadline: Int64? = nil,
-        answer: String? = nil
+        answer: String? = nil,
+        ice_servers: [LiveMediaIceServerWire]? = nil
     ) throws -> Data {
         let command = LiveMediaCommandWire(
             schema_version: 1,
@@ -208,15 +302,33 @@ final class LiveMediaHostTests: XCTestCase {
             host_instance_id: hostID,
             binding: binding,
             deadline_ms: deadline,
-            answer_sdp: answer
+            answer_sdp: answer,
+            ice_servers: ice_servers ?? (operation == "prepare_muted" ? [] : nil)
         )
         return try JSONEncoder().encode(command)
     }
 }
 
-private struct FakeFactory: LiveMediaPeerFactory {
-    let peer: FakePeer
-    func makeMutedPeer() throws -> any LiveMediaPeer { peer }
+private final class FakeFactory: LiveMediaPeerFactory, @unchecked Sendable {
+    let peer: any LiveMediaPeer
+    private let lock = NSLock()
+    private var _receivedIceServers: [LiveMediaIceServerWire] = []
+    private var _makeCount = 0
+
+    init(peer: any LiveMediaPeer) {
+        self.peer = peer
+    }
+
+    var receivedIceServers: [LiveMediaIceServerWire] { lock.withLock { _receivedIceServers } }
+    var makeCount: Int { lock.withLock { _makeCount } }
+
+    func makeMutedPeer(iceServers: [LiveMediaIceServerWire]) throws -> any LiveMediaPeer {
+        lock.withLock {
+            _makeCount += 1
+            _receivedIceServers = iceServers
+        }
+        return peer
+    }
 }
 
 private final class FakePermissionProvider: MicrophoneAuthorizationProvider, @unchecked Sendable {
@@ -334,6 +446,54 @@ private final class FakePeer: LiveMediaPeer, @unchecked Sendable {
             (closed && !captureStarted, closed && !remotePlaybackStarted)
         }
     }
+}
+
+private final class BlockingOfferPeer: LiveMediaPeer, @unchecked Sendable {
+    private let lock = NSLock()
+    private let offerEntered = DispatchSemaphore(value: 0)
+    private let releaseOfferGate = DispatchSemaphore(value: 0)
+    private var active = false
+    private var terminal = false
+    private var stopped = false
+
+    func startAudio(deadlineMilliseconds: Int64) throws {
+        try lock.withLock {
+            guard deadlineMilliseconds > 0, !terminal else { throw LiveMediaHostFailure.conflict }
+            active = true
+        }
+    }
+
+    func createOffer(deadlineMilliseconds: Int64) throws -> String {
+        guard lock.withLock({ active && !terminal }) else { throw LiveMediaHostFailure.conflict }
+        offerEntered.signal()
+        guard releaseOfferGate.wait(timeout: .now() + .milliseconds(Int(deadlineMilliseconds))) == .success else {
+            throw LiveMediaHostFailure.deadlineExceeded
+        }
+        return "v=0\r\ns=late-synthetic-offer\r\na=end-of-candidates\r\n"
+    }
+
+    func applyAnswer(_ sdp: String, deadlineMilliseconds: Int64) throws {
+        guard lock.withLock({ active && !terminal && deadlineMilliseconds > 0 }),
+              sdp.hasPrefix("v=0\r\n") else { throw LiveMediaHostFailure.conflict }
+    }
+
+    func fence() { lock.withLock { terminal = true; active = false } }
+
+    func stop(deadlineMilliseconds: Int64) throws {
+        guard deadlineMilliseconds > 0 else { throw LiveMediaHostFailure.deadlineExceeded }
+        fence()
+        lock.withLock { stopped = true }
+    }
+
+    func observeStop() -> (captureStopped: Bool, playbackStopped: Bool) {
+        lock.withLock { (stopped && !active, stopped && !active) }
+    }
+
+    func waitForOffer() -> DispatchTimeoutResult {
+        offerEntered.wait(timeout: .now() + .seconds(2))
+    }
+
+    func releaseOffer() { releaseOfferGate.signal() }
 }
 
 private final class TrackState {

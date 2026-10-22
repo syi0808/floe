@@ -1,8 +1,10 @@
 //! Private native WebRTC signaling/handle boundary. No Dart JSON or provider
 //! credential is part of this port. Audio permission is gated by an explicit
 //! Voice Start on the exact process-local lease; preparation stays muted.
+mod ice;
 use floe_execution::{BoxFuture, Cancellation};
 use floe_kernel::{AgentFailure, OwnerActor};
+pub use ice::{LiveIceConfiguration, LiveIceServer};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex},

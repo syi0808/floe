@@ -1,5 +1,8 @@
 //! Apple WebRTC lease bridge into the process-owned Swift host.
-use super::{LiveMediaBinding, LiveMediaLease, LiveMediaStopObservation, LiveSessionDescription};
+use super::{
+    LiveIceConfiguration, LiveIceServer, LiveMediaBinding, LiveMediaLease,
+    LiveMediaStopObservation, LiveSessionDescription,
+};
 use floe_execution::{BoxFuture, CancelReason, Cancellation};
 use floe_kernel::AgentFailure;
 use serde::{Deserialize, Serialize};
@@ -9,9 +12,40 @@ use std::sync::{
 };
 use tokio::time::Instant;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const MAX_REQUEST_BYTES: usize = 131_072;
 const MAX_RESPONSE_BYTES: usize = 131_072;
+
+#[derive(Serialize)]
+struct NativeIceServer<'a> {
+    urls: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential: Option<&'a str>,
+}
+impl<'a> From<&'a LiveIceServer> for NativeIceServer<'a> {
+    fn from(value: &'a LiveIceServer) -> Self {
+        Self {
+            urls: value.urls(),
+            username: value.username(),
+            credential: value.credential(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct NativeRequest<'a> {
+    schema_version: u32,
+    operation: &'static str,
+    host_instance_id: String,
+    binding: NativeBinding,
+    deadline_ms: Option<u64>,
+    answer_sdp: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ice_servers: Option<Vec<NativeIceServer<'a>>>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +83,22 @@ struct NativeReply {
     failure: Option<String>,
 }
 
+fn native_ice_servers<'a>(
+    operation: &str,
+    configuration: Option<&'a LiveIceConfiguration>,
+) -> Option<Vec<NativeIceServer<'a>>> {
+    if operation != "prepare_muted" {
+        return None;
+    }
+    configuration.map(|configuration| {
+        configuration
+            .servers()
+            .iter()
+            .map(NativeIceServer::from)
+            .collect()
+    })
+}
+
 static APPLE_LIVE_MEDIA: crate::ByteCall = crate::ByteCall::new(crate::NativeLibrary {
     relative_path: "Frameworks/libfloe_local_model.dylib",
     invoke_symbol: c"floe_live_media",
@@ -72,6 +122,7 @@ impl AppleLiveMediaLease {
     pub fn prepare_muted(
         binding: LiveMediaBinding,
         host_instance_id: Uuid,
+        ice_configuration: LiveIceConfiguration,
     ) -> Result<Arc<Self>, AgentFailure> {
         binding.validate()?;
         if host_instance_id.is_nil() {
@@ -85,24 +136,26 @@ impl AppleLiveMediaLease {
             stop_issued: AtomicBool::new(false),
             stop_confirmed: AtomicBool::new(false),
         });
-        lease.invoke("prepare_muted", None, None)?;
+        lease.invoke("prepare_muted", None, None, Some(&ice_configuration))?;
         Ok(lease)
     }
 
-    fn request(
-        &self,
+    fn request<'a>(
+        &'a self,
         operation: &'static str,
         deadline_ms: Option<u64>,
-        answer_sdp: Option<&str>,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "schema_version": 1,
-            "operation": operation,
-            "host_instance_id": self.host_instance_id.to_string(),
-            "binding": NativeBinding::from(&self.binding),
-            "deadline_ms": deadline_ms,
-            "answer_sdp": answer_sdp,
-        })
+        answer_sdp: Option<&'a str>,
+        ice_configuration: Option<&'a LiveIceConfiguration>,
+    ) -> NativeRequest<'a> {
+        NativeRequest {
+            schema_version: 1,
+            operation,
+            host_instance_id: self.host_instance_id.to_string(),
+            binding: NativeBinding::from(&self.binding),
+            deadline_ms,
+            answer_sdp,
+            ice_servers: native_ice_servers(operation, ice_configuration),
+        }
     }
 
     fn invoke(
@@ -110,14 +163,24 @@ impl AppleLiveMediaLease {
         operation: &'static str,
         deadline_ms: Option<u64>,
         answer_sdp: Option<&str>,
+        ice_configuration: Option<&LiveIceConfiguration>,
     ) -> Result<NativeReply, AgentFailure> {
-        let request = serde_json::to_vec(&self.request(operation, deadline_ms, answer_sdp))
-            .map_err(|_| AgentFailure::InvalidInput)?;
+        // TURN credentials cross the private ABI only at exact lease creation.
+        // Zeroize the one serialized request buffer immediately after the call.
+        let request = Zeroizing::new(
+            serde_json::to_vec(&self.request(
+                operation,
+                deadline_ms,
+                answer_sdp,
+                ice_configuration,
+            ))
+            .map_err(|_| AgentFailure::InvalidInput)?,
+        );
         if request.len() > MAX_REQUEST_BYTES {
             return Err(AgentFailure::BudgetExceeded);
         }
         let bytes = APPLE_LIVE_MEDIA
-            .call(&request, MAX_RESPONSE_BYTES)
+            .call(request.as_slice(), MAX_RESPONSE_BYTES)
             .map_err(|_| AgentFailure::CapabilityUnavailable)?;
         let reply: NativeReply =
             serde_json::from_slice(&bytes).map_err(|_| AgentFailure::PolicyDenied)?;
@@ -169,11 +232,12 @@ impl AppleLiveMediaLease {
                 operation,
                 Some(Self::remaining_ms(deadline)?),
                 answer_sdp.as_deref(),
+                None,
             ))
             .map_err(|_| AgentFailure::InvalidInput)?;
             let reply = tokio::task::spawn_blocking(move || {
                 let bytes = APPLE_LIVE_MEDIA
-                    .call(&request, MAX_RESPONSE_BYTES)
+                    .call(request.as_slice(), MAX_RESPONSE_BYTES)
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 serde_json::from_slice::<NativeReply>(&bytes)
                     .map_err(|_| AgentFailure::PolicyDenied)
@@ -199,7 +263,7 @@ impl LiveMediaLease for AppleLiveMediaLease {
 
     fn validate_current(&self) -> Result<(), AgentFailure> {
         self.ensure_active()?;
-        self.invoke("validate", None, None).map(|_| ())
+        self.invoke("validate", None, None, None).map(|_| ())
     }
 
     fn start_audio<'a>(
@@ -261,7 +325,7 @@ impl LiveMediaLease for AppleLiveMediaLease {
             return;
         }
         self.lifetime.cancel_with_reason(CancelReason::OwnerDropped);
-        let _ = self.invoke("fence", None, None);
+        let _ = self.invoke("fence", None, None, None);
     }
 
     fn lifetime_cancellation(&self) -> Cancellation {
@@ -277,11 +341,13 @@ impl LiveMediaLease for AppleLiveMediaLease {
             if self.stop_issued.swap(true, Ordering::AcqRel) {
                 return Ok(());
             }
-            let request = serde_json::to_vec(&self.request("stop_once", Some(deadline_ms), None))
-                .map_err(|_| AgentFailure::InvalidInput)?;
+            let request = Zeroizing::new(
+                serde_json::to_vec(&self.request("stop_once", Some(deadline_ms), None, None))
+                    .map_err(|_| AgentFailure::InvalidInput)?,
+            );
             let reply = tokio::task::spawn_blocking(move || {
                 let bytes = APPLE_LIVE_MEDIA
-                    .call(&request, MAX_RESPONSE_BYTES)
+                    .call(request.as_slice(), MAX_RESPONSE_BYTES)
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 serde_json::from_slice::<NativeReply>(&bytes)
                     .map_err(|_| AgentFailure::PolicyDenied)
@@ -301,15 +367,18 @@ impl LiveMediaLease for AppleLiveMediaLease {
         deadline: Instant,
     ) -> BoxFuture<'a, Result<LiveMediaStopObservation, AgentFailure>> {
         Box::pin(async move {
-            let request = serde_json::to_vec(&self.request(
-                "observe_stop",
-                Some(Self::remaining_ms(deadline)?),
-                None,
-            ))
-            .map_err(|_| AgentFailure::InvalidInput)?;
+            let request = Zeroizing::new(
+                serde_json::to_vec(&self.request(
+                    "observe_stop",
+                    Some(Self::remaining_ms(deadline)?),
+                    None,
+                    None,
+                ))
+                .map_err(|_| AgentFailure::InvalidInput)?,
+            );
             let reply = tokio::task::spawn_blocking(move || {
                 let bytes = APPLE_LIVE_MEDIA
-                    .call(&request, MAX_RESPONSE_BYTES)
+                    .call(request.as_slice(), MAX_RESPONSE_BYTES)
                     .map_err(|_| AgentFailure::CapabilityUnavailable)?;
                 serde_json::from_slice::<NativeReply>(&bytes)
                     .map_err(|_| AgentFailure::PolicyDenied)
@@ -334,7 +403,7 @@ impl LiveMediaLease for AppleLiveMediaLease {
 impl Drop for AppleLiveMediaLease {
     fn drop(&mut self) {
         if self.stop_confirmed.load(Ordering::Acquire) {
-            let _ = self.invoke("release", None, None);
+            let _ = self.invoke("release", None, None, None);
         } else {
             self.fence();
         }
@@ -364,5 +433,25 @@ mod tests {
             map_failure(Some("microphone_permission_denied")),
             AgentFailure::CapabilityDenied
         );
+    }
+
+    #[test]
+    fn ephemeral_ice_credentials_cross_the_abi_only_during_lease_creation() {
+        let configuration = LiveIceConfiguration::new(vec![
+            LiveIceServer::new(
+                vec!["turn:turn.example.test:3478?transport=udp".into()],
+                Some("fixture-user".into()),
+                Some("fixture-secret".into()),
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+
+        let creation = native_ice_servers("prepare_muted", Some(&configuration)).unwrap();
+        assert_eq!(creation.len(), 1);
+        assert_eq!(creation[0].username, Some("fixture-user"));
+        assert_eq!(creation[0].credential, Some("fixture-secret"));
+        assert!(native_ice_servers("offer", Some(&configuration)).is_none());
+        assert!(native_ice_servers("validate", Some(&configuration)).is_none());
     }
 }

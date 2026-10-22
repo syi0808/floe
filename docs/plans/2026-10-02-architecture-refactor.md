@@ -3795,14 +3795,19 @@ and is accounted conservatively. The public Realtime API rate card does not
 apply to this private Codex model endpoint. No live call, account refresh,
 microphone request or audio transmission was attempted.
 
-One runtime connectivity gap remains: `WebRTCMediaPeerFactory` uses a default
-`LKRTCConfiguration` without configured ICE servers, and signaling waits for
-local ICE gathering instead of exchanging trickled candidates. There is no
-TURN/STUN service selection or credential delivery in the current route. A
-public STUN service was not added implicitly. Before a real provider/device run,
-select an authorized ICE service and pass only its scoped configuration through
-the native lease owner; otherwise reachability is limited to favorable direct
-network topologies and must not be claimed generally.
+The native lease now accepts a typed, bounded ICE server configuration and maps
+explicit STUN/STUNS/TURN/TURNS entries into `LKRTCConfiguration`. TURN
+credentials are process-local, redacted, zeroized on the Rust side, and are sent
+only during exact lease creation; no service is selected by default. The current
+App composition still passes an empty list pending an authorized product/service
+choice. The inspected Codex adapter supports one create request with a complete
+SDP offer and a full SDP answer, but no candidate-specific signaling event or
+endpoint. The native peer therefore waits for end-of-candidates and exchanges
+full SDP; this is the supported non-trickle path observed in the repository, not
+a claim that an external provider contract is stable. Local candidate buffering
+and remote candidate application stay in WebRTC's SDP path, and late operations
+remain fenced by the exact lease. Public NAT traversal and external service
+credentials remain unqualified.
 
 The pinned WebRTC framework exposes an injectable `RTCAudioDevice` interface
 that accepts recorded PCM and yields playout PCM. The new
@@ -3849,3 +3854,36 @@ behavior. Actual provider testing requires separate approval to connect to the
 named OpenAI Codex endpoint and may consume account usage; actual speech
 additionally requires explicit microphone-permission and voice-transmission
 approval.
+
+### 2026-10-22 Lease-scoped ICE configuration and complete-SDP signaling
+
+The native lease now accepts a bounded typed ICE server list. URL schemes,
+authority, ports, TURN transport query, duplicate entries, credential pairing,
+and credential lengths are checked in Rust before crossing the ABI and checked
+again by the Swift host. The App composition supplies an empty list: no public
+STUN host, TURN vendor, or service credential was selected by default. When a
+future authorized composition provides ephemeral TURN credentials, Rust stores
+them in zeroizing values and includes them only on exact `prepare_muted`; its
+request buffer is zeroized after the synchronous ABI call. The Swift ABI borrows
+that request buffer without an extra `Data` copy, the native host does not return,
+log or persist ICE credentials, and the WebRTC peer necessarily retains its
+configured server entries for the lifetime of that peer.
+
+Inspection of the current Codex adapter found one create POST containing the
+complete local SDP offer and an `application/sdp` response containing the full
+answer. Neither the adapter nor the sideband event codec defines a candidate
+exchange operation. The native peer therefore waits for `.complete` ICE
+gathering before exposing its offer, and applies the answer as a full remote
+description. Candidate order, deduplication, buffering before remote description
+and end-of-candidates are delegated to WebRTC's SDP gathering/application
+implementation rather than a fabricated trickle queue. Stop broadcasts to the
+gathering wait; a fenced lease cannot return a late offer. The HTTP adapter test
+uses TEST-NET-only synthetic candidates and verifies offer and answer SDP are
+forwarded intact in the one-shot exchange.
+
+The typed-config, native propagation, invalid-config, late-fence and synthetic
+SDP tests are local-only. They do not verify any STUN/TURN endpoint, configured
+credential, provider signaling contract, public NAT traversal, or real call.
+No external connection, persistent credential, microphone request, or physical
+playback was used. A service/provider selection remains a product decision before
+the App can supply a non-empty configuration.

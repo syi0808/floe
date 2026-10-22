@@ -15,11 +15,19 @@ struct WebRTCMediaPeerFactory: LiveMediaPeerFactory, @unchecked Sendable {
         self.microphoneAuthorization = microphoneAuthorization
     }
 
-    func makeMutedPeer() throws -> any LiveMediaPeer {
-        guard LKRTCInitializeSSL() else { throw LiveMediaHostFailure.capabilityUnavailable }
-        let factory = LKRTCPeerConnectionFactory()
+    static func makeRTCConfiguration(iceServers: [LiveMediaIceServerWire]) -> LKRTCConfiguration {
         let configuration = LKRTCConfiguration()
         configuration.sdpSemantics = .unifiedPlan
+        configuration.iceServers = iceServers.map {
+            LKRTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential)
+        }
+        return configuration
+    }
+
+    func makeMutedPeer(iceServers: [LiveMediaIceServerWire]) throws -> any LiveMediaPeer {
+        guard LKRTCInitializeSSL() else { throw LiveMediaHostFailure.capabilityUnavailable }
+        let factory = LKRTCPeerConnectionFactory()
+        let configuration = Self.makeRTCConfiguration(iceServers: iceServers)
         let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         guard let connection = factory.peerConnection(
             with: configuration,
@@ -54,6 +62,7 @@ private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectio
     private let microphoneAuthorization: MicrophoneAuthorizationGate
     private let audioGate = LiveAudioTrackGate()
     private let lock = NSLock()
+    private let iceGatheringCondition = NSCondition()
     private var localAudioSource: LKRTCAudioSource?
     private var localAudioTrack: LKRTCAudioTrack?
 
@@ -115,8 +124,8 @@ private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectio
     }
 
     func createOffer(deadlineMilliseconds: Int64) throws -> String {
+        let deadline = Date().addingTimeInterval(TimeInterval(deadlineMilliseconds) / 1_000)
         try lock.withLock {
-            let deadline = Date().addingTimeInterval(TimeInterval(deadlineMilliseconds) / 1_000)
             let constraints = LKRTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             let offer: LKRTCSessionDescription = try waitForValue(deadline: deadline) { completion in
                 connection.offer(for: constraints, completionHandler: completion)
@@ -124,15 +133,31 @@ private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectio
             try waitForSuccess(deadline: deadline) { completion in
                 connection.setLocalDescription(offer, completionHandler: completion)
             }
-            while connection.iceGatheringState != .complete {
-                guard Date() < deadline else { throw LiveMediaHostFailure.deadlineExceeded }
-                Thread.sleep(forTimeInterval: 0.01)
-            }
-            guard let local = connection.localDescription else {
-                throw LiveMediaHostFailure.capabilityUnavailable
+        }
+        try waitForCompleteICEGathering(deadline: deadline)
+        return try lock.withLock {
+            guard !audioGate.isTerminal,
+                  connection.iceGatheringState == .complete,
+                  let local = connection.localDescription else {
+                throw LiveMediaHostFailure.conflict
             }
             return local.sdp
         }
+    }
+
+    private func waitForCompleteICEGathering(deadline: Date) throws {
+        iceGatheringCondition.lock()
+        defer { iceGatheringCondition.unlock() }
+        while connection.iceGatheringState != .complete {
+            guard !audioGate.isTerminal else { throw LiveMediaHostFailure.conflict }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw LiveMediaHostFailure.deadlineExceeded }
+            if !iceGatheringCondition.wait(until: Date().addingTimeInterval(remaining)),
+               connection.iceGatheringState != .complete {
+                throw LiveMediaHostFailure.deadlineExceeded
+            }
+        }
+        guard !audioGate.isTerminal else { throw LiveMediaHostFailure.conflict }
     }
 
     func applyAnswer(_ sdp: String, deadlineMilliseconds: Int64) throws {
@@ -149,6 +174,9 @@ private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectio
         // The gate is fenced before touching WebRTC objects, so an in-flight
         // Start or a late receiver callback cannot re-enable either direction.
         audioGate.fence()
+        iceGatheringCondition.lock()
+        iceGatheringCondition.broadcast()
+        iceGatheringCondition.unlock()
         stopAudioDevices()
         #if os(iOS)
         removeInterruptionObserver()
@@ -247,7 +275,14 @@ private final class WebRTCMediaPeer: NSObject, LiveMediaPeer, LKRTCPeerConnectio
     func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove stream: LKRTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: LKRTCPeerConnection) {}
     func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceConnectionState) {}
-    func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {}
+    func peerConnection(_ peerConnection: LKRTCPeerConnection, didChange newState: LKRTCIceGatheringState) {
+        iceGatheringCondition.lock()
+        iceGatheringCondition.broadcast()
+        iceGatheringCondition.unlock()
+    }
+    // The Codex call-create adapter exchanges complete SDP documents, not
+    // trickled candidates. Candidates stay in localDescription until gathering
+    // completes, and the private provider answer is applied as one remote SDP.
     func peerConnection(_ peerConnection: LKRTCPeerConnection, didGenerate candidate: LKRTCIceCandidate) {}
     func peerConnection(_ peerConnection: LKRTCPeerConnection, didRemove candidates: [LKRTCIceCandidate]) {}
     func peerConnection(_ peerConnection: LKRTCPeerConnection, didOpen dataChannel: LKRTCDataChannel) {}

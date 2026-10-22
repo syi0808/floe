@@ -33,7 +33,7 @@ func liveFixtureRuntime(t *testing.T, handler http.HandlerFunc) *Runtime {
 	return r
 }
 func liveFixtureStart() LiveStart {
-	return LiveStart{Model: "gpt-live-1-codex", Instructions: "Synthetic role instructions", InitialContext: `{"source":"synthetic"}`, SDP: "v=0\r\ns=synthetic-offer\r\n"}
+	return LiveStart{Model: "gpt-live-1-codex", Instructions: "Synthetic role instructions", InitialContext: `{"source":"synthetic"}`, SDP: "v=0\r\ns=synthetic-offer\r\na=ice-ufrag:fixture\r\na=ice-pwd:synthetic-fixture-password\r\na=candidate:fixture 1 UDP 12345 192.0.2.10 54321 typ host\r\na=end-of-candidates\r\n"}
 }
 func liveFixtureContext(t *testing.T) context.Context {
 	t.Helper()
@@ -62,7 +62,11 @@ func liveFixtureAnswer(w http.ResponseWriter) {
 	w.Header().Set("Location", "/v1/realtime/calls/calls/rtc_fixture")
 	w.Header().Set("Content-Type", "application/sdp")
 	w.WriteHeader(http.StatusCreated)
-	_, _ = w.Write([]byte("v=0\r\ns=synthetic-answer\r\n"))
+	_, _ = w.Write([]byte(liveFixtureAnswerSDP()))
+}
+
+func liveFixtureAnswerSDP() string {
+	return "v=0\r\ns=synthetic-answer\r\na=ice-ufrag:remote-fixture\r\na=ice-pwd:remote-synthetic-fixture\r\na=candidate:remote-fixture 1 UDP 12345 192.0.2.11 54322 typ host\r\na=end-of-candidates\r\n"
 }
 
 func TestLiveCreateIsOneShotWithInitialContextAndNoTokenReadback(t *testing.T) {
@@ -85,6 +89,9 @@ func TestLiveCreateIsOneShotWithInitialContextAndNoTokenReadback(t *testing.T) {
 		if _, ok := body.Session["id"]; ok {
 			t.Error("host ID is not a provider session ID")
 		}
+		if !strings.Contains(body.SDP, "a=candidate:fixture") || !strings.HasSuffix(body.SDP, "a=end-of-candidates\r\n") {
+			t.Error("call create did not forward a complete synthetic SDP offer")
+		}
 		liveFixtureAnswer(w)
 	})
 	p := liveFixturePrepare(t, r)
@@ -97,7 +104,7 @@ func TestLiveCreateIsOneShotWithInitialContextAndNoTokenReadback(t *testing.T) {
 	}
 	defer c.CloseLocal()
 	answer, answerErr := c.AnswerSDP()
-	if c.CallID() != "rtc_fixture" || answerErr != nil || answer != "v=0\r\ns=synthetic-answer\r\n" {
+	if c.CallID() != "rtc_fixture" || answerErr != nil || answer != liveFixtureAnswerSDP() {
 		t.Fatal("lost exact signaling result")
 	}
 	if _, err = p.Start(liveFixtureContext(t), liveFixtureStart()); !errors.Is(err, errLiveConsumed) || requests.Load() != 1 {

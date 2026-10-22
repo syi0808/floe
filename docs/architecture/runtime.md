@@ -1491,6 +1491,36 @@ Apple peer attaches its local source/track to the pre-created audio transceiver 
 enables remote audio only while the same lease is active. Raw audio remains in
 WebRTC's native media path, outside Dart JSON and the Voice event journal.
 
+ICE server configuration is a non-persisted value owned by the exact native
+lease. App currently passes an empty configuration; there is no implicit public
+STUN service or default TURN provider. If a future authorized composition
+supplies servers, Rust validates a bounded STUN/STUNS/TURN/TURNS list, keeps TURN
+username and credentials in zeroizing process-local values, and sends them only
+with `prepare_muted`. The request buffer is zeroized after the synchronous ABI
+call and the Swift ABI borrows that buffer without making another `Data` copy.
+The native host validates the closed URL/credential shape again and maps only
+those explicit servers into `LKRTCConfiguration`. Credentials are not returned,
+logged, or persisted; the WebRTC SDK necessarily retains configured server
+credentials for the lifetime of its peer configuration.
+
+The current Codex adapter signaling is one HTTP create request carrying the
+complete local SDP offer and one response carrying the complete SDP answer. The
+native peer waits for ICE gathering to reach `.complete` before returning its
+offer, so local candidates and end-of-candidates are carried in SDP; the remote
+description is applied once as a complete answer. The inspected adapter and
+sideband event codec expose no candidate-specific signaling operation, so this
+route does not send trickled candidates or invent a provider endpoint. Candidate
+buffering, duplicate suppression and per-candidate end markers therefore remain
+inside WebRTC's SDP gathering/application path, while the existing exact lease,
+host and call identity checks fence late signaling. A future provider with a
+documented trickle channel would need a separate exact-generation candidate
+queue and lifecycle contract before it could be enabled.
+
+Because the current App composition supplies no ICE service, the new typed
+configuration path is plumbing only: it does not qualify public STUN/TURN
+availability, external credentials, or NAT traversal. Local synthetic peer
+tests remain local-only; no network ICE service or provider was contacted.
+
 Canonical live dispatch now carries the actual projected input data classes
 alongside provider-facing context; the adapter cannot label real context as
 synthetic. Durable Inference/Voice admission still precedes Start. The adapter
