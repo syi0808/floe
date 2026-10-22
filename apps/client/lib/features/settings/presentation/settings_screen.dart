@@ -200,11 +200,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text('Settings', style: FloeType.pageTitle),
-          const SizedBox(height: 10),
-          Text(
-            'Manage Floe on this device.',
-            style: FloeType.body.copyWith(color: FloePalette.neutral600),
-          ),
           const SizedBox(height: 36),
           if (constraints.hasBoundedHeight) Expanded(child: body) else body,
         ],
