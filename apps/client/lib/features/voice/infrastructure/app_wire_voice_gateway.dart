@@ -138,6 +138,10 @@ final class AppWireVoiceGateway implements VoiceGateway {
           return exact;
         }
         if (exact.state == VoiceStartState.bound) {
+          if (exact.localLeaseReleased == true &&
+              _pending?.commandId == pending.commandId) {
+            _setPending(null);
+          }
           throw StateError('Only an unbound Voice Start can be cancelled.');
         }
       }

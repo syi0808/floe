@@ -382,6 +382,141 @@ void main() {
     },
   );
 
+  test(
+    'cancel readback clears a restored Start that already stopped locally',
+    () async {
+      const commandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      var recoveryCalls = 0;
+      final transport = _Transport()
+        ..onQuery = (request) async {
+          final query = request['query'];
+          final kind = query['kind'];
+          if (kind == 'voice.start.recoverable') {
+            recoveryCalls++;
+            return {
+              'kind': kind,
+              'status': recoveryCalls == 1
+                  ? _startStatus(commandId, surfaceId, 'preparing')
+                  : null,
+            };
+          }
+          if (kind == 'voice.start.status') {
+            expect(query['command_id'], commandId);
+            return {
+              'kind': kind,
+              'status': {
+                'command_id': commandId,
+                'surface_session_id': surfaceId,
+                'state': 'bound',
+                'media': 'stopped',
+                'remote': 'closed',
+                'stop_requested': true,
+                'local_lease_released': true,
+              },
+            };
+          }
+          throw StateError('Unexpected synthetic query: $kind');
+        }
+        ..onCommand = (request) async => {
+          'kind': 'voice.start',
+          'status': _startStatus(request['command_id'], surfaceId, 'preparing'),
+        };
+      final gateway = AppWireVoiceGateway(transport);
+
+      expect((await gateway.recoverPendingStart())?.commandId, commandId);
+      await expectLater(
+        gateway.cancelPendingStart(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Only an unbound Voice Start can be cancelled.',
+          ),
+        ),
+      );
+      expect(gateway.pendingCommandId, isNull);
+      expect(transport.commands, isEmpty);
+
+      final fresh = await gateway.start(surfaceId);
+      final freshId = transport.commands.single['command_id'] as String;
+      expect(freshId, isNot(commandId));
+      expect(fresh.commandId, freshId);
+      expect(fresh.surfaceSessionId, surfaceId);
+      expect(gateway.pendingCommandId, freshId);
+      expect(transport.queries.map((request) => request['query']['kind']), [
+        'voice.start.recoverable',
+        'voice.start.status',
+        'voice.start.recoverable',
+      ]);
+    },
+  );
+
+  test(
+    'late terminal cancel readback cannot clear a newer recovered identity',
+    () async {
+      const oldId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+      const newId = 'e7bdc7ea-2830-44d9-98f5-1bc23de2c94d';
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      final heldCancelRead = Completer<Map<String, dynamic>>();
+      var recoveryCalls = 0;
+      var statusReads = 0;
+      final terminalOldStatus = {
+        'command_id': oldId,
+        'surface_session_id': surfaceId,
+        'state': 'bound',
+        'media': 'stopped',
+        'remote': 'closed',
+        'stop_requested': true,
+        'local_lease_released': true,
+      };
+      final transport = _Transport()
+        ..onQuery = (request) async {
+          final query = request['query'];
+          final kind = query['kind'];
+          if (kind == 'voice.start.recoverable') {
+            recoveryCalls++;
+            return {
+              'kind': kind,
+              'status': recoveryCalls == 1
+                  ? _startStatus(oldId, surfaceId, 'preparing')
+                  : _startStatus(newId, surfaceId, 'preparing'),
+            };
+          }
+          if (kind == 'voice.start.status') {
+            statusReads++;
+            if (statusReads == 1) return heldCancelRead.future;
+            return {'kind': kind, 'status': terminalOldStatus};
+          }
+          throw StateError('Unexpected synthetic query: $kind');
+        };
+      final gateway = AppWireVoiceGateway(transport);
+
+      await gateway.recoverPendingStart();
+      final cancellation = gateway.cancelPendingStart();
+      final replaced = await gateway.recoverPendingStart();
+      expect(replaced?.commandId, newId);
+      expect(gateway.pendingCommandId, newId);
+
+      heldCancelRead.complete({
+        'kind': 'voice.start.status',
+        'status': terminalOldStatus,
+      });
+      await expectLater(
+        cancellation,
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Voice Start changed during cancellation.',
+          ),
+        ),
+      );
+      expect(gateway.pendingCommandId, newId);
+      expect(transport.commands, isEmpty);
+    },
+  );
+
   test('ended bound Start is not recovered for reuse', () async {
     const endedCommandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
     final transport = _Transport()
