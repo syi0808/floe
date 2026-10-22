@@ -24,6 +24,7 @@ Mockups are evidence of a useful direction, not a pixel contract. A screen may d
 | Document | Scope |
 | --- | --- |
 | [Foundations](foundations.md) | Color, type, spacing, continuous-corner geometry, depth |
+| [Copy and information](copy-and-information.md) | Calm, decision-first copy, truthful states and visual review |
 | [Components](components.md) | Shared controls, cards, timeline items, rails, and overlays |
 | [Selection controls](selection-controls.md) | Checkbox, Radio, Select and Dropdown behavior, motion and input semantics |
 | [Action review](s3-calendar-action-ui.md) | Decision-first summaries, explicit approval, progressive diagnostic disclosure and safe recovery |

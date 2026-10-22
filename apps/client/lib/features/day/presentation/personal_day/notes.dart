@@ -53,8 +53,12 @@ class _NotesScreenState extends State<_NotesScreen> {
             appearance?.category ?? '',
           ].any((text) => text.toLowerCase().contains(query));
     }).toList();
+    final filtered = query.isNotEmpty || personalOnly;
+    final copy = AppLocalizations.of(context);
     final heading = Text(
-      AppLocalizations.of(context).notesCount(widget.notes.length),
+      filtered
+          ? copy.notesMatchingCount(notes.length)
+          : copy.notesCount(widget.notes.length),
       style: FloeType.titleLarge.copyWith(height: 1.2),
     );
     final searchField = FloeSquircle(
@@ -77,18 +81,26 @@ class _NotesScreenState extends State<_NotesScreen> {
         ),
       ),
     );
-    final filter = FloeButton.outlined(
-      style: ButtonStyle(
-        backgroundColor: WidgetStatePropertyAll(
-          personalOnly ? FloePalette.primary100 : FloePalette.neutral0,
-        ),
-        side: const WidgetStatePropertyAll(
-          BorderSide(color: FloePalette.neutral200),
+    final filter = MergeSemantics(
+      child: Semantics(
+        toggled: personalOnly,
+        child: FloeButton.outlined(
+          style: ButtonStyle(
+            backgroundColor: WidgetStatePropertyAll(
+              personalOnly ? FloePalette.primary100 : FloePalette.neutral0,
+            ),
+            side: const WidgetStatePropertyAll(
+              BorderSide(color: FloePalette.neutral200),
+            ),
+          ),
+          onPressed: () => setState(() => personalOnly = !personalOnly),
+          icon: Icon(
+            personalOnly ? LucideIcons.check : LucideIcons.filter,
+            size: 18,
+          ),
+          child: Text(copy.personalNotesFilter),
         ),
       ),
-      onPressed: () => setState(() => personalOnly = !personalOnly),
-      icon: Icon(LucideIcons.filter, size: 18),
-      child: Text(AppLocalizations.of(context).filter),
     );
     final create = FloeButton.filled(
       onPressed: widget.pending ? null : _create,
@@ -132,28 +144,41 @@ class _NotesScreenState extends State<_NotesScreen> {
         SizedBox(height: widget.narrow ? 4 : 8),
         if (notes.isEmpty)
           Padding(
-            padding: EdgeInsets.symmetric(vertical: 120),
+            padding: EdgeInsets.symmetric(vertical: widget.narrow ? 48 : 80),
             child: Center(
               child: Column(
                 children: [
-                  Icon(LucideIcons.search, size: 24),
+                  FloeSquircle(
+                    size: FloeSquircleSize.md,
+                    fill: FloePalette.neutral100,
+                    borderWidth: 0,
+                    padding: const EdgeInsets.all(FloeSpace.base),
+                    child: Icon(
+                      filtered ? LucideIcons.search : LucideIcons.notebookPen,
+                      size: 24,
+                      color: FloeColor.textSecondary,
+                    ),
+                  ),
                   SizedBox(height: FloeSpace.md),
                   Text(
-                    AppLocalizations.of(context).noNotesFound,
+                    filtered ? copy.noNotesFound : copy.notesEmptyTitle,
                     style: FloeType.headline,
                   ),
                   SizedBox(height: FloeSpace.sm),
                   Text(
-                    AppLocalizations.of(context).tryADifferentSearchOrClearThe,
+                    filtered
+                        ? copy.tryADifferentSearchOrClearThe
+                        : copy.notesEmptyBody,
                     textAlign: TextAlign.center,
                   ),
-                  FloeButton.text(
-                    onPressed: () => setState(() {
-                      search.clear();
-                      personalOnly = false;
-                    }),
-                    child: Text(AppLocalizations.of(context).clearFilters),
-                  ),
+                  if (filtered)
+                    FloeButton.text(
+                      onPressed: () => setState(() {
+                        search.clear();
+                        personalOnly = false;
+                      }),
+                      child: Text(AppLocalizations.of(context).clearFilters),
+                    ),
                 ],
               ),
             ),

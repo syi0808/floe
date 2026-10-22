@@ -500,5 +500,50 @@
         "format": "decimalPattern"
       }
     }
+  },
+  "voiceTitle": "Voice",
+  "voiceSubtitle": "A conversation with Floe, out loud.",
+  "voiceConversation": "Talk with Floe",
+  "voiceBeforeStart": "Before you start",
+  "voiceDisclosure": "Floe checks microphone permission before sending your microphone audio and conversation context to OpenAI’s experimental Codex live service configured in Gateway settings.",
+  "voicePlaybackDisclosure": "Replies play on this device. Stop mutes your microphone and closes the local audio connection.",
+  "voiceStart": "Start voice",
+  "voiceStop": "Stop voice",
+  "voiceCheckStatus": "Check status",
+  "voiceCancelConnection": "Cancel connection",
+  "voicePendingMessage": "The connection is still pending. Cancel it before starting again.",
+  "voiceStoppedMessage": "Voice has stopped on this device.",
+  "voiceBoundMessage": "This voice session belongs to your current conversation.",
+  "voiceCancelledMessage": "The voice connection was cancelled.",
+  "voiceUnconfirmedMessage": "Voice status could not be confirmed. Check the status before starting again.",
+  "voiceNoPendingConnection": "No pending voice connection was found.",
+  "voiceConnecting": "Connection pending",
+  "voiceStopped": "Stopped on this device",
+  "voiceSessionOpen": "Voice session open",
+  "voiceCancelled": "Connection cancelled",
+  "voiceMicrophonePreparing": "Microphone: preparing",
+  "voiceMicrophoneMuted": "Microphone: muted",
+  "voiceMicrophoneOn": "Microphone: on",
+  "voiceMicrophoneStopped": "Microphone: stopped",
+  "voiceMicrophoneNotStarted": "Microphone: not started",
+  "voiceServiceNotStarted": "Service: not connected",
+  "voiceServiceConnecting": "Service: connecting",
+  "voiceServiceConnected": "Service: connected",
+  "voiceServiceClosing": "Service: disconnecting",
+  "voiceServiceClosed": "Service: disconnected",
+  "voiceServiceUnknown": "Service: status unconfirmed",
+  "voiceCheckingAvailability": "Checking voice availability…",
+  "voiceNotAvailable": "Voice is unavailable in this session.",
+  "voiceOpenConversation": "Open a conversation before starting voice.",
+  "notesEmptyTitle": "A place for your thoughts",
+  "notesEmptyBody": "Keep an idea, a reminder, or something you want to return to.",
+  "personalNotesFilter": "Personal only",
+  "notesMatchingCount": "Matching notes · {count}",
+  "@notesMatchingCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   }
 }

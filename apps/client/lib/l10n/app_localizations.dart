@@ -2451,6 +2451,234 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Connected services · {count}'**
   String connectedServicesCount(int count);
+
+  /// No description provided for @voiceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get voiceTitle;
+
+  /// No description provided for @voiceSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'A conversation with Floe, out loud.'**
+  String get voiceSubtitle;
+
+  /// No description provided for @voiceConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk with Floe'**
+  String get voiceConversation;
+
+  /// No description provided for @voiceBeforeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Before you start'**
+  String get voiceBeforeStart;
+
+  /// No description provided for @voiceDisclosure.
+  ///
+  /// In en, this message translates to:
+  /// **'Floe checks microphone permission before sending your microphone audio and conversation context to OpenAI’s experimental Codex live service configured in Gateway settings.'**
+  String get voiceDisclosure;
+
+  /// No description provided for @voicePlaybackDisclosure.
+  ///
+  /// In en, this message translates to:
+  /// **'Replies play on this device. Stop mutes your microphone and closes the local audio connection.'**
+  String get voicePlaybackDisclosure;
+
+  /// No description provided for @voiceStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start voice'**
+  String get voiceStart;
+
+  /// No description provided for @voiceStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop voice'**
+  String get voiceStop;
+
+  /// No description provided for @voiceCheckStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Check status'**
+  String get voiceCheckStatus;
+
+  /// No description provided for @voiceCancelConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel connection'**
+  String get voiceCancelConnection;
+
+  /// No description provided for @voicePendingMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The connection is still pending. Cancel it before starting again.'**
+  String get voicePendingMessage;
+
+  /// No description provided for @voiceStoppedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice has stopped on this device.'**
+  String get voiceStoppedMessage;
+
+  /// No description provided for @voiceBoundMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'This voice session belongs to your current conversation.'**
+  String get voiceBoundMessage;
+
+  /// No description provided for @voiceCancelledMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice connection was cancelled.'**
+  String get voiceCancelledMessage;
+
+  /// No description provided for @voiceUnconfirmedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice status could not be confirmed. Check the status before starting again.'**
+  String get voiceUnconfirmedMessage;
+
+  /// No description provided for @voiceNoPendingConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'No pending voice connection was found.'**
+  String get voiceNoPendingConnection;
+
+  /// No description provided for @voiceConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection pending'**
+  String get voiceConnecting;
+
+  /// No description provided for @voiceStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopped on this device'**
+  String get voiceStopped;
+
+  /// No description provided for @voiceSessionOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice session open'**
+  String get voiceSessionOpen;
+
+  /// No description provided for @voiceCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection cancelled'**
+  String get voiceCancelled;
+
+  /// No description provided for @voiceMicrophonePreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone: preparing'**
+  String get voiceMicrophonePreparing;
+
+  /// No description provided for @voiceMicrophoneMuted.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone: muted'**
+  String get voiceMicrophoneMuted;
+
+  /// No description provided for @voiceMicrophoneOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone: on'**
+  String get voiceMicrophoneOn;
+
+  /// No description provided for @voiceMicrophoneStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone: stopped'**
+  String get voiceMicrophoneStopped;
+
+  /// No description provided for @voiceMicrophoneNotStarted.
+  ///
+  /// In en, this message translates to:
+  /// **'Microphone: not started'**
+  String get voiceMicrophoneNotStarted;
+
+  /// No description provided for @voiceServiceNotStarted.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: not connected'**
+  String get voiceServiceNotStarted;
+
+  /// No description provided for @voiceServiceConnecting.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: connecting'**
+  String get voiceServiceConnecting;
+
+  /// No description provided for @voiceServiceConnected.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: connected'**
+  String get voiceServiceConnected;
+
+  /// No description provided for @voiceServiceClosing.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: disconnecting'**
+  String get voiceServiceClosing;
+
+  /// No description provided for @voiceServiceClosed.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: disconnected'**
+  String get voiceServiceClosed;
+
+  /// No description provided for @voiceServiceUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Service: status unconfirmed'**
+  String get voiceServiceUnknown;
+
+  /// No description provided for @voiceCheckingAvailability.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking voice availability…'**
+  String get voiceCheckingAvailability;
+
+  /// No description provided for @voiceNotAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice is unavailable in this session.'**
+  String get voiceNotAvailable;
+
+  /// No description provided for @voiceOpenConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Open a conversation before starting voice.'**
+  String get voiceOpenConversation;
+
+  /// No description provided for @notesEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'A place for your thoughts'**
+  String get notesEmptyTitle;
+
+  /// No description provided for @notesEmptyBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep an idea, a reminder, or something you want to return to.'**
+  String get notesEmptyBody;
+
+  /// No description provided for @personalNotesFilter.
+  ///
+  /// In en, this message translates to:
+  /// **'Personal only'**
+  String get personalNotesFilter;
+
+  /// No description provided for @notesMatchingCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Matching notes · {count}'**
+  String notesMatchingCount(int count);
 }
 
 class _AppLocalizationsDelegate

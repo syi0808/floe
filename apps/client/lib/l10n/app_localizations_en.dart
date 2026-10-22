@@ -1380,4 +1380,128 @@ class AppLocalizationsEn extends AppLocalizations {
 
     return 'Connected services · $countString';
   }
+
+  @override
+  String get voiceTitle => 'Voice';
+
+  @override
+  String get voiceSubtitle => 'A conversation with Floe, out loud.';
+
+  @override
+  String get voiceConversation => 'Talk with Floe';
+
+  @override
+  String get voiceBeforeStart => 'Before you start';
+
+  @override
+  String get voiceDisclosure =>
+      'Floe checks microphone permission before sending your microphone audio and conversation context to OpenAI’s experimental Codex live service configured in Gateway settings.';
+
+  @override
+  String get voicePlaybackDisclosure =>
+      'Replies play on this device. Stop mutes your microphone and closes the local audio connection.';
+
+  @override
+  String get voiceStart => 'Start voice';
+
+  @override
+  String get voiceStop => 'Stop voice';
+
+  @override
+  String get voiceCheckStatus => 'Check status';
+
+  @override
+  String get voiceCancelConnection => 'Cancel connection';
+
+  @override
+  String get voicePendingMessage =>
+      'The connection is still pending. Cancel it before starting again.';
+
+  @override
+  String get voiceStoppedMessage => 'Voice has stopped on this device.';
+
+  @override
+  String get voiceBoundMessage =>
+      'This voice session belongs to your current conversation.';
+
+  @override
+  String get voiceCancelledMessage => 'The voice connection was cancelled.';
+
+  @override
+  String get voiceUnconfirmedMessage =>
+      'Voice status could not be confirmed. Check the status before starting again.';
+
+  @override
+  String get voiceNoPendingConnection =>
+      'No pending voice connection was found.';
+
+  @override
+  String get voiceConnecting => 'Connection pending';
+
+  @override
+  String get voiceStopped => 'Stopped on this device';
+
+  @override
+  String get voiceSessionOpen => 'Voice session open';
+
+  @override
+  String get voiceCancelled => 'Connection cancelled';
+
+  @override
+  String get voiceMicrophonePreparing => 'Microphone: preparing';
+
+  @override
+  String get voiceMicrophoneMuted => 'Microphone: muted';
+
+  @override
+  String get voiceMicrophoneOn => 'Microphone: on';
+
+  @override
+  String get voiceMicrophoneStopped => 'Microphone: stopped';
+
+  @override
+  String get voiceMicrophoneNotStarted => 'Microphone: not started';
+
+  @override
+  String get voiceServiceNotStarted => 'Service: not connected';
+
+  @override
+  String get voiceServiceConnecting => 'Service: connecting';
+
+  @override
+  String get voiceServiceConnected => 'Service: connected';
+
+  @override
+  String get voiceServiceClosing => 'Service: disconnecting';
+
+  @override
+  String get voiceServiceClosed => 'Service: disconnected';
+
+  @override
+  String get voiceServiceUnknown => 'Service: status unconfirmed';
+
+  @override
+  String get voiceCheckingAvailability => 'Checking voice availability…';
+
+  @override
+  String get voiceNotAvailable => 'Voice is unavailable in this session.';
+
+  @override
+  String get voiceOpenConversation =>
+      'Open a conversation before starting voice.';
+
+  @override
+  String get notesEmptyTitle => 'A place for your thoughts';
+
+  @override
+  String get notesEmptyBody =>
+      'Keep an idea, a reminder, or something you want to return to.';
+
+  @override
+  String get personalNotesFilter => 'Personal only';
+
+  @override
+  String notesMatchingCount(int count) {
+    return 'Matching notes · $count';
+  }
 }

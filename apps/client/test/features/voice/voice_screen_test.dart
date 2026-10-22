@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/voice/application/voice_gateway.dart';
 import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 
@@ -9,7 +12,10 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: VoiceScreen(
             ownerGateways: LocalOwnerGateways(),
@@ -21,7 +27,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Live presentation'), findsOneWidget);
+    expect(find.text('Talk with Floe'), findsOneWidget);
     expect(find.text('Start voice'), findsOneWidget);
     expect(find.textContaining('checks microphone permission'), findsOneWidget);
     expect(
@@ -37,6 +43,9 @@ void main() {
     final gateway = _RecoverableVoiceGateway();
     await tester.pumpWidget(
       MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
         home: Scaffold(
           body: VoiceScreen(
             ownerGateways: LocalOwnerGateways(voice: gateway),
@@ -49,30 +58,128 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(gateway.recoverCalls, 1);
-    expect(find.text('Status: preparing'), findsOneWidget);
-    expect(find.text('Cancel pending Start'), findsOneWidget);
+    expect(find.text('Connection pending'), findsOneWidget);
+    expect(find.text('Cancel connection'), findsOneWidget);
 
-    await tester.tap(find.text('Cancel pending Start'));
+    await tester.tap(find.text('Cancel connection'));
     await tester.pumpAndSettle();
 
     expect(gateway.cancelCalls, 1);
     expect(gateway.pendingCommandId, isNull);
-    expect(find.text('Status: cancelled'), findsOneWidget);
-    expect(
-      find.text(
-        'Voice Start was cancelled. A later Start uses a new command ID.',
+    expect(find.text('Connection cancelled'), findsOneWidget);
+    expect(find.textContaining('command ID'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets(
+    'active voice keeps Stop ahead of disclosure without implying microphone capture',
+    (tester) async {
+      final gateway = _RecoverableVoiceGateway(VoiceStartState.bound);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: VoiceScreen(
+              ownerGateways: LocalOwnerGateways(voice: gateway),
+              agentGateway: null,
+              personId: 'fixture',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Voice session open'), findsOneWidget);
+      expect(find.text('Microphone: not started'), findsOneWidget);
+      expect(find.text('Start voice'), findsNothing);
+      expect(
+        tester.getTopLeft(find.text('Stop voice')).dy,
+        lessThan(tester.getTopLeft(find.text('Before you start')).dy),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+  testWidgets('owner failure retains its specific recovery instruction', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: VoiceScreen(
+            ownerGateways: LocalOwnerGateways(
+              voice: _UnavailableVoiceGateway(),
+            ),
+            agentGateway: null,
+            personId: 'fixture',
+          ),
+        ),
       ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Voice access is disabled for this connection.'),
       findsOneWidget,
     );
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
+  for (final width in [320.0, 390.0, 1200.0]) {
+    testWidgets('Voice fits $width with large text and preserves disclosures', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: FloeTheme.light,
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const Scaffold(
+            body: VoiceScreen(
+              ownerGateways: LocalOwnerGateways(),
+              agentGateway: null,
+              personId: 'fixture',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('command journal'), findsNothing);
+      expect(find.textContaining('lease'), findsNothing);
+      expect(find.textContaining('microphone permission'), findsOneWidget);
+      expect(find.textContaining('conversation context'), findsOneWidget);
+      expect(
+        find.textContaining('OpenAI’s experimental Codex live service'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Replies play on this device'),
+        findsOneWidget,
+      );
+      expect(find.text('Check status'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
 }
 
 final class _RecoverableVoiceGateway implements VoiceGateway {
   static const _commandId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
   static const _surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
 
-  VoiceStartState _state = VoiceStartState.preparing;
+  _RecoverableVoiceGateway([this._state = VoiceStartState.preparing]);
+  VoiceStartState _state;
   int recoverCalls = 0;
   int cancelCalls = 0;
 
@@ -107,4 +214,13 @@ final class _RecoverableVoiceGateway implements VoiceGateway {
 
   @override
   Future<VoiceStartStatus?> readStatus(String commandId) async => _status();
+}
+
+final class _UnavailableVoiceGateway extends _RecoverableVoiceGateway {
+  @override
+  Future<VoiceStartStatus?> recoverPendingStart() async =>
+      throw const AppWireTransportException(
+        'permission_denied',
+        'Voice access is disabled for this connection.',
+      );
 }

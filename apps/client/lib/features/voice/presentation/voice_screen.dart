@@ -5,8 +5,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
-import 'package:floe_client/app/runtime/app_wire_transport.dart';
+import 'package:floe_client/app/floe_squircle.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
+import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/voice/application/voice_gateway.dart';
@@ -72,7 +74,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
     try {
       session = await widget.agentGateway?.resumeConversation(widget.personId);
     } on Object catch (error) {
-      if (mounted) setState(() => _message = error.toString());
+      if (mounted) setState(() => _message = _errorMessage(error));
     }
     VoiceStartStatus? status;
     final gateway = _gateway;
@@ -81,7 +83,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
       try {
         status = await gateway.recoverPendingStart();
       } on Object catch (error) {
-        if (mounted) setState(() => _message = error.toString());
+        if (mounted) setState(() => _message = _errorMessage(error));
       }
     }
     if (!mounted) return;
@@ -138,7 +140,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
         setState(() {
           _status = status;
           _message = status == null
-              ? 'No Voice Start record was found.'
+              ? AppLocalizations.of(context).voiceNoPendingConnection
               : _messageFor(status);
         });
       }
@@ -217,19 +219,46 @@ class _VoiceScreenState extends State<VoiceScreen> {
     }
   }
 
+  AppLocalizations get _copy => AppLocalizations.of(context);
+
   String _messageFor(VoiceStartStatus status) => switch (status.state) {
-    VoiceStartState.preparing =>
-      'Voice Start is unresolved. Cancel it before trying another Start.',
+    VoiceStartState.preparing => _copy.voicePendingMessage,
     VoiceStartState.bound when status.localLeaseReleased == true =>
-      'The Voice media lease is stopped.',
-    VoiceStartState.bound => 'A Voice call is bound to this conversation.',
-    VoiceStartState.cancelled =>
-      'Voice Start was cancelled. A later Start uses a new command ID.',
+      _copy.voiceStoppedMessage,
+    VoiceStartState.bound => _copy.voiceBoundMessage,
+    VoiceStartState.cancelled => _copy.voiceCancelledMessage,
   };
 
   String _errorMessage(Object error) => switch (error) {
+    // Preserve the owner's specific failure/recovery reason; a generic
+    // connection message must not erase permission or availability limits.
     AppWireTransportException() => error.message,
-    _ => 'Voice status could not be confirmed. Retry the same Start to observe it.',
+    _ => _copy.voiceUnconfirmedMessage,
+  };
+
+  String _statusLabel(VoiceStartStatus status) => switch (status.state) {
+    VoiceStartState.preparing => _copy.voiceConnecting,
+    VoiceStartState.bound when status.localLeaseReleased == true =>
+      _copy.voiceStopped,
+    VoiceStartState.bound => _copy.voiceSessionOpen,
+    VoiceStartState.cancelled => _copy.voiceCancelled,
+  };
+
+  String _mediaLabel(VoiceMediaState? media) => switch (media) {
+    VoiceMediaState.preparing => _copy.voiceMicrophonePreparing,
+    VoiceMediaState.muted => _copy.voiceMicrophoneMuted,
+    VoiceMediaState.capturing => _copy.voiceMicrophoneOn,
+    VoiceMediaState.stopped => _copy.voiceMicrophoneStopped,
+    null => _copy.voiceMicrophoneNotStarted,
+  };
+
+  String _remoteLabel(VoiceRemoteState remote) => switch (remote) {
+    VoiceRemoteState.notStarted => _copy.voiceServiceNotStarted,
+    VoiceRemoteState.dispatching => _copy.voiceServiceConnecting,
+    VoiceRemoteState.connected => _copy.voiceServiceConnected,
+    VoiceRemoteState.closeRequested => _copy.voiceServiceClosing,
+    VoiceRemoteState.closed => _copy.voiceServiceClosed,
+    VoiceRemoteState.unknown => _copy.voiceServiceUnknown,
   };
 
   @override
@@ -247,102 +276,178 @@ class _VoiceScreenState extends State<VoiceScreen> {
         gateway != null &&
         _status?.state != VoiceStartState.preparing &&
         !callActive;
+    final setupMessage = _loading
+        ? _copy.voiceCheckingAvailability
+        : !runtimeReady || gateway == null
+        ? _copy.voiceNotAvailable
+        : _session == null
+        ? _copy.voiceOpenConversation
+        : null;
+    final messageIsError =
+        _message != null &&
+        (_status == null || _message != _messageFor(_status!));
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 20, 12, 36),
       children: [
-        Text('Voice', style: FloeType.display.copyWith(fontSize: 30)),
-        const SizedBox(height: 8),
-        Text(
-          'Start and status use the durable Voice command journal.',
-          style: FloeType.body.copyWith(color: FloePalette.neutral600),
-        ),
-        const SizedBox(height: 20),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
+        Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    const Icon(LucideIcons.mic, size: 20),
-                    const SizedBox(width: 10),
-                    Text('Live presentation', style: FloeType.title),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                Text(_copy.voiceTitle, style: FloeType.display),
+                const SizedBox(height: FloeSpace.sm),
                 Text(
-                  'Voice prepares a muted WebRTC lease. When you press Start, '
-                  'Floe checks microphone permission and may ask before sending '
-                  'microphone audio over WebRTC to OpenAI’s experimental Codex '
-                  'live service selected in Gateway settings. The Gateway also '
-                  'sends session context to that service. Replies play on this '
-                  'device. Stop immediately mutes and closes the local lease.',
-                  style: FloeType.body,
+                  _copy.voiceSubtitle,
+                  style: FloeType.body.copyWith(color: FloeColor.textSecondary),
                 ),
-                if (_status != null) ...[
-                  const SizedBox(height: 16),
-                  Text('Status: ${_status!.state.name}'),
-                  Text('Media: ${_status!.media?.name ?? 'not bound'}'),
-                  if (_status!.remote != null)
-                    Text('Provider: ${_status!.remote!.name}'),
-                ],
-                if (_message != null) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    _message!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.error,
-                    ),
+                const SizedBox(height: FloeSpace.lg),
+                FloeCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          FloeSquircle(
+                            size: FloeSquircleSize.sm,
+                            fill: FloePalette.primary50,
+                            borderWidth: 0,
+                            padding: const EdgeInsets.all(12),
+                            child: const Icon(
+                              LucideIcons.mic,
+                              size: 22,
+                              color: FloePalette.primary600,
+                            ),
+                          ),
+                          const SizedBox(width: FloeSpace.md),
+                          Expanded(
+                            child: Text(
+                              _copy.voiceConversation,
+                              style: FloeType.headline,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: FloeSpace.lg),
+                      if (_status != null) ...[
+                        Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _statusLabel(_status!),
+                            style: FloeType.title,
+                          ),
+                        ),
+                        const SizedBox(height: FloeSpace.sm),
+                        Text(_mediaLabel(_status!.media), style: FloeType.body),
+                        if (_status!.remote != null)
+                          Text(
+                            _remoteLabel(_status!.remote!),
+                            style: FloeType.body.copyWith(
+                              color: FloeColor.textSecondary,
+                            ),
+                          ),
+                        const SizedBox(height: FloeSpace.md),
+                      ],
+                      if (_message != null &&
+                          (messageIsError ||
+                              _status?.state == VoiceStartState.preparing)) ...[
+                        Semantics(
+                          liveRegion: true,
+                          child: Text(
+                            _message!,
+                            style: FloeType.body.copyWith(
+                              color: messageIsError
+                                  ? Theme.of(context).colorScheme.error
+                                  : FloeColor.textSecondary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: FloeSpace.md),
+                      ],
+                      if (setupMessage != null &&
+                          !callActive &&
+                          _status?.state != VoiceStartState.preparing) ...[
+                        Text(
+                          setupMessage,
+                          style: FloeType.body.copyWith(
+                            color: FloeColor.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: FloeSpace.md),
+                      ],
+                      if (!callActive &&
+                          _status?.state != VoiceStartState.preparing) ...[
+                        const SizedBox(height: FloeSpace.md),
+                        const _VoiceDisclosure(),
+                        const SizedBox(height: FloeSpace.lg),
+                      ],
+                      Wrap(
+                        spacing: FloeSpace.md,
+                        runSpacing: FloeSpace.sm,
+                        children: [
+                          if (callActive)
+                            FloeButton.filled(
+                              onPressed: !_busy ? _stop : null,
+                              loading: _busy,
+                              icon: const Icon(LucideIcons.square, size: 18),
+                              child: Text(_copy.voiceStop),
+                            )
+                          else if (_status?.state == VoiceStartState.preparing)
+                            FloeButton.outlined(
+                              onPressed: !_busy ? _cancelStart : null,
+                              loading: _busy,
+                              child: Text(_copy.voiceCancelConnection),
+                            )
+                          else
+                            FloeButton.filled(
+                              onPressed: canStart ? _start : null,
+                              loading: _busy,
+                              icon: const Icon(LucideIcons.mic, size: 18),
+                              child: Text(_copy.voiceStart),
+                            ),
+                          if (gateway?.pendingCommandId != null)
+                            FloeButton.text(
+                              onPressed: !_busy ? _refresh : null,
+                              child: Text(_copy.voiceCheckStatus),
+                            ),
+                        ],
+                      ),
+                      if (callActive ||
+                          _status?.state == VoiceStartState.preparing) ...[
+                        const SizedBox(height: FloeSpace.lg),
+                        const _VoiceDisclosure(),
+                      ],
+                    ],
                   ),
-                ],
-                if (_session == null && !_loading) ...[
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Open or resume a conversation before trying Voice.',
-                  ),
-                ],
-                if (!runtimeReady && !_loading) ...[
-                  const SizedBox(height: 8),
-                  const Text('Prepare Runtime before using Voice.'),
-                ],
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    FloeButton.filled(
-                      onPressed: canStart ? _start : null,
-                      loading: _busy,
-                      icon: const Icon(LucideIcons.mic),
-                      child: const Text('Start voice'),
-                    ),
-                    const SizedBox(width: 12),
-                    FloeButton.outlined(
-                      onPressed: !_busy && gateway?.pendingCommandId != null
-                          ? _refresh
-                          : null,
-                      child: const Text('Refresh status'),
-                    ),
-                  ],
                 ),
-                if (_status?.state == VoiceStartState.preparing) ...[
-                  const SizedBox(height: 12),
-                  FloeButton.outlined(
-                    onPressed: !_busy ? _cancelStart : null,
-                    loading: _busy,
-                    child: const Text('Cancel pending Start'),
-                  ),
-                ],
-                if (callActive) ...[
-                  const SizedBox(height: 12),
-                  FloeButton.outlined(
-                    onPressed: !_busy ? _stop : null,
-                    loading: _busy,
-                    child: const Text('Stop voice'),
-                  ),
-                ],
               ],
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _VoiceDisclosure extends StatelessWidget {
+  const _VoiceDisclosure();
+  @override
+  Widget build(BuildContext context) {
+    final copy = AppLocalizations.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(copy.voiceBeforeStart, style: FloeType.title),
+        const SizedBox(height: FloeSpace.sm),
+        Text(
+          copy.voiceDisclosure,
+          style: FloeType.body.copyWith(color: FloeColor.textSecondary),
+        ),
+        const SizedBox(height: FloeSpace.md),
+        Text(
+          copy.voicePlaybackDisclosure,
+          style: FloeType.body.copyWith(color: FloeColor.textSecondary),
         ),
       ],
     );
