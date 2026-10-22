@@ -276,6 +276,11 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
     );
     final currentMinute = axis.minute(snapshot.generatedAt);
     final sameDay = currentMinute >= 0 && currentMinute < axis.minutes;
+    final timeLabelScale =
+        MediaQuery.textScalerOf(context).scale(FloeType.micro.fontSize!) /
+        FloeType.micro.fontSize!;
+    final timeLabelCollisionDistance =
+        _timeLabelCollisionDistance * timeLabelScale;
     return FloeSquircle(
       key: Key('timeline-card'),
       child: Stack(
@@ -471,6 +476,7 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                         children: [
                                           Positioned.fill(
                                             child: CustomPaint(
+                                              key: const Key('calendar-guides'),
                                               painter: _CalendarGuides(zoom),
                                             ),
                                           ),
@@ -483,9 +489,12 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                 ((hour * 60 - currentMinute)
                                                             .abs() *
                                                         zoom) >=
-                                                    _timeLabelCollisionDistance)
+                                                    timeLabelCollisionDistance)
                                               Positioned(
-                                                top: 16 + hour * 60 * zoom - 6,
+                                                top:
+                                                    16 +
+                                                    hour * 60 * zoom -
+                                                    6 * timeLabelScale,
                                                 left: 16,
                                                 child: Text(
                                                   axis.hourLabel(hour),
@@ -500,8 +509,71 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                       ),
                                                 ),
                                               ),
+                                          // The clock is a reference, not a foreground rule across event text.
+                                          if (sameDay)
+                                            Positioned(
+                                              key: const Key(
+                                                'calendar-time-marker',
+                                              ),
+                                              top: 16 + currentMinute * zoom,
+                                              left: 10,
+                                              right: 18,
+                                              child: IgnorePointer(
+                                                child: FractionalTranslation(
+                                                  translation: const Offset(
+                                                    0,
+                                                    -.5,
+                                                  ),
+                                                  child: Row(
+                                                    children: [
+                                                      SizedBox(
+                                                        width: 56,
+                                                        child: Text(
+                                                          axis.time(
+                                                            snapshot
+                                                                .generatedAt,
+                                                          ),
+                                                          key: const Key(
+                                                            'calendar-current-time-label',
+                                                          ),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: FloeType.micro
+                                                              .copyWith(
+                                                                color: FloePalette
+                                                                    .primary600,
+                                                              ),
+                                                        ),
+                                                      ),
+                                                      Container(
+                                                        width: 5,
+                                                        height: 5,
+                                                        decoration:
+                                                            const BoxDecoration(
+                                                              shape: BoxShape
+                                                                  .circle,
+                                                              color: FloePalette
+                                                                  .primary500,
+                                                            ),
+                                                      ),
+                                                      const Expanded(
+                                                        child: FloeDivider(
+                                                          color: FloePalette
+                                                              .primary500,
+                                                          height: 1,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                           for (final placement in placements)
                                             Positioned(
+                                              key: ValueKey(
+                                                'calendar-event-${placement.event.id}',
+                                              ),
                                               top: 16 + placement.start * zoom,
                                               left:
                                                   80 +
@@ -641,49 +713,6 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                     ),
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                          if (sameDay)
-                                            Positioned(
-                                              top:
-                                                  16 + currentMinute * zoom - 6,
-                                              left: 10,
-                                              right: 18,
-                                              child: Row(
-                                                children: [
-                                                  SizedBox(
-                                                    width: 56,
-                                                    child: Text(
-                                                      axis.time(
-                                                        snapshot.generatedAt,
-                                                      ),
-                                                      key: const Key(
-                                                        'calendar-current-time-label',
-                                                      ),
-                                                      style: FloeType.micro
-                                                          .copyWith(
-                                                            color: FloePalette
-                                                                .primary600,
-                                                          ),
-                                                    ),
-                                                  ),
-                                                  Container(
-                                                    width: 5,
-                                                    height: 5,
-                                                    decoration: BoxDecoration(
-                                                      shape: BoxShape.circle,
-                                                      color: FloePalette
-                                                          .primary500,
-                                                    ),
-                                                  ),
-                                                  Expanded(
-                                                    child: FloeDivider(
-                                                      color: FloePalette
-                                                          .primary500,
-                                                      height: 1,
-                                                    ),
-                                                  ),
-                                                ],
                                               ),
                                             ),
                                         ],
@@ -1037,7 +1066,9 @@ class _CalendarGuides extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..strokeWidth = 1;
-    for (var halfHour = 0; halfHour <= 48; halfHour++) {
+    // The selected civil day can span 23 or 25 hours at DST boundaries.
+    final halfHours = ((size.height - 32) / (30 * zoom)).round();
+    for (var halfHour = 0; halfHour <= halfHours; halfHour++) {
       final vertical = 16 + halfHour * 30 * zoom;
       paint.color = halfHour.isEven
           ? FloePalette.primary200
