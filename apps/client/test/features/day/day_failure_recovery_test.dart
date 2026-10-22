@@ -537,8 +537,13 @@ double _twoLineDiagnosticHeight(WidgetTester tester, Finder diagnosticScroll) {
     text: TextSpan(text: 'M\nM', style: DefaultTextStyle.of(context).style),
     textDirection: Directionality.of(context),
     textScaler: MediaQuery.textScalerOf(context),
-  )..layout(maxWidth: tester.getSize(diagnosticScroll).width);
-  return painter.height;
+  );
+  try {
+    painter.layout(maxWidth: tester.getSize(diagnosticScroll).width);
+    return painter.height;
+  } finally {
+    painter.dispose();
+  }
 }
 
 bool _containsRect(Rect outer, Rect inner) =>

@@ -19,16 +19,23 @@ class _FailureDay extends StatelessWidget {
       final diagnosticWidth = maxCardWidth > horizontalPadding
           ? maxCardWidth - horizontalPadding
           : maxCardWidth;
-      final twoLineDiagnosticHeight = TextPainter(
+      final twoLineDiagnosticPainter = TextPainter(
         text: TextSpan(text: 'M\nM', style: DefaultTextStyle.of(context).style),
         textDirection: Directionality.of(context),
         textScaler: MediaQuery.textScalerOf(context),
-      )..layout(maxWidth: diagnosticWidth);
+      );
+      final double twoLineDiagnosticHeight;
+      try {
+        twoLineDiagnosticPainter.layout(maxWidth: diagnosticWidth);
+        twoLineDiagnosticHeight = twoLineDiagnosticPainter.height;
+      } finally {
+        twoLineDiagnosticPainter.dispose();
+      }
       final proportionalDiagnosticHeight = constraints.maxHeight * 0.3;
       final diagnosticViewportHeight =
-          proportionalDiagnosticHeight > twoLineDiagnosticHeight.height
+          proportionalDiagnosticHeight > twoLineDiagnosticHeight
           ? proportionalDiagnosticHeight
-          : twoLineDiagnosticHeight.height;
+          : twoLineDiagnosticHeight;
 
       return SingleChildScrollView(
         key: const Key('day-failure-card-scroll'),
