@@ -20,9 +20,11 @@ class CalendarContextRail extends StatelessWidget {
     required this.onOpenTask,
     this.showCoverage = true,
     this.observationCurrent = true,
+    this.hideEmptyStatus = false,
   });
   final bool showCoverage;
   final bool observationCurrent;
+  final bool hideEmptyStatus;
   final DaySnapshot snapshot;
   final DayQuery query;
   final bool disabled;
@@ -89,7 +91,7 @@ class CalendarContextRail extends StatelessWidget {
               snapshot: snapshot,
               query: query,
               observationCurrent: observationCurrent,
-              hideEmptyStatus: true,
+              hideEmptyStatus: hideEmptyStatus,
             ),
           ],
         ],

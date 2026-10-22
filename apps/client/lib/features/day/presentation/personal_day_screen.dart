@@ -425,6 +425,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           snapshot: snapshot,
           query: controller.query,
           observationCurrent: controller.hasCurrentObservation,
+          hideEmptyStatus: agendaOwnsEmptyStatus,
           disabled: controller.commandPending,
           complete: _setTaskCompleted,
           onTasks: () => _selectDestination(_DestinationView.tasks),

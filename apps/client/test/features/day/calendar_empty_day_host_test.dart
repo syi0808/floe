@@ -6,9 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/floe_loading.dart';
+import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/runtime/runtime_controller.dart';
+import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
+import 'package:floe_client/features/day/presentation/calendar_context_rail.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/preview/product_fixture.dart';
 
 DayQuery _query() {
@@ -89,12 +94,13 @@ Widget _app({
   required DayQuery query,
   required _SyntheticDayGateway gateway,
   required double textScale,
+  RuntimeController? runtime,
 }) => previewAppearance(
   FloeApp(
     personId: query.personId,
     query: query,
     gateway: gateway,
-    ownerGateways: const LocalOwnerGateways(),
+    ownerGateways: LocalOwnerGateways(runtime: runtime),
     builder: (context, child) => RepaintBoundary(
       key: const Key('full-day-screen'),
       child: MediaQuery(
@@ -112,11 +118,17 @@ Future<void> _mount(
   required double textScale,
   required DayQuery query,
   required _SyntheticDayGateway gateway,
+  RuntimeController? runtime,
 }) async {
   tester.view.physicalSize = Size(width, 1000);
   tester.view.devicePixelRatio = 1;
   await tester.pumpWidget(
-    _app(query: query, gateway: gateway, textScale: textScale),
+    _app(
+      query: query,
+      gateway: gateway,
+      textScale: textScale,
+      runtime: runtime,
+    ),
   );
   await tester.pumpAndSettle();
 }
@@ -139,6 +151,36 @@ Future<void> _loadProductionFonts() async {
 
 void main() {
   setUpAll(_loadProductionFonts);
+
+  testWidgets('standalone context rail keeps empty status by default', (
+    tester,
+  ) async {
+    final query = _query();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: FloeTheme.light,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: CalendarContextRail(
+              snapshot: _snapshot(query, _completeCoverage(query)),
+              query: query,
+              observationCurrent: false,
+              disabled: false,
+              complete: (_, _) async {},
+              onTasks: () {},
+              onOpenTask: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Calendar status needs refresh'), findsOneWidget);
+    expect(find.text('Calendar details'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   for (final width in [390.0, 1200.0]) {
     for (final textScale in [1.0, 2.0]) {
@@ -285,6 +327,54 @@ void main() {
     },
   );
 
+  testWidgets(
+    'wide Day keeps stale empty status in the rail while a draft is open',
+    (tester) async {
+      final query = _query();
+      final gateway = _SyntheticDayGateway(coverage: _completeCoverage(query));
+      final runtime = RuntimeController(
+        gateway: _ReadyRuntimeGateway(),
+        personId: query.personId,
+      );
+      await runtime.open();
+      addTearDown(runtime.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _mount(
+        tester,
+        width: 1200,
+        textScale: 1,
+        query: query,
+        gateway: gateway,
+        runtime: runtime,
+      );
+      expect(find.text('A little breathing room.'), findsOneWidget);
+      expect(find.text('Calendar status needs refresh'), findsNothing);
+
+      gateway.failNextRefresh = true;
+      await tester.tap(find.byTooltip('Refresh calendar'));
+      await tester.pumpAndSettle();
+      expect(find.text('Calendar status needs refresh'), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Calendar status needs refresh'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Create event'));
+      await tester.pumpAndSettle();
+      expect(find.text('New event'), findsNWidgets(2));
+      expect(find.text('Calendar status needs refresh'), findsOneWidget);
+      expect(find.text('Calendar details'), findsNothing);
+      expect(find.byTooltip('Refresh calendar'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Calendar status needs refresh'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   for (final textScale in [1.0, 2.0]) {
     testWidgets(
       'incomplete event coverage keeps one visible Timeline details action at text $textScale',
@@ -423,6 +513,10 @@ final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
       _snapshot(query, coverage, items: items);
 
   @override
+  Future<List<ManualCalendarDestination>>
+  loadExternalCalendarDestinations() async => const [];
+
+  @override
   Future<DayRefreshSnapshot> refreshDay({
     required String commandId,
     required DayQuery query,
@@ -476,4 +570,22 @@ final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('Unexpected gateway call: ${invocation.memberName}');
+}
+
+final class _ReadyRuntimeGateway implements RuntimeGateway {
+  @override
+  Future<RuntimeReadinessSnapshot> readiness(String requestId) async =>
+      const RuntimeReadinessSnapshot(state: RuntimeReadinessState.ready);
+
+  @override
+  Future<RuntimePreparationResult> prepare(String operationId) =>
+      throw StateError('Ready runtime should not prepare.');
+
+  @override
+  Future<RuntimePreparationResult> getPreparation(String operationId) =>
+      throw StateError('Ready runtime should not have preparation work.');
+
+  @override
+  Future<RuntimePreparationResult> acknowledge(String operationId) =>
+      throw StateError('Ready runtime should not acknowledge preparation.');
 }
