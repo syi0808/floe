@@ -101,6 +101,13 @@ void main() {
       await tester.pump();
       expect(fixture.gateway.calls, hasLength(1));
       _expectSingleSelect(tester, ActionAuthorityMode.ask, enabled: false);
+      expect(fixture.controller.hasPendingChange, isTrue);
+      final retryButton = find.ancestor(
+        of: find.text('Retry pending change'),
+        matching: find.byType(TextButton),
+      );
+      expect(tester.widget<TextButton>(retryButton).onPressed, isNull);
+      expect(find.text('Refresh current value'), findsNothing);
 
       result.completeError(
         const AppRuntimeException(
@@ -112,10 +119,10 @@ void main() {
       await _pumpFrames(tester);
       expect(fixture.controller.hasPendingChange, isFalse);
       _expectSingleSelect(tester, ActionAuthorityMode.ask, enabled: false);
-      expect(find.text('Reload Access policy'), findsOneWidget);
+      expect(find.text('Refresh current value'), findsOneWidget);
       expect(fixture.gateway.calls, hasLength(1));
 
-      await tester.tap(find.text('Reload Access policy'));
+      await tester.tap(find.text('Refresh current value'));
       await _pumpFrames(tester);
       _expectSingleSelect(tester, ActionAuthorityMode.ask, enabled: true);
       expect(fixture.gateway.calls, hasLength(1));
@@ -142,7 +149,7 @@ void main() {
       );
       expect(fixture.controller.hasPendingChange, isTrue);
       _expectSingleSelect(tester, ActionAuthorityMode.ask, enabled: false);
-      expect(find.text('Reload Access policy'), findsOneWidget);
+      expect(find.text('Refresh current value'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -240,7 +247,7 @@ void main() {
       await _pumpFrames(tester);
       expect(fixture.controller.hasPendingChange, isTrue);
       _expectSingleSelect(tester, ActionAuthorityMode.ask, enabled: false);
-      expect(find.text('Retry pending policy change'), findsOneWidget);
+      expect(find.text('Retry pending change'), findsOneWidget);
       expect(
         find.text(
           'A previous policy change has no confirmed result. Reloading reads the current value; it does not resolve that change.',
@@ -248,25 +255,129 @@ void main() {
         findsOneWidget,
       );
       final first = fixture.gateway.calls.single;
-      await tester.ensureVisible(find.text('Retry pending policy change'));
+      final retryButton = find.ancestor(
+        of: find.text('Retry pending change'),
+        matching: find.byType(TextButton),
+      );
+      await tester.ensureVisible(retryButton);
       await _pumpFrames(tester);
       await expectLater(
         find.byType(SettingsScreen),
-        matchesGoldenFile('goldens/v026-policy-recovery-narrow-200.png'),
+        matchesGoldenFile('goldens/v030-policy-recovery-narrow-200.png'),
       );
 
-      await tester.tap(find.text('Reload Access policy'));
+      await tester.tap(find.text('Refresh current value'));
       await _pumpFrames(tester);
       expect(fixture.gateway.calls, hasLength(1));
       expect(fixture.controller.hasPendingChange, isTrue);
 
-      await tester.ensureVisible(find.text('Retry pending policy change'));
-      await tester.tap(find.text('Retry pending policy change'));
+      await tester.ensureVisible(find.text('Retry pending change'));
+      await tester.tap(find.text('Retry pending change'));
       await _pumpFrames(tester);
       expect(fixture.gateway.calls, hasLength(2));
       expect(fixture.gateway.calls[1], first);
       expect(fixture.controller.hasPendingChange, isFalse);
       _expectSingleSelect(tester, ActionAuthorityMode.deny, enabled: true);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    '320px recovery keeps retry and refresh controls usable at 200% text',
+    (tester) async {
+      _setViewport(tester, const Size(320, 560));
+      final fixture = await _fixture();
+      addTearDown(fixture.dispose);
+      var submissions = 0;
+      fixture.gateway.onSet = (_, mode, revision) async {
+        submissions++;
+        if (submissions == 1) {
+          throw const AppRuntimeException(
+            'timeout',
+            'Synthetic lost acknowledgement',
+            commandOutcome: CommandOutcome.indeterminate,
+          );
+        }
+        return ActionAuthority(revision: revision + 1, calendarCreate: mode);
+      };
+      await _mount(tester, fixture, textScale: 2);
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('floe-selection-trigger')),
+      );
+      await _openAndChoose(tester, 'Do not allow');
+      await _pumpFrames(tester);
+
+      expect(fixture.controller.hasPendingChange, isTrue);
+      expect(_textScale(tester), 2);
+      expect(find.text('Retry pending change'), findsOneWidget);
+      expect(find.text('Refresh current value'), findsOneWidget);
+      final retryButton = find.ancestor(
+        of: find.text('Retry pending change'),
+        matching: find.byType(TextButton),
+      );
+      await tester.ensureVisible(retryButton);
+      await _pumpFrames(tester);
+
+      final visibleViewport = tester.getRect(
+        find.byKey(const ValueKey('settings-content-scroll')),
+      );
+      final warning = tester.getRect(
+        find.text(
+          'A previous policy change has no confirmed result. Reloading reads the current value; it does not resolve that change.',
+        ),
+      );
+      expect(
+        warning.bottom <= visibleViewport.top ||
+            warning.top >= visibleViewport.bottom,
+        isTrue,
+        reason: 'Recovery controls should remain clear when the warning scrolls away.',
+      );
+      final retryBounds = tester.getRect(find.text('Retry pending change'));
+      expect(retryBounds.top, greaterThanOrEqualTo(visibleViewport.top));
+      expect(retryBounds.bottom, lessThanOrEqualTo(visibleViewport.bottom));
+      await expectLater(
+        find.byType(SettingsScreen),
+        matchesGoldenFile('goldens/v030-policy-recovery-320-200-retry.png'),
+      );
+      final original = fixture.gateway.calls.single;
+
+      final refreshButton = find.ancestor(
+        of: find.text('Refresh current value'),
+        matching: find.byType(TextButton),
+      );
+      await tester.ensureVisible(refreshButton);
+      await _pumpFrames(tester);
+      final refreshViewport = tester.getRect(
+        find.byKey(const ValueKey('settings-content-scroll')),
+      );
+      final refreshBounds = tester.getRect(find.text('Refresh current value'));
+      expect(refreshBounds.top, greaterThanOrEqualTo(refreshViewport.top));
+      expect(refreshBounds.bottom, lessThanOrEqualTo(refreshViewport.bottom));
+      final warningAfterScroll = tester.getRect(
+        find.text(
+          'A previous policy change has no confirmed result. Reloading reads the current value; it does not resolve that change.',
+        ),
+      );
+      expect(
+        warningAfterScroll.bottom <= refreshViewport.top ||
+            warningAfterScroll.top >= refreshViewport.bottom,
+        isTrue,
+      );
+      await expectLater(
+        find.byType(SettingsScreen),
+        matchesGoldenFile('goldens/v030-policy-recovery-320-200-refresh.png'),
+      );
+      await tester.tap(find.text('Refresh current value'));
+      await _pumpFrames(tester);
+      expect(fixture.gateway.calls, hasLength(1));
+      expect(fixture.controller.hasPendingChange, isTrue);
+      await tester.ensureVisible(retryButton);
+      await tester.tap(find.text('Retry pending change'));
+      await _pumpFrames(tester);
+      expect(fixture.gateway.calls, hasLength(2));
+      expect(fixture.gateway.calls[1], original);
+      expect(fixture.controller.hasPendingChange, isFalse);
       expect(tester.takeException(), isNull);
     },
   );

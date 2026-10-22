@@ -351,16 +351,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Reload Access policy'));
+    await tester.tap(find.text('Refresh current value'));
     await tester.pumpAndSettle();
     expect(gateway.calls, hasLength(1));
-    expect(find.text('Retry pending policy change'), findsOneWidget);
+    expect(find.text('Retry pending change'), findsOneWidget);
     gateway.onSet = null;
-    await tester.tap(find.text('Retry pending policy change'));
+    await tester.tap(find.text('Retry pending change'));
     await tester.pumpAndSettle();
     expect(gateway.calls[1], gateway.calls[0]);
     expect(controller.authority!.revision, 3);
-    expect(find.text('Retry pending policy change'), findsNothing);
+    expect(find.text('Retry pending change'), findsNothing);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

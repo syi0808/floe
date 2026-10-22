@@ -85,7 +85,7 @@ class _OperationPolicySettings extends StatelessWidget {
                           // Keep the exact pending command and owner failure visible.
                         }
                       },
-                child: const Text('Retry pending policy change'),
+                child: const Text('Retry pending change'),
               ),
             ],
             if (controller.error case final error?) ...[
@@ -93,7 +93,7 @@ class _OperationPolicySettings extends StatelessWidget {
               Text(error.message),
               TextButton(
                 onPressed: controller.busy ? null : controller.load,
-                child: const Text('Reload Access policy'),
+                child: const Text('Refresh current value'),
               ),
             ],
           ],
