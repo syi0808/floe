@@ -247,7 +247,15 @@ class _ScheduleEventRow extends StatelessWidget {
         onEdit: writable && onEdit != null ? () => onEdit!(event) : null,
         onDelete: writable && onDelete != null ? () => onDelete!(event) : null,
         child: FloeButton.text(
-          onPressed: () => openCalendarEvent(context, event, snapshot),
+          onPressed: () => openCalendarEvent(
+            context,
+            event,
+            snapshot,
+            onEdit: writable && onEdit != null ? () => onEdit!(event) : null,
+            onDelete: writable && onDelete != null
+                ? () => onDelete!(event)
+                : null,
+          ),
           style: ButtonStyle(
             alignment: Alignment.centerLeft,
             backgroundColor: WidgetStateProperty.resolveWith(

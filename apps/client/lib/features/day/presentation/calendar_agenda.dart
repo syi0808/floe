@@ -345,6 +345,21 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                               context,
                                               event,
                                               snapshot,
+                                              onEdit:
+                                                  event.actionTarget != null &&
+                                                      widget.onEditEvent != null
+                                                  ? () => widget.onEditEvent!(
+                                                      event,
+                                                    )
+                                                  : null,
+                                              onDelete:
+                                                  event.actionTarget != null &&
+                                                      widget.onDeleteEvent !=
+                                                          null
+                                                  ? () => widget.onDeleteEvent!(
+                                                      event,
+                                                    )
+                                                  : null,
                                             ),
                                           ),
                                         ),
@@ -514,6 +529,22 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                                                 CalendarEventCard(
                                                   event: placement.event,
                                                   snapshot: snapshot,
+                                                  onEdit:
+                                                      widget.onEditEvent == null
+                                                      ? null
+                                                      : () =>
+                                                            widget.onEditEvent!(
+                                                              placement.event,
+                                                            ),
+                                                  onDelete:
+                                                      widget.onDeleteEvent ==
+                                                          null
+                                                      ? null
+                                                      : () =>
+                                                            widget
+                                                                .onDeleteEvent!(
+                                                              placement.event,
+                                                            ),
                                                   height:
                                                       (placement.end -
                                                           placement.start) *
@@ -868,10 +899,14 @@ class CalendarEventCard extends StatelessWidget {
     required this.event,
     required this.snapshot,
     required this.height,
+    this.onEdit,
+    this.onDelete,
   });
   final EventItem event;
   final DaySnapshot snapshot;
   final double height;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
   @override
   Widget build(BuildContext context) {
     final tone = DayAppearance.tone(context, event.id, ItemTone.blue);
@@ -887,8 +922,20 @@ class CalendarEventCard extends StatelessWidget {
         child: FloePressable(
           fill: tone.fill,
           size: height < 24 ? FloeSquircleSize.xs : FloeSquircleSize.md,
-          onPressed: () => openCalendarEvent(context, event, snapshot),
-          onDoubleTap: () => openCalendarEvent(context, event, snapshot),
+          onPressed: () => openCalendarEvent(
+            context,
+            event,
+            snapshot,
+            onEdit: onEdit,
+            onDelete: onDelete,
+          ),
+          onDoubleTap: () => openCalendarEvent(
+            context,
+            event,
+            snapshot,
+            onEdit: onEdit,
+            onDelete: onDelete,
+          ),
           hoverFill: tone.border,
           child: height < 24 * textScale
               ? Align(

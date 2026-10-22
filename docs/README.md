@@ -15,6 +15,7 @@ This file is the entry point for repository documentation. Do not recursively re
 | How is behavior verified and old behavior evidence retained? | [Testing](testing/README.md) |
 | How should an architecture-changing task be sequenced? | [Architecture evolution](development/architecture-evolution.md) and the repo-local architecture-change skill |
 | How should the product look and behave? | [Design system](../DESIGN.md) and [design specifications](design/README.md) |
+| How do UI iterations remain reversible? | [UI iteration checkpoints](development/ui-versions.md) |
 | How do I build/debug a surface? | The nearest component README, plus [development docs](development) where applicable |
 | How do I select test gates, measure tests or reuse cross-language fixtures? | [Test performance](development/test-performance.md) |
 | How do I configure deployment/runtime infrastructure? | [Deployment docs](deployment) and the relevant service README |

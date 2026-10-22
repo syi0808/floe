@@ -80,3 +80,9 @@ No speech bubbles or free-floating mascot heads over the timeline; the single st
 ## Content density
 
 Omit the timeline's empty All day strip. The Schedule list uses title, time and an optional calendar label, with provenance and actions in the existing event detail/menu. Current events have a restrained violet emphasis; other rows remain neutral. Large text and overlapping events must expand list rows rather than clipping titles into miniature calendar blocks.
+
+## Event detail handoff
+
+Event detail leads with the event's own dates and times, not the selected canvas date. Timed endpoints preserve the schedule display zone (device-local when compatible, otherwise its declared offset); overnight events show both civil dates and repeated DST hours distinguish endpoint zones. All-day values remain civil dates and display the inclusive date span (stored exclusive end remains unchanged). Source timezone is secondary Calendar details, not an implied display timezone.
+
+Edit and Delete appear only for a verified action target with a supplied owner callback. Selecting them closes detail and enters the existing editor or deletion confirmation; merely opening or closing detail never changes an event. Existing alert preservation and recurrence/invitation limitations stay visible before save.

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
 import 'package:floe_client/app/floe_button.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_selection.dart';
@@ -207,7 +208,8 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
     final strings = AppLocalizations.of(context);
     final event = widget.event;
     final target = event?.actionTarget;
-    final canSubmit = !saving &&
+    final canSubmit =
+        !saving &&
         !loadingDestinations &&
         (event == null
             ? destinations.any(
@@ -219,24 +221,21 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
       loading: saving || (event == null && loadingDestinations),
       loadingLabel: strings.actionLoading,
       children: [
-        const Text(
-          'Existing alerts are preserved. Manage recurring events and invitations in the original calendar.',
-        ),
-        const SizedBox(height: 16),
         Form(
           key: form,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (event == null && loadingDestinations)
-                const Text('Checking writable Calendar destinations…'),
-              if (event == null && !loadingDestinations)
-                if (destinations.isNotEmpty)
+              if (event == null) ...[
+                if (loadingDestinations)
+                  const Text('Checking writable Calendar destinations…')
+                else if (destinations.isNotEmpty)
                   FloeSelect<String>(
                     label: strings.actionDestination,
-                    value: destinations.any(
-                      (choice) => choice.destinationRef == destinationRef,
-                    )
+                    value:
+                        destinations.any(
+                          (choice) => choice.destinationRef == destinationRef,
+                        )
                         ? destinationRef
                         : null,
                     options: destinations
@@ -256,12 +255,15 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                 else
                   const Text(
                     'Calendar changes are unavailable. No writable Calendar destination could be confirmed.',
-                  )
+                  ),
+              ] else if (target == null)
+                Text(strings.eventCannotEdit)
               else
-                Text(
-                  target == null
-                      ? 'This event has no safe Calendar target and cannot be edited.'
-                      : 'The current event is the target for this update.',
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Text(
+                    event.calendarLabel ?? strings.eventConnectedCalendar,
+                  ),
                 ),
               if (event == null) const SizedBox(height: 12),
               FloeInput(
@@ -300,6 +302,16 @@ class _CalendarEventComposerState extends State<CalendarEventComposer> {
                   child: Text(strings.actionReload),
                 ),
               ],
+              const SizedBox(height: 20),
+              Text(
+                event == null
+                    ? strings.eventCreateScope
+                    : strings.eventEditScope,
+                style: FloeType.bodySmall.copyWith(
+                  color: FloeColor.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 16),
               FloeButton.filled(
                 onPressed: canSubmit ? save : null,
                 loading: saving,

@@ -1558,4 +1558,30 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get dayOtherEvents => 'Also today';
+
+  @override
+  String get eventConnectedCalendar => 'Connected calendar';
+
+  @override
+  String get eventDeviceTime => 'Local time';
+
+  @override
+  String get eventCalendarDetails => 'Calendar details';
+
+  @override
+  String get eventSourceTimezone => 'Original timezone';
+
+  @override
+  String get eventEdit => 'Edit event';
+
+  @override
+  String get eventCannotEdit => 'This event can’t be edited here.';
+
+  @override
+  String get eventCreateScope =>
+      'Creates one event. Manage recurring events and invitations in the original calendar.';
+
+  @override
+  String get eventEditScope =>
+      'Alerts stay unchanged. Manage recurring events and invitations in the original calendar.';
 }

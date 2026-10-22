@@ -57,7 +57,13 @@ class CalendarEventActions extends StatelessWidget {
     if (!context.mounted) return;
     switch (selected) {
       case 'open':
-        openCalendarEvent(context, event, snapshot);
+        openCalendarEvent(
+          context,
+          event,
+          snapshot,
+          onEdit: onEdit,
+          onDelete: onDelete,
+        );
       case 'edit':
         onEdit?.call();
       case 'delete':

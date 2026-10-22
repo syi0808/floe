@@ -563,5 +563,13 @@
   "dayNoEvents": "No events scheduled for this day.",
   "dayNoEventsLoaded": "No events loaded for this day.",
   "dayStatusNeedsRefresh": "Calendar status needs refresh",
-  "dayOtherEvents": "Also today"
+  "dayOtherEvents": "Also today",
+  "eventConnectedCalendar": "Connected calendar",
+  "eventDeviceTime": "Local time",
+  "eventCalendarDetails": "Calendar details",
+  "eventSourceTimezone": "Original timezone",
+  "eventEdit": "Edit event",
+  "eventCannotEdit": "This event can’t be edited here.",
+  "eventCreateScope": "Creates one event. Manage recurring events and invitations in the original calendar.",
+  "eventEditScope": "Alerts stay unchanged. Manage recurring events and invitations in the original calendar."
 }

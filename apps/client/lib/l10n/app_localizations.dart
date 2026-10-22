@@ -2781,6 +2781,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Also today'**
   String get dayOtherEvents;
+
+  /// No description provided for @eventConnectedCalendar.
+  ///
+  /// In en, this message translates to:
+  /// **'Connected calendar'**
+  String get eventConnectedCalendar;
+
+  /// No description provided for @eventDeviceTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Local time'**
+  String get eventDeviceTime;
+
+  /// No description provided for @eventCalendarDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar details'**
+  String get eventCalendarDetails;
+
+  /// No description provided for @eventSourceTimezone.
+  ///
+  /// In en, this message translates to:
+  /// **'Original timezone'**
+  String get eventSourceTimezone;
+
+  /// No description provided for @eventEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit event'**
+  String get eventEdit;
+
+  /// No description provided for @eventCannotEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'This event can’t be edited here.'**
+  String get eventCannotEdit;
+
+  /// No description provided for @eventCreateScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Creates one event. Manage recurring events and invitations in the original calendar.'**
+  String get eventCreateScope;
+
+  /// No description provided for @eventEditScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Alerts stay unchanged. Manage recurring events and invitations in the original calendar.'**
+  String get eventEditScope;
 }
 
 class _AppLocalizationsDelegate

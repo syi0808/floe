@@ -270,6 +270,7 @@ void main() {
           .evaluate()
           .isNotEmpty;
       final reloadIsHidden = find.text('Reload reviews').evaluate().isEmpty;
+      expect(find.text('This event can’t be edited here.'), findsNothing);
       retry.complete(_destinationsResponse('calendar-a', 'Calendar A'));
       await tester.pumpAndSettle();
 
