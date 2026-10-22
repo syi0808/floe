@@ -37,6 +37,12 @@ class _AdaptiveNavigation extends StatelessWidget {
   Widget _assistant() => FloeButton.text(
     focusNode: assistantFocus,
     onPressed: onAssistant,
+    style: const ButtonStyle(
+      padding: WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      ),
+      minimumSize: WidgetStatePropertyAll(Size(72, 56)),
+    ),
     child: const Padding(
       padding: EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -44,7 +50,7 @@ class _AdaptiveNavigation extends StatelessWidget {
         children: [
           ExcludeSemantics(child: FloeMascot(size: 24)),
           SizedBox(height: 4),
-          Text('Floe'),
+          Text('Floe', style: FloeType.caption),
         ],
       ),
     ),
@@ -98,25 +104,36 @@ class _AdaptiveNavigation extends StatelessWidget {
       bottom: 20,
       left: 16,
       width: 80,
-      child: Column(
-        children: [
-          const Padding(
-            padding: EdgeInsets.only(bottom: 32),
-            child: Text('Floe', style: FloeType.title),
-          ),
-          for (final view in _primaryDestinations) ...[
-            _DestinationButton(
-              view: view,
-              selected: selected == view,
-              onPressed: () => onSelected(view),
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          key: const Key('desktop-navigation-scroll'),
+          primary: false,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: IntrinsicHeight(
+              child: Column(
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 32),
+                    child: Text('Floe', style: FloeType.title),
+                  ),
+                  for (final view in _primaryDestinations) ...[
+                    _DestinationButton(
+                      view: view,
+                      selected: selected == view,
+                      onPressed: () => onSelected(view),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  const SizedBox(height: 20),
+                  _assistant(),
+                  const Spacer(),
+                  _more(context),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-          ],
-          const SizedBox(height: 20),
-          _assistant(),
-          const Spacer(),
-          _more(context),
-        ],
+          ),
+        ),
       ),
     );
   }

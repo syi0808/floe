@@ -56,7 +56,11 @@ void main() {
         await tester.tap(find.text('Launch plan'));
         await tester.pumpAndSettle();
         expect(find.text('Review with Floe'), findsNothing);
-        expect(find.textContaining('Editing is not available'), findsOneWidget);
+        expect(find.textContaining('Editing is not available'), findsNothing);
+        expect(
+          find.widgetWithText(SelectableText, 'Launch plan'),
+          findsOneWidget,
+        );
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         expect(find.text('All notes · 1'), findsOneWidget);

@@ -212,15 +212,3 @@ class _LabeledValue extends StatelessWidget {
     ],
   );
 }
-
-Future<void> _openNote(BuildContext context, NoteItem note, bool narrow) async {
-  final detail = _NoteDetail(note: note);
-  if (narrow) {
-    await showFloeSheet<void>(context, (context) => detail);
-  } else {
-    await showFloeDialog<void>(
-      context,
-      (context) => FloeDialogSurface(maxWidth: 640, child: detail),
-    );
-  }
-}

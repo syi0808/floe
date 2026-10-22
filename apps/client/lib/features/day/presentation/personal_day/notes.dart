@@ -288,7 +288,7 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
         width: 420,
         child: FloeInput(
           key: Key('new-note-content'),
-          label: AppLocalizations.of(context).writeAThoughtDecisionOrDetailTo,
+          label: AppLocalizations.of(context).note,
           controller: content,
           autofocus: true,
           enabled: !pending,
@@ -324,6 +324,16 @@ class _NotePreviewCard extends StatelessWidget {
     final appearance = DayAppearance.of(context)?.notes[note.id];
     final tone = appearance?.tone ?? ItemTone.violet;
     final mobile = MediaQuery.sizeOf(context).width <= 780;
+    // The current note contract stores the complete original content in title.
+    // Derive a bounded preview without changing that content or using a generated summary.
+    final content = note.title.trim();
+    final lineBreak = content.indexOf('\n');
+    final heading = lineBreak < 0
+        ? content
+        : content.substring(0, lineBreak).trimRight();
+    final excerpt = lineBreak < 0
+        ? appearance?.excerpt ?? ''
+        : content.substring(lineBreak + 1).trim();
     return FloeSquircle(
       fill: Color.lerp(Colors.white, tone.fill, .4)!,
       borderColor: tone.border,
@@ -354,17 +364,23 @@ class _NotePreviewCard extends StatelessWidget {
                   ),
                   SizedBox(height: 20),
                   Text(
-                    note.title,
+                    heading,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: FloeType.headline.copyWith(
                       fontWeight: FontWeight.w600,
                       height: 1.2,
                     ),
                   ),
-                  SizedBox(height: 14),
-                  Text(
-                    appearance?.excerpt ?? '',
-                    style: FloeType.body.copyWith(height: 1.65),
-                  ),
+                  if (excerpt.isNotEmpty) ...[
+                    SizedBox(height: 14),
+                    Text(
+                      excerpt,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: FloeType.body.copyWith(height: 1.65),
+                    ),
+                  ],
                   Spacer(),
                   SizedBox(height: FloeSpace.lg),
                   Text(
@@ -385,46 +401,94 @@ class _NotePreviewCard extends StatelessWidget {
   }
 }
 
+Future<void> _openNote(BuildContext context, NoteItem note, bool narrow) async {
+  if (narrow) {
+    Widget page(BuildContext context) => Scaffold(
+      backgroundColor: FloeColor.surface,
+      body: SafeArea(child: _NoteDetail(note: note, fullPage: true)),
+    );
+    final route = FloeMotion.reduceMotion(context)
+        ? PageRouteBuilder<void>(
+            pageBuilder: (context, _, _) => page(context),
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            fullscreenDialog: true,
+          )
+        : MaterialPageRoute<void>(builder: page, fullscreenDialog: true);
+    await Navigator.of(context).push(route);
+  } else {
+    await showFloeDialog<void>(
+      context,
+      (context) =>
+          FloeDialogSurface(maxWidth: 640, child: _NoteDetail(note: note)),
+    );
+  }
+}
+
 class _NoteDetail extends StatelessWidget {
-  const _NoteDetail({required this.note});
+  const _NoteDetail({required this.note, this.fullPage = false});
   final NoteItem note;
+  final bool fullPage;
+
   @override
-  Widget build(BuildContext context) => FloeSquircle(
-    size: FloeSquircleSize.xl,
-    padding: EdgeInsets.all(FloeSpace.xl),
-    child: ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: 640),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+  Widget build(BuildContext context) {
+    final copy = AppLocalizations.of(context);
+    final content = Column(
+      key: const Key('note-reader'),
+      mainAxisSize: fullPage ? MainAxisSize.max : MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 16, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                AppLocalizations.of(context).personalNote,
-                style: FloeType.label,
+              Row(
+                children: [
+                  Expanded(child: Text(copy.note, style: FloeType.titleLarge)),
+                  FloeButton.icon(
+                    tooltip: copy.close,
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
               ),
-              Spacer(),
-              FloeButton.icon(
-                tooltip: AppLocalizations.of(context).close,
-                onPressed: () => Navigator.pop(context),
-                icon: Icon(Icons.close),
+              const SizedBox(height: 4),
+              Text(
+                DateFormat.yMMMd(copy.localeName)
+                    .format(note.createdAt.toLocal()),
+                style: FloeType.caption.copyWith(
+                  color: FloeColor.textSecondary,
+                ),
               ),
             ],
           ),
-          SizedBox(height: FloeSpace.base),
-          Text(note.title, style: FloeType.display),
-          SizedBox(height: FloeSpace.sm),
-          Text(_date(context, note.createdAt), style: FloeType.numeric),
-          SizedBox(height: FloeSpace.xl),
-          Text(
-            AppLocalizations.of(context).thisIsYourOriginalNoteEditingIs,
-            style: FloeType.bodyLarge,
+        ),
+        Flexible(
+          child: SingleChildScrollView(
+            key: const Key('note-reader-scroll'),
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 28),
+            child: SelectableText(
+              note.title,
+              key: const Key('note-original-content'),
+              style: FloeType.bodyLarge.copyWith(height: 1.65),
+            ),
           ),
-        ],
+        ),
+      ],
+    );
+    if (fullPage) return content;
+    return FloeSquircle(
+      size: FloeSquircleSize.xl,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 640,
+          maxHeight: MediaQuery.sizeOf(context).height * .85,
+        ),
+        child: content,
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _ToneDot extends StatelessWidget {

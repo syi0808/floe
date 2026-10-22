@@ -50,3 +50,5 @@ Each destination preserves its scroll position, current filter, and selected obj
 - `Day / Week / Month` exists only in a timeline/calendar context.
 - The shell exposes exactly one persistent Floe entry.
 - All global and local controls remain keyboard and screen-reader accessible.
+
+The desktop navigation rail keeps consistent button padding and caption sizing for the primary destinations and Floe. When window height or large text makes the rail taller than its viewport, it scrolls instead of clipping destinations or the utility menu. The utility menu remains bottom-aligned when space permits.

@@ -472,10 +472,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get clearFilters => 'Clear filters';
 
   @override
-  String get writeAThoughtDecisionOrDetailTo =>
-      'Write a thought, decision, or detail to remember.';
-
-  @override
   String get couldNotSavePleaseTryAgain => 'Could not save. Please try again.';
 
   @override
@@ -546,14 +542,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get completeTask => 'Complete task';
 
   @override
-  String get personalNote => 'Personal note';
-
-  @override
   String get close => 'Close';
-
-  @override
-  String get thisIsYourOriginalNoteEditingIs =>
-      'This is your original note. Editing is not available yet.';
 
   @override
   String get reviewWithFloe => 'Review with Floe';

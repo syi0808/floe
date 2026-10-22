@@ -910,12 +910,6 @@ abstract class AppLocalizations {
   /// **'Clear filters'**
   String get clearFilters;
 
-  /// No description provided for @writeAThoughtDecisionOrDetailTo.
-  ///
-  /// In en, this message translates to:
-  /// **'Write a thought, decision, or detail to remember.'**
-  String get writeAThoughtDecisionOrDetailTo;
-
   /// No description provided for @couldNotSavePleaseTryAgain.
   ///
   /// In en, this message translates to:
@@ -1054,23 +1048,11 @@ abstract class AppLocalizations {
   /// **'Complete task'**
   String get completeTask;
 
-  /// No description provided for @personalNote.
-  ///
-  /// In en, this message translates to:
-  /// **'Personal note'**
-  String get personalNote;
-
   /// No description provided for @close.
   ///
   /// In en, this message translates to:
   /// **'Close'**
   String get close;
-
-  /// No description provided for @thisIsYourOriginalNoteEditingIs.
-  ///
-  /// In en, this message translates to:
-  /// **'This is your original note. Editing is not available yet.'**
-  String get thisIsYourOriginalNoteEditingIs;
 
   /// No description provided for @reviewWithFloe.
   ///

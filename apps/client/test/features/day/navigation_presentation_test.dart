@@ -8,6 +8,47 @@ import 'package:floe_client/preview/calendar_fixture.dart';
 import 'package:floe_client/preview/product_fixture.dart';
 
 void main() {
+  testWidgets(
+    'desktop navigation stays reachable in a short window with large text',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pumpWidget(
+        previewAppearance(
+          FloeApp(
+            personId: calendarPreviewQuery.personId,
+            gateway: calendarPreviewGateway(),
+            query: calendarPreviewQuery,
+            ownerGateways: const LocalOwnerGateways(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Notes'));
+      await tester.pumpAndSettle();
+      tester.view.physicalSize = const Size(1200, 400);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(find.byTooltip('More')).bottom,
+        lessThanOrEqualTo(400),
+      );
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      expect(find.text('Activity'), findsOneWidget);
+      expect(find.text('Settings'), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   for (final width in [320.0, 390.0, 1200.0]) {
     for (final largeText in [false, true]) {
       testWidgets(
