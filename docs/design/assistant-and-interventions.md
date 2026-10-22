@@ -49,6 +49,10 @@ It provides:
 - session resume/search without forcing the full archive into the current context;
 - accessible status announcements and keyboard focus recovery after stop/error.
 
+Keep the panel header and Close control outside the compact transcript scroller.
+
+The composer is one squircle surface containing the text field and its trailing action, not a floating-label form field beside a separate button. Use one visible `Message Floe` prompt and retain that accessible field name after typing. Keep the action target at least 44px. Empty or whitespace-only drafts disable Send, but never disable Stop, reload, or recovery solely because the draft is empty. Preserve multiline entry, draft ownership, and the existing length limit.
+
 Do not render private chain-of-thought. Show observable calls, sources, decisions and
 errors. A model disconnect preserves completed turns and offers retry without
 duplicating tool execution.

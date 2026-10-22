@@ -7,7 +7,6 @@ import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_badge.dart';
 import 'package:floe_client/app/floe_primitives.dart';
-import 'package:floe_client/app/floe_input.dart';
 import 'package:floe_client/app/floe_mascot.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -396,12 +395,21 @@ class _AgentPanelState extends State<AgentPanel> {
                         },
                       );
                 if (compact) {
-                  return SingleChildScrollView(
-                    controller: _scroll,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [header, const FloeDivider(), content, footer],
-                    ),
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      header,
+                      const FloeDivider(),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          controller: _scroll,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [content, footer],
+                          ),
+                        ),
+                      ),
+                    ],
                   );
                 }
                 return Column(
@@ -624,7 +632,9 @@ class _AgentPanelState extends State<AgentPanel> {
         ? () => controller.load()
         : controller.needsRecovery
         ? () => controller.recover()
-        : controller.canSend && controller.isConnectedConversation
+        : controller.canSend &&
+              controller.isConnectedConversation &&
+              _composerText.text.trim().isNotEmpty
         ? () => _sendText(controller)
         : null;
     return Padding(
@@ -684,43 +694,89 @@ class _AgentPanelState extends State<AgentPanel> {
             ),
             const SizedBox(height: FloeSpace.md),
           ],
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (!runtimeUnavailable) ...[
-                Expanded(
-                  child: FloeInput(
-                    label: controller.isGeneralConversation
-                        ? strings.agentConversationPrompt
-                        : strings.agentConnectedPrompt,
-                    controller: _composerText,
-                    focusNode: _messageFocus,
-                    enabled:
-                        controller.canSend &&
-                        controller.isConnectedConversation,
-                    placeholder: controller.isGeneralConversation
-                        ? strings.agentConversationEmpty
-                        : strings.agentConnectedEmpty,
-                    minLines: 1,
-                    maxLines: 4,
-                    compact: true,
-                    textInputAction: TextInputAction.newline,
-                    textCapitalization: TextCapitalization.sentences,
-                    inputFormatters: [LengthLimitingTextInputFormatter(8192)],
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(width: FloeSpace.sm),
-              ] else
-                const Spacer(),
-              FloeButton.icon(
+          AnimatedBuilder(
+            animation: _messageFocus,
+            builder: (context, _) {
+              final actionButton = FloeButton.icon(
+                key: const Key('conversation-composer-action'),
                 tooltip: label,
                 onPressed: action,
                 focusNode: _actionFocus,
                 size: FloeButtonSize.compact,
-                icon: Icon(icon, size: 16),
-              ),
-            ],
+                constraints: const BoxConstraints.tightFor(
+                  width: 44,
+                  height: 44,
+                ),
+                style: IconButton.styleFrom(
+                  backgroundColor: FloePalette.primary600,
+                  foregroundColor: FloePalette.neutral0,
+                  disabledBackgroundColor: FloePalette.neutral100,
+                  disabledForegroundColor: FloePalette.neutral400,
+                ),
+                icon: Icon(icon, size: 18),
+              );
+              if (runtimeUnavailable) {
+                return Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: actionButton,
+                );
+              }
+              return FloeSquircle(
+                key: const Key('conversation-composer'),
+                size: FloeSquircleSize.lg,
+                fill: FloePalette.neutral50,
+                borderColor: _messageFocus.hasFocus
+                    ? FloePalette.primary500
+                    : FloePalette.neutral200,
+                padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Semantics(
+                        label: strings.agentMessagePlaceholder,
+                        child: TextFormField(
+                          key: const Key('conversation-composer-input'),
+                          controller: _composerText,
+                          focusNode: _messageFocus,
+                          enabled:
+                              controller.canSend &&
+                              controller.isConnectedConversation,
+                          style: FloeType.body.copyWith(
+                            color: FloeColor.textPrimary,
+                          ),
+                          decoration: InputDecoration(
+                            hint: ExcludeSemantics(
+                              child: Text(strings.agentMessagePlaceholder),
+                            ),
+                            floatingLabelBehavior: FloatingLabelBehavior.never,
+                            filled: false,
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            disabledBorder: InputBorder.none,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 10,
+                            ),
+                          ),
+                          minLines: 1,
+                          maxLines: 4,
+                          textInputAction: TextInputAction.newline,
+                          textCapitalization: TextCapitalization.sentences,
+                          inputFormatters: [
+                            LengthLimitingTextInputFormatter(8192),
+                          ],
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: FloeSpace.sm),
+                    actionButton,
+                  ],
+                ),
+              );
+            },
           ),
           if (controller.canContinue || controller.canRetry) ...[
             const SizedBox(height: FloeSpace.sm),

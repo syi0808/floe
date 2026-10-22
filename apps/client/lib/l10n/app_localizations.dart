@@ -130,12 +130,6 @@ abstract class AppLocalizations {
   /// **'Ask anything about your day or calendars…'**
   String get agentConnectedEmpty;
 
-  /// No description provided for @agentConnectedPrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Message'**
-  String get agentConnectedPrompt;
-
   /// No description provided for @agentConnectedBriefing.
   ///
   /// In en, this message translates to:
@@ -147,6 +141,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Propose a focus block'**
   String get agentConnectedFocus;
+
+  /// No description provided for @agentMessagePlaceholder.
+  ///
+  /// In en, this message translates to:
+  /// **'Message Floe'**
+  String get agentMessagePlaceholder;
 
   /// No description provided for @agentConnectedSend.
   ///
@@ -165,12 +165,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Ask Floe anything…'**
   String get agentConversationEmpty;
-
-  /// No description provided for @agentConversationPrompt.
-  ///
-  /// In en, this message translates to:
-  /// **'Message'**
-  String get agentConversationPrompt;
 
   /// No description provided for @agentConversationSource.
   ///

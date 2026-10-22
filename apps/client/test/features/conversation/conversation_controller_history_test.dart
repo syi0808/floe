@@ -1,4 +1,5 @@
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
+import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/actions/domain/calendar_action.dart';
 
@@ -25,6 +26,115 @@ import 'package:floe_client/features/conversation/presentation/agent_panel.dart'
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  for (final width in [320.0, 1200.0]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'composer keeps one label and truthful send state at $width, $scale',
+        (tester) async {
+          tester.view.physicalSize = Size(width, 740);
+          tester.view.devicePixelRatio = 1;
+          tester.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+          final h = await _Harness.create();
+          addTearDown(h.dispose);
+          final handle = tester.ensureSemantics();
+          try {
+            await tester.pumpWidget(_panelApp(h.controller));
+            await tester.pumpAndSettle();
+            final input = find.byKey(const Key('conversation-composer-input'));
+            final action = find.byKey(
+              const Key('conversation-composer-action'),
+            );
+            expect(tester.widget<FloeButton>(action).onPressed, isNull);
+            expect(find.text('Message Floe'), findsOneWidget);
+            expect(
+              tester
+                  .widget<TextField>(find.byType(TextField))
+                  .decoration!
+                  .label,
+              isNull,
+            );
+            expect(
+              tester.widget<TextField>(find.byType(TextField)).decoration!.hint,
+              isNotNull,
+            );
+            expect(tester.getSize(action).width, greaterThanOrEqualTo(44));
+            expect(tester.getSize(action).height, greaterThanOrEqualTo(44));
+            await tester.enterText(input, '   ');
+            await tester.pump();
+            expect(tester.widget<FloeButton>(action).onPressed, isNull);
+            await tester.enterText(input, 'A draft\nwith a second line');
+            await tester.pumpAndSettle();
+            expect(tester.widget<FloeButton>(action).onPressed, isNotNull);
+            final field = find.descendant(
+              of: input,
+              matching: find.byType(TextField),
+            );
+            final node = tester.getSemantics(field);
+            expect(node.label, contains('Message Floe'));
+            expect(node.value, 'A draft\nwith a second line');
+            expect(
+              tester.widget<TextField>(field).decoration!.floatingLabelBehavior,
+              FloatingLabelBehavior.never,
+            );
+            expect(h.transport.commands, isEmpty);
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox.shrink());
+          } finally {
+            handle.dispose();
+          }
+        },
+      );
+    }
+  }
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets('compact conversation keeps Close visible at $scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 560);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = scale;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var closes = 0;
+      await tester.pumpWidget(_panelApp(h.controller, onClose: () => closes++));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byType(TextField),
+        'First line\nSecond line\nThird line\nFourth line',
+      );
+      await tester.pumpAndSettle();
+      final close = find.byTooltip('Close');
+      final initialRect = tester.getRect(close);
+      expect(initialRect.top, greaterThanOrEqualTo(0));
+      final scrollable = find
+          .descendant(
+            of: find.byType(SingleChildScrollView).first,
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final position = tester.state<ScrollableState>(scrollable).position;
+      expect(position.maxScrollExtent, greaterThan(0));
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pump();
+      expect(tester.getRect(close), initialRect);
+      position.jumpTo(0);
+      await tester.pump();
+      expect(tester.getRect(close), initialRect);
+      await tester.tap(close);
+      expect(closes, 1);
+      expect(h.transport.commands, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   test('a synchronous readiness failure retains one Work intent and permits exact recovery', () async {
     var attempts = 0;
     final h = await _Harness.create(
@@ -66,6 +176,30 @@ void main() {
       h.controller.surfaceMessages.whereType<AppSurfaceInput>().last.text,
       'retain this exact input',
     );
+  });
+
+  testWidgets('empty composer keeps Stop available for running work', (
+    tester,
+  ) async {
+    _usePanelViewport(tester);
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    h.transport.returnTerminalFailure = true;
+    h.transport.workingRun = true;
+    expect(await h.controller.sendText('synthetic running work'), isTrue);
+    await tester.pumpWidget(_panelApp(h.controller));
+    await tester.pumpAndSettle();
+    final action = tester.widget<FloeButton>(
+      find.byKey(const Key('conversation-composer-action')),
+    );
+    expect(action.tooltip, 'Stop response');
+    expect(action.onPressed, isNotNull);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      isEmpty,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   test('a working Manager does not disable new text admission', () async {
@@ -619,6 +753,7 @@ void main() {
         find.byType(TextFormField),
         'old conversation draft',
       );
+      await tester.pump();
       await tester.tap(find.byTooltip('Ask Floe'));
       await tester.pump();
       await original.transport.startTurnRequested.future.timeout(
@@ -665,6 +800,7 @@ void main() {
     await tester.pumpWidget(_panelApp(harness.controller));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextFormField), 'keep this draft');
+    await tester.pump();
     await tester.tap(find.byTooltip('Ask Floe'));
     await tester.pump();
     await harness.transport.startTurnRequested.future.timeout(
@@ -704,6 +840,7 @@ void main() {
       await tester.pumpWidget(_panelApp(harness.controller));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextFormField), 'keep terminal draft');
+      await tester.pump();
       await tester.tap(find.byTooltip('Ask Floe'));
       await tester.pump();
       await harness.transport.startTurnRequested.future.timeout(
@@ -1065,17 +1202,18 @@ void _usePanelViewport(WidgetTester tester) {
   addTearDown(tester.view.resetDevicePixelRatio);
 }
 
-Widget _panelApp(ConversationController controller) => MaterialApp(
-  localizationsDelegates: AppLocalizations.localizationsDelegates,
-  supportedLocales: AppLocalizations.supportedLocales,
-  home: Scaffold(
-    body: AgentPanel(
-      controller: controller,
-      dayGateway: _UnusedDayGateway(),
-      onClose: () {},
-    ),
-  ),
-);
+Widget _panelApp(ConversationController controller, {VoidCallback? onClose}) =>
+    MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+        body: AgentPanel(
+          controller: controller,
+          dayGateway: _UnusedDayGateway(),
+          onClose: onClose ?? () {},
+        ),
+      ),
+    );
 
 final class _Harness {
   _Harness(this.runtime, this.readModel, this.transport, this.controller);
@@ -1190,7 +1328,9 @@ final class _ConversationTransport implements AppWireTransport {
         proposalQueries.add(query);
         return proposalPreview!(query);
       case 'conversation.surface.get':
-        if (surfaceRead case final read?) { return read(query); }
+        if (surfaceRead case final read?) {
+          return read(query);
+        }
         if (query['through'] != null) {
           historyQueries.add(query);
           if (_historyReplies.isEmpty) {

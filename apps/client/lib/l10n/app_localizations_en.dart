@@ -28,13 +28,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConnectedEmpty => 'Ask anything about your day or calendars…';
 
   @override
-  String get agentConnectedPrompt => 'Message';
-
-  @override
   String get agentConnectedBriefing => 'Brief my calendar';
 
   @override
   String get agentConnectedFocus => 'Propose a focus block';
+
+  @override
+  String get agentMessagePlaceholder => 'Message Floe';
 
   @override
   String get agentConnectedSend => 'Ask Floe';
@@ -44,9 +44,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get agentConversationEmpty => 'Ask Floe anything…';
-
-  @override
-  String get agentConversationPrompt => 'Message';
 
   @override
   String get agentConversationSource => 'Source';
