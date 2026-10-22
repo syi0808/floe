@@ -130,7 +130,13 @@ void main() {
           ),
           findsNothing,
         );
-        expect(find.text('Oct 22, 2026'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('note-reader')),
+            matching: find.text('Oct 22, 2026'),
+          ),
+          findsOneWidget,
+        );
         final viewport = find.byKey(const Key('note-reader-scroll'));
         final scroll = tester.state<ScrollableState>(
           find
@@ -159,7 +165,7 @@ void main() {
         expect(tester.getRect(close).bottom, lessThanOrEqualTo(740));
         await tester.tap(close);
         await tester.pumpAndSettle();
-        expect(find.text('All notes · 1'), findsOneWidget);
+        expect(find.text('Notes · 1'), findsOneWidget);
         final retained =
             (await gateway.loadDay(query)).items.single as NoteItem;
         expect(identical(retained, note), isTrue);

@@ -302,7 +302,9 @@
       }
     }
   },
-  "notesCount": "All notes · {count}",
+  "noteSavedToToday": "Saved to today’s notes",
+  "viewNotes": "View notes",
+  "notesCount": "Notes · {count}",
   "@notesCount": {
     "placeholders": {
       "count": {

@@ -356,6 +356,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
               _DestinationView.activity => SizedBox.shrink(),
               _DestinationView.settings => SizedBox.shrink(),
               _DestinationView.notes => _NotesScreen(
+                date: snapshot.date,
                 notes: snapshot.items.whereType<NoteItem>().toList(),
                 narrow: narrow,
                 onCreate: _createNote,
@@ -914,8 +915,20 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return false;
     final saved = await controller.classify(NoteDraft(content: content));
     if (saved && mounted) {
-      FloeToastHost.of(context)
-          .show(title: AppLocalizations.of(context).savedInFloe);
+      final copy = AppLocalizations.of(context);
+      final outsideSelectedDay = !DateUtils.isSameDay(
+        controller.query.date,
+        controller.query.now.toLocal(),
+      );
+      FloeToastHost.of(context).show(
+        title: outsideSelectedDay ? copy.noteSavedToToday : copy.savedInFloe,
+        actionLabel: outsideSelectedDay ? copy.viewNotes : null,
+        onAction: outsideSelectedDay
+            ? () {
+                if (mounted) controller.goToday();
+              }
+            : null,
+      );
     }
     return saved;
   }

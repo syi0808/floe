@@ -1786,10 +1786,22 @@ abstract class AppLocalizations {
   /// **'{remaining, plural, =0{No tasks remaining} one{1 task remaining} other{{remaining} tasks remaining}} · {total} total'**
   String taskSummary(int remaining, int total);
 
+  /// No description provided for @noteSavedToToday.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to today’s notes'**
+  String get noteSavedToToday;
+
+  /// No description provided for @viewNotes.
+  ///
+  /// In en, this message translates to:
+  /// **'View notes'**
+  String get viewNotes;
+
   /// No description provided for @notesCount.
   ///
   /// In en, this message translates to:
-  /// **'All notes · {count}'**
+  /// **'Notes · {count}'**
   String notesCount(int count);
 
   /// No description provided for @dueAt.

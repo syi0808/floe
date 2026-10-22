@@ -8,9 +8,11 @@ Make recent and relevant notes easy to scan without making Notes feel like a sep
 
 ## Toolbar
 
-Use `All notes · count` as context, followed by search and one `New note` action. Do not show `Day / Week / Month`.
+Use `Notes · count` with the selected display date, followed by search and one `New note` action. This view is the selected day’s notes from the day snapshot, not an account-wide collection. Keep the date visible while searching. Do not show `Day / Week / Month`.
 
 ## Collection
+
+Order a presentation copy newest-first by creation time, with a deterministic ID tiebreak. Do not change the shared snapshot order or widen the owner query.
 
 Wide layouts may use a responsive grid; narrow layouts use a single list. Grid columns are content-width decisions, not a fixed three-column contract.
 
@@ -33,6 +35,8 @@ Do not embed a mascot or speech bubble in a note card. Floe actions become avail
 Opening a note preserves the collection's query and scroll position. Back restores the same context. Wide layouts use a bounded reading dialog; narrow layouts use a full reading route. Keep the close action and creation date visible while the original text scrolls. Respect reduced-motion preferences.
 
 The current note projection carries the complete original content in `NoteItem.title`; it is not a separate heading. Render that exact content as selectable body text, preserving internal whitespace and newlines. Never substitute preview/appearance excerpts for the original. Derive a short first-line heading and at most three preview lines for collection cards without modifying the stored content. Do not show unsupported editing controls or placeholder editing explanations.
+
+New notes keep their actual creation timestamp, even while another display day is selected. After saving outside the current day view, confirm that the note belongs to today and offer an explicit `View notes` action. Never silently backdate a note or change the selected day before the user chooses that action.
 
 ## States
 

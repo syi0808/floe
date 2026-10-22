@@ -965,12 +965,18 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get noteSavedToToday => 'Saved to today’s notes';
+
+  @override
+  String get viewNotes => 'View notes';
+
+  @override
   String notesCount(int count) {
     final intl.NumberFormat countNumberFormat =
         intl.NumberFormat.decimalPattern(localeName);
     final String countString = countNumberFormat.format(count);
 
-    return 'All notes · $countString';
+    return 'Notes · $countString';
   }
 
   @override

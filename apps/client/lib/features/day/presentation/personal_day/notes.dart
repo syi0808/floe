@@ -3,11 +3,13 @@ part of '../personal_day_screen.dart';
 class _NotesScreen extends StatefulWidget {
   const _NotesScreen({
     required this.notes,
+    required this.date,
     required this.narrow,
     required this.onCreate,
     required this.pending,
   });
   final List<NoteItem> notes;
+  final DateTime date;
   final bool narrow;
   final Future<bool> Function(String) onCreate;
   final bool pending;
@@ -56,16 +58,33 @@ class _NotesScreenState extends State<_NotesScreen> {
   @override
   Widget build(BuildContext context) {
     final query = search.text.trim().toLowerCase();
-    final notes = widget.notes
-        .where((note) => note.title.toLowerCase().contains(query))
-        .toList();
+    final notes =
+        widget.notes
+            .where((note) => note.title.toLowerCase().contains(query))
+            .toList()
+          ..sort((left, right) {
+            final time = right.createdAt.compareTo(left.createdAt);
+            return time != 0 ? time : left.id.compareTo(right.id);
+          });
     final filtered = query.isNotEmpty;
     final copy = AppLocalizations.of(context);
-    final heading = Text(
-      filtered
-          ? copy.notesMatchingCount(notes.length)
-          : copy.notesCount(widget.notes.length),
-      style: FloeType.titleLarge.copyWith(height: 1.2),
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          filtered
+              ? copy.notesMatchingCount(notes.length)
+              : copy.notesCount(widget.notes.length),
+          style: FloeType.titleLarge.copyWith(height: 1.2),
+        ),
+        const SizedBox(height: FloeSpace.xs),
+        Text(
+          DateFormat.yMMMd(Localizations.localeOf(context).toString())
+              .format(widget.date),
+          key: const Key('notes-selected-date'),
+          style: FloeType.bodySmall.copyWith(color: FloeColor.textSecondary),
+        ),
+      ],
     );
     final searchField = FloeSquircle(
       size: FloeSquircleSize.md,
@@ -295,7 +314,7 @@ class _NotePreviewCard extends StatelessWidget {
     final excerpt = lineBreak < 0
         ? appearance?.excerpt ?? ''
         : content.substring(lineBreak + 1).trim();
-    final timestamp = appearance?.timestamp ?? _date(context, note.createdAt);
+    final timestamp = appearance?.timestamp ?? _time(context, note.createdAt);
     String brief(String value, int limit) {
       final text = value.replaceAll(RegExp(r'\s+'), ' ').trim();
       return text.characters.length > limit
