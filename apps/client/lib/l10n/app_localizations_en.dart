@@ -465,11 +465,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noNotesFound => 'No notes found';
 
   @override
-  String get tryADifferentSearchOrClearThe =>
-      'Try a different search or clear the current filter.';
+  String get tryADifferentSearch => 'Try a different search.';
 
   @override
-  String get clearFilters => 'Clear filters';
+  String get clearSearch => 'Clear search';
 
   @override
   String get couldNotSavePleaseTryAgain => 'Could not save. Please try again.';
@@ -1485,9 +1484,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get notesEmptyBody =>
       'Keep an idea, a reminder, or something you want to return to.';
-
-  @override
-  String get personalNotesFilter => 'Personal only';
 
   @override
   String notesMatchingCount(int count) {

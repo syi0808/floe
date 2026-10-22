@@ -18,12 +18,10 @@ enum ItemTone {
 class NoteAppearance {
   const NoteAppearance({
     required this.excerpt,
-    required this.category,
     required this.timestamp,
     this.tone = ItemTone.violet,
   });
   final String excerpt;
-  final String category;
   final String timestamp;
   final ItemTone tone;
 }

@@ -8,7 +8,7 @@ Make recent and relevant notes easy to scan without making Notes feel like a sep
 
 ## Toolbar
 
-Use `All notes · count` as context, followed by search, filter, sort where justified, and one `New note` action. Do not show `Day / Week / Month`.
+Use `All notes · count` as context, followed by search and one `New note` action. Do not show `Day / Week / Month`.
 
 ## Collection
 
@@ -16,13 +16,13 @@ Wide layouts may use a responsive grid; narrow layouts use a single list. Grid c
 
 Each note preview includes:
 
-1. category or source label with redundant text/icon;
-2. title;
-3. a short plain-text excerpt;
-4. created or updated time;
-5. optional relationship to today's context.
+1. a first-line heading;
+2. a short plain-text excerpt;
+3. creation time.
 
-Cards use `sq-lg`, a white or step-50 surface, and a 1px border. Category tints remain subtle. Selected state uses focus and border in addition to color.
+Do not invent categories or show a `Personal only` filter: the current note contract has no category field. Search the original saved content, not synthetic preview metadata.
+
+Cards use `sq-lg`, a white or step-50 surface, and a 1px border. Any preview tint remains subtle and does not imply a category. Selected state uses focus and border in addition to color.
 
 ## Floe behavior
 
@@ -30,20 +30,21 @@ Do not embed a mascot or speech bubble in a note card. Floe actions become avail
 
 ## Detail transition
 
-Opening a note preserves the collection's query, filters, and scroll position. Back restores the same context. Wide layouts use a bounded reading dialog; narrow layouts use a full reading route. Keep the close action and creation date visible while the original text scrolls. Respect reduced-motion preferences.
+Opening a note preserves the collection's query and scroll position. Back restores the same context. Wide layouts use a bounded reading dialog; narrow layouts use a full reading route. Keep the close action and creation date visible while the original text scrolls. Respect reduced-motion preferences.
 
 The current note projection carries the complete original content in `NoteItem.title`; it is not a separate heading. Render that exact content as selectable body text, preserving internal whitespace and newlines. Never substitute preview/appearance excerpts for the original. Derive a short first-line heading and at most three preview lines for collection cards without modifying the stored content. Do not show unsupported editing controls or placeholder editing explanations.
 
 ## States
 
 - Empty collection: offer `New note` and explain capture briefly.
-- No search results: retain the query and offer filter reset.
+- No search results: retain the query and offer `Clear search`.
 - Loading: preserve card geometry.
 - Sync/source issue: keep local readable content and identify stale metadata.
 
 ## Acceptance criteria
 
 - Notes and calendar controls cannot be confused.
-- Every card remains legible without its category tint.
+- Every card remains legible without its preview tint.
+- Screen readers announce a bounded heading/excerpt preview and an open action, not the entire hidden note body. The reader exposes the complete original.
 - Note cards contain no proactive assistant overlays.
 - Keyboard navigation follows visual order at every responsive column count.

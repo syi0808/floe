@@ -140,8 +140,8 @@
   "filter": "Filter",
   "newNote": "New note",
   "noNotesFound": "No notes found",
-  "tryADifferentSearchOrClearThe": "Try a different search or clear the current filter.",
-  "clearFilters": "Clear filters",
+  "tryADifferentSearch": "Try a different search.",
+  "clearSearch": "Clear search",
   "couldNotSavePleaseTryAgain": "Could not save. Please try again.",
   "cancel": "Cancel",
   "saving": "Saving…",
@@ -534,7 +534,6 @@
   "voiceOpenConversation": "Open a conversation before starting voice.",
   "notesEmptyTitle": "A place for your thoughts",
   "notesEmptyBody": "Keep an idea, a reminder, or something you want to return to.",
-  "personalNotesFilter": "Personal only",
   "notesMatchingCount": "Matching notes · {count}",
   "@notesMatchingCount": {
     "placeholders": {

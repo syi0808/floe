@@ -26,53 +26,44 @@ Widget previewAppearance(Widget child) => DayAppearance(
   dailyNote: 'Focus on finalizing the launch plan and getting feedback on the deck. Keep the afternoon light for deep work and planning.',
   notes: const {
     'launch-plan': NoteAppearance(
-      category: 'Planning',
       excerpt: 'Finalizing timelines and aligning on priorities for a smooth launch next week.',
       timestamp: 'Today, 2:28 PM',
     ),
     'focus-choice': NoteAppearance(
-      category: 'Ideas',
       excerpt: 'Protect your focus like it’s your most valuable asset. It shapes everything.',
       timestamp: 'Today, 9:12 AM',
       tone: ItemTone.blue,
     ),
     'design-feedback': NoteAppearance(
-      category: 'Work',
       excerpt: 'Loved the direction. Small tweaks to spacing and hierarchy will make a big impact.',
       timestamp: 'Yesterday, 4:40 PM',
       tone: ItemTone.amber,
     ),
     'gratitude': NoteAppearance(
-      category: 'Personal',
       excerpt: 'Grateful for the small wins, meaningful conversations, and moments of calm.',
       timestamp: 'Yesterday, 9:07 PM',
       tone: ItemTone.mint,
     ),
     'deep-work': NoteAppearance(
-      category: 'Focus',
       excerpt: 'Morning is my best window for deep work. No meetings, no distractions.',
       timestamp: 'Yesterday, 8:30 AM',
     ),
     'design-systems': NoteAppearance(
-      category: 'Learning',
       excerpt: 'Consistency creates clarity. Systems scale ideas into beautiful experiences.',
       timestamp: 'Sep 2, 6:15 PM',
     ),
     'customer-delight': NoteAppearance(
-      category: 'Ideas',
       excerpt: 'The little details are the big difference. Make the experience feel effortless.',
       timestamp: 'Sep 2, 11:20 AM',
       tone: ItemTone.blue,
     ),
     'team-retro': NoteAppearance(
-      category: 'Work',
       excerpt:
           'Celebrate wins, learn openly, and keep raising the bar together.',
       timestamp: 'Sep 1, 3:45 PM',
       tone: ItemTone.amber,
     ),
     'evening-reset': NoteAppearance(
-      category: 'Personal',
       excerpt: 'Slow down, reflect, and prepare for a better tomorrow.',
       timestamp: 'Sep 1, 9:30 PM',
       tone: ItemTone.mint,

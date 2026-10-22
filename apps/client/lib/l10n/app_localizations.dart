@@ -898,17 +898,17 @@ abstract class AppLocalizations {
   /// **'No notes found'**
   String get noNotesFound;
 
-  /// No description provided for @tryADifferentSearchOrClearThe.
+  /// No description provided for @tryADifferentSearch.
   ///
   /// In en, this message translates to:
-  /// **'Try a different search or clear the current filter.'**
-  String get tryADifferentSearchOrClearThe;
+  /// **'Try a different search.'**
+  String get tryADifferentSearch;
 
-  /// No description provided for @clearFilters.
+  /// No description provided for @clearSearch.
   ///
   /// In en, this message translates to:
-  /// **'Clear filters'**
-  String get clearFilters;
+  /// **'Clear search'**
+  String get clearSearch;
 
   /// No description provided for @couldNotSavePleaseTryAgain.
   ///
@@ -2649,12 +2649,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Keep an idea, a reminder, or something you want to return to.'**
   String get notesEmptyBody;
-
-  /// No description provided for @personalNotesFilter.
-  ///
-  /// In en, this message translates to:
-  /// **'Personal only'**
-  String get personalNotesFilter;
 
   /// No description provided for @notesMatchingCount.
   ///

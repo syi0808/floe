@@ -37,7 +37,7 @@ void main() {
     (tester) async {
       await openNotes(tester, empty: true);
       expect(find.text('A place for your thoughts'), findsOneWidget);
-      expect(find.text('Clear filters'), findsNothing);
+      expect(find.text('Clear search'), findsNothing);
       expect(find.text('New note'), findsOneWidget);
       await tester.tap(find.text('New note'));
       await tester.pumpAndSettle();
@@ -86,17 +86,28 @@ void main() {
     },
   );
   for (final width in [390.0, 1200.0]) {
-    testWidgets('personal filter is explicit and reversible at $width', (
-      tester,
-    ) async {
+    testWidgets('search is preserved and reversible at $width', (tester) async {
       await openNotes(tester, width: width);
       expect(find.text('All notes · 1'), findsOneWidget);
-      await tester.tap(find.text('Personal only'));
+      expect(find.text('Personal only'), findsNothing);
+      expect(find.text('Work'), findsNothing);
+      await tester.enterText(find.byType(TextField).first, 'launch');
+      await tester.pumpAndSettle();
+      expect(find.text('Matching notes · 1'), findsOneWidget);
+      await tester.tap(find.byTooltip('Tasks'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Notes'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+        'launch',
+      );
+      await tester.enterText(find.byType(TextField).first, 'missing note');
       await tester.pumpAndSettle();
       expect(find.text('Matching notes · 0'), findsOneWidget);
       expect(find.text('No notes found'), findsOneWidget);
-      expect(find.text('Clear filters'), findsOneWidget);
-      await tester.tap(find.text('Clear filters'));
+      expect(find.text('Clear search'), findsOneWidget);
+      await tester.tap(find.text('Clear search'));
       await tester.pumpAndSettle();
       expect(find.text('All notes · 1'), findsOneWidget);
       expect(find.text('Launch plan'), findsOneWidget);

@@ -17,7 +17,6 @@ class _NotesScreen extends StatefulWidget {
 
 class _NotesScreenState extends State<_NotesScreen> {
   final search = TextEditingController();
-  bool personalOnly = false;
   bool _restored = false;
 
   @override
@@ -26,17 +25,13 @@ class _NotesScreenState extends State<_NotesScreen> {
     if (_restored) return;
     _restored = true;
     final saved = PageStorage.maybeOf(context)
-        ?.readState(context, identifier: 'notes-filters');
-    if (saved is (String, bool)) {
-      search.text = saved.$1;
-      personalOnly = saved.$2;
-    }
+        ?.readState(context, identifier: 'notes-search');
+    if (saved is String) search.text = saved;
   }
 
-  void _rememberFilters() => PageStorage.maybeOf(context)?.writeState(context, (
-    search.text,
-    personalOnly,
-  ), identifier: 'notes-filters');
+  void _rememberSearch() =>
+      PageStorage.maybeOf(context)
+          ?.writeState(context, search.text, identifier: 'notes-search');
 
   Future<void> _create() async {
     final saved = await showFloeDialog<bool>(
@@ -47,8 +42,7 @@ class _NotesScreenState extends State<_NotesScreen> {
     if (saved == true && mounted) {
       setState(() {
         search.clear();
-        personalOnly = false;
-        _rememberFilters();
+        _rememberSearch();
       });
     }
   }
@@ -62,18 +56,10 @@ class _NotesScreenState extends State<_NotesScreen> {
   @override
   Widget build(BuildContext context) {
     final query = search.text.trim().toLowerCase();
-    final appearances = DayAppearance.of(context)?.notes ?? {};
-    final notes = widget.notes.where((note) {
-      final appearance = appearances[note.id];
-      return (!personalOnly ||
-              (appearance?.category ?? 'Personal') == 'Personal') &&
-          [
-            note.title,
-            appearance?.excerpt ?? '',
-            appearance?.category ?? '',
-          ].any((text) => text.toLowerCase().contains(query));
-    }).toList();
-    final filtered = query.isNotEmpty || personalOnly;
+    final notes = widget.notes
+        .where((note) => note.title.toLowerCase().contains(query))
+        .toList();
+    final filtered = query.isNotEmpty;
     final copy = AppLocalizations.of(context);
     final heading = Text(
       filtered
@@ -96,35 +82,11 @@ class _NotesScreenState extends State<_NotesScreen> {
                 placeholder: AppLocalizations.of(context).searchNotes,
                 onChanged: (_) {
                   setState(() {});
-                  _rememberFilters();
+                  _rememberSearch();
                 },
               ),
             ),
           ],
-        ),
-      ),
-    );
-    final filter = MergeSemantics(
-      child: Semantics(
-        toggled: personalOnly,
-        child: FloeButton.outlined(
-          style: ButtonStyle(
-            backgroundColor: WidgetStatePropertyAll(
-              personalOnly ? FloePalette.primary100 : FloePalette.neutral0,
-            ),
-            side: const WidgetStatePropertyAll(
-              BorderSide(color: FloePalette.neutral200),
-            ),
-          ),
-          onPressed: () {
-            setState(() => personalOnly = !personalOnly);
-            _rememberFilters();
-          },
-          icon: Icon(
-            personalOnly ? LucideIcons.check : LucideIcons.filter,
-            size: 18,
-          ),
-          child: Text(copy.personalNotesFilter),
         ),
       ),
     );
@@ -143,25 +105,27 @@ class _NotesScreenState extends State<_NotesScreen> {
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    heading,
+                    if (MediaQuery.textScalerOf(context).scale(16) <= 20)
+                      Row(
+                        children: [
+                          Expanded(child: heading),
+                          SizedBox(width: 12),
+                          create,
+                        ],
+                      )
+                    else ...[
+                      heading,
+                      SizedBox(height: FloeSpace.md),
+                      Align(alignment: Alignment.centerRight, child: create),
+                    ],
                     SizedBox(height: FloeSpace.md),
                     searchField,
-                    SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(child: filter),
-                        SizedBox(width: 10),
-                        Expanded(child: create),
-                      ],
-                    ),
                   ],
                 )
               : Row(
                   children: [
                     Expanded(child: heading),
                     SizedBox(width: 240, child: searchField),
-                    SizedBox(width: 10),
-                    filter,
                     SizedBox(width: 10),
                     create,
                   ],
@@ -192,19 +156,16 @@ class _NotesScreenState extends State<_NotesScreen> {
                   ),
                   SizedBox(height: FloeSpace.sm),
                   Text(
-                    filtered
-                        ? copy.tryADifferentSearchOrClearThe
-                        : copy.notesEmptyBody,
+                    filtered ? copy.tryADifferentSearch : copy.notesEmptyBody,
                     textAlign: TextAlign.center,
                   ),
                   if (filtered)
                     FloeButton.text(
                       onPressed: () => setState(() {
                         search.clear();
-                        personalOnly = false;
-                        _rememberFilters();
+                        _rememberSearch();
                       }),
-                      child: Text(AppLocalizations.of(context).clearFilters),
+                      child: Text(copy.clearSearch),
                     ),
                 ],
               ),
@@ -334,64 +295,69 @@ class _NotePreviewCard extends StatelessWidget {
     final excerpt = lineBreak < 0
         ? appearance?.excerpt ?? ''
         : content.substring(lineBreak + 1).trim();
-    return FloeSquircle(
-      fill: Color.lerp(Colors.white, tone.fill, .4)!,
-      borderColor: tone.border,
-      child: FloePressable(
-        size: FloeSquircleSize.lg,
-        onPressed: onOpen,
-        child: Padding(
-          padding: EdgeInsets.all(mobile ? 25 : 29),
-          child: IntrinsicHeight(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(minHeight: mobile ? 160 : 187),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+    final timestamp = appearance?.timestamp ?? _date(context, note.createdAt);
+    String brief(String value, int limit) {
+      final text = value.replaceAll(RegExp(r'\s+'), ' ').trim();
+      return text.characters.length > limit
+          ? '${text.characters.take(limit)}…'
+          : text;
+    }
+
+    return Semantics(
+      key: ValueKey('note-preview-${note.id}'),
+      button: true,
+      enabled: true,
+      label: [
+        brief(heading, 96),
+        brief(excerpt, 160),
+        timestamp,
+      ].where((text) => text.isNotEmpty).join('\n'),
+      child: FloeSquircle(
+        fill: Color.lerp(Colors.white, tone.fill, .4)!,
+        borderColor: tone.border,
+        child: FloePressable(
+          size: FloeSquircleSize.lg,
+          onPressed: onOpen,
+          child: ExcludeSemantics(
+            child: Padding(
+              padding: EdgeInsets.all(mobile ? 25 : 29),
+              child: IntrinsicHeight(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: mobile ? 124 : 151),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _ToneDot(color: tone.accent),
-                      SizedBox(width: 10),
                       Text(
-                        appearance?.category ??
-                            AppLocalizations.of(context).personal,
-                        style: FloeType.label.copyWith(
+                        heading,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: FloeType.headline.copyWith(
+                          fontWeight: FontWeight.w600,
                           height: 1.2,
-                          color: FloePalette.neutral600,
+                        ),
+                      ),
+                      if (excerpt.isNotEmpty) ...[
+                        SizedBox(height: 14),
+                        Text(
+                          excerpt,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: FloeType.body.copyWith(height: 1.65),
+                        ),
+                      ],
+                      Spacer(),
+                      SizedBox(height: FloeSpace.lg),
+                      Text(
+                        timestamp,
+                        style: FloeType.bodySmall.copyWith(
+                          fontSize: 12,
+                          height: 1.2,
+                          color: FloePalette.neutral500,
                         ),
                       ),
                     ],
                   ),
-                  SizedBox(height: 20),
-                  Text(
-                    heading,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: FloeType.headline.copyWith(
-                      fontWeight: FontWeight.w600,
-                      height: 1.2,
-                    ),
-                  ),
-                  if (excerpt.isNotEmpty) ...[
-                    SizedBox(height: 14),
-                    Text(
-                      excerpt,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: FloeType.body.copyWith(height: 1.65),
-                    ),
-                  ],
-                  Spacer(),
-                  SizedBox(height: FloeSpace.lg),
-                  Text(
-                    appearance?.timestamp ?? _date(context, note.createdAt),
-                    style: FloeType.bodySmall.copyWith(
-                      fontSize: 12,
-                      height: 1.2,
-                      color: FloePalette.neutral500,
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ),
@@ -489,14 +455,4 @@ class _NoteDetail extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ToneDot extends StatelessWidget {
-  const _ToneDot({required this.color});
-  final Color color;
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-    child: SizedBox.square(dimension: 10),
-  );
 }

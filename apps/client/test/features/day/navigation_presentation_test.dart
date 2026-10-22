@@ -102,7 +102,10 @@ void main() {
 
           await tester.tap(find.byTooltip('Notes'));
           await tester.pumpAndSettle();
-          await tester.tap(find.text('Personal only'));
+          await tester.enterText(
+            find.byType(TextField).first,
+            'no matching note',
+          );
           await tester.pumpAndSettle();
           expect(find.text('Matching notes · 0'), findsOneWidget);
           await tester.tap(find.byTooltip('Tasks'));

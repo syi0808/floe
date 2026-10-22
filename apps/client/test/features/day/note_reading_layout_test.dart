@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
@@ -41,7 +43,6 @@ void main() {
             notes: const {
               'reading-note': NoteAppearance(
                 excerpt: 'This is not the saved note.',
-                category: 'Work',
                 timestamp: 'Preview only',
               ),
             },
@@ -69,8 +70,40 @@ void main() {
         await tester.ensureVisible(heading);
         await tester.pumpAndSettle();
         expect(tester.widget<Text>(heading).maxLines, 2);
-        await tester.tap(heading);
-        await tester.pumpAndSettle();
+        final handle = tester.ensureSemantics();
+        try {
+          await tester.pump();
+          final card = find.byKey(const ValueKey('note-preview-reading-note'));
+          final node = tester.getSemantics(card);
+          final data = node.getSemanticsData();
+          expect(data.label, contains('Reading draft'));
+          expect(
+            data.label,
+            isNot(contains('The final sentence stays reachable.')),
+          );
+          expect(data.label.length, lessThan(300));
+          expect(data.flagsCollection.isButton, isTrue);
+          expect(data.hasAction(ui.SemanticsAction.tap), isTrue);
+          tester
+              .renderObject(card)
+              .owner!
+              .semanticsOwner!
+              .performAction(node.id, ui.SemanticsAction.tap);
+          await tester.pumpAndSettle();
+          expect(
+            tester
+                .getSemantics(
+                  find.descendant(
+                    of: find.byKey(const Key('note-original-content')),
+                    matching: find.byType(EditableText),
+                  ),
+                )
+                .value,
+            body,
+          );
+        } finally {
+          handle.dispose();
+        }
         expect(tester.takeException(), isNull, reason: 'Note reader');
         final original = find.byKey(const Key('note-original-content'));
         expect(tester.widget<SelectableText>(original).data, body);
