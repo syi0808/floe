@@ -275,6 +275,7 @@ final class FloePressable extends StatelessWidget {
   const FloePressable({
     required this.child,
     required this.onPressed,
+    this.focusNode,
     this.onDoubleTap,
     this.onHover,
     this.onFocusChange,
@@ -289,6 +290,7 @@ final class FloePressable extends StatelessWidget {
 
   final Widget child;
   final VoidCallback? onPressed;
+  final FocusNode? focusNode;
   final VoidCallback? onDoubleTap;
   final ValueChanged<bool>? onHover;
   final ValueChanged<bool>? onFocusChange;
@@ -306,6 +308,7 @@ final class FloePressable extends StatelessWidget {
     borderColor: borderColor,
     borderWidth: borderWidth,
     child: InkWell(
+      focusNode: focusNode,
       statesController: statesController,
       mouseCursor: onPressed == null
           ? SystemMouseCursors.basic

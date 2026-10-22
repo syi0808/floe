@@ -38,6 +38,9 @@ final class ConnectorScreen extends StatefulWidget {
 final class _ConnectorScreenState extends State<ConnectorScreen> {
   IntegrationRef? selectedIntegration;
   SourceRef? selectedSource;
+  final Map<String, FocusNode> _cardFocusNodes = {};
+  _ConnectionNavigationReturn? _connectionReturn;
+  int _navigationGeneration = 0;
   ConnectionsController? get controller => widget.controller;
   @override
   void initState() {
@@ -48,17 +51,21 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   }
 
   void _changed() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _pruneCardFocusNodes();
+    setState(() {});
   }
 
   @override
   void didUpdateWidget(ConnectorScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.initialSourceRef != widget.initialSourceRef) {
+      _invalidateConnectionReturn();
       selectedIntegration = null;
       selectedSource = widget.initialSourceRef;
     }
     if (oldWidget.controller != controller) {
+      _invalidateConnectionReturn(disposeFocusNodes: true);
       selectedIntegration = null;
       selectedSource = null;
       oldWidget.controller?.removeListener(_changed);
@@ -70,7 +77,194 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
   @override
   void dispose() {
     controller?.removeListener(_changed);
+    _invalidateConnectionReturn(disposeFocusNodes: true);
     super.dispose();
+  }
+
+  FocusNode _cardFocusNode(String identity) => _cardFocusNodes.putIfAbsent(
+    identity,
+    () => FocusNode(
+      debugLabel: identity.startsWith('source:')
+          ? 'Connections source card'
+          : 'Connections integration card',
+    ),
+  );
+
+  String _sourceIdentity(SourceRef source) => 'source:${source.value}';
+
+  String _integrationIdentity(IntegrationRef integration) =>
+      'integration:${integration.value}';
+
+  String? get _selectedIdentity =>
+      switch ((selectedSource, selectedIntegration)) {
+        (final source?, _) => _sourceIdentity(source),
+        (_, final integration?) => _integrationIdentity(integration),
+        _ => null,
+      };
+
+  void _openConnectionDetail({
+    required String identity,
+    SourceRef? source,
+    IntegrationRef? integration,
+  }) {
+    final current = controller;
+    final focusNode = _cardFocusNodes[identity];
+    if (current == null || focusNode == null) return;
+
+    final position = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    final restore = _ConnectionNavigationReturn(
+      controller: current,
+      identity: identity,
+      position: position,
+      offset: position?.pixels,
+      focusNode: focusNode,
+    );
+    final generation = ++_navigationGeneration;
+    setState(() {
+      _connectionReturn = restore;
+      selectedSource = source;
+      selectedIntegration = integration;
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_isCurrentDetailEntry(generation, current, identity) ||
+          position == null ||
+          !position.hasContentDimensions ||
+          !identical(
+            Scrollable.maybeOf(context, axis: Axis.vertical)?.position,
+            position,
+          )) {
+        return;
+      }
+      if (position.pixels != 0) position.jumpTo(0);
+    });
+  }
+
+  bool _isCurrentDetailEntry(
+    int generation,
+    ConnectionsController expectedController,
+    String expectedIdentity,
+  ) =>
+      mounted &&
+      generation == _navigationGeneration &&
+      controller == expectedController &&
+      _selectedIdentity == expectedIdentity &&
+      _connectionReturn?.identity == expectedIdentity &&
+      _connectionReturn?.controller == expectedController &&
+      _hasListCard(expectedIdentity);
+
+  void _backToConnections() {
+    final restore = _connectionReturn;
+    final selectedIdentity = _selectedIdentity;
+    final current = controller;
+    final generation = ++_navigationGeneration;
+    setState(() {
+      selectedIntegration = null;
+      selectedSource = null;
+      _connectionReturn = null;
+    });
+
+    if (restore == null ||
+        current != restore.controller ||
+        selectedIdentity != restore.identity) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _navigationGeneration ||
+          controller != restore.controller ||
+          selectedSource != null ||
+          selectedIntegration != null ||
+          !_hasListCard(restore.identity)) {
+        return;
+      }
+
+      final currentPosition = Scrollable.maybeOf(
+        context,
+        axis: Axis.vertical,
+      )?.position;
+      final position = restore.position;
+      if (position != null &&
+          position.hasContentDimensions &&
+          identical(currentPosition, position) &&
+          restore.offset != null) {
+        position.jumpTo(
+          restore.offset!.clamp(0, position.maxScrollExtent).toDouble(),
+        );
+      }
+
+      final focusNode = _cardFocusNodes[restore.identity];
+      if (focusNode == restore.focusNode &&
+          focusNode?.context != null &&
+          focusNode!.canRequestFocus) {
+        focusNode.requestFocus();
+      }
+    });
+  }
+
+  bool _hasListCard(String identity) {
+    final overview = controller?.overview;
+    if (overview == null) return false;
+    if (identity.startsWith('integration:')) {
+      final ref = identity.substring('integration:'.length);
+      return overview.integrations.any(
+        (value) => value.integrationRef.value == ref,
+      );
+    }
+    if (!identity.startsWith('source:')) return false;
+    final ref = identity.substring('source:'.length);
+    final linkedSources = {
+      for (final integration in overview.integrations)
+        if (integration.source case final source?) source.sourceRef.value,
+    };
+    return !linkedSources.contains(ref) &&
+        overview.sources.any((value) => value.sourceRef.value == ref);
+  }
+
+  void _pruneCardFocusNodes() {
+    final overview = controller?.overview;
+    if (overview == null) {
+      if (controller?.ready == false) {
+        _invalidateConnectionReturn(disposeFocusNodes: true);
+      }
+      return;
+    }
+    final linkedSources = {
+      for (final integration in overview.integrations)
+        if (integration.source case final source?) source.sourceRef.value,
+    };
+    final identities = <String>{
+      for (final integration in overview.integrations)
+        _integrationIdentity(integration.integrationRef),
+      for (final source in overview.sources)
+        if (!linkedSources.contains(source.sourceRef.value))
+          _sourceIdentity(source.sourceRef),
+    };
+    for (final identity in _cardFocusNodes.keys.toList()) {
+      if (identities.contains(identity)) continue;
+      final node = _cardFocusNodes.remove(identity)!;
+      if (identical(_connectionReturn?.focusNode, node)) {
+        _invalidateConnectionReturn();
+      }
+      node.dispose();
+    }
+    final restore = _connectionReturn;
+    if (restore != null &&
+        (restore.controller != controller ||
+            !identities.contains(restore.identity))) {
+      _invalidateConnectionReturn();
+    }
+  }
+
+  void _invalidateConnectionReturn({bool disposeFocusNodes = false}) {
+    _navigationGeneration++;
+    _connectionReturn = null;
+    if (!disposeFocusNodes) return;
+    for (final node in _cardFocusNodes.values) {
+      node.dispose();
+    }
+    _cardFocusNodes.clear();
   }
 
   @override
@@ -176,10 +370,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
             child: FloeTextLink(
               label: AppLocalizations.of(context).backToConnections,
               icon: LucideIcons.arrowLeft,
-              onPressed: () => setState(() {
-                selectedIntegration = null;
-                selectedSource = null;
-              }),
+              onPressed: _backToConnections,
             ),
           ),
           const SizedBox(height: FloeSpace.lg),
@@ -270,16 +461,21 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     );
   }
 
-  Widget _sourceCard(SourceSummary source) => _ConnectionCard(
-    key: ValueKey('source-${source.sourceRef.value}'),
-    icon: LucideIcons.plug,
-    name: source.displayLabels.join(' · '),
-    status: ServicePresentation.sourceAvailabilityLabel(source.availability),
-    tone: source.availability == 'available'
-        ? FloeBadgeTone.success
-        : FloeBadgeTone.neutral,
-    onPressed: () => setState(() => selectedSource = source.sourceRef),
-  );
+  Widget _sourceCard(SourceSummary source) {
+    final identity = _sourceIdentity(source.sourceRef);
+    return _ConnectionCard(
+      key: ValueKey(identity),
+      focusNode: _cardFocusNode(identity),
+      icon: LucideIcons.plug,
+      name: source.displayLabels.join(' · '),
+      status: ServicePresentation.sourceAvailabilityLabel(source.availability),
+      tone: source.availability == 'available'
+          ? FloeBadgeTone.success
+          : FloeBadgeTone.neutral,
+      onPressed: () =>
+          _openConnectionDetail(identity: identity, source: source.sourceRef),
+    );
+  }
 
   Widget _integrationCard(
     BuildContext context,
@@ -289,8 +485,10 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
       integration,
       AppLocalizations.of(context),
     );
+    final identity = _integrationIdentity(integration.integrationRef);
     return _ConnectionCard(
-      key: ValueKey('integration-${integration.integrationRef.value}'),
+      key: ValueKey(identity),
+      focusNode: _cardFocusNode(identity),
       icon: presentation.icon,
       name: presentation.name,
       description: presentation.description,
@@ -308,8 +506,10 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
         'available' => FloeBadgeTone.info,
         _ => FloeBadgeTone.neutral,
       },
-      onPressed: () =>
-          setState(() => selectedIntegration = integration.integrationRef),
+      onPressed: () => _openConnectionDetail(
+        identity: identity,
+        integration: integration.integrationRef,
+      ),
     );
   }
 }
@@ -319,6 +519,7 @@ final class _ConnectionCard extends StatelessWidget {
     super.key,
     required this.icon,
     required this.name,
+    required this.focusNode,
     this.description,
     required this.status,
     required this.tone,
@@ -326,6 +527,7 @@ final class _ConnectionCard extends StatelessWidget {
   });
   final IconData icon;
   final String name;
+  final FocusNode focusNode;
   final String? description;
   final String status;
   final FloeBadgeTone tone;
@@ -338,6 +540,7 @@ final class _ConnectionCard extends StatelessWidget {
     borderColor: FloePalette.neutral200,
     borderWidth: 1,
     hoverFill: FloePalette.primary50,
+    focusNode: focusNode,
     onPressed: onPressed,
     child: Padding(
       padding: const EdgeInsets.all(FloeSpace.lg),
@@ -377,6 +580,22 @@ final class _ConnectionCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+final class _ConnectionNavigationReturn {
+  const _ConnectionNavigationReturn({
+    required this.controller,
+    required this.identity,
+    required this.position,
+    required this.offset,
+    required this.focusNode,
+  });
+
+  final ConnectionsController controller;
+  final String identity;
+  final ScrollPosition? position;
+  final double? offset;
+  final FocusNode focusNode;
 }
 
 final class _ConnectionCardGrid extends StatelessWidget {
