@@ -36,29 +36,44 @@ class _ErrorNotice extends StatelessWidget {
   final String message;
   final VoidCallback dismiss;
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.only(top: FloeSpace.base),
-    child: FloeSquircle(
-      size: FloeSquircleSize.md,
-      fill: FloePalette.error50,
-      borderColor: FloePalette.coral100,
-      padding: EdgeInsets.symmetric(
-        horizontal: FloeSpace.base,
-        vertical: FloeSpace.sm,
+  Widget build(BuildContext context) {
+    final compactLargeText =
+        MediaQuery.sizeOf(context).width <= 360 &&
+        MediaQuery.textScalerOf(context).scale(1) >= 2;
+    return Padding(
+      padding: EdgeInsets.only(top: FloeSpace.base),
+      child: FloeSquircle(
+        size: FloeSquircleSize.md,
+        fill: FloePalette.error50,
+        borderColor: FloePalette.coral100,
+        padding: EdgeInsets.symmetric(
+          horizontal: FloeSpace.base,
+          vertical: FloeSpace.sm,
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.error_outline, color: FloePalette.error600),
+            SizedBox(width: FloeSpace.md),
+            Expanded(
+              child: Tooltip(
+                message: message,
+                child: Text(
+                  message,
+                  maxLines: compactLargeText ? 2 : null,
+                  overflow: compactLargeText ? TextOverflow.ellipsis : null,
+                  semanticsLabel: message,
+                ),
+              ),
+            ),
+            FloeButton.text(
+              onPressed: dismiss,
+              child: Text(AppLocalizations.of(context).close),
+            ),
+          ],
+        ),
       ),
-      child: Row(
-        children: [
-          Icon(Icons.error_outline, color: FloePalette.error600),
-          SizedBox(width: FloeSpace.md),
-          Expanded(child: Text(message)),
-          FloeButton.text(
-            onPressed: dismiss,
-            child: Text(AppLocalizations.of(context).close),
-          ),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }
 
 String _time(BuildContext context, DateTime value) =>

@@ -85,9 +85,13 @@ void main() {
             await tester.tap(find.text('Timeline'));
             await tester.pumpAndSettle();
             expect(find.byKey(const Key('timeline-card')), findsOneWidget);
-            await tester.tap(find.byKey(const Key('day-status-details')));
+            await tester.tap(find.byKey(const Key('day-status-warning')));
             await tester.pumpAndSettle();
-            expect(find.text('Calendar status unavailable'), findsNWidgets(2));
+            expect(find.text('Calendar status unavailable'), findsOneWidget);
+            expect(
+              find.byTooltip('Calendar status unavailable'),
+              findsOneWidget,
+            );
             await tester.tap(find.byType(FloeCheckbox));
             await tester.pumpAndSettle();
             expect(find.text('No tasks for this day.'), findsOneWidget);

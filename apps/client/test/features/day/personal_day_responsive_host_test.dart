@@ -266,28 +266,19 @@ void main() {
 
     await tester.tap(find.text('Timeline'));
     await tester.pumpAndSettle();
-    final status = find.byKey(const Key('day-status-details'));
+    final status = find.byKey(const Key('day-status-warning'));
     expect(status, findsOneWidget);
-    // At 200%, the warning wraps into the bounded header scroll view. Moving
-    // keyboard focus to it must reveal the whole action in the middle host.
-    var statusFocused = false;
-    for (var tab = 0; tab < 40 && !statusFocused; tab++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-      await tester.pumpAndSettle();
-      statusFocused = _hasKeyAncestor(
-        FocusManager.instance.primaryFocus?.context,
-        const Key('day-status-details'),
-      );
-    }
-    expect(
-      statusFocused,
-      isTrue,
-      reason: 'the status action should be tabbable',
-    );
-    final statusRect = tester.getRect(status);
+    // The toolbar action is visible on first render; it does not depend on
+    // moving keyboard focus through the clipped Timeline header.
     expect(status.hitTestable(), findsOneWidget);
+    expect(find.byTooltip('Calendar status unavailable'), findsOneWidget);
+    final statusRect = tester.getRect(status);
     expect(statusRect.top, greaterThanOrEqualTo(tester.getRect(host).top));
     expect(statusRect.bottom, lessThanOrEqualTo(tester.getRect(host).bottom));
+    expect(statusRect.width, greaterThanOrEqualTo(44));
+    expect(statusRect.height, greaterThanOrEqualTo(44));
+    expect(tester.getSemantics(status).flagsCollection.isLiveRegion, isTrue);
+    expect(tester.getSemantics(status).label, 'Calendar status unavailable');
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

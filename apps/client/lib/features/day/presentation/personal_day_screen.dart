@@ -51,6 +51,21 @@ part 'personal_day/feedback.dart';
 
 enum _DestinationView { today, tasks, notes, activity, connections, settings }
 
+final class _CalendarStatusPresentation {
+  const _CalendarStatusPresentation({
+    required this.agendaOwnsEmptyStatus,
+    required this.observationComplete,
+    required this.label,
+  });
+
+  final bool agendaOwnsEmptyStatus;
+  final bool observationComplete;
+  final String label;
+
+  bool get showFreshnessAction =>
+      !agendaOwnsEmptyStatus && !observationComplete;
+}
+
 const _primaryDestinations = [
   _DestinationView.today,
   _DestinationView.tasks,
@@ -362,18 +377,42 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           FloeLoadingOverlay(
             loading: controller.commandPending,
             child: switch (destination) {
-              _DestinationView.today => Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _DayToolbar(
-                    controller,
-                    narrow: narrow,
-                    onCreateEvent: widget.ownerGateways.runtime?.ready == true
-                        ? () => _openCalendarEditor()
-                        : null,
-                  ),
-                  Expanded(child: _content(narrow, snapshot)),
-                ],
+              _DestinationView.today => LayoutBuilder(
+                builder: (context, constraints) {
+                  final status = _calendarStatusFor(snapshot);
+                  final compactCalendar = constraints.maxWidth <= 800;
+                  final showToolbarStatus =
+                      compactTimeline &&
+                      compactCalendar &&
+                      status.showFreshnessAction;
+                  void openDayDetails() => _openDayDetails(snapshot);
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _DayToolbar(
+                        controller,
+                        narrow: narrow,
+                        onCreateEvent:
+                            widget.ownerGateways.runtime?.ready == true
+                            ? () => _openCalendarEditor()
+                            : null,
+                        statusLabel: showToolbarStatus ? status.label : null,
+                        onStatusPressed: showToolbarStatus
+                            ? openDayDetails
+                            : null,
+                      ),
+                      Expanded(
+                        child: _content(
+                          narrow,
+                          snapshot,
+                          status: status,
+                          showToolbarStatus: showToolbarStatus,
+                          onDayDetails: openDayDetails,
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
               _DestinationView.tasks => _TasksScreen(
                 snapshot: snapshot,
@@ -399,9 +438,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
-  Widget _content(bool narrow, DaySnapshot snapshot) {
-    final calendarChangesAvailable =
-        widget.ownerGateways.runtime?.ready == true;
+  _CalendarStatusPresentation _calendarStatusFor(DaySnapshot snapshot) {
     final hasEvents = snapshot.items.any((item) => item is EventItem);
     final agendaOwnsEmptyStatus =
         !hasEvents &&
@@ -410,13 +447,27 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final observationComplete =
         controller.hasCurrentObservation &&
         hasCompleteCalendarCoverage(snapshot, controller.query);
-    final showTimelineStatusAction =
-        compactTimeline && !agendaOwnsEmptyStatus && !observationComplete;
-    final statusLabel =
+    final label =
         !controller.hasCurrentObservation ||
             snapshot.calendarCoverage?.sources.isNotEmpty == true
         ? AppLocalizations.of(context).dayStatusNeedsRefresh
         : AppLocalizations.of(context).dayCalendarStatusUnavailable;
+    return _CalendarStatusPresentation(
+      agendaOwnsEmptyStatus: agendaOwnsEmptyStatus,
+      observationComplete: observationComplete,
+      label: label,
+    );
+  }
+
+  Widget _content(
+    bool narrow,
+    DaySnapshot snapshot, {
+    required _CalendarStatusPresentation status,
+    required bool showToolbarStatus,
+    required VoidCallback onDayDetails,
+  }) {
+    final calendarChangesAvailable =
+        widget.ownerGateways.runtime?.ready == true;
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
@@ -451,7 +502,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           snapshot: snapshot,
           query: controller.query,
           observationCurrent: controller.hasCurrentObservation,
-          hideEmptyStatus: agendaOwnsEmptyStatus,
+          hideEmptyStatus: status.agendaOwnsEmptyStatus,
           disabled: controller.commandPending,
           complete: _setTaskCompleted,
           onTasks: () => _selectDestination(_DestinationView.tasks),
@@ -463,57 +514,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       builder: (context, constraints) {
         if (constraints.maxWidth <= 800) {
           final copy = AppLocalizations.of(context);
-          void openDayDetails() => showFloeSheet<void>(
-            context,
-            (sheetContext) => SafeArea(
-              child: SizedBox(
-                height: MediaQuery.sizeOf(sheetContext).height * .7,
-                child: FloeCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(copy.dayDetails, style: FloeType.title),
-                          ),
-                          FloeButton.icon(
-                            key: const Key('day-details-close'),
-                            tooltip: copy.close,
-                            onPressed: () => Navigator.pop(sheetContext),
-                            icon: const Icon(LucideIcons.x, size: 18),
-                          ),
-                        ],
-                      ),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          child: AnimatedBuilder(
-                            animation: controller,
-                            builder: (context, _) => CalendarContextRail(
-                              snapshot: controller.snapshot ?? snapshot,
-                              query: controller.query,
-                              observationCurrent:
-                                  controller.hasCurrentObservation,
-                              disabled: controller.commandPending,
-                              complete: _setTaskCompleted,
-                              onTasks: () {
-                                Navigator.pop(sheetContext);
-                                _selectDestination(_DestinationView.tasks);
-                              },
-                              onOpenTask: (task) {
-                                Navigator.pop(sheetContext);
-                                _openTask(task);
-                              },
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          );
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -553,30 +553,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                                   : copy.dayTimeline,
                             ),
                           ),
-                          if (showTimelineStatusAction)
-                            Semantics(
-                              key: const Key('day-status-details'),
-                              container: true,
-                              liveRegion: true,
-                              child: FloeButton.text(
-                                icon: const Icon(
-                                  LucideIcons.ellipsis,
-                                  size: 18,
-                                ),
-                                onPressed: openDayDetails,
-                                child: Text(
-                                  statusLabel,
-                                  style: FloeType.bodySmall.copyWith(
-                                    color: FloePalette.warning600,
-                                  ),
-                                ),
-                              ),
-                            )
-                          else if (compactTimeline)
+                          if (compactTimeline && !showToolbarStatus)
                             FloeButton.icon(
                               key: const Key('day-details-opener'),
                               tooltip: copy.dayDetails,
-                              onPressed: openDayDetails,
+                              onPressed: onDayDetails,
                               icon: const Icon(LucideIcons.ellipsis, size: 18),
                             ),
                         ],
@@ -659,6 +640,60 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           ],
         );
       },
+    );
+  }
+
+  void _openDayDetails(DaySnapshot snapshot) {
+    final copy = AppLocalizations.of(context);
+    showFloeSheet<void>(
+      context,
+      (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * .7,
+          child: FloeCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(copy.dayDetails, style: FloeType.title),
+                    ),
+                    FloeButton.icon(
+                      key: const Key('day-details-close'),
+                      tooltip: copy.close,
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: const Icon(LucideIcons.x, size: 18),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: AnimatedBuilder(
+                      animation: controller,
+                      builder: (context, _) => CalendarContextRail(
+                        snapshot: controller.snapshot ?? snapshot,
+                        query: controller.query,
+                        observationCurrent: controller.hasCurrentObservation,
+                        disabled: controller.commandPending,
+                        complete: _setTaskCompleted,
+                        onTasks: () {
+                          Navigator.pop(sheetContext);
+                          _selectDestination(_DestinationView.tasks);
+                        },
+                        onOpenTask: (task) {
+                          Navigator.pop(sheetContext);
+                          _openTask(task);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 

@@ -115,13 +115,19 @@ Widget _app({
 Future<void> _mount(
   WidgetTester tester, {
   required double width,
+  double height = 1000,
   required double textScale,
   required DayQuery query,
   required _SyntheticDayGateway gateway,
   RuntimeController? runtime,
+  FakeViewPadding padding = const FakeViewPadding(),
 }) async {
-  tester.view.physicalSize = Size(width, 1000);
+  tester.view.physicalSize = Size(width, height);
   tester.view.devicePixelRatio = 1;
+  tester.view.padding = padding;
+  tester.view.viewPadding = padding;
+  addTearDown(tester.view.resetPadding);
+  addTearDown(tester.view.resetViewPadding);
   await tester.pumpWidget(
     _app(
       query: query,
@@ -206,6 +212,8 @@ void main() {
             await tester.tap(find.text('Timeline'));
             await tester.pumpAndSettle();
             expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+            expect(find.byKey(const Key('day-status-warning')), findsNothing);
+            expect(find.byKey(const Key('day-details-opener')), findsOneWidget);
           }
 
           final refresh = find.byTooltip('Refresh calendar');
@@ -312,16 +320,63 @@ void main() {
       await tester.pump(const Duration(milliseconds: 510));
       expect(find.byType(FloeSpinner).evaluate(), isNotEmpty);
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
-      expect(find.text('Calendar status needs refresh'), findsOneWidget);
-      expect(find.byKey(const Key('day-status-details')), findsOneWidget);
+      expect(find.text('Calendar status needs refresh'), findsNothing);
+      expect(find.byKey(const Key('day-status-warning')), findsOneWidget);
       expect(find.byTooltip('Tasks and calendar status'), findsNothing);
+      expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
 
       gateway.completeDeferredRefresh();
       await tester.pumpAndSettle();
       expect(find.text('A little breathing room.'), findsOneWidget);
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
-      expect(find.byKey(const Key('day-status-details')), findsNothing);
+      expect(find.byKey(const Key('day-status-warning')), findsNothing);
       expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'narrow draft-suppressed empty status moves to the toolbar warning once',
+    (tester) async {
+      final query = _query();
+      final gateway = _SyntheticDayGateway(coverage: _partialCoverage());
+      final runtime = RuntimeController(
+        gateway: _ReadyRuntimeGateway(),
+        personId: query.personId,
+      );
+      await runtime.open();
+      addTearDown(runtime.dispose);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _mount(
+        tester,
+        width: 390,
+        textScale: 2,
+        query: query,
+        gateway: gateway,
+        runtime: runtime,
+      );
+      await tester.tap(find.text('Timeline'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('empty-day-status')), findsOneWidget);
+      expect(find.byKey(const Key('day-status-warning')), findsNothing);
+      expect(find.byKey(const Key('day-details-opener')), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Create event'));
+      await tester.pumpAndSettle();
+      expect(find.text('New event'), findsNWidgets(2));
+      expect(find.byKey(const Key('empty-day-status')), findsNothing);
+      expect(find.byKey(const Key('day-status-warning')), findsOneWidget);
+      expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
+      expect(find.byKey(const Key('day-details-opener')), findsNothing);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('empty-day-status')), findsOneWidget);
+      expect(find.byKey(const Key('day-status-warning')), findsNothing);
+      expect(find.byKey(const Key('day-details-opener')), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -375,6 +430,140 @@ void main() {
     },
   );
 
+  testWidgets(
+    '320px 200% Timeline keeps stale warning visible while the grid scrolls',
+    (tester) async {
+      final query = _query();
+      final gateway = _SyntheticDayGateway(
+        coverage: _completeCoverage(query),
+        items: [_event(query)],
+      );
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _mount(
+        tester,
+        width: 320,
+        height: 560,
+        textScale: 2,
+        query: query,
+        gateway: gateway,
+        padding: const FakeViewPadding(top: 24, bottom: 34),
+      );
+      expect(tester.takeException(), isNull, reason: 'initial render');
+      await tester.tap(find.text('Timeline'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Timeline render');
+
+      gateway.failNextRefresh = true;
+      await tester.tap(find.byTooltip('Refresh calendar'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'failed refresh render');
+      expect(find.text('Close'), findsOneWidget);
+      final errorMessage = find.text(
+        'Bad state: Day refresh failed: unavailable',
+      );
+      expect(errorMessage, findsOneWidget);
+      expect(tester.getSemantics(errorMessage).label, contains('unavailable'));
+      expect(find.text('Close').hitTestable(), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'dismissed error render');
+
+      final warning = find.byKey(const Key('day-status-warning'));
+      final statusTooltip = find.byTooltip('Calendar status needs refresh');
+      final refresh = find.byTooltip('Refresh calendar');
+      expect(warning, findsOneWidget);
+      expect(statusTooltip, findsOneWidget);
+      expect(warning.hitTestable(), findsOneWidget);
+      expect(refresh.hitTestable(), findsOneWidget);
+      expect(find.byKey(const Key('day-status-details')), findsNothing);
+      expect(find.byKey(const Key('day-details-opener')), findsNothing);
+      expect(tester.getSemantics(warning).flagsCollection.isLiveRegion, isTrue);
+      expect(
+        tester.getSemantics(warning).label,
+        'Calendar status needs refresh',
+      );
+      final warningRect = tester.getRect(warning);
+      expect(warningRect.width, greaterThanOrEqualTo(44));
+      expect(warningRect.height, greaterThanOrEqualTo(44));
+      final middle = tester.getRect(
+        find.byKey(const Key('personal-day-middle-viewport')),
+      );
+      expect(warningRect.top, greaterThanOrEqualTo(middle.top));
+      expect(warningRect.bottom, lessThanOrEqualTo(middle.bottom));
+
+      await expectLater(
+        find.byKey(const Key('full-day-screen')),
+        matchesGoldenFile(
+          'goldens/calendar_timeline_stale_events_widget_320_2x.png',
+        ),
+      );
+
+      await tester.tap(warning);
+      await tester.pumpAndSettle();
+      expect(find.text('Tasks and calendar status'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('day-details-close')));
+      await tester.pumpAndSettle();
+
+      final timelineScroll = find
+          .ancestor(
+            of: find.byKey(const Key('timeline-card')),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      expect(timelineScroll.hitTestable(), findsOneWidget);
+      await tester.drag(timelineScroll, const Offset(0, -180));
+      await tester.pumpAndSettle();
+      expect(find.text('Synthetic event').hitTestable(), findsOneWidget);
+      expect(warning.hitTestable(), findsOneWidget);
+      expect(tester.getRect(warning), warningRect);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'compact Timeline warning follows the calendar layout breakpoint',
+    (tester) async {
+      final query = _query();
+      final gateway = _SyntheticDayGateway(
+        coverage: _partialCoverage(),
+        items: [_event(query)],
+      );
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await _mount(
+        tester,
+        width: 820,
+        textScale: 1,
+        query: query,
+        gateway: gateway,
+      );
+      await tester.tap(find.text('Timeline'));
+      await tester.pumpAndSettle();
+      final warning = find.byKey(const Key('day-status-warning'));
+      expect(warning.hitTestable(), findsOneWidget);
+      expect(find.byKey(const Key('day-details-opener')), findsNothing);
+
+      tester.view.physicalSize = const Size(950, 1000);
+      await tester.pumpAndSettle();
+      expect(warning.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      tester.view.physicalSize = const Size(1200, 1000);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('day-status-warning')), findsNothing);
+      expect(find.byTooltip('Calendar status needs refresh'), findsNothing);
+      expect(
+        find.text('Some calendar data may be missing or out of date'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('day-details-opener')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   for (final textScale in [1.0, 2.0]) {
     testWidgets(
       'incomplete event coverage keeps one visible Timeline details action at text $textScale',
@@ -397,14 +586,18 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.text('Calendar status needs refresh'), findsOneWidget);
-        final statusAction = find.byKey(const Key('day-status-details'));
+        expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
+        final statusAction = find.byKey(const Key('day-status-warning'));
         expect(statusAction, findsOneWidget);
-        await tester.ensureVisible(statusAction);
+        expect(statusAction.hitTestable(), findsOneWidget);
         expect(find.byTooltip('Tasks and calendar status'), findsNothing);
         expect(
           tester.getSemantics(statusAction).flagsCollection.isLiveRegion,
           isTrue,
+        );
+        expect(
+          tester.getSemantics(statusAction).label,
+          'Calendar status needs refresh',
         );
         final refresh = find.byTooltip('Refresh calendar');
         expect(refresh, findsOneWidget);
@@ -420,8 +613,8 @@ void main() {
         await tester.tap(find.byTooltip('Refresh calendar'));
         await tester.pumpAndSettle();
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.text('Calendar status needs refresh'), findsNothing);
-        expect(find.byKey(const Key('day-status-details')), findsNothing);
+        expect(find.byTooltip('Calendar status needs refresh'), findsNothing);
+        expect(find.byKey(const Key('day-status-warning')), findsNothing);
         expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
@@ -455,8 +648,8 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.text('Calendar status needs refresh'), findsOneWidget);
-        expect(find.byKey(const Key('day-status-details')), findsOneWidget);
+        expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
+        expect(find.byKey(const Key('day-status-warning')), findsOneWidget);
         expect(find.byTooltip('Tasks and calendar status'), findsNothing);
         expect(find.text('Close'), findsOneWidget);
         await tester.tap(find.text('Close'));
@@ -465,15 +658,15 @@ void main() {
         // Dismissing the read error must not make the retained event snapshot
         // look current or remove its only visible status/details control.
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.text('Calendar status needs refresh'), findsOneWidget);
-        final statusAction = find.byKey(const Key('day-status-details'));
+        expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
+        final statusAction = find.byKey(const Key('day-status-warning'));
         expect(statusAction, findsOneWidget);
-        await tester.ensureVisible(statusAction);
+        expect(statusAction.hitTestable(), findsOneWidget);
         expect(find.byTooltip('Tasks and calendar status'), findsNothing);
         final refresh = find.byTooltip('Refresh calendar');
         expect(refresh, findsOneWidget);
         expect(tester.getRect(refresh).bottom, lessThanOrEqualTo(1000));
-        expect(tester.getRect(statusAction).bottom, lessThanOrEqualTo(1000));
+        expect(statusAction.hitTestable(), findsOneWidget);
 
         final golden = textScale == 1
             ? 'goldens/calendar_timeline_stale_events_widget_390.png'
@@ -487,8 +680,8 @@ void main() {
         await tester.tap(refresh);
         await tester.pumpAndSettle();
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.text('Calendar status needs refresh'), findsNothing);
-        expect(find.byKey(const Key('day-status-details')), findsNothing);
+        expect(find.byTooltip('Calendar status needs refresh'), findsNothing);
+        expect(find.byKey(const Key('day-status-warning')), findsNothing);
         expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());

@@ -203,10 +203,14 @@ class _DayToolbar extends StatelessWidget {
     this.controller, {
     required this.narrow,
     required this.onCreateEvent,
+    required this.statusLabel,
+    required this.onStatusPressed,
   });
   final PersonalDayController controller;
   final bool narrow;
   final VoidCallback? onCreateEvent;
+  final String? statusLabel;
+  final VoidCallback? onStatusPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -265,6 +269,25 @@ class _DayToolbar extends StatelessWidget {
             );
           },
           icon: const Icon(LucideIcons.refreshCw, size: 18),
+        ),
+      if (statusLabel != null && onStatusPressed != null)
+        Semantics(
+          key: const Key('day-status-warning'),
+          label: statusLabel,
+          button: true,
+          container: true,
+          liveRegion: true,
+          onTap: onStatusPressed,
+          child: ExcludeSemantics(
+            child: FloeButton.icon(
+              tooltip: statusLabel,
+              onPressed: onStatusPressed,
+              style: IconButton.styleFrom(
+                foregroundColor: FloePalette.warning600,
+              ),
+              icon: const Icon(LucideIcons.triangleAlert, size: 18),
+            ),
+          ),
         ),
     ];
     return Padding(
