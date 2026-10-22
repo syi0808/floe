@@ -1756,11 +1756,11 @@ abstract class AppLocalizations {
   /// **'Bring events from your Mac into your day.'**
   String get bringEventsFromYourMacIntoYour;
 
-  /// No description provided for @loadingCalendar.
+  /// No description provided for @loading.
   ///
   /// In en, this message translates to:
-  /// **'Loading calendar'**
-  String get loadingCalendar;
+  /// **'Loading'**
+  String get loading;
 
   /// No description provided for @dismissDialog.
   ///

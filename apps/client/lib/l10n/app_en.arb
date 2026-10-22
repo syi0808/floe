@@ -286,7 +286,7 @@
   "availableServices": "Available services",
   "unavailableServices": "Unavailable services",
   "bringEventsFromYourMacIntoYour": "Bring events from your Mac into your day.",
-  "loadingCalendar": "Loading calendar",
+  "loading": "Loading",
   "dismissDialog": "Dismiss dialog",
   "readOnly": "Read-only",
   "couldNotStartFloeCore": "Could not start Floe Core",

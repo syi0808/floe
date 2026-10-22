@@ -61,7 +61,7 @@ final class _FloeSpinnerState extends State<FloeSpinner>
     final radius = widget.size * 11 / 32;
     final center = (widget.size - dotSize) / 2;
     return Semantics(
-      label: widget.label ?? AppLocalizations.of(context).loadingCalendar,
+      label: widget.label ?? AppLocalizations.of(context).loading,
       liveRegion: true,
       child: RotationTransition(
         turns: animation,

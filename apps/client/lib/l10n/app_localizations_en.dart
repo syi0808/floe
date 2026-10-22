@@ -938,7 +938,7 @@ class AppLocalizationsEn extends AppLocalizations {
       'Bring events from your Mac into your day.';
 
   @override
-  String get loadingCalendar => 'Loading calendar';
+  String get loading => 'Loading';
 
   @override
   String get dismissDialog => 'Dismiss dialog';
