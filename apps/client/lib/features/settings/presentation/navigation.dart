@@ -6,6 +6,7 @@ class _SettingsNavigation extends StatelessWidget {
     required this.controller,
     required this.pages,
     required this.selected,
+    required this.focusNodes,
     required this.onSelected,
   });
 
@@ -13,6 +14,7 @@ class _SettingsNavigation extends StatelessWidget {
   final ScrollController? controller;
   final List<_SettingsPage> pages;
   final _SettingsPage selected;
+  final Map<_SettingsPage, FocusNode> focusNodes;
   final ValueChanged<_SettingsPage> onSelected;
 
   @override
@@ -36,6 +38,7 @@ class _SettingsNavigation extends StatelessWidget {
             _SettingsPage.remoteServer => 'Remote server',
           },
           selected: page == selected,
+          focusNode: focusNodes[page],
           onPressed: () => onSelected(page),
         ),
     ];
@@ -59,12 +62,14 @@ class _SettingsSection extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    required this.focusNode,
     this.selected = false,
     super.key,
   });
   final IconData icon;
   final String label;
   final bool selected;
+  final FocusNode? focusNode;
   final VoidCallback onPressed;
 
   @override
@@ -78,6 +83,7 @@ class _SettingsSection extends StatelessWidget {
       borderWidth: 0,
       child: FloePressable(
         size: FloeSquircleSize.md,
+        focusNode: focusNode,
         onPressed: onPressed,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

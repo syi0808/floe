@@ -66,6 +66,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       : _SettingsPage.assistantFeatures;
   final navigationScrollController = ScrollController();
   final contentScrollController = ScrollController();
+  final Map<_SettingsPage, FocusNode> _sectionFocusNodes = {};
+
+  FocusNode _sectionFocusNode(_SettingsPage page) =>
+      _sectionFocusNodes.putIfAbsent(
+        page,
+        () => FocusNode(debugLabel: 'Settings ${page.name} section'),
+      );
+
+  _SettingsPage get _navigationPage => selectedPage == _SettingsPage.memory
+      ? _SettingsPage.dataPrivacy
+      : selectedPage;
+
+  void _focusSelectedSection() {
+    _sectionFocusNode(_navigationPage).requestFocus();
+  }
 
   List<_SettingsPage> get _availablePages => [
     if (widget.operationPolicyController != null) _SettingsPage.operationPolicy,
@@ -79,22 +94,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void didUpdateWidget(SettingsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.assistantFeatureSourceTarget !=
-            oldWidget.assistantFeatureSourceTarget &&
-        widget.assistantFeatureSourceTarget != null) {
+    final assistantTargetChanged =
+        widget.assistantFeatureSourceTarget !=
+        oldWidget.assistantFeatureSourceTarget;
+    if (assistantTargetChanged && widget.assistantFeatureSourceTarget != null) {
+      _resetContentScroll();
       selectedPage = _SettingsPage.assistantFeatures;
+      _sectionFocusNode(_SettingsPage.assistantFeatures).requestFocus();
+    } else if (assistantTargetChanged &&
+        selectedPage == _SettingsPage.assistantFeatures) {
+      _resetContentScroll();
+    }
+    if ((oldWidget.assistantFeatureController !=
+                widget.assistantFeatureController &&
+            selectedPage == _SettingsPage.assistantFeatures) ||
+        ((oldWidget.memoryController != widget.memoryController ||
+                oldWidget.runtime != widget.runtime) &&
+            (selectedPage == _SettingsPage.dataPrivacy ||
+                selectedPage == _SettingsPage.memory)) ||
+        (oldWidget.connectionsController != widget.connectionsController &&
+            selectedPage == _SettingsPage.remoteServer) ||
+        (oldWidget.operationPolicyController !=
+                widget.operationPolicyController &&
+            selectedPage == _SettingsPage.operationPolicy)) {
+      _resetContentScroll();
     }
     if (!_availablePages.contains(selectedPage) &&
         !(selectedPage == _SettingsPage.memory &&
             widget.memoryController != null)) {
-      selectedPage = _availablePages.first;
+      final nextPage = _availablePages.first;
+      if (selectedPage != nextPage) _resetContentScroll();
+      selectedPage = nextPage;
+      _sectionFocusNode(_navigationPage).requestFocus();
     }
+  }
+
+  void _resetContentScroll() {
+    if (!contentScrollController.hasClients) return;
+    for (final position in contentScrollController.positions) {
+      if (position.hasContentDimensions && position.pixels != 0) {
+        position.jumpTo(0);
+      }
+    }
+  }
+
+  void _selectPage(_SettingsPage page) {
+    if (selectedPage == page) {
+      _focusSelectedSection();
+      return;
+    }
+    _resetContentScroll();
+    setState(() => selectedPage = page);
+    _sectionFocusNode(
+      page == _SettingsPage.memory ? _SettingsPage.dataPrivacy : page,
+    ).requestFocus();
   }
 
   @override
   void dispose() {
     navigationScrollController.dispose();
     contentScrollController.dispose();
+    for (final node in _sectionFocusNodes.values) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -106,7 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       runtime: widget.runtime!,
       controller: widget.memoryController!,
       platform: widget.platform,
-      onManageMemory: () => setState(() => selectedPage = _SettingsPage.memory),
+      onManageMemory: () => _selectPage(_SettingsPage.memory),
     ),
     _SettingsPage.assistantFeatures => AssistantFeatureSettings(
       controller: widget.assistantFeatureController!,
@@ -117,7 +179,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _SettingsPage.memory => AgentMemorySettings(
       controller: widget.memoryController!,
       runtime: widget.runtime!,
-      onBack: () => setState(() => selectedPage = _SettingsPage.dataPrivacy),
+      onBack: () => _selectPage(_SettingsPage.dataPrivacy),
     ),
     _SettingsPage.remoteServer => ConnectorScreen(
       controller: widget.connectionsController,
@@ -159,10 +221,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       horizontal: narrow,
       controller: narrow ? navigationScrollController : null,
       pages: _availablePages,
-      selected: selectedPage == _SettingsPage.memory
-          ? _SettingsPage.dataPrivacy
-          : selectedPage,
-      onSelected: (page) => setState(() => selectedPage = page),
+      selected: _navigationPage,
+      focusNodes: {
+        for (final page in _availablePages) page: _sectionFocusNode(page),
+      },
+      onSelected: _selectPage,
     );
     final content = FloeAnimatedSwap(
       beginScale: 1,

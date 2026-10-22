@@ -245,7 +245,7 @@ final class _GatewayConnectionPanelState extends State<GatewayConnectionPanel> {
               const Text('Connection boundary', style: FloeType.controlLabel),
               const SizedBox(height: 6),
               Text(
-                'Pairing connects this device to your server. Connector permissions control which sources may be used; service credentials remain on the server.',
+                'Pairing connects this device to your server. Connector permissions control which sources may be used.',
                 style: FloeType.body.copyWith(color: FloePalette.neutral600),
               ),
             ],
