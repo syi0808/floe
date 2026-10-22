@@ -690,30 +690,36 @@ class _AgentPanelState extends State<AgentPanel> {
   Widget _activityMessage(
     AppLocalizations strings,
     AgentCapabilityMessage message,
-  ) => ExpansionTile(
-    tilePadding: EdgeInsets.zero,
-    childrenPadding: const EdgeInsets.only(bottom: FloeSpace.sm),
-    title: Text(strings.agentConversationSource, style: FloeType.controlLabel),
-    subtitle: Text(
-      strings.agentConversationSourceDetails,
-      style: FloeType.bodySmall.copyWith(fontSize: 12),
-    ),
-    children: [
-      Align(
-        alignment: Alignment.centerLeft,
-        child: SelectableText(
-          _sourceText(strings, message),
-          style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+  ) => Padding(
+    padding: const EdgeInsets.only(top: FloeSpace.sm),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          container: true,
+          header: true,
+          child: Text(
+            strings.agentConversationSource,
+            style: FloeType.controlLabel,
+          ),
         ),
-      ),
-      if (message.hasArtifactMediaType(
-            'application/vnd.floe.actions.calendar-proposal+json;version=1',
-          ) &&
-          message.executionReceipt != null) ...[
-        const SizedBox(height: FloeSpace.md),
-        AgentProposalCard(controller: widget.controller, message: message),
+        const SizedBox(height: FloeSpace.sm),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: SelectableText(
+            _sourceText(strings, message),
+            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+          ),
+        ),
+        if (message.hasArtifactMediaType(
+              'application/vnd.floe.actions.calendar-proposal+json;version=1',
+            ) &&
+            message.executionReceipt != null) ...[
+          const SizedBox(height: FloeSpace.md),
+          AgentProposalCard(controller: widget.controller, message: message),
+        ],
       ],
-    ],
+    ),
   );
 
   String _sourceText(AppLocalizations strings, AgentCapabilityMessage message) {

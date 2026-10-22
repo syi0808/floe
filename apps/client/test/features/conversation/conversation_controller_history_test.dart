@@ -702,6 +702,116 @@ void main() {
   }
 
   testWidgets(
+    'execution details reveals complete delegation sources and read-only proposal review',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 720);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+      final output = List.generate(
+        64,
+        (index) =>
+            'Line ${index + 1}: 제안 원문 stays complete and selectable at narrow widths.',
+      ).join('\n');
+      final userMessage = {
+        ..._message(_m5),
+        'text': 'Please review this calendar proposal.',
+      };
+      final assistantMessage = {
+        ..._message(_m6),
+        'kind': 'assistant',
+        'text': 'I prepared a proposal for review.',
+      };
+      final initialSession = _session(
+        messages: [
+          userMessage,
+          assistantMessage,
+          _proposalDelegationMessage(output: output),
+          _failedDelegationMessage(),
+        ],
+      );
+      final surfaceSession = _session(
+        messages: [userMessage, assistantMessage],
+      );
+      final h = await _Harness.create(
+        initialSession: initialSession,
+        surfaceRead: (_) async => _surfaceEnvelope(surfaceSession),
+      );
+      addTearDown(h.dispose);
+      h.transport.proposalPreview = (_) async =>
+          _proposalPreviewEnvelope(_readyProposal('Personal calendar'));
+
+      final semantics = tester.ensureSemantics();
+      try {
+        await tester.pumpWidget(_panelApp(h.controller));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Execution details'), findsOneWidget);
+        expect(find.text('Source'), findsNothing);
+        expect(find.text('View source'), findsNothing);
+        expect(find.text('Review proposal'), findsNothing);
+        expect(find.text('Add to calendar'), findsNothing);
+        expect(find.byType(ExpansionTile), findsOneWidget);
+        expect(h.transport.proposalQueries, isEmpty);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.text('Execution details'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Source'), findsNWidgets(2));
+        expect(find.text('View source'), findsNothing);
+        expect(find.byType(ExpansionTile), findsOneWidget);
+        expect(find.text('This source is unavailable.'), findsOneWidget);
+        expect(h.transport.proposalQueries, isEmpty);
+        final sourceHeading = tester.getSemantics(find.text('Source').first);
+        final executionDetails = tester.getSemantics(
+          find.text('Execution details'),
+        );
+        expect(sourceHeading.label, 'Source');
+        expect(sourceHeading.flagsCollection.isHeader, isTrue);
+        expect(executionDetails.label, 'Execution details');
+        expect(executionDetails.parent, isNot(same(sourceHeading)));
+        final source = find.byWidgetPredicate(
+          (widget) => widget is SelectableText && widget.data == output,
+        );
+        expect(source, findsOneWidget);
+        expect(
+          tester.getRect(source).right,
+          lessThanOrEqualTo(tester.view.physicalSize.width),
+        );
+        expect(find.text('Review proposal'), findsOneWidget);
+        expect(find.text('Add to calendar'), findsNothing);
+        expect(tester.takeException(), isNull);
+
+        await tester.ensureVisible(find.text('Review proposal'));
+        await tester.tap(find.text('Review proposal'));
+        await tester.pumpAndSettle();
+
+        expect(h.transport.proposalQueries, hasLength(1));
+        expect(
+          h.transport.proposalQueries.single['receipt'],
+          _proposalReceipt(),
+        );
+        expect(h.transport.proposalQueries.single['artifact_id'], _m3);
+        expect(find.text('Add to calendar'), findsOneWidget);
+        await tester.ensureVisible(find.text('Add to calendar'));
+        await tester.pumpAndSettle();
+        expect(find.text('Add to calendar').hitTestable(), findsOneWidget);
+        expect(h.transport.commands, isEmpty);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+      }
+    },
+  );
+
+  testWidgets(
     'exact proposal refresh rejects a different operation and preserves its current card',
     (tester) async {
       final h = await _Harness.create();
@@ -2427,10 +2537,11 @@ Map<String, Object?> _proposalReceipt() => {
   'journal_revision': 2,
   'digest': 'a' * 64,
 };
-AgentCapabilityMessage _proposalMessage(
-  String artifact, {
+Map<String, Object?> _proposalDelegationMessage({
+  required String output,
+  String artifact = _m3,
   String messageId = _m1,
-}) => AgentCapabilityMessage.fromDelegation({
+}) => {
   'kind': 'delegation',
   'message_id': messageId,
   'turn_id': '00000000-0000-4000-8000-000000000099',
@@ -2439,7 +2550,7 @@ AgentCapabilityMessage _proposalMessage(
     'task_id': _m1,
     'agent_id': 'scheduler',
     'state': 'completed',
-    'result': 'Proposal ready',
+    'result': output,
     'artifacts': [
       {
         'artifact_id': artifact,
@@ -2450,7 +2561,41 @@ AgentCapabilityMessage _proposalMessage(
       },
     ],
   },
-});
+};
+
+Map<String, Object?> _failedDelegationMessage() => {
+  'kind': 'delegation',
+  'message_id': _replacementMessageId,
+  'turn_id': _turnId,
+  'task': {
+    'execution_receipt': {
+      'execution': {
+        'task_id': _m4,
+        'execution_id': _replacementMessageId,
+        'executor_generation': 1,
+      },
+      'task_revision': 2,
+      'journal_revision': 2,
+      'digest': 'c' * 64,
+    },
+    'task_id': _m4,
+    'agent_id': 'scheduler',
+    'state': 'failed',
+    'issue': {'code': 'failed', 'message': 'Synthetic proposal failure.'},
+    'artifacts': const <Object?>[],
+  },
+};
+
+AgentCapabilityMessage _proposalMessage(
+  String artifact, {
+  String messageId = _m1,
+}) => AgentCapabilityMessage.fromDelegation(
+  _proposalDelegationMessage(
+    artifact: artifact,
+    messageId: messageId,
+    output: 'Proposal ready',
+  ),
+);
 Widget _proposalApp(
   ConversationController controller,
   AgentCapabilityMessage message,

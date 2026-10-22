@@ -13,7 +13,6 @@
   "agentConversationTitle": "Conversation",
   "agentConversationEmpty": "Ask Floe anything…",
   "agentConversationSource": "Source",
-  "agentConversationSourceDetails": "View source",
   "agentConversationSourceUnavailable": "This source is unavailable.",
   "agentConversationCommitment": "{title}: {start}–{end}",
   "@agentConversationCommitment": { "placeholders": { "title": {"type": "String"}, "start": {"type": "String"}, "end": {"type": "String"} } },

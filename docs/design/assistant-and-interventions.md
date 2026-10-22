@@ -49,6 +49,11 @@ It provides:
 - session resume/search without forcing the full archive into the current context;
 - accessible status announcements and keyboard focus recovery after stop/error.
 
+Capability and delegation source output stays inside one initially collapsed
+`Execution details` disclosure. `Source` is a noninteractive heading within it;
+opened output remains complete and selectable. A proposal keeps its explicit
+`Review proposal` action, and reading or reviewing it does not submit a change.
+
 Conversation turns have distinct visual roles without repeated speaker labels. User text uses an end-aligned neutral squircle capped at 88% of the message width; assistant replies are unboxed prose on the panel ground. Keep a small text inset and the existing turn spacing. Both paths remain selectable, and each turn retains an accessible speaker container with explicit content children. Partial results keep an explicit visible and accessible marker. This treatment does not change provenance, review, recovery, or action cards.
 
 Keep the panel header and Close control outside the compact transcript scroller. Short or empty histories leave the composer at the bottom of the available body; overflowing content and its footer remain scrollable. Expandable recent work belongs in the scrollable history, not the fixed header. Its cancel/stop controls retain 44px targets and accessible action names even at large text sizes.

@@ -49,9 +49,6 @@ class AppLocalizationsEn extends AppLocalizations {
   String get agentConversationSource => 'Source';
 
   @override
-  String get agentConversationSourceDetails => 'View source';
-
-  @override
   String get agentConversationSourceUnavailable =>
       'This source is unavailable.';
 

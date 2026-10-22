@@ -172,12 +172,6 @@ abstract class AppLocalizations {
   /// **'Source'**
   String get agentConversationSource;
 
-  /// No description provided for @agentConversationSourceDetails.
-  ///
-  /// In en, this message translates to:
-  /// **'View source'**
-  String get agentConversationSourceDetails;
-
   /// No description provided for @agentConversationSourceUnavailable.
   ///
   /// In en, this message translates to:
