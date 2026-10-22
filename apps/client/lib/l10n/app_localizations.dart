@@ -2829,6 +2829,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Alerts stay unchanged. Manage recurring events and invitations in the original calendar.'**
   String get eventEditScope;
+
+  /// No description provided for @eventDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Details'**
+  String get eventDetails;
+
+  /// No description provided for @eventEditAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit…'**
+  String get eventEditAction;
+
+  /// No description provided for @eventDeleteAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete…'**
+  String get eventDeleteAction;
+
+  /// No description provided for @eventActions.
+  ///
+  /// In en, this message translates to:
+  /// **'Event actions'**
+  String get eventActions;
 }
 
 class _AppLocalizationsDelegate

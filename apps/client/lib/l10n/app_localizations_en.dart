@@ -1584,4 +1584,16 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get eventEditScope =>
       'Alerts stay unchanged. Manage recurring events and invitations in the original calendar.';
+
+  @override
+  String get eventDetails => 'Details';
+
+  @override
+  String get eventEditAction => 'Edit…';
+
+  @override
+  String get eventDeleteAction => 'Delete…';
+
+  @override
+  String get eventActions => 'Event actions';
 }

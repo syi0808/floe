@@ -939,121 +939,130 @@ class CalendarEventCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tone = DayAppearance.tone(context, event.id, ItemTone.blue);
+    final hasActions =
+        event.actionTarget != null && (onEdit != null || onDelete != null);
     final textScale = MediaQuery.textScalerOf(context).scale(12) / 12;
     final label =
         '${event.title} · ${calendarRange(context, event, snapshot.timezoneOffsetSeconds, date: snapshot.date)}';
+    void openDetails() => openCalendarEvent(
+      context,
+      event,
+      snapshot,
+      onEdit: onEdit,
+      onDelete: onDelete,
+    );
     return FloeTooltip(
       message: label,
       triggerMode: TooltipTriggerMode.manual,
       child: Semantics(
         label: label,
         button: true,
+        enabled: true,
+        onTap: openDetails,
         child: FloePressable(
           fill: tone.fill,
           size: height < 24 ? FloeSquircleSize.xs : FloeSquircleSize.md,
-          onPressed: () => openCalendarEvent(
-            context,
-            event,
-            snapshot,
-            onEdit: onEdit,
-            onDelete: onDelete,
-          ),
-          onDoubleTap: () => openCalendarEvent(
-            context,
-            event,
-            snapshot,
-            onEdit: onEdit,
-            onDelete: onDelete,
-          ),
+          onPressed: openDetails,
+          onDoubleTap: openDetails,
           hoverFill: tone.border,
-          child: height < 24 * textScale
-              ? Align(
-                  alignment: Alignment.centerLeft,
-                  child: Container(
-                    margin: EdgeInsets.only(left: 4),
-                    width: 3,
-                    height: height * .7,
-                    color: tone.accent,
-                  ),
-                )
-              : LayoutBuilder(
-                  builder: (context, constraints) {
-                    if (constraints.maxWidth < 100) {
-                      return Padding(
-                        padding: const EdgeInsets.only(left: 6, right: 24),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            event.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: FloeType.caption,
+          child: ExcludeSemantics(
+            child: height < 24 * textScale
+                ? Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      margin: EdgeInsets.only(left: 4),
+                      width: 3,
+                      height: height * .7,
+                      color: tone.accent,
+                    ),
+                  )
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      if (constraints.maxWidth < 100) {
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            left: 6,
+                            right: hasActions ? 24 : 6,
                           ),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              event.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: FloeType.caption,
+                            ),
+                          ),
+                        );
+                      }
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          12,
+                          0,
+                          hasActions ? 28 : 12,
+                          0,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: tone.accent,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    event.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: FloeType.label.copyWith(height: 1.2),
+                                  ),
+                                  if (height >= 42 * textScale) ...[
+                                    SizedBox(height: 3),
+                                    Text(
+                                      calendarRange(
+                                        context,
+                                        event,
+                                        snapshot.timezoneOffsetSeconds,
+                                        date: snapshot.date,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: FloeType.caption.copyWith(
+                                        height: 1.2,
+                                        color: FloePalette.neutral600,
+                                      ),
+                                    ),
+                                  ],
+                                  if (height >= 58 * textScale &&
+                                      event.calendarLabel != null) ...[
+                                    SizedBox(height: 3),
+                                    Text(
+                                      event.calendarLabel!,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: FloeType.micro.copyWith(
+                                        height: 1.2,
+                                        color: FloePalette.neutral600,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       );
-                    }
-                    return Padding(
-                      padding: EdgeInsets.fromLTRB(12, 0, 28, 0),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: tone.accent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  event.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: FloeType.label.copyWith(height: 1.2),
-                                ),
-                                if (height >= 42 * textScale) ...[
-                                  SizedBox(height: 3),
-                                  Text(
-                                    calendarRange(
-                                      context,
-                                      event,
-                                      snapshot.timezoneOffsetSeconds,
-                                      date: snapshot.date,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: FloeType.caption.copyWith(
-                                      height: 1.2,
-                                      color: FloePalette.neutral600,
-                                    ),
-                                  ),
-                                ],
-                                if (height >= 58 * textScale &&
-                                    event.calendarLabel != null) ...[
-                                  SizedBox(height: 3),
-                                  Text(
-                                    event.calendarLabel!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: FloeType.micro.copyWith(
-                                      height: 1.2,
-                                      color: FloePalette.neutral600,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
+                    },
+                  ),
+          ),
         ),
       ),
     );

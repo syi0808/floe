@@ -239,6 +239,7 @@ class _ScheduleEventRow extends StatelessWidget {
         ? copy.allDay
         : '${axis.time(event.startsAt)} – ${axis.time(event.endsAt)}';
     final writable = event.actionTarget != null;
+    final hasActions = writable && (onEdit != null || onDelete != null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: CalendarEventActions(
@@ -265,8 +266,8 @@ class _ScheduleEventRow extends StatelessWidget {
                   ? FloePalette.primary50
                   : Colors.transparent,
             ),
-            padding: const WidgetStatePropertyAll(
-              EdgeInsets.fromLTRB(12, 12, 40, 12),
+            padding: WidgetStatePropertyAll(
+              EdgeInsets.fromLTRB(12, 12, hasActions ? 40 : 12, 12),
             ),
           ),
           child: Column(

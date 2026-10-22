@@ -81,6 +81,8 @@ No speech bubbles or free-floating mascot heads over the timeline; the single st
 
 Omit the timeline's empty All day strip. The Schedule list uses title, time and an optional calendar label, with provenance and actions in the existing event detail/menu. Current events have a restrained violet emphasis; other rows remain neutral. Large text and overlapping events must expand list rows rather than clipping titles into miniature calendar blocks.
 
+Show a visible event overflow button only when a target-gated edit or delete action is available; omit unavailable menu actions. Read-only detail remains reachable by the primary click, context gestures and keyboard. Accessible event cards expose one enabled, fully labeled activation action.
+
 The timeline time marker stays behind event cards and never intercepts their input. Hour-label spacing scales with text size, while the reference line remains aligned to the actual minute. Grid guides follow the selected civil-day duration, including 23- and 25-hour days.
 
 ## Event detail handoff
