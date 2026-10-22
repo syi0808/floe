@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/features/voice/infrastructure/app_wire_voice_gateway.dart';
@@ -129,6 +131,159 @@ void main() {
       );
     },
   );
+
+  test(
+    'late pre-Stop recovery cannot resurrect the stopped command before Start',
+    () async {
+      const oldId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+      const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+      final staleRecovery = Completer<Map<String, dynamic>>();
+      var recoveryCalls = 0;
+      final transport = _Transport()
+        ..onQuery = (request) async {
+          final kind = request['query']['kind'];
+          if (kind != 'voice.start.recoverable') {
+            throw StateError('Unexpected synthetic query: $kind');
+          }
+          recoveryCalls++;
+          if (recoveryCalls == 1) {
+            return {
+              'kind': kind,
+              'status': _startStatus(oldId, surfaceId, 'bound')
+                ..addAll({
+                  'media': 'muted',
+                  'remote': 'connected',
+                  'stop_requested': false,
+                  'local_lease_released': false,
+                }),
+            };
+          }
+          if (recoveryCalls == 2) return staleRecovery.future;
+          return {'kind': kind, 'status': null};
+        }
+        ..onCommand = (request) async {
+          final kind = request['command']['kind'];
+          if (kind == 'voice.stop') {
+            final commandId = request['command']['voice_session_id'];
+            return {
+              'kind': kind,
+              'status': {
+                'command_id': commandId,
+                'surface_session_id': surfaceId,
+                'state': 'bound',
+                'media': 'stopped',
+                'remote': 'closed',
+                'stop_requested': true,
+                'local_lease_released': true,
+              },
+            };
+          }
+          if (kind == 'voice.start') {
+            return {
+              'kind': kind,
+              'status': _startStatus(
+                request['command_id'],
+                request['command']['surface_session_id'],
+                'preparing',
+              ),
+            };
+          }
+          throw StateError('Unexpected synthetic command: $kind');
+        };
+      final gateway = AppWireVoiceGateway(transport);
+
+      expect((await gateway.recoverPendingStart())?.commandId, oldId);
+      final oldRead = gateway.recoverPendingStart();
+      final stop = await gateway.stop();
+      expect(stop.localLeaseReleased, isTrue);
+      expect(gateway.pendingCommandId, isNull);
+
+      staleRecovery.complete({
+        'kind': 'voice.start.recoverable',
+        'status': {
+          'command_id': oldId,
+          'surface_session_id': surfaceId,
+          'state': 'bound',
+          'media': 'muted',
+          'remote': 'connected',
+          'stop_requested': false,
+          'local_lease_released': false,
+        },
+      });
+      expect(await oldRead, isNull);
+      expect(gateway.pendingCommandId, isNull);
+
+      final freshStart = await gateway.start(surfaceId);
+      final freshId = transport.commands.last['command_id'] as String;
+      expect(freshId, isNot(oldId));
+      expect(freshStart.commandId, freshId);
+      expect(freshStart.surfaceSessionId, surfaceId);
+      expect(freshStart.state.name, 'preparing');
+      expect(gateway.pendingCommandId, freshId);
+      expect(transport.commands.map((request) => request['command']['kind']), [
+        'voice.stop',
+        'voice.start',
+      ]);
+      expect(transport.commands[0]['command']['voice_session_id'], oldId);
+      expect(transport.commands[1]['command'], {
+        'kind': 'voice.start',
+        'surface_session_id': surfaceId,
+      });
+
+      // A subsequent genuinely fresh observation may still install a new
+      // command identity once no older recovery is in flight.
+      const recoveredId = 'e7bdc7ea-2830-44d9-98f5-1bc23de2c94d';
+      transport.onQuery = (request) async {
+        final kind = request['query']['kind'];
+        if (kind == 'voice.start.recoverable') {
+          return {
+            'kind': kind,
+            'status': _startStatus(recoveredId, surfaceId, 'preparing'),
+          };
+        }
+        throw StateError('Unexpected synthetic query: $kind');
+      };
+      await gateway.stop();
+      expect(gateway.pendingCommandId, isNull);
+      expect((await gateway.recoverPendingStart())?.commandId, recoveredId);
+      expect(gateway.pendingCommandId, recoveredId);
+    },
+  );
+
+  test('late recovery cannot replace a newer Start command identity', () async {
+    const staleId = 'd3c5b1bc-555e-4cd3-8f17-e694f9a4c3b9';
+    const surfaceId = 'fb0a4201-8e82-4a18-bfc1-0cf6bd35806e';
+    final staleRecovery = Completer<Map<String, dynamic>>();
+    var recoveryCalls = 0;
+    final transport = _Transport()
+      ..onQuery = (request) async {
+        final kind = request['query']['kind'];
+        recoveryCalls++;
+        if (recoveryCalls == 1) return staleRecovery.future;
+        return {'kind': kind, 'status': null};
+      }
+      ..onCommand = (request) async => {
+        'kind': 'voice.start',
+        'status': _startStatus(request['command_id'], surfaceId, 'preparing'),
+      };
+    final gateway = AppWireVoiceGateway(transport);
+
+    final oldRead = gateway.recoverPendingStart();
+    final started = await gateway.start(surfaceId);
+    final newId = transport.commands.single['command_id'] as String;
+    expect(started.commandId, newId);
+    expect(newId, isNot(staleId));
+    expect(gateway.pendingCommandId, newId);
+
+    staleRecovery.complete({
+      'kind': 'voice.start.recoverable',
+      'status': _startStatus(staleId, surfaceId, 'preparing'),
+    });
+    expect(await oldRead, isNull);
+    expect(gateway.pendingCommandId, newId);
+    expect(transport.commands, hasLength(1));
+    expect(transport.commands.single['command_id'], newId);
+  });
 
   test(
     'process restart recovers the journal command before allocating a new ID',

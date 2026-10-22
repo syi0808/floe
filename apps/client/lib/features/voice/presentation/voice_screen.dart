@@ -110,6 +110,8 @@ class _VoiceScreenState extends State<VoiceScreen> {
     final session = _session;
     final gateway = _gateway;
     if (_busy || session == null || gateway == null) return;
+    // Ignore recovery snapshots that started before or during this command.
+    _statusLoadRevision++;
     setState(() {
       _busy = true;
       _message = null;
@@ -137,7 +139,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
         _message = status == null ? _errorMessage(error) : _messageFor(status);
       });
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        _statusLoadRevision++;
+        setState(() => _busy = false);
+      }
     }
   }
 
@@ -145,6 +150,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
     final gateway = _gateway;
     final commandId = gateway?.pendingCommandId;
     if (gateway == null || commandId == null || _busy) return;
+    _statusLoadRevision++;
     setState(() => _busy = true);
     try {
       final status = await gateway.readStatus(commandId);
@@ -159,13 +165,19 @@ class _VoiceScreenState extends State<VoiceScreen> {
     } on Object catch (error) {
       if (mounted) setState(() => _message = _errorMessage(error));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        _statusLoadRevision++;
+        setState(() => _busy = false);
+      }
     }
   }
 
   Future<void> _cancelStart() async {
     final gateway = _gateway;
     if (gateway == null || _busy) return;
+    // Keep older Runtime-triggered reobservations from replacing the
+    // cancellation result after this action settles.
+    _statusLoadRevision++;
     setState(() {
       _busy = true;
       _message = null;
@@ -193,7 +205,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
         _message = status == null ? _errorMessage(error) : _messageFor(status);
       });
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        _statusLoadRevision++;
+        setState(() => _busy = false);
+      }
     }
   }
 

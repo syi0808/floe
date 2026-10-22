@@ -451,6 +451,97 @@ void main() {
     },
   );
 
+  testWidgets(
+    'stale reads cannot replace newer Start or Cancel results or identity',
+    (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final transport = _StartCancelRaceTransport();
+      final voice = AppWireVoiceGateway(transport);
+      final runtimeGateway = _ControlledRuntimeGateway();
+      final harness = await _mount(
+        tester,
+        gateway: voice,
+        runtimeGateway: runtimeGateway,
+      );
+      try {
+        expect(find.text('Start voice'), findsOneWidget);
+        expect(voice.pendingCommandId, isNull);
+
+        final preStartRead = transport.holdNextRecovery();
+        await _notifyReady(
+          runtimeGateway,
+          harness.runtime,
+          tester,
+          'before-start',
+        );
+        expect(transport.recoverableQueries, 2);
+        await tester.tap(find.text('Start voice'));
+        await tester.pumpAndSettle();
+
+        final startRequest = transport.commands.single;
+        final startedId = startRequest['command_id'] as String;
+        expect(startRequest['command'], {
+          'kind': 'voice.start',
+          'surface_session_id': _SyntheticVoiceGateway._commandId,
+        });
+        expect(voice.pendingCommandId, startedId);
+        expect(find.text('Connection pending'), findsOneWidget);
+        expect(find.text('Cancel connection'), findsOneWidget);
+        expect(find.text('Microphone: not started'), findsOneWidget);
+
+        preStartRead.complete(
+          _recoverableReply(
+            _preparingWireStatus(_SyntheticVoiceGateway._commandId),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(voice.pendingCommandId, startedId);
+        expect(find.text('Connection pending'), findsOneWidget);
+        expect(find.text('Cancel connection'), findsOneWidget);
+        expect(find.text('Voice session open'), findsNothing);
+
+        final duringCancelRead = transport.holdNextRecovery();
+        await _notifyReady(
+          runtimeGateway,
+          harness.runtime,
+          tester,
+          'before-cancel',
+        );
+        expect(transport.recoverableQueries, 4);
+        await tester.tap(find.text('Cancel connection'));
+        await tester.pumpAndSettle();
+
+        final cancelRequest = transport.commands.last;
+        expect(cancelRequest['command'], {
+          'kind': 'voice.start.cancel',
+          'surface_session_id': _SyntheticVoiceGateway._commandId,
+        });
+        expect(cancelRequest['command_id'], startedId);
+        expect(voice.pendingCommandId, isNull);
+        expect(find.text('Connection cancelled'), findsOneWidget);
+        expect(find.text('Start voice'), findsOneWidget);
+
+        duringCancelRead.complete(
+          _recoverableReply(_preparingWireStatus(startedId)),
+        );
+        await tester.pumpAndSettle();
+        expect(voice.pendingCommandId, isNull);
+        expect(find.text('Connection cancelled'), findsOneWidget);
+        expect(find.text('Start voice'), findsOneWidget);
+        expect(find.text('Cancel connection'), findsNothing);
+        expect(transport.commands, hasLength(2));
+        expect(
+          transport.commands.map((request) => request['command']['kind']),
+          ['voice.start', 'voice.start.cancel'],
+        );
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        harness.dispose();
+      }
+    },
+  );
+
   testWidgets('a pending runtime recovery completing after disposal is inert', (
     tester,
   ) async {
@@ -692,6 +783,80 @@ final class _RaceVoiceTransport implements AppWireTransport {
   Future<void> close() async {}
 }
 
+final class _StartCancelRaceTransport implements AppWireTransport {
+  final List<Map<String, dynamic>> commands = [];
+  final List<Completer<Map<String, dynamic>>> _heldRecoveries = [];
+  int recoverableQueries = 0;
+
+  Completer<Map<String, dynamic>> holdNextRecovery() {
+    final completer = Completer<Map<String, dynamic>>();
+    _heldRecoveries.add(completer);
+    return completer;
+  }
+
+  @override
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    commands.add(request);
+    final kind = request['command']?['kind'];
+    if (kind == 'voice.start') {
+      return {
+        'kind': kind,
+        'status': _preparingWireStatus(
+          request['command_id'] as String,
+          request['command']['surface_session_id'] as String,
+        ),
+      };
+    }
+    if (kind == 'voice.start.cancel') {
+      return {
+        'kind': kind,
+        'status': _cancelledWireStatus(
+          request['command_id'] as String,
+          request['command']['surface_session_id'] as String,
+        ),
+      };
+    }
+    throw StateError('Unexpected synthetic command: $kind');
+  }
+
+  @override
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    final kind = request['query']?['kind'];
+    if (kind == 'voice.start.recoverable') {
+      recoverableQueries++;
+      if (_heldRecoveries.isNotEmpty) return _heldRecoveries.removeAt(0).future;
+      return Future.value({'kind': kind, 'status': null});
+    }
+    throw StateError('Unexpected synthetic Voice query: $kind');
+  }
+
+  @override
+  Future<Map<String, dynamic>> eventsV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async => throw StateError('Synthetic race has no event transport.');
+
+  @override
+  Future<void> close() async {}
+}
+
+Map<String, dynamic> _cancelledWireStatus(String commandId, String surfaceId) =>
+    {
+      'command_id': commandId,
+      'surface_session_id': surfaceId,
+      'state': 'cancelled',
+      'media': null,
+      'remote': null,
+      'stop_requested': null,
+      'local_lease_released': null,
+    };
+
 Future<void> _notifyReady(
   _ControlledRuntimeGateway gateway,
   RuntimeController runtime,
@@ -749,6 +914,19 @@ Map<String, dynamic> _activeWireStatus() => {
   'remote': 'connected',
   'stop_requested': false,
   'local_lease_released': false,
+};
+
+Map<String, dynamic> _preparingWireStatus(
+  String commandId, [
+  String surfaceId = _SyntheticVoiceGateway._commandId,
+]) => {
+  'command_id': commandId,
+  'surface_session_id': surfaceId,
+  'state': 'preparing',
+  'media': null,
+  'remote': null,
+  'stop_requested': null,
+  'local_lease_released': null,
 };
 
 Map<String, dynamic> _stoppedWireStatus() => {

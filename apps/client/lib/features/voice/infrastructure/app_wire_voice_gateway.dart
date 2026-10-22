@@ -7,12 +7,17 @@ final class AppWireVoiceGateway implements VoiceGateway {
 
   final AppWireTransport _transport;
   _PendingStart? _pending;
+  int _pendingRevision = 0;
+  int _recoveryRevision = 0;
 
   @override
   String? get pendingCommandId => _pending?.commandId;
 
   @override
   Future<VoiceStartStatus?> recoverPendingStart() async {
+    final recoveryRevision = ++_recoveryRevision;
+    final pendingRevision = _pendingRevision;
+    final previous = _pending;
     final result = await _transport.queryV2({
       'schema_version': appWireProtocolVersion,
       'request_id': newAgentRequestId(),
@@ -38,23 +43,25 @@ final class AppWireVoiceGateway implements VoiceGateway {
       throw const FormatException('Voice returned a terminal recovery record.');
     }
 
-    final previous = _pending;
     if (previous != null && previous.commandId != recovered?.commandId) {
-      final exact = await readStatus(previous.commandId);
+      final exact = await _queryStatus(previous.commandId);
+      if (!_recoveryIsCurrent(recoveryRevision, pendingRevision)) return null;
       if (exact != null && _isRecoverable(exact)) {
         throw StateError('A different Voice Start is still unresolved.');
       }
-      _pending = null;
     }
+    if (!_recoveryIsCurrent(recoveryRevision, pendingRevision)) return null;
     if (recovered == null) {
-      _pending = null;
+      _setPending(null);
       return null;
     }
-    _pending = _PendingStart(
-      commandId: recovered.commandId,
-      surfaceSessionId: recovered.surfaceSessionId,
-      submitted: true,
-      restored: true,
+    _setPending(
+      _PendingStart(
+        commandId: recovered.commandId,
+        surfaceSessionId: recovered.surfaceSessionId,
+        submitted: true,
+        restored: true,
+      ),
     );
     return recovered;
   }
@@ -71,13 +78,14 @@ final class AppWireVoiceGateway implements VoiceGateway {
         commandId: newAgentRequestId(),
         surfaceSessionId: surfaceSessionId,
       );
-      _pending = pending;
+      _setPending(pending);
     } else if (pending.surfaceSessionId != surfaceSessionId) {
       throw StateError(
         'Resolve the previous Voice Start before changing session.',
       );
     }
 
+    _pendingRevision++;
     final previouslySubmitted = pending.submitted;
     pending.submitted = true;
     try {
@@ -91,16 +99,21 @@ final class AppWireVoiceGateway implements VoiceGateway {
         },
       }, timeout: const Duration(seconds: 10));
       final status = _decodeStatus(result, pending.commandId);
-      if (status.state == VoiceStartState.cancelled) _pending = null;
+      if (status.state == VoiceStartState.cancelled &&
+          _pending?.commandId == pending.commandId) {
+        _setPending(null);
+      }
       return status;
     } on AppWireTransportException catch (error) {
       if (mayDiscardPendingCommand(
         error.commandOutcome,
         previouslySubmitted: previouslySubmitted,
       )) {
-        _pending = null;
+        if (_pending?.commandId == pending.commandId) _setPending(null);
       }
       rethrow;
+    } finally {
+      _pendingRevision++;
     }
   }
 
@@ -109,37 +122,49 @@ final class AppWireVoiceGateway implements VoiceGateway {
     if (_pending == null) await recoverPendingStart();
     final pending = _pending;
     if (pending == null) throw StateError('No recoverable Voice Start exists.');
-    if (pending.restored) {
-      final exact = await readStatus(pending.commandId);
-      if (exact == null) {
-        throw StateError('Voice Start disappeared during recovery.');
+    _pendingRevision++;
+    try {
+      if (pending.restored) {
+        final exact = await _queryStatus(pending.commandId);
+        if (_pending?.commandId != pending.commandId) {
+          throw StateError('Voice Start changed during cancellation.');
+        }
+        if (exact == null) {
+          _setPending(null);
+          throw StateError('Voice Start disappeared during recovery.');
+        }
+        if (exact.state == VoiceStartState.cancelled) {
+          _setPending(null);
+          return exact;
+        }
+        if (exact.state == VoiceStartState.bound) {
+          throw StateError('Only an unbound Voice Start can be cancelled.');
+        }
       }
-      if (exact.state == VoiceStartState.cancelled) return exact;
-      if (exact.state == VoiceStartState.bound) {
-        throw StateError('Only an unbound Voice Start can be cancelled.');
-      }
-    }
-    final result = await _transport.commandV2({
-      'schema_version': appWireProtocolVersion,
-      'request_id': newAgentRequestId(),
-      'command_id': pending.commandId,
-      'command': {
-        'kind': 'voice.start.cancel',
-        'surface_session_id': pending.surfaceSessionId,
-      },
-    }, timeout: const Duration(seconds: 10));
-    final status = _decodeStatus(
-      result,
-      pending.commandId,
-      expectedKind: 'voice.start.cancel',
-    );
-    if (status.state != VoiceStartState.cancelled) {
-      throw const FormatException(
-        'Voice cancellation did not settle as cancelled.',
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': newAgentRequestId(),
+        'command_id': pending.commandId,
+        'command': {
+          'kind': 'voice.start.cancel',
+          'surface_session_id': pending.surfaceSessionId,
+        },
+      }, timeout: const Duration(seconds: 10));
+      final status = _decodeStatus(
+        result,
+        pending.commandId,
+        expectedKind: 'voice.start.cancel',
       );
+      if (status.state != VoiceStartState.cancelled) {
+        throw const FormatException(
+          'Voice cancellation did not settle as cancelled.',
+        );
+      }
+      if (_pending?.commandId == pending.commandId) _setPending(null);
+      return status;
+    } finally {
+      _pendingRevision++;
     }
-    _pending = null;
-    return status;
   }
 
   @override
@@ -147,26 +172,31 @@ final class AppWireVoiceGateway implements VoiceGateway {
     if (_pending == null) await recoverPendingStart();
     final pending = _pending;
     if (pending == null) throw StateError('No bound Voice call exists.');
-    final result = await _transport.commandV2({
-      'schema_version': appWireProtocolVersion,
-      'request_id': newAgentRequestId(),
-      'command_id': newAgentRequestId(),
-      'command': {
-        'kind': 'voice.stop',
-        'voice_session_id': pending.commandId,
-        'surface_session_id': pending.surfaceSessionId,
-      },
-    }, timeout: const Duration(seconds: 10));
-    final status = _decodeStatus(
-      result,
-      pending.commandId,
-      expectedKind: 'voice.stop',
-    );
-    if (status.localLeaseReleased == true &&
-        _pending?.commandId == pending.commandId) {
-      _pending = null;
+    _pendingRevision++;
+    try {
+      final result = await _transport.commandV2({
+        'schema_version': appWireProtocolVersion,
+        'request_id': newAgentRequestId(),
+        'command_id': newAgentRequestId(),
+        'command': {
+          'kind': 'voice.stop',
+          'voice_session_id': pending.commandId,
+          'surface_session_id': pending.surfaceSessionId,
+        },
+      }, timeout: const Duration(seconds: 10));
+      final status = _decodeStatus(
+        result,
+        pending.commandId,
+        expectedKind: 'voice.stop',
+      );
+      if (status.localLeaseReleased == true &&
+          _pending?.commandId == pending.commandId) {
+        _setPending(null);
+      }
+      return status;
+    } finally {
+      _pendingRevision++;
     }
-    return status;
   }
 
   @override
@@ -174,6 +204,13 @@ final class AppWireVoiceGateway implements VoiceGateway {
     if (!_wireId(commandId)) {
       throw const FormatException('Invalid Voice command identity.');
     }
+    return _queryStatus(commandId, reconcilePending: true);
+  }
+
+  Future<VoiceStartStatus?> _queryStatus(
+    String commandId, {
+    bool reconcilePending = false,
+  }) async {
     final result = await _transport.queryV2({
       'schema_version': appWireProtocolVersion,
       'request_id': newAgentRequestId(),
@@ -186,7 +223,9 @@ final class AppWireVoiceGateway implements VoiceGateway {
     }
     final raw = result['status'];
     if (raw == null) {
-      if (_pending?.commandId == commandId) _pending = null;
+      if (reconcilePending && _pending?.commandId == commandId) {
+        _setPending(null);
+      }
       return null;
     }
     final status = _decodeStatus({
@@ -196,10 +235,20 @@ final class AppWireVoiceGateway implements VoiceGateway {
     if ((status.state == VoiceStartState.cancelled ||
             status.state == VoiceStartState.bound &&
                 status.localLeaseReleased == true) &&
-        _pending?.commandId == commandId) {
-      _pending = null;
+        _pending?.commandId == commandId &&
+        reconcilePending) {
+      _setPending(null);
     }
     return status;
+  }
+
+  bool _recoveryIsCurrent(int recoveryRevision, int pendingRevision) =>
+      recoveryRevision == _recoveryRevision &&
+      pendingRevision == _pendingRevision;
+
+  void _setPending(_PendingStart? pending) {
+    _pending = pending;
+    _pendingRevision++;
   }
 
   bool _isRecoverable(VoiceStartStatus status) =>
