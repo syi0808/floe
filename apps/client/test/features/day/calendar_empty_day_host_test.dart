@@ -16,15 +16,18 @@ DayQuery _query() {
   return DayQuery.local(personId: 'synthetic-v018', date: now, now: now);
 }
 
-DaySnapshot _snapshot(DayQuery query, DayCalendarCoverage? coverage) =>
-    DaySnapshot(
-      personId: query.personId,
-      date: query.date,
-      generatedAt: query.now,
-      timezoneOffsetSeconds: query.timezoneOffsetSeconds,
-      items: const [],
-      calendarCoverage: coverage,
-    );
+DaySnapshot _snapshot(
+  DayQuery query,
+  DayCalendarCoverage? coverage, {
+  List<DayItem> items = const [],
+}) => DaySnapshot(
+  personId: query.personId,
+  date: query.date,
+  generatedAt: query.now,
+  timezoneOffsetSeconds: query.timezoneOffsetSeconds,
+  items: items,
+  calendarCoverage: coverage,
+);
 
 DayCalendarCoverage _completeCoverage(DayQuery query) {
   final range = DayCalendarRange(
@@ -56,6 +59,31 @@ DayCalendarCoverage _completeCoverage(DayQuery query) {
     ],
   );
 }
+
+DayCalendarCoverage _partialCoverage() => const DayCalendarCoverage(
+  sources: [
+    DayCalendarSourceCoverage(
+      sourceRef: 'synthetic-source',
+      label: 'Synthetic calendar',
+      state: DayCoverageState.partial,
+      resources: [],
+    ),
+  ],
+);
+
+EventItem _event(DayQuery query) => EventItem(
+  id: 'synthetic-event',
+  title: 'Synthetic event',
+  revision: 1,
+  createdAt: query.now,
+  startsAt: query.startsAt.add(const Duration(hours: 10)),
+  endsAt: query.startsAt.add(const Duration(hours: 11)),
+  source: const CalendarDayItemSource(
+    sourceRef: 'synthetic-source',
+    calendarRef: 'synthetic-calendar',
+    calendarLabel: 'Synthetic calendar',
+  ),
+);
 
 Widget _app({
   required DayQuery query,
@@ -242,21 +270,148 @@ void main() {
       await tester.pump(const Duration(milliseconds: 510));
       expect(find.byType(FloeSpinner).evaluate(), isNotEmpty);
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
+      expect(find.text('Calendar status needs refresh'), findsOneWidget);
+      expect(find.byKey(const Key('day-status-details')), findsOneWidget);
+      expect(find.byTooltip('Tasks and calendar status'), findsNothing);
 
       gateway.completeDeferredRefresh();
       await tester.pumpAndSettle();
       expect(find.text('A little breathing room.'), findsOneWidget);
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
+      expect(find.byKey(const Key('day-status-details')), findsNothing);
+      expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
+
+  for (final textScale in [1.0, 2.0]) {
+    testWidgets(
+      'incomplete event coverage keeps one visible Timeline details action at text $textScale',
+      (tester) async {
+        final query = _query();
+        final gateway = _SyntheticDayGateway(
+          coverage: _partialCoverage(),
+          items: [_event(query)],
+        );
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await _mount(
+          tester,
+          width: 390,
+          textScale: textScale,
+          query: query,
+          gateway: gateway,
+        );
+        await tester.tap(find.text('Timeline'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.text('Calendar status needs refresh'), findsOneWidget);
+        final statusAction = find.byKey(const Key('day-status-details'));
+        expect(statusAction, findsOneWidget);
+        await tester.ensureVisible(statusAction);
+        expect(find.byTooltip('Tasks and calendar status'), findsNothing);
+        expect(
+          tester.getSemantics(statusAction).flagsCollection.isLiveRegion,
+          isTrue,
+        );
+        final refresh = find.byTooltip('Refresh calendar');
+        expect(refresh, findsOneWidget);
+        expect(tester.getRect(refresh).bottom, lessThanOrEqualTo(1000));
+
+        await tester.tap(statusAction);
+        await tester.pumpAndSettle();
+        expect(find.text('Tasks and calendar status'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('day-details-close')));
+        await tester.pumpAndSettle();
+
+        gateway.coverage = _completeCoverage(query);
+        await tester.tap(find.byTooltip('Refresh calendar'));
+        await tester.pumpAndSettle();
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.text('Calendar status needs refresh'), findsNothing);
+        expect(find.byKey(const Key('day-status-details')), findsNothing);
+        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'retained events stay marked stale after refresh failure and dismissal at text $textScale',
+      (tester) async {
+        final query = _query();
+        final gateway = _SyntheticDayGateway(
+          coverage: _completeCoverage(query),
+          items: [_event(query)],
+        );
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await _mount(
+          tester,
+          width: 390,
+          textScale: textScale,
+          query: query,
+          gateway: gateway,
+        );
+        await tester.tap(find.text('Timeline'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        gateway.failNextRefresh = true;
+        await tester.tap(find.byTooltip('Refresh calendar'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.text('Calendar status needs refresh'), findsOneWidget);
+        expect(find.byKey(const Key('day-status-details')), findsOneWidget);
+        expect(find.byTooltip('Tasks and calendar status'), findsNothing);
+        expect(find.text('Close'), findsOneWidget);
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+
+        // Dismissing the read error must not make the retained event snapshot
+        // look current or remove its only visible status/details control.
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.text('Calendar status needs refresh'), findsOneWidget);
+        final statusAction = find.byKey(const Key('day-status-details'));
+        expect(statusAction, findsOneWidget);
+        await tester.ensureVisible(statusAction);
+        expect(find.byTooltip('Tasks and calendar status'), findsNothing);
+        final refresh = find.byTooltip('Refresh calendar');
+        expect(refresh, findsOneWidget);
+        expect(tester.getRect(refresh).bottom, lessThanOrEqualTo(1000));
+        expect(tester.getRect(statusAction).bottom, lessThanOrEqualTo(1000));
+
+        final golden = textScale == 1
+            ? 'goldens/calendar_timeline_stale_events_widget_390.png'
+            : 'goldens/calendar_timeline_stale_events_widget_390_2x.png';
+        await expectLater(
+          find.byKey(const Key('full-day-screen')),
+          matchesGoldenFile(golden),
+        );
+
+        gateway.coverage = _completeCoverage(query);
+        await tester.tap(refresh);
+        await tester.pumpAndSettle();
+        expect(find.text('Synthetic event'), findsOneWidget);
+        expect(find.text('Calendar status needs refresh'), findsNothing);
+        expect(find.byKey(const Key('day-status-details')), findsNothing);
+        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
 }
 
 final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
-  _SyntheticDayGateway({this.coverage});
+  _SyntheticDayGateway({this.coverage, this.items = const []});
 
   DayCalendarCoverage? coverage;
+  List<DayItem> items;
   bool failNextRefresh = false;
   Completer<DayRefreshSnapshot>? _nextRefresh;
   Completer<DayRefreshSnapshot>? _activeRefresh;
@@ -265,7 +420,7 @@ final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
 
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async =>
-      _snapshot(query, coverage);
+      _snapshot(query, coverage, items: items);
 
   @override
   Future<DayRefreshSnapshot> refreshDay({
@@ -292,7 +447,7 @@ final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
     return CompletedDayRefresh(
       operationRef: operationRef,
       revision: 1,
-      day: _snapshot(query, coverage),
+      day: _snapshot(query, coverage, items: items),
     );
   }
 
@@ -307,7 +462,7 @@ final class _SyntheticDayGateway implements DayGateway, DayRefreshGateway {
       CompletedDayRefresh(
         operationRef: 'synthetic-refresh-$_refreshCount',
         revision: 1,
-        day: _snapshot(query, coverage),
+        day: _snapshot(query, coverage, items: items),
       ),
     );
     _activeRefresh = null;

@@ -376,6 +376,21 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   Widget _content(bool narrow, DaySnapshot snapshot) {
     final calendarChangesAvailable =
         widget.ownerGateways.runtime?.ready == true;
+    final hasEvents = snapshot.items.any((item) => item is EventItem);
+    final agendaOwnsEmptyStatus =
+        !hasEvents &&
+        controller.loadState != DayLoadState.loading &&
+        draftEventStart == null;
+    final observationComplete =
+        controller.hasCurrentObservation &&
+        hasCompleteCalendarCoverage(snapshot, controller.query);
+    final showTimelineStatusAction =
+        compactTimeline && !agendaOwnsEmptyStatus && !observationComplete;
+    final statusLabel =
+        !controller.hasCurrentObservation ||
+            snapshot.calendarCoverage?.sources.isNotEmpty == true
+        ? AppLocalizations.of(context).dayStatusNeedsRefresh
+        : AppLocalizations.of(context).dayCalendarStatusUnavailable;
     final primary = CalendarAgenda(
       key: PageStorageKey('calendar-agenda'),
       snapshot: snapshot,
@@ -511,8 +526,28 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                                   : copy.dayTimeline,
                             ),
                           ),
-                          if (compactTimeline)
+                          if (showTimelineStatusAction)
+                            Semantics(
+                              key: const Key('day-status-details'),
+                              container: true,
+                              liveRegion: true,
+                              child: FloeButton.text(
+                                icon: const Icon(
+                                  LucideIcons.ellipsis,
+                                  size: 18,
+                                ),
+                                onPressed: openDayDetails,
+                                child: Text(
+                                  statusLabel,
+                                  style: FloeType.bodySmall.copyWith(
+                                    color: FloePalette.warning600,
+                                  ),
+                                ),
+                              ),
+                            )
+                          else if (compactTimeline)
                             FloeButton.icon(
+                              key: const Key('day-details-opener'),
                               tooltip: copy.dayDetails,
                               onPressed: openDayDetails,
                               icon: const Icon(LucideIcons.ellipsis, size: 18),
