@@ -191,39 +191,68 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth <= 780;
+        final navigation = _AdaptiveNavigation(
+          selected: destination,
+          onSelected: _selectDestination,
+          onAssistant: _openAssistant,
+          assistantFocus: assistantEntryFocus,
+        );
         return FloeScaffold(
           backgroundColor: FloePalette.neutral25,
           body: SafeArea(
-            child: Stack(
+            child: Column(
               children: [
-                Positioned.fill(child: _page(narrow)),
-                _AdaptiveNavigation(
-                  narrow: narrow,
-                  selected: destination,
-                  onSelected: _selectDestination,
-                  onAssistant: _openAssistant,
-                  assistantFocus: assistantEntryFocus,
+                // Keep the header, content, and dock slots in fixed positions
+                // across breakpoints so destination state stays mounted.
+                Visibility(
+                  key: const Key('compact-header-slot'),
+                  visible: narrow,
+                  child: navigation.compactHeader(context),
                 ),
-                Positioned(
-                  top: narrow ? 56 : 16,
-                  right: 12,
-                  bottom: narrow ? 96 : 16,
-                  width: constraints.maxWidth <= 960
-                      ? constraints.maxWidth - (narrow ? 24 : 132)
-                      : 420,
-                  child: FloePanelPresence(
-                    visible: assistantOpen,
-                    child: CallbackShortcuts(
-                      bindings: {
-                        const SingleActivator(LogicalKeyboardKey.escape):
-                            _closeAssistant,
-                      },
-                      child: FocusScope(
-                        autofocus: true,
-                        child: _assistantPanel(_closeAssistant),
+                Expanded(
+                  child: Stack(
+                    key: const Key('personal-day-middle-viewport'),
+                    children: [
+                      Positioned.fill(child: _page(narrow)),
+                      Positioned(
+                        top: 24,
+                        bottom: 20,
+                        left: 16,
+                        width: 80,
+                        child: Visibility(
+                          key: const Key('desktop-navigation-slot'),
+                          visible: !narrow,
+                          child: navigation.desktopRail(),
+                        ),
                       ),
-                    ),
+                      Positioned(
+                        top: narrow ? 0 : 16,
+                        right: 12,
+                        bottom: narrow ? 0 : 16,
+                        width: constraints.maxWidth <= 960
+                            ? constraints.maxWidth - (narrow ? 24 : 132)
+                            : 420,
+                        child: FloePanelPresence(
+                          visible: assistantOpen,
+                          child: CallbackShortcuts(
+                            bindings: {
+                              const SingleActivator(LogicalKeyboardKey.escape):
+                                  _closeAssistant,
+                            },
+                            child: FocusScope(
+                              autofocus: true,
+                              child: _assistantPanel(_closeAssistant),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+                Visibility(
+                  key: const Key('compact-dock-slot'),
+                  visible: narrow,
+                  child: navigation.compactDock(),
                 ),
               ],
             ),
@@ -234,12 +263,9 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   );
 
   Widget _page(bool narrow) {
-    final padding = EdgeInsets.fromLTRB(
-      narrow ? FloeSpace.md : 120,
-      narrow ? 64 : 24,
-      narrow ? FloeSpace.md : 36,
-      narrow ? 96 : 24,
-    );
+    final padding = narrow
+        ? const EdgeInsets.symmetric(horizontal: FloeSpace.md)
+        : const EdgeInsets.fromLTRB(120, 24, 36, 24);
     final workspace = FloeScreenEntrance(
       identity: selectedTaskId ?? destination,
       child: _workspace(narrow),

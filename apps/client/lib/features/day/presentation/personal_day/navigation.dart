@@ -1,14 +1,12 @@
 part of '../personal_day_screen.dart';
 
-class _AdaptiveNavigation extends StatelessWidget {
+class _AdaptiveNavigation {
   const _AdaptiveNavigation({
-    required this.narrow,
     required this.selected,
     required this.onSelected,
     required this.onAssistant,
     required this.assistantFocus,
   });
-  final bool narrow;
   final _DestinationView selected;
   final ValueChanged<_DestinationView> onSelected;
   final VoidCallback onAssistant;
@@ -35,6 +33,7 @@ class _AdaptiveNavigation extends StatelessWidget {
   );
 
   Widget _assistant() => FloeButton.text(
+    key: const Key('assistant-entry'),
     focusNode: assistantFocus,
     onPressed: onAssistant,
     style: const ButtonStyle(
@@ -56,87 +55,72 @@ class _AdaptiveNavigation extends StatelessWidget {
     ),
   );
 
-  @override
-  Widget build(BuildContext context) {
-    if (narrow) {
-      return Stack(
+  Widget compactHeader(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(16, 4, 8, 12),
+    child: Row(
+      key: const Key('compact-navigation-header'),
+      children: [
+        const Text('Floe', style: FloeType.title),
+        const Spacer(),
+        _more(context),
+      ],
+    ),
+  );
+
+  Widget compactDock() => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+    child: FloeSquircle(
+      key: const Key('compact-navigation-dock'),
+      size: FloeSquircleSize.lg,
+      elevation: 2,
+      padding: const EdgeInsets.all(4),
+      child: Row(
         children: [
-          Positioned(
-            top: 4,
-            left: 16,
-            right: 8,
-            child: Row(
-              children: [
-                const Text('Floe', style: FloeType.title),
-                const Spacer(),
-                _more(context),
-              ],
-            ),
-          ),
-          Positioned(
-            right: 12,
-            bottom: 8,
-            left: 12,
-            child: FloeSquircle(
-              size: FloeSquircleSize.lg,
-              elevation: 2,
-              padding: const EdgeInsets.all(4),
-              child: Row(
-                children: [
-                  for (final view in _primaryDestinations)
-                    Expanded(
-                      child: _DestinationButton(
-                        view: view,
-                        selected: selected == view,
-                        onPressed: () => onSelected(view),
-                      ),
-                    ),
-                  Expanded(child: _assistant()),
-                ],
+          for (final view in _primaryDestinations)
+            Expanded(
+              child: _DestinationButton(
+                view: view,
+                selected: selected == view,
+                onPressed: () => onSelected(view),
               ),
             ),
-          ),
+          Expanded(child: _assistant()),
         ],
-      );
-    }
-    return Positioned(
-      top: 24,
-      bottom: 20,
-      left: 16,
-      width: 80,
-      child: LayoutBuilder(
-        builder: (context, constraints) => SingleChildScrollView(
-          key: const Key('desktop-navigation-scroll'),
-          primary: false,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: IntrinsicHeight(
-              child: Column(
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 32),
-                    child: Text('Floe', style: FloeType.title),
-                  ),
-                  for (final view in _primaryDestinations) ...[
-                    _DestinationButton(
-                      view: view,
-                      selected: selected == view,
-                      onPressed: () => onSelected(view),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                  const SizedBox(height: 20),
-                  _assistant(),
-                  const Spacer(),
-                  _more(context),
-                ],
+      ),
+    ),
+  );
+
+  Widget desktopRail() => LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      key: const Key('desktop-navigation-scroll'),
+      primary: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+        child: IntrinsicHeight(
+          child: Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(bottom: 32),
+                child: Text('Floe', style: FloeType.title),
               ),
-            ),
+              for (final view in _primaryDestinations) ...[
+                _DestinationButton(
+                  view: view,
+                  selected: selected == view,
+                  onPressed: () => onSelected(view),
+                ),
+                const SizedBox(height: 8),
+              ],
+              const SizedBox(height: 20),
+              _assistant(),
+              const Spacer(),
+              _more(context),
+            ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
 }
 
 class _DestinationButton extends StatelessWidget {

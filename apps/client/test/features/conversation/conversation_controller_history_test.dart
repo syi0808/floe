@@ -19,6 +19,7 @@ import '../../support/interaction_page_fixture.dart';
 import 'package:floe_client/features/conversation/presentation/agent_interaction_card.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
@@ -35,6 +36,115 @@ import 'package:floe_client/features/conversation/presentation/conversation_comp
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  testWidgets('live assistant draft and focus survive the host breakpoint', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+    addTearDown(tester.view.resetViewInsets);
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    final now = DateTime(2026, 10, 22, 12);
+    await tester.pumpWidget(
+      FloeApp(
+        personId: _personId,
+        gateway: FakeDayGateway(),
+        query: DayQuery.local(personId: _personId, date: now, now: now),
+        agentGateway: h.controller.gateway,
+        ownerGateways: LocalOwnerGateways(runtime: h.runtime),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(disableAnimations: true),
+          child: child!,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('assistant-entry')));
+    await tester.pumpAndSettle();
+    final composer = find.byKey(const Key('conversation-composer'));
+    expect(composer, findsOneWidget);
+    const draft = 'Keep this draft while the host changes width.';
+    await tester.enterText(
+      find.descendant(of: composer, matching: find.byType(TextField)),
+      draft,
+    );
+    await tester.pumpAndSettle();
+
+    tester.view.physicalSize = const Size(700, 844);
+    await tester.pumpAndSettle();
+    expect(composer, findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(
+            find.descendant(of: composer, matching: find.byType(TextField)),
+          )
+          .controller!
+          .text,
+      draft,
+    );
+    final host = find.byKey(const Key('personal-day-middle-viewport'));
+    final hostRect = tester.getRect(host);
+    expect(tester.getRect(composer).bottom, lessThanOrEqualTo(hostRect.bottom));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(composer, findsNothing);
+    expect(
+      _hasKeyAncestor(
+        FocusManager.instance.primaryFocus?.context,
+        const Key('assistant-entry'),
+      ),
+      isTrue,
+    );
+
+    await tester.tap(find.byKey(const Key('assistant-entry')));
+    await tester.pumpAndSettle();
+    expect(composer, findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(
+            find.descendant(of: composer, matching: find.byType(TextField)),
+          )
+          .controller!
+          .text,
+      draft,
+    );
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pumpAndSettle();
+    expect(tester.getRect(composer).bottom, lessThanOrEqualTo(544));
+    expect(
+      tester
+          .widget<TextField>(
+            find.descendant(of: composer, matching: find.byType(TextField)),
+          )
+          .controller!
+          .text,
+      draft,
+    );
+    tester.view.physicalSize = const Size(900, 844);
+    await tester.pumpAndSettle();
+    expect(composer, findsOneWidget);
+    expect(tester.getRect(composer).bottom, lessThanOrEqualTo(544));
+    expect(
+      tester
+          .widget<TextField>(
+            find.descendant(of: composer, matching: find.byType(TextField)),
+          )
+          .controller!
+          .text,
+      draft,
+    );
+    tester.view.physicalSize = const Size(700, 844);
+    await tester.pumpAndSettle();
+    expect(composer, findsOneWidget);
+    expect(tester.getRect(composer).bottom, lessThanOrEqualTo(544));
+    expect(h.transport.commands, isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final width in [320.0, 388.0]) {
     for (final scale in [1.0, 2.0]) {
       for (final empty in [true, false]) {
@@ -2375,6 +2485,18 @@ void _usePanelViewport(WidgetTester tester) {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+bool _hasKeyAncestor(BuildContext? context, Key key) {
+  var found = false;
+  context?.visitAncestorElements((element) {
+    if (element.widget.key == key) {
+      found = true;
+      return false;
+    }
+    return true;
+  });
+  return found;
 }
 
 Widget _panelApp(

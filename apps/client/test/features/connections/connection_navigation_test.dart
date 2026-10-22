@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/design_tokens.dart';
+import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/connections/application/calendar_system_access_gateway.dart';
@@ -12,6 +14,8 @@ import 'package:floe_client/features/connections/application/connections_gateway
 import 'package:floe_client/features/connections/domain/connection_models.dart';
 import 'package:floe_client/features/connections/presentation/connections_controller.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
+import 'package:floe_client/features/day/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
 const _sourcePrefix = 'Synthetic source';
@@ -35,6 +39,66 @@ void main() {
       await loader.load();
     }
   });
+
+  testWidgets(
+    'selected Connections detail survives compact host breakpoint changes',
+    (tester) async {
+      final fixture = await _fixture();
+      addTearDown(() {
+        fixture.controller.dispose();
+        fixture.runtime.dispose();
+      });
+      _setViewport(tester, width: 390, height: 844);
+      const personId = 'synthetic-connection-navigation-person';
+      final now = DateTime(2026, 9, 4, 12);
+      await tester.pumpWidget(
+        FloeApp(
+          personId: personId,
+          gateway: FakeDayGateway(),
+          query: DayQuery.local(personId: personId, date: now, now: now),
+          connectionsController: fixture.controller,
+          ownerGateways: LocalOwnerGateways(runtime: fixture.runtime),
+        ),
+      );
+      await _pump(tester);
+      await tester.tap(find.byTooltip('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Connected services'));
+      await tester.pumpAndSettle();
+
+      const sourceName = '$_sourcePrefix 12';
+      final source = find.text(sourceName);
+      await tester.ensureVisible(source);
+      await tester.pumpAndSettle();
+      await tester.tap(source);
+      await tester.pumpAndSettle();
+      expect(find.text('Back to connections'), findsOneWidget);
+      expect(find.text('Launch planning calendar 18'), findsOneWidget);
+
+      final host = find.byKey(const Key('personal-day-middle-viewport'));
+      final hostElement = tester.element(host);
+      for (final width in [900.0, 390.0]) {
+        tester.view.physicalSize = Size(width, 844);
+        await tester.pumpAndSettle();
+        expect(tester.element(host), same(hostElement));
+        expect(find.text('Back to connections'), findsOneWidget);
+        expect(find.text(sourceName), findsOneWidget);
+        expect(find.text('Launch planning calendar 18'), findsOneWidget);
+      }
+
+      await tester.tap(find.text('Back to connections'));
+      await tester.pumpAndSettle();
+      expect(find.text(sourceName), findsOneWidget);
+      expect(
+        _visible(tester.getRect(source), 390, 844),
+        isTrue,
+        reason: 'the detail return should retain its source list position',
+      );
+      expect(fixture.gateway.unexpectedCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets(
     'source detail opens at its heading and Back restores list position and focus',
