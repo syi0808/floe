@@ -55,6 +55,11 @@ behavior visible before the voice action. Do not hide those facts in a tooltip
 or a collapsed diagnostic section. A local Stop is not proof that a remote
 service has closed; preserve uncertainty when present.
 
+While a voice Stop request is awaiting its result, show an accessible stopping
+status and keep the loading Stop control named. Continue to show only the last
+confirmed microphone and service states; report the local microphone stopped
+only after owner confirmation, and do not imply remote service closure.
+
 Never claim a successful save, connection, cancellation or recovery without
 owner-issued evidence. Do not invent a recovery action or promise that setup
 will enable a feature when availability is unknown. Preserve user-authored

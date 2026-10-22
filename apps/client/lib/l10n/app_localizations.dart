@@ -2560,6 +2560,12 @@ abstract class AppLocalizations {
   /// **'Voice session open'**
   String get voiceSessionOpen;
 
+  /// No description provided for @voiceStopping.
+  ///
+  /// In en, this message translates to:
+  /// **'Stopping voice'**
+  String get voiceStopping;
+
   /// No description provided for @voiceCancelled.
   ///
   /// In en, this message translates to:

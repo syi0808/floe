@@ -18,6 +18,7 @@ final class FloeButton extends StatelessWidget {
     this.focusNode,
     this.size = FloeButtonSize.standard,
     this.loading = false,
+    this.loadingLabel,
     super.key,
   }) : _kind = _ButtonKind.filled,
        tooltip = null,
@@ -32,6 +33,7 @@ final class FloeButton extends StatelessWidget {
     this.focusNode,
     this.size = FloeButtonSize.standard,
     this.loading = false,
+    this.loadingLabel,
     super.key,
   }) : _kind = _ButtonKind.outlined,
        tooltip = null,
@@ -46,6 +48,7 @@ final class FloeButton extends StatelessWidget {
     this.focusNode,
     this.size = FloeButtonSize.standard,
     this.loading = false,
+    this.loadingLabel,
     super.key,
   }) : _kind = _ButtonKind.text,
        tooltip = null,
@@ -62,6 +65,7 @@ final class FloeButton extends StatelessWidget {
     this.padding,
     this.size = FloeButtonSize.standard,
     this.loading = false,
+    this.loadingLabel,
     super.key,
   }) : _kind = _ButtonKind.icon,
        child = icon,
@@ -78,6 +82,7 @@ final class FloeButton extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
   final FloeButtonSize size;
   final bool loading;
+  final String? loadingLabel;
 
   Widget get _content => Stack(
     alignment: Alignment.center,
@@ -86,7 +91,7 @@ final class FloeButton extends StatelessWidget {
         excluding: loading,
         child: Opacity(opacity: loading ? 0 : 1, child: child),
       ),
-      if (loading) const FloeSpinner(size: 18),
+      if (loading) FloeSpinner(size: 18, label: loadingLabel),
     ],
   );
 

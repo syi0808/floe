@@ -521,6 +521,7 @@
   "voiceConnecting": "Connection pending",
   "voiceStopped": "Stopped on this device",
   "voiceSessionOpen": "Voice session open",
+  "voiceStopping": "Stopping voice",
   "voiceCancelled": "Connection cancelled",
   "voiceMicrophonePreparing": "Microphone: preparing",
   "voiceMicrophoneMuted": "Microphone: muted",

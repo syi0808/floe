@@ -1443,6 +1443,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get voiceSessionOpen => 'Voice session open';
 
   @override
+  String get voiceStopping => 'Stopping voice';
+
+  @override
   String get voiceCancelled => 'Connection cancelled';
 
   @override

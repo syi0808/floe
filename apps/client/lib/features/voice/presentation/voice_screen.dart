@@ -37,6 +37,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
   String? _message;
   bool _loading = true;
   bool _busy = false;
+  bool _stopping = false;
 
   VoiceGateway? get _gateway => widget.ownerGateways.voice;
 
@@ -192,6 +193,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
     if (gateway == null || _busy) return;
     setState(() {
       _busy = true;
+      _stopping = true;
       _message = null;
     });
     try {
@@ -200,8 +202,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
       setState(() {
         _status = status;
         _message = _messageFor(status);
+        _stopping = false;
       });
     } on Object catch (error) {
+      if (mounted) setState(() => _stopping = false);
       VoiceStartStatus? status;
       final commandId = gateway.pendingCommandId;
       if (commandId != null) {
@@ -215,9 +219,15 @@ class _VoiceScreenState extends State<VoiceScreen> {
       setState(() {
         _status = status;
         _message = status == null ? _errorMessage(error) : _messageFor(status);
+        _stopping = false;
       });
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _stopping = false;
+        });
+      }
     }
   }
 
@@ -341,7 +351,9 @@ class _VoiceScreenState extends State<VoiceScreen> {
                     Semantics(
                       liveRegion: true,
                       child: Text(
-                        _statusLabel(_status!),
+                        _stopping
+                            ? _copy.voiceStopping
+                            : _statusLabel(_status!),
                         style: FloeType.title,
                       ),
                     ),
@@ -396,6 +408,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
                         FloeButton.filled(
                           onPressed: !_busy ? _stop : null,
                           loading: _busy,
+                          loadingLabel: _stopping ? _copy.voiceStop : null,
                           icon: const Icon(LucideIcons.square, size: 18),
                           child: Text(_copy.voiceStop),
                         )

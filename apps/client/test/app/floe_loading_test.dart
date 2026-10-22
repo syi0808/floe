@@ -54,6 +54,33 @@ void main() {
     }
   });
 
+  testWidgets('busy buttons can opt into a meaningful action label', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    try {
+      await tester.pumpWidget(
+        _host(
+          FloeButton.filled(
+            loading: true,
+            loadingLabel: 'Stop voice',
+            onPressed: () {},
+            child: const Text('Stop voice'),
+          ),
+        ),
+      );
+      final busy = tester
+          .getSemantics(find.byType(FilledButton))
+          .getSemanticsData();
+      expect(busy.label, 'Stop voice');
+      expect(busy.flagsCollection.isLiveRegion, isTrue);
+      expect(busy.flagsCollection.isEnabled, ui.Tristate.isFalse);
+      expect(find.bySemanticsLabel('Loading'), findsNothing);
+    } finally {
+      semantics.dispose();
+    }
+  });
+
   testWidgets('explicit spinner labels retain their context', (tester) async {
     final semantics = tester.ensureSemantics();
     try {
