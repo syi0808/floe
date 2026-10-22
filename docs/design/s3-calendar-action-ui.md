@@ -14,18 +14,25 @@ toolbar `+`, empty-slot double-click and event direct-manipulation contract in
 ## Decision-first review
 
 Review is a decision surface, not a ledger inspector. Its first screen answers:
-**what will change, where, when, and what will not change**. Show the event title,
-human-readable destination, date/time, and the one-event scope. Keep guests,
-alerts, recurrence and effects on existing events explicit. Reducing noise must
-not reduce the user's understanding of what they authorize.
+**what will change, where, when, and what will not change**. In the ready proposal
+card, make the user's event title the first heading; do not repeat the generic
+`Calendar proposal` heading or an instruction to review details. Keep the explicit
+`Review proposal` action before details are loaded and the explicit Add action in
+the ready state. Keep the human-readable destination, one-event scope, guests,
+alerts, recurrence and effects on existing events clear. Reducing noise must not
+reduce the user's understanding of what they authorize.
 
-Flutter displays both endpoints in the device's local time. Full
-dates avoid ambiguity for overnight events. The user neither enters nor reviews a
-schedule timezone, offset or UTC string. If local endpoint offsets differ across a
-clock change, display each local zone abbreviation, falling back to its UTC offset
-if the abbreviations match, solely to disambiguate the changed clock reading. This
-is presentation only: approval retains the original immutable UTC instants and
-internal scheduling metadata, never a reparsed display string.
+Present schedule instants in device-local time and the user's locale/time format;
+do not convert them to the proposal's timezone or expose timezone metadata. When
+both endpoints resolve to the same device-local calendar date and have the same
+UTC offset, show one localized date followed by a localized start–end time range.
+If the local dates differ, including a cross-midnight event, or the endpoint UTC
+offsets differ, show the full device-local date and time for both endpoints. Only
+when offsets differ across a clock change, add each endpoint's local timezone
+abbreviation, falling back to its UTC offset if the abbreviations match, solely to
+disambiguate the changed clock reading. This is presentation only: approval
+retains the original immutable UTC instants and internal scheduling metadata,
+never a reparsed display string.
 
 The planning dialog accepts `yyyy-MM-dd HH:mm` in device-local time. Destination,
 title, start and end fields use a consistent 12px vertical gap; explanatory copy

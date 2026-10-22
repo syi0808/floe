@@ -81,16 +81,25 @@ that exact proposal. Sensitive, high-impact or visually ambiguous proposals hand
 to this confirmation UI rather than interpreting casual speech as approval.
 
 The default view answers the user's decision, not the executor's schema: what will
-change, when, and where. Present the user's title and readable local time first;
-retain account/calendar distinctions. Timezone names, offsets and UTC notation are
-not review content; UTC remains the internal storage/execution representation.
-When endpoint local offsets differ across a clock change, include each endpoint's
-local timezone abbreviation, falling back to its UTC offset if abbreviations
-match, solely to disambiguate the changed clock reading. Show a short explanation
-only when it adds decision-relevant context. UUIDs and raw provider codes belong
-in collapsed technical details, not between the proposal and its approval
-controls. Do not invent rationale from an ID or implementation state, and do not
-conceal guests, alerts or other effects.
+change, when, and where. In the ready calendar proposal, make the user's title the
+first heading and omit a repeated generic proposal heading or review instruction;
+retain the explicit `Review proposal` step before details load and explicit Add
+confirmation in the ready state. Retain account/calendar distinctions.
+
+Present schedule instants in device-local time and the user's locale/time format;
+do not convert them to the proposal's timezone or expose timezone metadata. If
+both endpoints resolve to the same device-local calendar date and have the same
+UTC offset, show one localized date and start–end time range. If their local dates
+differ, including across midnight, or their UTC offsets differ, show each full
+device-local date and time. Only when endpoint offsets differ across a clock
+change, include each endpoint's local timezone abbreviation, falling back to its
+UTC offset if abbreviations match, solely to disambiguate the changed clock
+reading. UTC remains the internal storage/execution representation, and the
+display never changes the owner contract's instants or scheduling metadata.
+Show a short explanation only when it adds decision-relevant context. UUIDs and
+raw provider codes belong in collapsed technical details, not between the
+proposal and its approval controls. Do not invent rationale from an ID or
+implementation state, and do not conceal guests, alerts or other effects.
 
 See [Review, authority and Activity](../product/experience.md#review-authority-and-activity)
 and [decision-first action review](s3-calendar-action-ui.md). Metadata remains
