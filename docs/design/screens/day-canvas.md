@@ -71,9 +71,10 @@ Detailed create, drag, context-menu and authority behavior follows
   room` as a compact inline status with gesture-appropriate creation guidance;
   never blur, dim, overlay or disable the grid.
 - Initial Day read failure: keep `Could not load your day` and `Try again` within
-  the middle viewport. Keep the complete diagnostic selectable in a bounded
-  scroll region; at exceptionally short heights, make the whole failure card
-  scrollable rather than shrinking text or clipping the recovery action.
+  the middle viewport whenever the available height permits. Keep the complete
+  diagnostic selectable in a bounded scroll region with at least two rendered
+  lines; let the whole failure card scroll when its content does not fit rather
+  than shrinking text or clipping the recovery action.
 - Conflict: explain which items conflict before offering a resolution.
 - Overdue: use explicit language plus warning styling.
 - Offline or stale: retain local content and identify unavailable actions.

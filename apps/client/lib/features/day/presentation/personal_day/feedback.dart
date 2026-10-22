@@ -12,63 +12,66 @@ class _FailureDay extends StatelessWidget {
       final diagnostic = message?.trim().isNotEmpty == true
           ? message!
           : strings.anUnknownErrorOccurred;
+      final maxCardWidth = constraints.maxWidth < 720
+          ? constraints.maxWidth
+          : 720.0;
+      final horizontalPadding = 2 * FloeSpace.xl;
+      final diagnosticWidth = maxCardWidth > horizontalPadding
+          ? maxCardWidth - horizontalPadding
+          : maxCardWidth;
+      final twoLineDiagnosticHeight = TextPainter(
+        text: TextSpan(text: 'M\nM', style: DefaultTextStyle.of(context).style),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+      )..layout(maxWidth: diagnosticWidth);
+      final proportionalDiagnosticHeight = constraints.maxHeight * 0.3;
+      final diagnosticViewportHeight =
+          proportionalDiagnosticHeight > twoLineDiagnosticHeight.height
+          ? proportionalDiagnosticHeight
+          : twoLineDiagnosticHeight.height;
 
-      Widget card({required bool scrollDiagnostic}) => FloeSquircle(
-        padding: const EdgeInsets.all(FloeSpace.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, color: FloePalette.error600),
-            const SizedBox(height: FloeSpace.md),
-            Text(strings.couldNotLoadYourDay),
-            const SizedBox(height: FloeSpace.sm),
-            if (scrollDiagnostic)
-              Flexible(
-                child: SingleChildScrollView(
-                  key: const Key('day-failure-diagnostic-scroll'),
-                  child: SelectableText(
-                    diagnostic,
-                    textAlign: TextAlign.center,
-                  ),
+      return SingleChildScrollView(
+        key: const Key('day-failure-card-scroll'),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: FloeSquircle(
+                padding: const EdgeInsets.all(FloeSpace.xl),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: FloePalette.error600,
+                    ),
+                    const SizedBox(height: FloeSpace.md),
+                    Text(strings.couldNotLoadYourDay),
+                    const SizedBox(height: FloeSpace.sm),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight: diagnosticViewportHeight,
+                      ),
+                      child: SingleChildScrollView(
+                        key: const Key('day-failure-diagnostic-scroll'),
+                        child: SelectableText(
+                          diagnostic,
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: FloeSpace.base),
+                    FloeButton.filled(
+                      onPressed: retry,
+                      icon: const Icon(Icons.refresh),
+                      child: Text(strings.tryAgain),
+                    ),
+                  ],
                 ),
-              )
-            else
-              SelectableText(diagnostic, textAlign: TextAlign.center),
-            const SizedBox(height: FloeSpace.base),
-            FloeButton.filled(
-              onPressed: retry,
-              icon: const Icon(Icons.refresh),
-              child: Text(strings.tryAgain),
-            ),
-          ],
-        ),
-      );
-
-      // At extremely short heights even the fixed heading and recovery action
-      // cannot fit beside a useful diagnostic viewport. Scroll the whole card
-      // in that case instead of shrinking text or clipping either control.
-      if (constraints.maxHeight < 280) {
-        return SingleChildScrollView(
-          key: const Key('day-failure-card-scroll'),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 720),
-                child: card(scrollDiagnostic: false),
               ),
             ),
           ),
-        );
-      }
-
-      return Center(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: 720,
-            maxHeight: constraints.maxHeight,
-          ),
-          child: card(scrollDiagnostic: true),
         ),
       );
     },

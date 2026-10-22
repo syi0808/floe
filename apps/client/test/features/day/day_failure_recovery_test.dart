@@ -86,6 +86,109 @@ const _layoutCases =
 void main() {
   setUpAll(_loadBundledFonts);
 
+  const cutoffCases = <({double textScale, double screenHeight})>[
+    (textScale: 2, screenHeight: 455),
+    (textScale: 2, screenHeight: 456),
+    (textScale: 3, screenHeight: 521),
+    (textScale: 3, screenHeight: 522),
+    (textScale: 3, screenHeight: 560),
+  ];
+
+  for (final cutoffCase in cutoffCases) {
+    testWidgets('readable diagnostic and keyboard retry near cutoff at '
+        '${cutoffCase.textScale}x, ${cutoffCase.screenHeight}px', (
+      tester,
+    ) async {
+      final harness = await _mount(
+        tester,
+        size: Size(320, cutoffCase.screenHeight),
+        textScale: cutoffCase.textScale,
+        safeTop: 24,
+        safeBottom: 20,
+        diagnostic: _longDiagnostic,
+      );
+      addTearDown(harness.dispose);
+
+      final middle = find.byKey(const Key('personal-day-middle-viewport'));
+      final diagnosticScroll = find.byKey(
+        const Key('day-failure-diagnostic-scroll'),
+      );
+      final cardScroll = find.byKey(const Key('day-failure-card-scroll'));
+      expect(tester.getSize(middle).height, greaterThanOrEqualTo(280));
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSize(diagnosticScroll).height,
+        greaterThanOrEqualTo(
+          _twoLineDiagnosticHeight(tester, diagnosticScroll),
+        ),
+      );
+      final diagnosticPosition = tester
+          .state<ScrollableState>(_scrollableUnder(tester, diagnosticScroll))
+          .position;
+      expect(diagnosticPosition.maxScrollExtent, greaterThan(0));
+      final cardPosition = tester
+          .state<ScrollableState>(_scrollableUnder(tester, cardScroll))
+          .position;
+      expect(cardPosition.maxScrollExtent, greaterThan(0));
+      final middleBounds = tester.getRect(middle);
+      final diagnosticBounds = tester.getRect(diagnosticScroll);
+      await tester.drag(
+        cardScroll,
+        Offset(0, middleBounds.center.dy - diagnosticBounds.center.dy),
+      );
+      await _pumpFrames(tester);
+      expect(
+        _containsRect(tester.getRect(middle), tester.getRect(diagnosticScroll)),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+      for (
+        var attempt = 0;
+        attempt < 4 &&
+            diagnosticPosition.pixels < diagnosticPosition.maxScrollExtent - 1;
+        attempt++
+      ) {
+        await tester.drag(diagnosticScroll, const Offset(0, -3000));
+        await _pumpFrames(tester);
+      }
+      expect(
+        diagnosticPosition.pixels,
+        closeTo(diagnosticPosition.maxScrollExtent, 1),
+      );
+      final diagnosticSemantics = tester
+          .getSemantics(find.byType(SelectableText))
+          .getSemanticsData();
+      expect(diagnosticSemantics.value, contains(_longDiagnostic));
+      expect(diagnosticSemantics.value, contains(_scrollTail));
+
+      final retryText = find.text('Try again');
+      final retry = find.ancestor(
+        of: retryText,
+        matching: find.byType(FilledButton),
+      );
+      var focused = false;
+      for (var tab = 0; tab < 40 && !focused; tab++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        focused = Focus.of(
+          tester.element(retryText),
+          createDependency: false,
+        ).hasPrimaryFocus;
+      }
+      expect(focused, isTrue);
+      expect(
+        _containsRect(tester.getRect(middle), tester.getRect(retry)),
+        isTrue,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await _pumpFrames(tester);
+      expect(harness.gateway.readCalls, 2);
+      expect(harness.gateway.otherCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   for (final layout in _layoutCases) {
     testWidgets('initial Day failure fits ${layout.name}', (tester) async {
       final harness = await _mount(
@@ -427,6 +530,16 @@ Future<void> _pumpFrames(WidgetTester tester) async {
 
 Finder _scrollableUnder(WidgetTester tester, Finder scrollView) =>
     find.descendant(of: scrollView, matching: find.byType(Scrollable)).first;
+
+double _twoLineDiagnosticHeight(WidgetTester tester, Finder diagnosticScroll) {
+  final context = tester.element(diagnosticScroll);
+  final painter = TextPainter(
+    text: TextSpan(text: 'M\nM', style: DefaultTextStyle.of(context).style),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout(maxWidth: tester.getSize(diagnosticScroll).width);
+  return painter.height;
+}
 
 bool _containsRect(Rect outer, Rect inner) =>
     inner.left >= outer.left &&
