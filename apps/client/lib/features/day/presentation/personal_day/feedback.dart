@@ -4,30 +4,74 @@ class _FailureDay extends StatelessWidget {
   const _FailureDay({required this.retry, required this.message});
   final VoidCallback retry;
   final String? message;
+
   @override
-  Widget build(BuildContext context) => Center(
-    child: FloeSquircle(
-      padding: EdgeInsets.all(FloeSpace.xl),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.error_outline, color: FloePalette.error600),
-          SizedBox(height: FloeSpace.md),
-          Text(AppLocalizations.of(context).couldNotLoadYourDay),
-          SizedBox(height: FloeSpace.sm),
-          SelectableText(
-            message ?? AppLocalizations.of(context).anUnknownErrorOccurred,
-            textAlign: TextAlign.center,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final strings = AppLocalizations.of(context);
+      final diagnostic = message?.trim().isNotEmpty == true
+          ? message!
+          : strings.anUnknownErrorOccurred;
+
+      Widget card({required bool scrollDiagnostic}) => FloeSquircle(
+        padding: const EdgeInsets.all(FloeSpace.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, color: FloePalette.error600),
+            const SizedBox(height: FloeSpace.md),
+            Text(strings.couldNotLoadYourDay),
+            const SizedBox(height: FloeSpace.sm),
+            if (scrollDiagnostic)
+              Flexible(
+                child: SingleChildScrollView(
+                  key: const Key('day-failure-diagnostic-scroll'),
+                  child: SelectableText(
+                    diagnostic,
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              )
+            else
+              SelectableText(diagnostic, textAlign: TextAlign.center),
+            const SizedBox(height: FloeSpace.base),
+            FloeButton.filled(
+              onPressed: retry,
+              icon: const Icon(Icons.refresh),
+              child: Text(strings.tryAgain),
+            ),
+          ],
+        ),
+      );
+
+      // At extremely short heights even the fixed heading and recovery action
+      // cannot fit beside a useful diagnostic viewport. Scroll the whole card
+      // in that case instead of shrinking text or clipping either control.
+      if (constraints.maxHeight < 280) {
+        return SingleChildScrollView(
+          key: const Key('day-failure-card-scroll'),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 720),
+                child: card(scrollDiagnostic: false),
+              ),
+            ),
           ),
-          SizedBox(height: FloeSpace.base),
-          FloeButton.filled(
-            onPressed: retry,
-            icon: Icon(Icons.refresh),
-            child: Text(AppLocalizations.of(context).tryAgain),
+        );
+      }
+
+      return Center(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 720,
+            maxHeight: constraints.maxHeight,
           ),
-        ],
-      ),
-    ),
+          child: card(scrollDiagnostic: true),
+        ),
+      );
+    },
   );
 }
 
