@@ -40,6 +40,30 @@ class _ErrorNotice extends StatelessWidget {
     final compactLargeText =
         MediaQuery.sizeOf(context).width <= 360 &&
         MediaQuery.textScalerOf(context).scale(1) >= 2;
+    final errorText = Text(
+      message,
+      maxLines: compactLargeText ? 2 : null,
+      overflow: compactLargeText ? TextOverflow.ellipsis : null,
+      semanticsLabel: message,
+    );
+    final messageWidget = compactLargeText
+        ? Semantics(
+            label: message,
+            container: true,
+            child: ExcludeSemantics(
+              child: Tooltip(
+                key: const Key('compact-error-message-tooltip'),
+                richMessage: TextSpan(
+                  children: [
+                    WidgetSpan(child: ExcludeSemantics(child: Text(message))),
+                  ],
+                ),
+                excludeFromSemantics: true,
+                child: errorText,
+              ),
+            ),
+          )
+        : errorText;
     return Padding(
       padding: EdgeInsets.only(top: FloeSpace.base),
       child: FloeSquircle(
@@ -54,17 +78,7 @@ class _ErrorNotice extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, color: FloePalette.error600),
             SizedBox(width: FloeSpace.md),
-            Expanded(
-              child: Tooltip(
-                message: message,
-                child: Text(
-                  message,
-                  maxLines: compactLargeText ? 2 : null,
-                  overflow: compactLargeText ? TextOverflow.ellipsis : null,
-                  semanticsLabel: message,
-                ),
-              ),
-            ),
+            Expanded(child: messageWidget),
             FloeButton.text(
               onPressed: dismiss,
               child: Text(AppLocalizations.of(context).close),

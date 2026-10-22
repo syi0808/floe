@@ -459,11 +459,26 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: 'failed refresh render');
       expect(find.text('Close'), findsOneWidget);
-      final errorMessage = find.text(
-        'Bad state: Day refresh failed: unavailable',
-      );
+      const fullErrorMessage = 'Bad state: Day refresh failed: unavailable';
+      final errorMessage = find.text(fullErrorMessage);
       expect(errorMessage, findsOneWidget);
-      expect(tester.getSemantics(errorMessage).label, contains('unavailable'));
+      expect(find.bySemanticsLabel(fullErrorMessage), findsOneWidget);
+      final fullMessageTooltip = find.byKey(
+        const Key('compact-error-message-tooltip'),
+      );
+      expect(fullMessageTooltip, findsOneWidget);
+      final tooltip = tester.widget<Tooltip>(fullMessageTooltip);
+      expect(tooltip.richMessage, isNotNull);
+      expect(find.text('Close').hitTestable(), findsOneWidget);
+      await tester.longPress(errorMessage);
+      await tester.pumpAndSettle();
+      expect(find.text(fullErrorMessage), findsNWidgets(2));
+      expect(find.bySemanticsLabel(fullErrorMessage), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(find.text(fullErrorMessage), findsOneWidget);
+      expect(find.bySemanticsLabel(fullErrorMessage), findsOneWidget);
       expect(find.text('Close').hitTestable(), findsOneWidget);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
@@ -650,6 +665,10 @@ void main() {
         expect(find.text('Synthetic event'), findsOneWidget);
         expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
         expect(find.byKey(const Key('day-status-warning')), findsOneWidget);
+        expect(
+          find.byKey(const Key('compact-error-message-tooltip')),
+          findsNothing,
+        );
         expect(find.byTooltip('Tasks and calendar status'), findsNothing);
         expect(find.text('Close'), findsOneWidget);
         await tester.tap(find.text('Close'));
