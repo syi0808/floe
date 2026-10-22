@@ -205,6 +205,27 @@ cache path or copy an old library after a failed build. Cargo retains its own
 incremental tracking and `CARGO_TARGET_DIR` remains honored. Cross-target native
 builds are explicitly unsupported by this QA runner.
 
+For read-only Notes and Settings interaction coverage without the development
+Gateway, launch the separate synthetic preview entrypoint:
+
+```sh
+cd apps/client
+flutter run -d linux --debug -t lib/main_native_interaction_preview.dart
+```
+
+It uses the production Floe app, Notes, Settings, theme and bundled fonts with
+an in-memory Day fixture. It extends the existing nine sample notes with 36
+deterministic notes and one long multiline reader, and provides synthetic
+Runtime, operation-policy, assistant-feature and Memory snapshots. The preview
+does not construct a persisted profile, AppRuntime, live ConnectionsController,
+conversation or voice gateway, microphone, provider, or calendar service. Read
+paths return only fixture data; all Day, Runtime, policy and assistant command
+methods fail closed with a preview-only error, and Memory review/forget gateways
+are absent. Do not use it to qualify Apple permissions, provider behavior,
+assistive technology, or production owner integrations. The ordinary Linux
+runner still builds its bundled FFI library, but this preview entrypoint does
+not wire that library into the app's owner gateways.
+
 Linux Release/Profile configuration fails explicitly until a Linux production
 OS-keyring backend is available. It never falls back to development custody.
 Use the same source snapshot for the client and Gateway. Their development
