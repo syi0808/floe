@@ -124,10 +124,8 @@ class CalendarCoverageDetails extends StatelessWidget {
             ? AppLocalizations.of(context).dayStatusNeedsRefresh
             : complete
             ? 'Calendars synced for this date'
-            : coverage == null
-            ? 'Calendar status unavailable'
-            : coverage.sources.isEmpty
-            ? 'No calendar data loaded'
+            : coverage == null || coverage.sources.isEmpty
+            ? AppLocalizations.of(context).dayCalendarStatusUnavailable
             : 'Some calendar data may be missing or out of date',
         style: FloeType.bodySmall.copyWith(
           color: complete ? FloePalette.neutral600 : FloePalette.warning600,

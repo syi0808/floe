@@ -1556,6 +1556,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get dayStatusNeedsRefresh => 'Calendar status needs refresh';
 
   @override
+  String get dayCalendarStatusUnavailable => 'Calendar status unavailable';
+
+  @override
   String get dayOtherEvents => 'Also today';
 
   @override
