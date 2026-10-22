@@ -84,10 +84,13 @@ The default view answers the user's decision, not the executor's schema: what wi
 change, when, and where. Present the user's title and readable local time first;
 retain account/calendar distinctions. Timezone names, offsets and UTC notation are
 not review content; UTC remains the internal storage/execution representation.
-Show a short explanation only when it adds decision-relevant context. UUIDs and
-raw provider codes belong in collapsed technical details,
-not between the proposal and its approval controls. Do not invent rationale from
-an ID or implementation state, and do not conceal guests, alerts or other effects.
+When endpoint local offsets differ across a clock change, include each endpoint's
+local timezone abbreviation, falling back to its UTC offset if abbreviations
+match, solely to disambiguate the changed clock reading. Show a short explanation
+only when it adds decision-relevant context. UUIDs and raw provider codes belong
+in collapsed technical details, not between the proposal and its approval
+controls. Do not invent rationale from an ID or implementation state, and do not
+conceal guests, alerts or other effects.
 
 See [Review, authority and Activity](../product/experience.md#review-authority-and-activity)
 and [decision-first action review](s3-calendar-action-ui.md). Metadata remains

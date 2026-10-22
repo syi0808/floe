@@ -19,6 +19,7 @@ import 'package:floe_client/features/conversation/presentation/agent_interaction
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/runtime/app_read_model.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
@@ -741,8 +742,21 @@ void main() {
         surfaceRead: (_) async => _surfaceEnvelope(surfaceSession),
       );
       addTearDown(h.dispose);
-      h.transport.proposalPreview = (_) async =>
-          _proposalPreviewEnvelope(_readyProposal('Personal calendar'));
+      const longTitle =
+          'A carefully planned long focus session that should wrap comfortably at narrow widths';
+      final localStart = DateTime(2026, 10, 12, 23, 30);
+      final localEnd = DateTime(2026, 10, 13, 0, 30);
+      final startUtc = localStart.toUtc();
+      final endUtc = localEnd.toUtc();
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+        _readyProposal(
+          'Personal calendar',
+          title: longTitle,
+          startsAt: startUtc.toIso8601String(),
+          endsAt: endUtc.toIso8601String(),
+          timezone: 'Asia/Seoul',
+        ),
+      );
 
       final semantics = tester.ensureSemantics();
       try {
@@ -796,10 +810,30 @@ void main() {
           _proposalReceipt(),
         );
         expect(h.transport.proposalQueries.single['artifact_id'], _m3);
+        final summaryText = _normalizedText(tester);
+        expect(find.text(longTitle), findsOneWidget);
+        expect(
+          summaryText,
+          contains(
+            'Starts: ${_proposalLocalDateTime(tester, startUtc, endUtc)}',
+          ),
+        );
+        expect(
+          summaryText,
+          contains('Ends: ${_proposalLocalDateTime(tester, endUtc, startUtc)}'),
+        );
+        expect(summaryText, isNot(contains('UTC')));
+        expect(find.text('Event timezone: Asia/Seoul'), findsNothing);
         expect(find.text('Add to calendar'), findsOneWidget);
+        await tester.ensureVisible(find.text(longTitle));
+        expect(find.text(longTitle).hitTestable(), findsOneWidget);
         await tester.ensureVisible(find.text('Add to calendar'));
         await tester.pumpAndSettle();
         expect(find.text('Add to calendar').hitTestable(), findsOneWidget);
+        expect(
+          tester.getRect(find.text('Add to calendar')).right,
+          lessThanOrEqualTo(tester.view.physicalSize.width),
+        );
         expect(h.transport.commands, isEmpty);
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
@@ -808,6 +842,55 @@ void main() {
       } finally {
         semantics.dispose();
       }
+    },
+  );
+
+  testWidgets(
+    'proposal preview follows 24-hour preference and disambiguates clock changes',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final startUtc = DateTime.utc(2026, 11, 1, 5, 30);
+      final endUtc = DateTime.utc(2026, 11, 1, 6, 30);
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+        _readyProposal(
+          'Personal calendar',
+          title: 'Clock-change proposal',
+          startsAt: startUtc.toIso8601String(),
+          endsAt: endUtc.toIso8601String(),
+          timezone: 'America/New_York',
+        ),
+      );
+
+      await tester.pumpWidget(
+        _proposalApp(
+          h.controller,
+          _proposalMessage(_m3),
+          alwaysUse24HourFormat: true,
+        ),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+
+      final summaryText = _normalizedText(tester);
+      expect(
+        summaryText,
+        contains('Starts: ${_proposalLocalDateTime(tester, startUtc, endUtc)}'),
+      );
+      expect(
+        summaryText,
+        contains('Ends: ${_proposalLocalDateTime(tester, endUtc, startUtc)}'),
+      );
+      expect(summaryText, isNot(contains('UTC')));
+      final localStart = startUtc.toLocal();
+      final localEnd = endUtc.toLocal();
+      if (localStart.timeZoneOffset != localEnd.timeZoneOffset) {
+        expect(summaryText, contains(localStart.timeZoneName));
+        expect(summaryText, contains(localEnd.timeZoneName));
+      }
+      expect(find.text('Event timezone: America/New_York'), findsNothing);
+      expect(h.transport.commands, isEmpty);
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -841,6 +924,175 @@ void main() {
       expect(h.transport.commands, isEmpty);
     },
   );
+
+  testWidgets('ready proposal without a destination remains review-only', (
+    tester,
+  ) async {
+    final h = await _Harness.create();
+    addTearDown(h.dispose);
+    h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+      _readyProposal(
+        'No destinations',
+        title: 'Reviewable, not submittable',
+        destinations: const [],
+      ),
+    );
+    await tester.pumpWidget(_proposalApp(h.controller, _proposalMessage(_m3)));
+    await tester.tap(find.text('Review proposal'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reviewable, not submittable'), findsOneWidget);
+    expect(
+      find.text('No Calendar destinations are currently available.'),
+      findsOneWidget,
+    );
+    expect(find.text('Add to calendar'), findsOneWidget);
+    expect(_addToCalendarOnPressed(tester), isNull);
+    expect(h.transport.commands, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'receipt replacement clears details and failed reload cannot reuse them',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      var firstPreview = true;
+      h.transport.proposalPreview = (_) async {
+        if (firstPreview) {
+          firstPreview = false;
+          return _proposalPreviewEnvelope(
+            _readyProposal('First calendar', title: 'Old proposal details'),
+          );
+        }
+        throw StateError('replacement preview failed');
+      };
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.text('Old proposal details'), findsOneWidget);
+
+      await tester.pumpWidget(
+        _proposalApp(
+          h.controller,
+          _proposalMessage(_m3, receipt: _proposalReceipt(digest: 'b' * 64)),
+        ),
+      );
+      expect(find.text('Old proposal details'), findsNothing);
+      expect(find.text('Add to calendar'), findsNothing);
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      expect(find.text('Old proposal details'), findsNothing);
+      expect(find.textContaining('replacement preview failed'), findsOneWidget);
+      expect(_addToCalendarOnPressed(tester), isNull);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'late preview after receipt replacement cannot restore old details',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final old = Completer<Map<String, dynamic>>();
+      h.transport.proposalPreview = (_) => old.future;
+      await tester.pumpWidget(
+        _proposalApp(h.controller, _proposalMessage(_m3)),
+      );
+      await tester.tap(find.text('Review proposal'));
+      await tester.pump();
+      await tester.pumpWidget(
+        _proposalApp(
+          h.controller,
+          _proposalMessage(_m3, receipt: _proposalReceipt(digest: 'c' * 64)),
+        ),
+      );
+      expect(find.text('Add to calendar'), findsNothing);
+      old.complete(
+        _proposalPreviewEnvelope(
+          _readyProposal('Old receipt', title: 'Stale receipt details'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Stale receipt details'), findsNothing);
+      expect(find.text('Review proposal'), findsOneWidget);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'artifact selection clears old details and fences its late preview',
+    (tester) async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      final old = Completer<Map<String, dynamic>>();
+      h.transport.proposalPreview = (query) => query['artifact_id'] == _m3
+          ? old.future
+          : Future.value(
+              _proposalPreviewEnvelope(
+                _readyProposal('Second calendar', title: 'Current artifact'),
+              ),
+            );
+      final message = AgentCapabilityMessage.fromDelegation(
+        _proposalDelegationMessage(
+          output: 'Two proposals',
+          artifactIds: const [_m3, _m4],
+        ),
+      );
+      await tester.pumpWidget(_proposalApp(h.controller, message));
+      await tester.tap(find.text('Review proposal'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel('Proposal').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Schedule 1'));
+      await tester.pumpAndSettle();
+      expect(h.transport.proposalQueries.single['artifact_id'], _m3);
+      expect(find.text('Add to calendar'), findsOneWidget);
+      expect(_addToCalendarOnPressed(tester), isNull);
+
+      await tester.tap(find.bySemanticsLabel('Proposal').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Schedule 2'));
+      await tester.pumpAndSettle();
+      expect(find.text('Stale artifact details'), findsNothing);
+      expect(find.text('Current artifact'), findsOneWidget);
+      old.complete(
+        _proposalPreviewEnvelope(
+          _readyProposal('First calendar', title: 'Stale artifact details'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Current artifact'), findsOneWidget);
+      expect(find.text('Stale artifact details'), findsNothing);
+      expect(h.transport.commands, isEmpty);
+    },
+  );
+
+  testWidgets('controller replacement immediately clears proposal details', (
+    tester,
+  ) async {
+    final h = await _Harness.create();
+    final replacement = await _Harness.create();
+    addTearDown(h.dispose);
+    addTearDown(replacement.dispose);
+    h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+      _readyProposal('First calendar', title: 'Old controller details'),
+    );
+    await tester.pumpWidget(_proposalApp(h.controller, _proposalMessage(_m3)));
+    await tester.tap(find.text('Review proposal'));
+    await tester.pumpAndSettle();
+    expect(find.text('Old controller details'), findsOneWidget);
+
+    await tester.pumpWidget(
+      _proposalApp(replacement.controller, _proposalMessage(_m3)),
+    );
+    expect(find.text('Old controller details'), findsNothing);
+    expect(find.text('Add to calendar'), findsNothing);
+    expect(h.transport.commands, isEmpty);
+    expect(replacement.transport.commands, isEmpty);
+  });
 
   testWidgets(
     'two artifacts from one Task remain separate across card replacement',
@@ -884,8 +1136,9 @@ void main() {
       h.transport.interactionPage = (_) async =>
           interactionPageFixture(_sessionId, [_proposalInteraction()]);
       await h.controller.refreshInteractions();
-      h.transport.proposalPreview = (_) async =>
-          _proposalPreviewEnvelope(_readyProposal('Exact proposal calendar'));
+      h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope(
+        _readyProposal('Exact proposal calendar', title: 'Exact title'),
+      );
       await tester.pumpWidget(
         _proposalApp(h.controller, _proposalMessage(_m3)),
       );
@@ -894,6 +1147,8 @@ void main() {
       await tester.tap(find.text('Review proposal'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Exact proposal calendar'), findsOneWidget);
+      expect(find.text('Exact title'), findsOneWidget);
+      expect(h.transport.commands, isEmpty);
       expect(h.transport.proposalQueries.single['receipt'], _proposalReceipt());
       expect(h.transport.proposalQueries.single['artifact_id'], _m3);
       expect(h.transport.commands, isEmpty);
@@ -908,7 +1163,10 @@ void main() {
       var revision = 1;
       h.transport.proposalPreview = (_) async => _proposalPreviewEnvelope({
         'kind': 'existing',
-        'action': _proposalOperation(revision: revision++),
+        'action': _proposalOperation(
+          revision: revision++,
+          timezone: 'Asia/Seoul',
+        ),
       });
       await tester.pumpWidget(
         _proposalApp(h.controller, _proposalMessage(_m3)),
@@ -916,6 +1174,24 @@ void main() {
       await tester.tap(find.text('Review proposal'));
       await tester.pumpAndSettle();
       expect(find.text('Exact proposal operation'), findsOneWidget);
+      expect(
+        _normalizedText(tester),
+        contains(
+          'Starts: ${_proposalLocalDateTime(tester, DateTime.utc(2026, 10, 12, 10), DateTime.utc(2026, 10, 12, 11))}',
+        ),
+      );
+      expect(
+        _normalizedText(tester),
+        contains(
+          'Ends: ${_proposalLocalDateTime(tester, DateTime.utc(2026, 10, 12, 11), DateTime.utc(2026, 10, 12, 10))}',
+        ),
+      );
+      expect(
+        find.text('Review the details before adding this event.'),
+        findsNothing,
+      );
+      expect(find.text('Event timezone: Asia/Seoul'), findsNothing);
+      expect(_normalizedText(tester), isNot(contains('UTC')));
       await tester.tap(find.text('Refresh approval status'));
       await tester.pumpAndSettle();
       expect(h.transport.proposalQueries, hasLength(2));
@@ -965,7 +1241,7 @@ void main() {
       );
       await tester.tap(find.text('Review proposal'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('proposal evidence revoked'), findsWidgets);
+      expect(find.textContaining('proposal evidence revoked'), findsOneWidget);
       expect(h.transport.proposalQueries, hasLength(1));
       expect(h.transport.commands, isEmpty);
     },
@@ -2531,37 +2807,43 @@ const _m6 = '00000000-0000-4000-8000-000000000106';
 const _replacementMessageId = '00000000-0000-4000-8000-000000000107';
 const _terminalRunId = '00000000-0000-4000-8000-000000000108';
 
-Map<String, Object?> _proposalReceipt() => {
+Map<String, Object?> _proposalReceipt({String? digest}) => {
   'execution': {'task_id': _m1, 'execution_id': _m2, 'executor_generation': 1},
   'task_revision': 2,
   'journal_revision': 2,
-  'digest': 'a' * 64,
+  'digest': digest ?? 'a' * 64,
 };
 Map<String, Object?> _proposalDelegationMessage({
   required String output,
   String artifact = _m3,
+  List<String>? artifactIds,
   String messageId = _m1,
-}) => {
-  'kind': 'delegation',
-  'message_id': messageId,
-  'turn_id': '00000000-0000-4000-8000-000000000099',
-  'task': {
-    'execution_receipt': _proposalReceipt(),
-    'task_id': _m1,
-    'agent_id': 'scheduler',
-    'state': 'completed',
-    'result': output,
-    'artifacts': [
-      {
-        'artifact_id': artifact,
-        'name': 'Schedule',
-        'media_types': [
-          'application/vnd.floe.actions.calendar-proposal+json;version=1',
-        ],
-      },
-    ],
-  },
-};
+  Map<String, Object?>? receipt,
+}) {
+  final ids = artifactIds ?? [artifact];
+  return {
+    'kind': 'delegation',
+    'message_id': messageId,
+    'turn_id': '00000000-0000-4000-8000-000000000099',
+    'task': {
+      'execution_receipt': receipt ?? _proposalReceipt(),
+      'task_id': _m1,
+      'agent_id': 'scheduler',
+      'state': 'completed',
+      'result': output,
+      'artifacts': [
+        for (var index = 0; index < ids.length; index++)
+          {
+            'artifact_id': ids[index],
+            'name': 'Schedule ${index + 1}',
+            'media_types': [
+              'application/vnd.floe.actions.calendar-proposal+json;version=1',
+            ],
+          },
+      ],
+    },
+  };
+}
 
 Map<String, Object?> _failedDelegationMessage() => {
   'kind': 'delegation',
@@ -2589,44 +2871,105 @@ Map<String, Object?> _failedDelegationMessage() => {
 AgentCapabilityMessage _proposalMessage(
   String artifact, {
   String messageId = _m1,
+  Map<String, Object?>? receipt,
 }) => AgentCapabilityMessage.fromDelegation(
   _proposalDelegationMessage(
     artifact: artifact,
     messageId: messageId,
+    receipt: receipt,
     output: 'Proposal ready',
   ),
 );
 Widget _proposalApp(
   ConversationController controller,
-  AgentCapabilityMessage message,
-) => MaterialApp(
+  AgentCapabilityMessage message, {
+  bool? alwaysUse24HourFormat,
+}) => MaterialApp(
   localizationsDelegates: AppLocalizations.localizationsDelegates,
   supportedLocales: AppLocalizations.supportedLocales,
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context)
+        .copyWith(alwaysUse24HourFormat: alwaysUse24HourFormat ?? false),
+    child: child!,
+  ),
   home: Scaffold(
     body: SingleChildScrollView(
       child: AgentProposalCard(controller: controller, message: message),
     ),
   ),
 );
+VoidCallback? _addToCalendarOnPressed(WidgetTester tester) => tester
+    .widget<FilledButton>(
+      find
+          .ancestor(
+            of: find.text('Add to calendar'),
+            matching: find.byType(FilledButton),
+          )
+          .first,
+    )
+    .onPressed;
+String _normalizedText(WidgetTester tester) => tester
+    .widgetList<Text>(find.byType(Text))
+    .map((text) => text.data ?? '')
+    .join(' ')
+    .replaceAll('\u202f', ' ')
+    .replaceAll('\u00a0', ' ');
+String _proposalLocalDateTime(
+  WidgetTester tester,
+  DateTime instant,
+  DateTime otherInstant,
+) {
+  final context = tester.element(find.byType(AgentProposalCard));
+  final local = instant.toLocal();
+  final otherLocal = otherInstant.toLocal();
+  final clock = MaterialLocalizations.of(context).formatTimeOfDay(
+    TimeOfDay.fromDateTime(local),
+    alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+  );
+  var suffix = '';
+  if (local.timeZoneOffset != otherLocal.timeZoneOffset) {
+    suffix = local.timeZoneName != otherLocal.timeZoneName
+        ? ' ${local.timeZoneName}'
+        : ' ${_proposalOffsetLabel(local.timeZoneOffset.inSeconds)}';
+  }
+  final date = DateFormat.yMMMEd(AppLocalizations.of(context).localeName)
+      .format(local);
+  return '$date · $clock$suffix';
+}
+
+String _proposalOffsetLabel(int seconds) {
+  final minutes = seconds ~/ 60;
+  final sign = minutes < 0 ? '−' : '+';
+  return 'UTC$sign${(minutes.abs() ~/ 60).toString().padLeft(2, '0')}:${(minutes.abs() % 60).toString().padLeft(2, '0')}';
+}
+
 Map<String, dynamic> _proposalPreviewEnvelope(Map<String, dynamic> preview) => {
   'kind': 'conversation.calendar_proposal.preview',
   'preview': preview,
 };
-Map<String, dynamic> _readyProposal(String label) => {
+Map<String, dynamic> _readyProposal(
+  String label, {
+  String title = 'Proposal',
+  String startsAt = '2026-10-12T10:00:00Z',
+  String endsAt = '2026-10-12T11:00:00Z',
+  String timezone = 'UTC',
+  List<Map<String, Object?>>? destinations,
+}) => {
   'kind': 'ready',
-  'title': 'Proposal',
-  'schedule': {
-    'starts_at': '2026-10-12T10:00:00Z',
-    'ends_at': '2026-10-12T11:00:00Z',
-    'timezone': 'UTC',
-  },
-  'destinations': [
-    {'destination_ref': _m6, 'label': label},
-  ],
+  'title': title,
+  'schedule': {'starts_at': startsAt, 'ends_at': endsAt, 'timezone': timezone},
+  'destinations':
+      destinations ??
+      [
+        {'destination_ref': _m6, 'label': label},
+      ],
 };
 Map<String, dynamic> _proposalOperation({
   int revision = 1,
   String title = 'Exact proposal operation',
+  String startsAt = '2026-10-12T10:00:00Z',
+  String endsAt = '2026-10-12T11:00:00Z',
+  String timezone = 'UTC',
 }) => {
   'action_ref': _m5,
   'revision': revision,
@@ -2636,9 +2979,9 @@ Map<String, dynamic> _proposalOperation({
     'destination_label': 'Personal Calendar',
     'title': title,
     'schedule': {
-      'starts_at': '2026-10-12T10:00:00Z',
-      'ends_at': '2026-10-12T11:00:00Z',
-      'timezone': 'UTC',
+      'starts_at': startsAt,
+      'ends_at': endsAt,
+      'timezone': timezone,
     },
   },
   'review_ref': {

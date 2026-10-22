@@ -35,7 +35,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
 
   final form = GlobalKey<FormState>();
   bool expanded = false;
-  List<ActionDestinationChoice> destinations = const [];
+  ReadyActionProposal? proposalDetails;
+  List<ActionDestinationChoice> get destinations =>
+      proposalDetails?.destinations ?? const [];
   String? destinationRef;
   String? artifactId;
   ConversationCommandReplay? pendingCommands;
@@ -100,9 +102,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         oldWidget.message.callId != widget.message.callId ||
         oldWidget.message.executionReceipt != widget.message.executionReceipt) {
       _messageEpoch++;
+      _destinationEpoch++;
       final artifacts = proposals;
       artifactId = artifacts.length == 1 ? artifacts.single.id : null;
-      destinations = const [];
+      proposalDetails = null;
       destinationRef = null;
       expanded = false;
       error = null;
@@ -121,7 +124,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     setState(() {
       loadingPreview = true;
       previewLoaded = false;
-      destinations = const [];
+      proposalDetails = null;
       destinationRef = null;
       error = null;
     });
@@ -140,12 +143,12 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         switch (preview) {
           case ExistingActionProposal(:final action):
             _acceptAction(_actionKey(receipt, selectedArtifact), action);
-            destinations = const [];
+            proposalDetails = null;
             destinationRef = null;
-          case ReadyActionProposal(:final destinations):
-            this.destinations = destinations;
-            destinationRef = destinations.length == 1
-                ? destinations.single.destinationRef
+          case final ReadyActionProposal ready:
+            proposalDetails = ready;
+            destinationRef = ready.destinations.length == 1
+                ? ready.destinations.single.destinationRef
                 : null;
         }
         loadingPreview = false;
@@ -159,6 +162,8 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
         return;
       }
       setState(() {
+        proposalDetails = null;
+        destinationRef = null;
         error = failure.toString();
         loadingPreview = false;
       });
@@ -269,16 +274,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     }
   }
 
-  String _statusText(AppLocalizations strings, CalendarAction? action) {
+  String? _statusText(AppLocalizations strings, CalendarAction? action) {
     if (action == null) {
-      if (widget.message.executionReceipt == null || !receiptMatches) {
-        return 'This proposal is not ready to submit yet.';
-      }
-      if (error case final currentError?) return currentError;
       if (loadingPreview) return strings.actionLoading;
-      if (!expanded) return 'Review this proposal.';
-      if (destinationRef != null) return 'Ready to add to your calendar.';
-      return 'Choose where to add this proposal.';
+      return null;
     }
     return switch (action.status.state) {
       CalendarActionState.pendingReview => strings.actionPending,
@@ -320,6 +319,7 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
     for (final artifact in artifacts) {
       if (artifact.id == artifactId) selectedArtifact = artifact;
     }
+    final statusText = _statusText(strings, currentAction);
     return FloeSquircle(
       padding: const EdgeInsets.all(12),
       child: Form(
@@ -328,24 +328,28 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(strings.agentProposalTitle, style: FloeType.controlLabel),
-            const SizedBox(height: 8),
-            Text(
-              'Review this proposal before adding it to your calendar. Your Calendar permissions still apply.',
-              style: FloeType.bodySmall.copyWith(fontSize: 12),
-            ),
-            const SizedBox(height: 8),
-            Semantics(
-              liveRegion: true,
-              child: Align(
-                alignment: AlignmentDirectional.centerStart,
-                child: FloeBadge(
-                  label: _statusText(strings, currentAction),
-                  tone: error == null
-                      ? _statusTone(currentAction)
-                      : FloeBadgeTone.danger,
+            if (currentAction == null) ...[
+              const SizedBox(height: 8),
+              Text(
+                strings.agentProposalReviewReminder,
+                style: FloeType.bodySmall.copyWith(fontSize: 12),
+              ),
+            ],
+            if (statusText != null) ...[
+              const SizedBox(height: 8),
+              Semantics(
+                liveRegion: true,
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: FloeBadge(
+                    label: statusText,
+                    tone: error == null
+                        ? _statusTone(currentAction)
+                        : FloeBadgeTone.danger,
+                  ),
                 ),
               ),
-            ),
+            ],
             if (!receiptMatches) ...[
               const SizedBox(height: 8),
               Text(
@@ -384,8 +388,10 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   onChanged: (value) {
                     setState(() {
                       artifactId = value;
-                      destinations = const [];
+                      _destinationEpoch++;
+                      proposalDetails = null;
                       destinationRef = null;
+                      error = null;
                       previewLoaded = false;
                       loadingPreview = false;
                     });
@@ -395,6 +401,13 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                       value == null ? strings.actionFormInvalid : null,
                 ),
               if (currentAction == null) ...[
+                if (proposalDetails case final ready?) ...[
+                  if (artifacts.length > 1) const SizedBox(height: 12),
+                  _ProposalPresentation(
+                    title: ready.title,
+                    schedule: ready.schedule,
+                  ),
+                ],
                 if (destinations.length == 1)
                   Text(
                     '${strings.actionDestination}: ${destinations.single.label}',
@@ -454,11 +467,9 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                   child: const Text('Add to calendar'),
                 ),
               ] else ...[
-                Text(currentAction.title),
-                Text(
-                  DateFormat.yMMMd(
-                    Localizations.localeOf(context).toLanguageTag(),
-                  ).add_jm().format(currentAction.schedule.startsAt.toLocal()),
+                _ProposalPresentation(
+                  title: currentAction.title,
+                  schedule: currentAction.schedule,
                 ),
                 if (error case final failure?) Text(failure),
                 FloeButton.text(
@@ -469,6 +480,60 @@ class _AgentProposalCardState extends State<AgentProposalCard> {
                 ),
               ],
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _ProposalPresentation extends StatelessWidget {
+  const _ProposalPresentation({required this.title, required this.schedule});
+
+  final String title;
+  final ActionSchedule schedule;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    final start = schedule.startsAt.toLocal();
+    final end = schedule.endsAt.toLocal();
+    final dateFormat = DateFormat.yMMMEd(strings.localeName);
+    final alwaysUse24HourFormat = MediaQuery.alwaysUse24HourFormatOf(context);
+    String offsetLabel(int seconds) {
+      final minutes = seconds ~/ 60;
+      final sign = minutes < 0 ? '−' : '+';
+      return 'UTC$sign${(minutes.abs() ~/ 60).toString().padLeft(2, '0')}:${(minutes.abs() % 60).toString().padLeft(2, '0')}';
+    }
+
+    String time(DateTime value) => MaterialLocalizations.of(context)
+        .formatTimeOfDay(
+          TimeOfDay.fromDateTime(value),
+          alwaysUse24HourFormat: alwaysUse24HourFormat,
+        );
+
+    String dateTime(DateTime value) {
+      var clock = time(value);
+      if (start.timeZoneOffset != end.timeZoneOffset) {
+        clock += start.timeZoneName != end.timeZoneName
+            ? ' ${value.timeZoneName}'
+            : ' ${offsetLabel(value.timeZoneOffset.inSeconds)}';
+      }
+      return '${dateFormat.format(value)} · $clock';
+    }
+
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(title, style: FloeType.title, softWrap: true),
+            const SizedBox(height: 4),
+            Text(strings.agentProposalStartsLocal(dateTime(start))),
+            Text(strings.agentProposalEndsLocal(dateTime(end))),
           ],
         ),
       ),

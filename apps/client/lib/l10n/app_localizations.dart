@@ -2377,8 +2377,26 @@ abstract class AppLocalizations {
   /// No description provided for @agentProposalTitle.
   ///
   /// In en, this message translates to:
-  /// **'Suggested focus time'**
+  /// **'Calendar proposal'**
   String get agentProposalTitle;
+
+  /// No description provided for @agentProposalReviewReminder.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the details before adding this event.'**
+  String get agentProposalReviewReminder;
+
+  /// No description provided for @agentProposalStartsLocal.
+  ///
+  /// In en, this message translates to:
+  /// **'Starts: {dateTime}'**
+  String agentProposalStartsLocal(String dateTime);
+
+  /// No description provided for @agentProposalEndsLocal.
+  ///
+  /// In en, this message translates to:
+  /// **'Ends: {dateTime}'**
+  String agentProposalEndsLocal(String dateTime);
 
   /// No description provided for @agentProposalInterval.
   ///

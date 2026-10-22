@@ -1326,7 +1326,21 @@ class AppLocalizationsEn extends AppLocalizations {
       'Retry pending assistant feature change';
 
   @override
-  String get agentProposalTitle => 'Suggested focus time';
+  String get agentProposalTitle => 'Calendar proposal';
+
+  @override
+  String get agentProposalReviewReminder =>
+      'Review the details before adding this event.';
+
+  @override
+  String agentProposalStartsLocal(String dateTime) {
+    return 'Starts: $dateTime';
+  }
+
+  @override
+  String agentProposalEndsLocal(String dateTime) {
+    return 'Ends: $dateTime';
+  }
 
   @override
   String agentProposalInterval(String start, String end) {

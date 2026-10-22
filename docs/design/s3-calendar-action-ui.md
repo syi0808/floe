@@ -21,9 +21,11 @@ not reduce the user's understanding of what they authorize.
 
 Flutter displays both endpoints in the device's local time. Full
 dates avoid ambiguity for overnight events. The user neither enters nor reviews a
-timezone, offset or UTC string. This is presentation only: approval retains the
-original immutable UTC instants and internal scheduling metadata, never a reparsed
-display string.
+schedule timezone, offset or UTC string. If local endpoint offsets differ across a
+clock change, display each local zone abbreviation, falling back to its UTC offset
+if the abbreviations match, solely to disambiguate the changed clock reading. This
+is presentation only: approval retains the original immutable UTC instants and
+internal scheduling metadata, never a reparsed display string.
 
 The planning dialog accepts `yyyy-MM-dd HH:mm` in device-local time. Destination,
 title, start and end fields use a consistent 12px vertical gap; explanatory copy
