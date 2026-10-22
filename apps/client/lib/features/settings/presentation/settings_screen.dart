@@ -10,6 +10,7 @@ import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_feedback.dart';
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/app/floe_loading.dart';
+import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/floe_squircle.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
@@ -163,8 +164,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : selectedPage,
       onSelected: (page) => setState(() => selectedPage = page),
     );
-    final content = AnimatedSwitcher(
-      duration: const Duration(milliseconds: 180),
+    final content = FloeAnimatedSwap(
+      beginScale: 1,
       child: KeyedSubtree(key: ValueKey(selectedPage), child: _content()),
     );
 

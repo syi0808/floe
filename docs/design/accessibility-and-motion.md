@@ -40,6 +40,8 @@ Use strong ease-out for entry and exit. Animate transform and opacity rather tha
 
 Reduced-motion mode removes translation, parallax, scale, bounce, and spring. Short fades and color changes may remain when they clarify state. The Floe mascot never idles with perpetual motion.
 
+Settings content changes use a restrained fade. Once a page starts leaving, remove its pointer, keyboard-focus, and accessibility actions immediately while retaining its visual exit. Keep the same widget wrapper structure for current and outgoing pages so a transition does not remount stateful content. Rapid navigation must expose only the current page to input and screen readers.
+
 ## Validation checklist
 
 - Test keyboard-only use and focus restoration.

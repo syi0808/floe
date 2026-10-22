@@ -217,7 +217,22 @@ final class FloeAnimatedSwap extends StatelessWidget {
       duration: reduceMotion ? FloeMotion.reducedMotionDuration : duration,
       switchInCurve: FloeMotion.easeOut,
       switchOutCurve: FloeMotion.easeOut,
-      layoutBuilder: layoutBuilder,
+      // Keep the same wrapper shape for current and outgoing entries so
+      // retiring controls does not remount stateful page content.
+      layoutBuilder: (current, previous) {
+        Widget guard(Widget child, {required bool outgoing}) => IgnorePointer(
+          key: child.key,
+          ignoring: outgoing,
+          child: ExcludeFocus(
+            excluding: outgoing,
+            child: ExcludeSemantics(excluding: outgoing, child: child),
+          ),
+        );
+        return layoutBuilder(
+          current == null ? null : guard(current, outgoing: false),
+          [for (final child in previous) guard(child, outgoing: true)],
+        );
+      },
       transitionBuilder: (child, animation) {
         final faded = FadeTransition(opacity: animation, child: child);
         if (reduceMotion) return faded;

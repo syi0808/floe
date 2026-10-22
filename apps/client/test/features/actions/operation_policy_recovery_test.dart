@@ -1,7 +1,10 @@
+import 'dart:ui' as ui;
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
+import 'package:floe_client/app/floe_motion.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/runtime/app_runtime.dart';
@@ -239,6 +242,75 @@ void main() {
     expect(gateway.calls[1], gateway.calls[0]);
   });
 
+  for (final reduced in [false, true]) {
+    testWidgets(
+      'leaving Settings policy retires old actions, reduced $reduced',
+      (tester) async {
+        final gateway = _Gateway();
+        final controller = await _controller(gateway);
+        addTearDown(controller.dispose);
+        tester.view.physicalSize = const Size(1200, 1000);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final handle = tester.ensureSemantics();
+        try {
+          await tester.pumpWidget(
+            MaterialApp(
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              home: MediaQuery(
+                data: MediaQueryData(disableAnimations: reduced),
+                child: Scaffold(
+                  body: SettingsScreen(
+                    connectionsController: null,
+                    operationPolicyController: controller,
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final oldAction = find.text('Allow Calendar event creation');
+          final oldPosition = tester.getCenter(oldAction);
+          await tester.tap(find.text('Remote server'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 40));
+          expect(oldAction, findsOneWidget); // Still visible during exit.
+          final nav = tester
+              .getSemantics(find.byKey(const ValueKey('settings-remoteServer')))
+              .getSemanticsData();
+          expect(nav.flagsCollection.isEnabled, ui.Tristate.isTrue);
+          expect(nav.flagsCollection.isSelected, ui.Tristate.isTrue);
+          expect(nav.hasAction(ui.SemanticsAction.tap), isTrue);
+          await tester.tapAt(oldPosition);
+          await tester.pump();
+          expect(gateway.calls, isEmpty);
+          expect(controller.authority!.calendarCreate, ActionAuthorityMode.ask);
+          expect(
+            _liveLabels(tester).join('\n'),
+            isNot(contains('Allow Calendar event creation')),
+          );
+          final swap = tester.widget<AnimatedSwitcher>(
+            find.byType(AnimatedSwitcher),
+          );
+          expect(
+            swap.duration,
+            reduced
+                ? FloeMotion.reducedMotionDuration
+                : FloeMotion.selectionDuration,
+          );
+          await tester.pumpAndSettle();
+          expect(oldAction, findsNothing);
+          expect(tester.takeException(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        } finally {
+          handle.dispose();
+        }
+      },
+    );
+  }
+
   testWidgets('Settings offers exact retry after pure reload', (tester) async {
     final gateway = _Gateway();
     gateway.onSet = (_, _, _) async => throw const AppRuntimeException(
@@ -376,4 +448,24 @@ final class _Runtime implements RuntimeGateway {
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw StateError('Unexpected Runtime operation');
+}
+
+List<String> _liveLabels(WidgetTester tester) {
+  final labels = <String>[];
+  void visit(SemanticsNode node) {
+    labels.add(node.label);
+    node.visitChildren((child) {
+      visit(child);
+      return true;
+    });
+  }
+
+  visit(
+    tester
+        .renderObject(find.byType(Scaffold))
+        .owner!
+        .semanticsOwner!
+        .rootSemanticsNode!,
+  );
+  return labels;
 }

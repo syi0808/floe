@@ -71,6 +71,7 @@ class _SettingsSection extends StatelessWidget {
   Widget build(BuildContext context) => Semantics(
     selected: selected,
     button: true,
+    enabled: true,
     child: FloeSquircle(
       size: FloeSquircleSize.md,
       fill: selected ? FloePalette.primary100 : Colors.transparent,
