@@ -47,21 +47,10 @@ class _ErrorNotice extends StatelessWidget {
       semanticsLabel: message,
     );
     final messageWidget = compactLargeText
-        ? Semantics(
-            label: message,
-            container: true,
-            child: ExcludeSemantics(
-              child: Tooltip(
-                key: const Key('compact-error-message-tooltip'),
-                richMessage: TextSpan(
-                  children: [
-                    WidgetSpan(child: ExcludeSemantics(child: Text(message))),
-                  ],
-                ),
-                excludeFromSemantics: true,
-                child: errorText,
-              ),
-            ),
+        ? Tooltip(
+            message: message,
+            excludeFromSemantics: true,
+            child: errorText,
           )
         : errorText;
     return Padding(

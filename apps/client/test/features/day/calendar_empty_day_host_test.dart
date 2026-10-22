@@ -463,18 +463,28 @@ void main() {
       final errorMessage = find.text(fullErrorMessage);
       expect(errorMessage, findsOneWidget);
       expect(find.bySemanticsLabel(fullErrorMessage), findsOneWidget);
-      final fullMessageTooltip = find.byKey(
-        const Key('compact-error-message-tooltip'),
-      );
+      final fullMessageTooltip = find.byTooltip(fullErrorMessage);
       expect(fullMessageTooltip, findsOneWidget);
       final tooltip = tester.widget<Tooltip>(fullMessageTooltip);
-      expect(tooltip.richMessage, isNotNull);
+      expect(tooltip.message, fullErrorMessage);
+      expect(tooltip.excludeFromSemantics, isTrue);
       expect(find.text('Close').hitTestable(), findsOneWidget);
       await tester.longPress(errorMessage);
       await tester.pumpAndSettle();
       expect(find.text(fullErrorMessage), findsNWidgets(2));
-      expect(find.bySemanticsLabel(fullErrorMessage), findsOneWidget);
+      final tooltipMessageRect = tester.getRect(
+        find.text(fullErrorMessage).last,
+      );
+      expect(tooltipMessageRect.left, greaterThanOrEqualTo(0));
+      expect(tooltipMessageRect.top, greaterThanOrEqualTo(0));
+      expect(tooltipMessageRect.right, lessThanOrEqualTo(320));
+      expect(tooltipMessageRect.bottom, lessThanOrEqualTo(560));
       expect(tester.takeException(), isNull);
+      // Tooltip content is in the app overlay, outside the Day screen boundary.
+      await expectLater(
+        find.byType(Overlay).first,
+        matchesGoldenFile('goldens/calendar_compact_error_tooltip_320_2x.png'),
+      );
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
       expect(find.text(fullErrorMessage), findsOneWidget);
@@ -666,7 +676,7 @@ void main() {
         expect(find.byTooltip('Calendar status needs refresh'), findsOneWidget);
         expect(find.byKey(const Key('day-status-warning')), findsOneWidget);
         expect(
-          find.byKey(const Key('compact-error-message-tooltip')),
+          find.byTooltip('Bad state: Day refresh failed: unavailable'),
           findsNothing,
         );
         expect(find.byTooltip('Tasks and calendar status'), findsNothing);
