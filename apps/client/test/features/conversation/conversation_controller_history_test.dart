@@ -1,3 +1,5 @@
+import 'package:floe_client/app/floe_squircle.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
 import 'package:floe_client/features/day/domain/day_models.dart';
@@ -31,6 +33,176 @@ import 'package:floe_client/features/conversation/presentation/conversation_comp
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  for (final width in [320.0, 388.0]) {
+    for (final scale in [1.0, 2.0]) {
+      for (final empty in [true, false]) {
+        testWidgets(
+          'compact short history anchors composer at $width, $scale, $empty',
+          (tester) async {
+            tester.view.physicalSize = Size(width, 640);
+            tester.view.devicePixelRatio = 1;
+            tester.platformDispatcher.textScaleFactorTestValue = scale;
+            addTearDown(tester.view.resetPhysicalSize);
+            addTearDown(tester.view.resetDevicePixelRatio);
+            addTearDown(
+              tester.platformDispatcher.clearTextScaleFactorTestValue,
+            );
+            final h = await _Harness.create(
+              initialSession: _session(
+                messages: empty
+                    ? []
+                    : [
+                        {..._message(_m1), 'text': 'Keep it simple.'},
+                      ],
+              ),
+            );
+            addTearDown(h.dispose);
+            await tester.pumpWidget(_panelApp(h.controller));
+            await tester.pumpAndSettle();
+            final composer = find.byKey(const Key('conversation-composer'));
+            expect(tester.getRect(composer).bottom, closeTo(628, 1));
+            final body = find
+                .descendant(
+                  of: find.byType(SingleChildScrollView).first,
+                  matching: find.byType(Scrollable),
+                )
+                .first;
+            expect(
+              tester.state<ScrollableState>(body).position.maxScrollExtent,
+              0,
+            );
+            const draft = 'First line\nSecond line\nThird line';
+            await tester.enterText(find.byType(TextField), draft);
+            await tester.pumpAndSettle();
+            expect(tester.getRect(composer).bottom, closeTo(628, 1));
+            expect(
+              tester.widget<TextField>(find.byType(TextField)).controller!.text,
+              draft,
+            );
+            expect(find.byTooltip('Close').hitTestable(), findsOneWidget);
+            expect(h.transport.commands, isEmpty);
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox.shrink());
+          },
+        );
+      }
+    }
+  }
+  for (final width in [320.0, 388.0]) {
+    for (final scale in [1.0, 2.0]) {
+      testWidgets(
+        'conversation turn hierarchy stays readable at $width, $scale',
+        (tester) async {
+          tester.view.physicalSize = Size(width, 1000);
+          tester.view.devicePixelRatio = 1;
+          tester.platformDispatcher.textScaleFactorTestValue = scale;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+          const userText = 'Keep the plan simple.';
+          const longUserText =
+              '오후에는 중요한 일 하나에 집중할게.\n회의가 끝나면 다음 단계를 짧고 명확하게 정리해 줘.';
+          const answer =
+              '## Start small\n\n- Write **one opening paragraph**.\n- Leave the details for later.';
+          const partial = '첫 문단부터 작성하고 있어요.';
+          final session = _session(
+            messages: [
+              {..._message(_m1), 'text': userText},
+              {..._message(_m2), 'kind': 'assistant', 'text': answer},
+              {..._message(_m3), 'text': longUserText},
+              {..._message(_m4), 'kind': 'assistant', 'text': partial},
+            ],
+          );
+          final surface = _surfaceEnvelope(session);
+          final entries = (surface['snapshot']['messages'] as List)
+              .cast<Map<String, dynamic>>();
+          for (final index in [1, 3]) {
+            entries[index]['content'] = {
+              'kind': 'result',
+              'run_id': _terminalRunId,
+              'completeness': index == 3 ? 'partial' : 'complete',
+              'text': index == 1 ? answer : partial,
+            };
+          }
+          final h = await _Harness.create(
+            initialSession: session,
+            surfaceRead: (_) async => surface,
+          );
+          addTearDown(h.dispose);
+          final semantics = tester.ensureSemantics();
+          try {
+            await tester.pumpWidget(_panelApp(h.controller));
+            await tester.pumpAndSettle();
+            final user = find.byKey(const ValueKey('conversation-turn-$_m1'));
+            final assistant = find.byKey(
+              const ValueKey('conversation-turn-$_m2'),
+            );
+            final partialTurn = find.byKey(
+              const ValueKey('conversation-turn-$_m4'),
+            );
+            final bubble = find.descendant(
+              of: user,
+              matching: find.byType(FloeSquircle),
+            );
+            expect(bubble, findsOneWidget);
+            final userRect = tester.getRect(user);
+            final bubbleRect = tester.getRect(bubble);
+            expect(
+              bubbleRect.width,
+              lessThanOrEqualTo(userRect.width * .88 + .01),
+            );
+            expect(bubbleRect.right, closeTo(userRect.right, .01));
+            expect(
+              find.descendant(
+                of: assistant,
+                matching: find.byType(FloeSquircle),
+              ),
+              findsNothing,
+            );
+            expect(find.text('You'), findsNothing);
+            expect(find.text('Floe'), findsOneWidget);
+            expect(find.text('Partial result'), findsOneWidget);
+            expect(
+              find.descendant(
+                of: partialTurn,
+                matching: find.text('Partial result'),
+              ),
+              findsOneWidget,
+            );
+            expect(tester.getSemantics(user).label, 'You');
+            expect(tester.getSemantics(assistant).label, 'Floe');
+            final selectedUser = find.descendant(
+              of: user,
+              matching: find.byType(SelectableText),
+            );
+            expect(selectedUser, findsOneWidget);
+            expect(tester.widget<SelectableText>(selectedUser).data, userText);
+            expect(tester.getSemantics(selectedUser).value, userText);
+            final markdown = find.descendant(
+              of: assistant,
+              matching: find.byType(MarkdownBody),
+            );
+            expect(tester.widget<MarkdownBody>(markdown).selectable, isTrue);
+            expect(tester.widget<MarkdownBody>(markdown).data, answer);
+            expect(
+              find.descendant(
+                of: assistant,
+                matching: find.byType(SelectableText),
+              ),
+              findsWidgets,
+            );
+            expect(find.text(longUserText), findsOneWidget);
+            expect(tester.takeException(), isNull);
+            expect(h.transport.commands, isEmpty);
+            await tester.pumpWidget(const SizedBox.shrink());
+          } finally {
+            semantics.dispose();
+          }
+        },
+      );
+    }
+  }
+
   for (final width in [320.0, 388.0]) {
     for (final scale in [1.0, 2.0]) {
       for (final homeInset in [0.0, 34.0]) {
@@ -307,7 +479,8 @@ void main() {
     testWidgets('compact conversation keeps Close visible at $scale', (
       tester,
     ) async {
-      tester.view.physicalSize = const Size(320, 560);
+      // Use a short viewport so this fixture exercises real scrolling.
+      tester.view.physicalSize = const Size(320, 400);
       tester.view.devicePixelRatio = 1;
       tester.platformDispatcher.textScaleFactorTestValue = scale;
       addTearDown(tester.view.resetPhysicalSize);
@@ -1801,6 +1974,8 @@ final class _Harness {
     String sessionId = _sessionId,
     int surfaceSequence = 4,
     Future<void> Function()? beforeAdmission,
+    Map<String, Object?>? initialSession,
+    Future<Map<String, dynamic>> Function(Map<String, dynamic>)? surfaceRead,
   }) async {
     final runtime = RuntimeController(
       gateway: _ReadyRuntimeGateway(),
@@ -1809,13 +1984,15 @@ final class _Harness {
     await runtime.open();
     final readModel = AppReadModel();
     final transport = _ConversationTransport(
-      _session(
-        id: sessionId,
-        messages: [_message(_m5), _message(_m6)],
-        hasEarlier: true,
-      ),
+      initialSession ??
+          _session(
+            id: sessionId,
+            messages: [_message(_m5), _message(_m6)],
+            hasEarlier: true,
+          ),
       surfaceSequence: surfaceSequence,
     );
+    transport.surfaceRead = surfaceRead;
     final client = AppWireConversationClient(transport, newId: _nextRequestId);
     final gateway = AppWireConversationGateway(
       transport,

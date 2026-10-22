@@ -465,12 +465,23 @@ class _AgentPanelState extends State<AgentPanel> {
                         header,
                         const FloeDivider(),
                         Expanded(
-                          child: SingleChildScrollView(
-                            controller: _scroll,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [content, footer],
-                            ),
+                          child: LayoutBuilder(
+                            builder: (context, viewport) =>
+                                SingleChildScrollView(
+                                  controller: _scroll,
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minHeight: viewport.maxHeight,
+                                    ),
+                                    child: Column(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [content, footer],
+                                    ),
+                                  ),
+                                ),
                           ),
                         ),
                       ],
@@ -496,12 +507,19 @@ class _AgentPanelState extends State<AgentPanel> {
 
   Widget _surfaceMessage(AppLocalizations strings, AppSurfaceMessage message) =>
       switch (message) {
-        AppSurfaceInput(:final text) => _surfaceText(strings, text, user: true),
-        AppSurfaceResult(:final text, :final completeness) => _surfaceText(
+        AppSurfaceInput(:final messageId, :final text) => _surfaceText(
           strings,
           text,
-          partial: completeness == AppSurfaceResultCompleteness.partial,
+          messageId: messageId,
+          user: true,
         ),
+        AppSurfaceResult(:final messageId, :final text, :final completeness) =>
+          _surfaceText(
+            strings,
+            text,
+            messageId: messageId,
+            partial: completeness == AppSurfaceResultCompleteness.partial,
+          ),
         AppSurfaceOutcome(:final state, :final issueMessage) => Padding(
           padding: const EdgeInsets.symmetric(vertical: FloeSpace.sm),
           child: Text(
@@ -521,29 +539,50 @@ class _AgentPanelState extends State<AgentPanel> {
   Widget _surfaceText(
     AppLocalizations strings,
     String text, {
+    required String messageId,
     bool user = false,
     bool partial = false,
-  }) => FloeSquircle(
-    size: FloeSquircleSize.md,
-    fill: user ? FloePalette.neutral50 : FloePalette.primary50,
-    borderWidth: 0,
-    padding: const EdgeInsets.all(FloeSpace.md),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(user ? strings.agentYou : 'Floe', style: FloeType.label),
-        if (partial)
-          Text(
-            'Partial result',
-            style: FloeType.bodySmall.copyWith(color: FloePalette.neutral600),
+  }) => Semantics(
+    key: ValueKey('conversation-turn-$messageId'),
+    container: true,
+    explicitChildNodes: true,
+    label: user ? strings.agentYou : 'Floe',
+    child: user
+        ? Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: FractionallySizedBox(
+              widthFactor: .88,
+              child: FloeSquircle(
+                size: FloeSquircleSize.md,
+                fill: FloePalette.neutral50,
+                borderWidth: 0,
+                padding: const EdgeInsets.all(FloeSpace.md),
+                child: SelectableText(text, style: FloeType.body),
+              ),
+            ),
+          )
+        : Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: FloeSpace.xs,
+              vertical: FloeSpace.xs,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (partial) ...[
+                  Text(
+                    'Partial result',
+                    style: FloeType.bodySmall.copyWith(
+                      color: FloePalette.neutral600,
+                    ),
+                  ),
+                  const SizedBox(height: FloeSpace.sm),
+                ],
+                _AgentMarkdown(data: text),
+              ],
+            ),
           ),
-        const SizedBox(height: FloeSpace.sm),
-        if (user)
-          SelectableText(text, style: FloeType.body)
-        else
-          _AgentMarkdown(data: text),
-      ],
-    ),
   );
 
   Widget _workStrip(
