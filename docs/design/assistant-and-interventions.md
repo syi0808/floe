@@ -49,7 +49,9 @@ It provides:
 - session resume/search without forcing the full archive into the current context;
 - accessible status announcements and keyboard focus recovery after stop/error.
 
-Keep the panel header and Close control outside the compact transcript scroller.
+Keep the panel header and Close control outside the compact transcript scroller. Expandable recent work belongs in the scrollable history, not the fixed header. Its cancel/stop controls retain 44px targets and accessible action names even at large text sizes.
+
+Narrow sheets reserve the software keyboard inset; the conversation surface also protects the bottom system safe area. When a compact viewport shrinks during editing, keep the focused composer visible without changing its draft or dispatching it. This adjustment adds no independent animation.
 
 The composer is one squircle surface containing the text field and its trailing action, not a floating-label form field beside a separate button. Use one visible `Message Floe` prompt and retain that accessible field name after typing. Keep the action target at least 44px. Empty or whitespace-only drafts disable Send, but never disable Stop, reload, or recovery solely because the draft is empty. Preserve multiline entry, draft ownership, and the existing length limit.
 

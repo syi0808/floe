@@ -473,51 +473,72 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                children: [
-                  Text(
-                    compactTimeline ? copy.dayTimeline : copy.daySchedule,
-                    style: FloeType.title,
-                  ),
-                  FloeButton.text(
-                    onPressed: () =>
-                        setState(() => compactTimeline = !compactTimeline),
-                    icon: Icon(
-                      compactTimeline
-                          ? LucideIcons.list
-                          : LucideIcons.calendarDays,
-                      size: 16,
-                    ),
-                    child: Text(
-                      compactTimeline ? copy.daySchedule : copy.dayTimeline,
-                    ),
-                  ),
-                  if (compactTimeline)
-                    FloeButton.icon(
-                      tooltip: copy.dayDetails,
-                      onPressed: openDayDetails,
-                      icon: const Icon(LucideIcons.ellipsis, size: 18),
-                    ),
-                ],
-              ),
-              if (compactTimeline &&
-                  (!controller.hasCurrentObservation ||
-                      !hasCompleteCalendarCoverage(snapshot, controller.query)))
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FloeButton.text(
-                    onPressed: openDayDetails,
-                    child: Text(
-                      copy.dayStatusNeedsRefresh,
-                      style: FloeType.bodySmall.copyWith(
-                        color: FloePalette.warning600,
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: constraints.maxHeight / 2,
+                ),
+                child: SingleChildScrollView(
+                  primary: false,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        children: [
+                          Text(
+                            compactTimeline
+                                ? copy.dayTimeline
+                                : copy.daySchedule,
+                            style: FloeType.title,
+                          ),
+                          FloeButton.text(
+                            onPressed: () => setState(
+                              () => compactTimeline = !compactTimeline,
+                            ),
+                            icon: Icon(
+                              compactTimeline
+                                  ? LucideIcons.list
+                                  : LucideIcons.calendarDays,
+                              size: 16,
+                            ),
+                            child: Text(
+                              compactTimeline
+                                  ? copy.daySchedule
+                                  : copy.dayTimeline,
+                            ),
+                          ),
+                          if (compactTimeline)
+                            FloeButton.icon(
+                              tooltip: copy.dayDetails,
+                              onPressed: openDayDetails,
+                              icon: const Icon(LucideIcons.ellipsis, size: 18),
+                            ),
+                        ],
                       ),
-                    ),
+                      if (compactTimeline &&
+                          (!controller.hasCurrentObservation ||
+                              !hasCompleteCalendarCoverage(
+                                snapshot,
+                                controller.query,
+                              )))
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FloeButton.text(
+                            onPressed: openDayDetails,
+                            child: Text(
+                              copy.dayStatusNeedsRefresh,
+                              style: FloeType.bodySmall.copyWith(
+                                color: FloePalette.warning600,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
+              ),
               const SizedBox(height: 8),
               Expanded(
                 child: compactTimeline

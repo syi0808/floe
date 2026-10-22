@@ -18,7 +18,12 @@ Future<T?> showFloeSheet<T>(BuildContext context, WidgetBuilder builder) =>
               reverseDuration: FloeMotion.pressDuration,
             ),
       backgroundColor: Colors.transparent,
-      builder: builder,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(sheetContext).bottom,
+        ),
+        child: builder(sheetContext),
+      ),
     );
 
 final class FloeDivider extends StatelessWidget {

@@ -63,6 +63,9 @@ class _AgentPanelState extends State<AgentPanel> {
   bool _sessionRequested = false;
   bool _loadingHistory = false;
   int _historyLoadGeneration = 0;
+  Size? _lastPanelSize;
+  bool? _lastCompactLayout;
+  double? _lastComposerTextSize;
 
   @override
   void initState() {
@@ -150,6 +153,34 @@ class _AgentPanelState extends State<AgentPanel> {
 
   void _composerChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _keepComposerVisible(
+    BoxConstraints constraints,
+    bool compact,
+    double textSize,
+  ) {
+    final size = constraints.biggest;
+    final previous = _lastPanelSize;
+    final shrank =
+        previous != null &&
+        (size.height < previous.height || size.width < previous.width);
+    final enteredCompact = _lastCompactLayout == false && compact;
+    final textGrew =
+        _lastComposerTextSize != null && textSize > _lastComposerTextSize!;
+    _lastComposerTextSize = textSize;
+    _lastPanelSize = size;
+    _lastCompactLayout = compact;
+    if (!compact ||
+        (!shrank && !enteredCompact && !textGrew) ||
+        !_messageFocus.hasFocus) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _messageFocus.hasFocus && _scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
   }
 
   Future<void> _loadEarlier() async {
@@ -256,8 +287,6 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                     ],
                   ),
-                  if (controller.workItems.isNotEmpty)
-                    _workStrip(strings, controller),
                 ],
               ),
             );
@@ -310,138 +339,154 @@ class _AgentPanelState extends State<AgentPanel> {
                 _composer(strings, controller),
               ],
             );
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final compact =
-                    constraints.maxHeight < 650 ||
-                    MediaQuery.textScalerOf(context).scale(14) > 20;
-                final messages = controller.surfaceMessages;
-                final extraInteractions = controller.interactionSnapshots
-                    .toList(growable: false);
-                final activity = controller.messages
-                    .whereType<AgentCapabilityMessage>()
-                    .toList(growable: false);
-                final content =
-                    messages.isEmpty &&
-                        extraInteractions.isEmpty &&
-                        activity.isEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.all(FloeSpace.base),
-                        child: Text(
-                          strings.agentConversationEmpty,
-                          style: FloeType.body.copyWith(
-                            color: FloePalette.neutral600,
+            return SafeArea(
+              top: false,
+              left: false,
+              right: false,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final textSize = MediaQuery.textScalerOf(context).scale(14);
+                  final compact = constraints.maxHeight < 650 || textSize > 20;
+                  _keepComposerVisible(constraints, compact, textSize);
+                  final messages = controller.surfaceMessages;
+                  final extraInteractions = controller.interactionSnapshots
+                      .toList(growable: false);
+                  final activity = controller.messages
+                      .whereType<AgentCapabilityMessage>()
+                      .toList(growable: false);
+                  final content =
+                      messages.isEmpty &&
+                          extraInteractions.isEmpty &&
+                          activity.isEmpty &&
+                          controller.workItems.isEmpty
+                      ? Padding(
+                          padding: const EdgeInsets.all(FloeSpace.base),
+                          child: Text(
+                            strings.agentConversationEmpty,
+                            style: FloeType.body.copyWith(
+                              color: FloePalette.neutral600,
+                            ),
+                          ),
+                        )
+                      : ListView.separated(
+                          controller: compact ? null : _scroll,
+                          shrinkWrap: compact,
+                          physics: compact
+                              ? const NeverScrollableScrollPhysics()
+                              : null,
+                          padding: const EdgeInsets.all(FloeSpace.base),
+                          itemCount:
+                              messages.length +
+                              extraInteractions.length +
+                              (activity.isEmpty ? 0 : 1) +
+                              (controller.workItems.isEmpty ? 0 : 1) +
+                              (controller.hasEarlierMessages ? 1 : 0) +
+                              (controller.hasMoreInteractions ? 1 : 0),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: FloeSpace.base),
+                          itemBuilder: (context, index) {
+                            if (controller.workItems.isNotEmpty) {
+                              if (index == 0) {
+                                return _workStrip(strings, controller);
+                              }
+                              index--;
+                            }
+                            final offset = controller.hasEarlierMessages
+                                ? 1
+                                : 0;
+                            if (offset == 1 && index == 0) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  FloeButton.text(
+                                    onPressed: controller.loadingEarlier
+                                        ? null
+                                        : _loadEarlier,
+                                    child: Text(
+                                      controller.loadingEarlier
+                                          ? 'Loading earlier messages…'
+                                          : 'Load earlier messages',
+                                    ),
+                                  ),
+                                  if (controller.earlierFailure
+                                      case final failure?)
+                                    Text(failure),
+                                ],
+                              );
+                            }
+                            final contentIndex = index - offset;
+                            if (contentIndex < messages.length) {
+                              return _surfaceMessage(
+                                strings,
+                                messages[contentIndex],
+                              );
+                            }
+                            if (contentIndex <
+                                messages.length + extraInteractions.length) {
+                              final interaction =
+                                  extraInteractions[contentIndex -
+                                      messages.length];
+                              return AgentInteractionCard(
+                                key: ValueKey(interaction.id),
+                                controller: controller,
+                                interactionId: interaction.id,
+                                onOpenSourceReview: widget.onOpenSourceReview,
+                                onOpenConnections: widget.onOpenConnections,
+                                onOpenAssistantFeatureSettings:
+                                    widget.onOpenAssistantFeatureSettings,
+                              );
+                            }
+                            if (activity.isNotEmpty &&
+                                contentIndex ==
+                                    messages.length +
+                                        extraInteractions.length) {
+                              return ExpansionTile(
+                                title: const Text('Execution details'),
+                                children: activity
+                                    .map(
+                                      (message) =>
+                                          _activityMessage(strings, message),
+                                    )
+                                    .toList(),
+                              );
+                            }
+                            return FloeButton.text(
+                              onPressed: controller.loadingInteractions
+                                  ? null
+                                  : controller.loadMoreInteractions,
+                              child: const Text('Load more interactions'),
+                            );
+                          },
+                        );
+                  if (compact) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        header,
+                        const FloeDivider(),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            controller: _scroll,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [content, footer],
+                            ),
                           ),
                         ),
-                      )
-                    : ListView.separated(
-                        controller: compact ? null : _scroll,
-                        shrinkWrap: compact,
-                        physics: compact
-                            ? const NeverScrollableScrollPhysics()
-                            : null,
-                        padding: const EdgeInsets.all(FloeSpace.base),
-                        itemCount:
-                            messages.length +
-                            extraInteractions.length +
-                            (activity.isEmpty ? 0 : 1) +
-                            (controller.hasEarlierMessages ? 1 : 0) +
-                            (controller.hasMoreInteractions ? 1 : 0),
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(height: FloeSpace.base),
-                        itemBuilder: (context, index) {
-                          final offset = controller.hasEarlierMessages ? 1 : 0;
-                          if (offset == 1 && index == 0) {
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                FloeButton.text(
-                                  onPressed: controller.loadingEarlier
-                                      ? null
-                                      : _loadEarlier,
-                                  child: Text(
-                                    controller.loadingEarlier
-                                        ? 'Loading earlier messages…'
-                                        : 'Load earlier messages',
-                                  ),
-                                ),
-                                if (controller.earlierFailure
-                                    case final failure?)
-                                  Text(failure),
-                              ],
-                            );
-                          }
-                          final contentIndex = index - offset;
-                          if (contentIndex < messages.length) {
-                            return _surfaceMessage(
-                              strings,
-                              messages[contentIndex],
-                            );
-                          }
-                          if (contentIndex <
-                              messages.length + extraInteractions.length) {
-                            final interaction =
-                                extraInteractions[contentIndex -
-                                    messages.length];
-                            return AgentInteractionCard(
-                              key: ValueKey(interaction.id),
-                              controller: controller,
-                              interactionId: interaction.id,
-                              onOpenSourceReview: widget.onOpenSourceReview,
-                              onOpenConnections: widget.onOpenConnections,
-                              onOpenAssistantFeatureSettings:
-                                  widget.onOpenAssistantFeatureSettings,
-                            );
-                          }
-                          if (activity.isNotEmpty &&
-                              contentIndex ==
-                                  messages.length + extraInteractions.length) {
-                            return ExpansionTile(
-                              title: const Text('Execution details'),
-                              children: activity
-                                  .map(
-                                    (message) =>
-                                        _activityMessage(strings, message),
-                                  )
-                                  .toList(),
-                            );
-                          }
-                          return FloeButton.text(
-                            onPressed: controller.loadingInteractions
-                                ? null
-                                : controller.loadMoreInteractions,
-                            child: const Text('Load more interactions'),
-                          );
-                        },
-                      );
-                if (compact) {
+                      ],
+                    );
+                  }
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       header,
                       const FloeDivider(),
-                      Expanded(
-                        child: SingleChildScrollView(
-                          controller: _scroll,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [content, footer],
-                          ),
-                        ),
-                      ),
+                      Expanded(child: content),
+                      footer,
                     ],
                   );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    header,
-                    const FloeDivider(),
-                    Expanded(child: content),
-                    footer,
-                  ],
-                );
-              },
+                },
+              ),
             );
           },
         ),
@@ -516,6 +561,11 @@ class _AgentPanelState extends State<AgentPanel> {
         )
         .length;
     return ExpansionTile(
+      key: PageStorageKey<Object>((
+        'conversation-recent-work',
+        controller.personId,
+        controller.session?.id,
+      )),
       tilePadding: EdgeInsets.zero,
       title: Text(
         'Recent work · $queued queued · $busy working',
@@ -525,6 +575,12 @@ class _AgentPanelState extends State<AgentPanel> {
         ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 220),
           child: ListView(
+            key: PageStorageKey<Object>((
+              'conversation-work-scroll',
+              controller.personId,
+              controller.session?.id,
+            )),
+            primary: false,
             shrinkWrap: true,
             children: [
               for (final item in controller.workItems.reversed)
@@ -552,24 +608,34 @@ class _AgentPanelState extends State<AgentPanel> {
                       ),
                       subtitle: Text(label, style: FloeType.bodySmall),
                       trailing: item.state == AppSurfaceWorkState.queued
-                          ? FloeButton.text(
+                          ? FloeButton.icon(
+                              tooltip: strings.cancel,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 44,
+                              ),
                               onPressed:
                                   controller.cancellingWork(
                                     item.receipt.commandId,
                                   )
                                   ? null
                                   : () => controller.cancelQueuedWork(item),
-                              child: const Text('Cancel'),
+                              icon: const Icon(LucideIcons.x, size: 18),
                             )
                           : run != null && !run.state.terminal
-                          ? FloeButton.text(
+                          ? FloeButton.icon(
+                              tooltip: strings.agentStop,
+                              constraints: const BoxConstraints.tightFor(
+                                width: 44,
+                                height: 44,
+                              ),
                               onPressed:
                                   controller.cancellingWork(
                                     item.receipt.commandId,
                                   )
                                   ? null
                                   : () => controller.stopWork(item),
-                              child: Text(strings.agentStop),
+                              icon: const Icon(LucideIcons.square, size: 18),
                             )
                           : null,
                     );

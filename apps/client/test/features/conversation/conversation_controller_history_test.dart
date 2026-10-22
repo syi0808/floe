@@ -1,3 +1,6 @@
+import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/features/day/application/fake_day_gateway.dart';
+import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/actions/presentation/agent_proposal_card.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_motion.dart';
@@ -28,6 +31,214 @@ import 'package:floe_client/features/conversation/presentation/conversation_comp
 import 'package:floe_client/features/day/application/day_gateway.dart';
 
 void main() {
+  for (final width in [320.0, 388.0]) {
+    for (final scale in [1.0, 2.0]) {
+      for (final homeInset in [0.0, 34.0]) {
+        testWidgets(
+          'mobile conversation clears the keyboard at $width, $scale, $homeInset',
+          (tester) async {
+            tester.view.physicalSize = Size(width, 740);
+            tester.view.devicePixelRatio = 1;
+            tester.view.padding = FakeViewPadding(top: 24, bottom: homeInset);
+            tester.view.viewPadding = FakeViewPadding(
+              top: 24,
+              bottom: homeInset,
+            );
+            tester.platformDispatcher.textScaleFactorTestValue = scale;
+            addTearDown(tester.view.resetPhysicalSize);
+            addTearDown(tester.view.resetDevicePixelRatio);
+            addTearDown(tester.view.resetPadding);
+            addTearDown(tester.view.resetViewPadding);
+            addTearDown(tester.view.resetViewInsets);
+            addTearDown(
+              tester.platformDispatcher.clearTextScaleFactorTestValue,
+            );
+            final h = await _Harness.create();
+            addTearDown(h.dispose);
+            final now = DateTime(2026, 10, 22, 12);
+            await tester.pumpWidget(
+              FloeApp(
+                personId: _personId,
+                gateway: FakeDayGateway(),
+                query: DayQuery.local(personId: _personId, date: now, now: now),
+                agentGateway: h.controller.gateway,
+                ownerGateways: LocalOwnerGateways(runtime: h.runtime),
+              ),
+            );
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('Floe').last);
+            await tester.pumpAndSettle();
+            const text = 'Short first line.\nA clear next step.';
+            await tester.enterText(find.byType(TextField), text);
+            await tester.pumpAndSettle();
+            expect(
+              tester
+                  .getRect(find.byKey(const Key('conversation-composer')))
+                  .bottom,
+              lessThanOrEqualTo(740 - homeInset),
+            );
+            tester.view.padding = const FakeViewPadding(top: 24);
+            tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+            await tester.pumpAndSettle();
+            final composer = find.byKey(const Key('conversation-composer'));
+            final close = find.byTooltip('Close');
+            expect(tester.getRect(composer).bottom, closeTo(408, 0.01));
+            expect(tester.getRect(close).top, greaterThanOrEqualTo(24));
+            expect(tester.getRect(close).bottom, lessThan(420));
+            expect(
+              tester.widget<TextField>(find.byType(TextField)).controller!.text,
+              text,
+            );
+            expect(h.transport.commands, isEmpty);
+            expect(tester.takeException(), isNull);
+            tester.platformDispatcher.textScaleFactorTestValue = scale == 1
+                ? 2
+                : 1;
+            await tester.pumpAndSettle();
+            expect(tester.getRect(composer).bottom, closeTo(408, 0.01));
+            expect(
+              tester.widget<TextField>(find.byType(TextField)).controller!.text,
+              text,
+            );
+            tester.view.viewInsets = const FakeViewPadding();
+            tester.view.padding = FakeViewPadding(top: 24, bottom: homeInset);
+            await tester.pumpAndSettle();
+            expect(
+              tester.getRect(composer).bottom,
+              lessThanOrEqualTo(740 - homeInset),
+            );
+            expect(
+              tester.widget<TextField>(find.byType(TextField)).controller!.text,
+              text,
+            );
+            await tester.tap(close);
+            await tester.pumpAndSettle();
+            await tester.ensureVisible(find.text('Timeline'));
+            await tester.tap(find.text('Timeline'));
+            await tester.pumpAndSettle();
+            await tester.ensureVisible(
+              find.byTooltip('Tasks and calendar status'),
+            );
+            await tester.tap(find.byTooltip('Tasks and calendar status'));
+            await tester.pumpAndSettle();
+            tester.view.padding = const FakeViewPadding(top: 24);
+            tester.view.viewInsets = const FakeViewPadding(bottom: 320);
+            await tester.pumpAndSettle();
+            expect(find.text('Tasks and calendar status'), findsOneWidget);
+            expect(
+              tester.getRect(find.byTooltip('Close')).bottom,
+              lessThan(420),
+            );
+            expect(tester.takeException(), isNull);
+            await tester.pumpWidget(const SizedBox.shrink());
+          },
+        );
+      }
+    }
+  }
+
+  testWidgets('expanded recent work stays below the compact Close control', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 260);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final h = await _Harness.create(surfaceSequence: 20);
+    addTearDown(h.dispose);
+    h.transport.returnTerminalFailure = true;
+    h.transport.workingRun = true;
+    expect(
+      await h.controller.sendText(
+        'A longer synthetic work item to inspect safely',
+      ),
+      isTrue,
+    );
+    h.transport.extraWorks = [
+      for (var i = 1; i <= 5; i++)
+        {
+          'receipt': {
+            'command_id':
+                '10000000-0000-4000-8000-${(100 + i).toString().padLeft(12, '0')}',
+            'work_id':
+                '10000000-0000-4000-8000-${(200 + i).toString().padLeft(12, '0')}',
+            'execution_command_id':
+                '10000000-0000-4000-8000-${(300 + i).toString().padLeft(12, '0')}',
+            'input_id':
+                '10000000-0000-4000-8000-${(400 + i).toString().padLeft(12, '0')}',
+            'anchor': _surfaceAnchor(_sessionId, i),
+            'origin': {'kind': 'text'},
+            'runtime_epoch': 1,
+          },
+          'input_text': 'Queued synthetic task $i for a clear next step',
+          'state': {'kind': 'queued'},
+          'current_run_id': null,
+        },
+    ];
+    await h.controller.refreshSurface();
+    await tester.pumpWidget(_panelApp(h.controller));
+    await tester.pumpAndSettle();
+    final close = find.byTooltip('Close');
+    final initialRect = tester.getRect(close);
+    final work = find.textContaining('Recent work');
+    await tester.ensureVisible(work);
+    await tester.pumpAndSettle();
+    await tester.tap(work);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final workList = find.byKey(
+      const PageStorageKey<Object>((
+        'conversation-work-scroll',
+        _personId,
+        _sessionId,
+      )),
+    );
+    expect(tester.getSize(workList).height, 220);
+    final cancel = find.byTooltip('Cancel').first;
+    await tester.ensureVisible(cancel);
+    await tester.pumpAndSettle();
+    // Settle the inner list before revealing the target in the outer viewport.
+    await tester.ensureVisible(cancel);
+    await tester.pumpAndSettle();
+    expect(cancel.hitTestable(), findsOneWidget);
+    expect(tester.getSize(cancel).width, greaterThanOrEqualTo(44));
+    final workTile = find.byKey(
+      const PageStorageKey<Object>((
+        'conversation-recent-work',
+        _personId,
+        _sessionId,
+      )),
+    );
+    final workStop = find.descendant(
+      of: workTile,
+      matching: find.byTooltip('Stop response'),
+    );
+    await tester.scrollUntilVisible(
+      workStop,
+      100,
+      scrollable: find
+          .descendant(of: workList, matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(workStop);
+    await tester.pumpAndSettle();
+    expect(workStop.hitTestable(), findsOneWidget);
+    final composerAction = find.byKey(
+      const Key('conversation-composer-action'),
+    );
+    await tester.ensureVisible(composerAction);
+    await tester.pumpAndSettle();
+    expect(composerAction.hitTestable(), findsOneWidget);
+    expect(tester.widget<FloeButton>(composerAction).onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+    expect(tester.getRect(close), initialRect);
+    expect(initialRect.top, greaterThanOrEqualTo(0));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   for (final width in [320.0, 1200.0]) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(
@@ -1641,6 +1852,7 @@ final class _ConversationTransport implements AppWireTransport {
   _ConversationTransport(this.initialSession, {this.surfaceSequence = 4});
   final int surfaceSequence;
   Map<String, dynamic>? admittedWork;
+  List<Map<String, dynamic>> extraWorks = [];
   String? admittedText;
 
   final Map<String, Object?> initialSession;
@@ -1755,7 +1967,7 @@ final class _ConversationTransport implements AppWireTransport {
         return {
           'kind': 'conversation.work.page',
           'page': {
-            'items': admittedWork == null ? [] : [_workSnapshot()],
+            'items': [if (admittedWork != null) _workSnapshot(), ...extraWorks],
             'next': null,
           },
         };
