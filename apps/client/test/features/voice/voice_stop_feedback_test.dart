@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_theme.dart';
+import 'package:floe_client/app/runtime/app_owner_exception.dart';
 import 'package:floe_client/app/runtime/app_wire_transport.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
+import 'package:floe_client/app/runtime/owner_failure.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
 import 'package:floe_client/features/conversation/application/agent_conversation_gateway.dart';
@@ -15,6 +17,7 @@ import 'package:floe_client/features/conversation/application/agent_interaction_
 import 'package:floe_client/features/conversation/application/conversation_runtime_gateway.dart';
 import 'package:floe_client/features/conversation/domain/agent_session.dart';
 import 'package:floe_client/features/voice/application/voice_gateway.dart';
+import 'package:floe_client/features/voice/infrastructure/app_wire_voice_gateway.dart';
 import 'package:floe_client/features/voice/presentation/voice_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -278,6 +281,225 @@ void main() {
       }
     }
   });
+
+  testWidgets(
+    'recovery that settles during Stop cannot replace its status or facts',
+    (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final transport = _RaceVoiceTransport();
+      final voice = AppWireVoiceGateway(transport);
+      final runtimeGateway = _ControlledRuntimeGateway();
+      final harness = await _mount(
+        tester,
+        gateway: voice,
+        runtimeGateway: runtimeGateway,
+      );
+      final semantics = tester.ensureSemantics();
+      try {
+        expect(find.text('Voice session open'), findsOneWidget);
+        expect(find.text('Microphone: on'), findsOneWidget);
+        expect(find.text('Service: connected'), findsOneWidget);
+        final recovery = transport.holdNextRecovery();
+        await _notifyReady(runtimeGateway, harness.runtime, tester, 'before');
+        expect(transport.recoverableQueries, 2);
+
+        await tester.tap(find.text('Stop voice'));
+        await tester.pump();
+        expect(transport.stopCommands, 1);
+        expect(transport.commands, hasLength(1));
+        expect(transport.commands.single['command'], {
+          'kind': 'voice.stop',
+          'voice_session_id': _SyntheticVoiceGateway._commandId,
+          'surface_session_id': _SyntheticVoiceGateway._surfaceId,
+        });
+
+        // A null journal result is followed by an exact readback of the
+        // previously known command. Neither read may erase pending Stop UI.
+        recovery.complete(_recoverableReply(null));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 1));
+        expect(transport.statusReads, 1);
+        expect(find.text('Stopping voice'), findsOneWidget);
+        expect(find.text('Stop voice'), findsOneWidget);
+        expect(find.text('Voice session open'), findsNothing);
+        expect(find.text('Microphone: on'), findsOneWidget);
+        expect(find.text('Service: connected'), findsOneWidget);
+        expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isFalse);
+        expect(
+          tester.getSemantics(find.byType(FilledButton).first).label,
+          'Stop voice',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        expect(transport.stopCommands, 1);
+
+        transport.stopResult.complete(_stopReply());
+        await tester.pumpAndSettle();
+        expect(find.text('Stopped on this device'), findsOneWidget);
+        expect(find.text('Stop voice'), findsNothing);
+        expect(find.text('Start voice'), findsOneWidget);
+        expect(find.text('Microphone: stopped'), findsOneWidget);
+        expect(find.text('Service: disconnected'), findsOneWidget);
+        expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
+        expect(transport.stopCommands, 1);
+        expect(tester.takeException(), isNull);
+      } finally {
+        semantics.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+        harness.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'pre-Stop recovery completing after Stop cannot overwrite its receipt',
+    (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final transport = _RaceVoiceTransport();
+      final voice = AppWireVoiceGateway(transport);
+      final runtimeGateway = _ControlledRuntimeGateway();
+      final harness = await _mount(
+        tester,
+        gateway: voice,
+        runtimeGateway: runtimeGateway,
+      );
+      try {
+        final recovery = transport.holdNextRecovery();
+        await _notifyReady(
+          runtimeGateway,
+          harness.runtime,
+          tester,
+          'before-late',
+        );
+        await tester.tap(find.text('Stop voice'));
+        await tester.pump();
+        expect(transport.stopCommands, 1);
+
+        transport.stopResult.complete(_stopReply());
+        await tester.pumpAndSettle();
+        expect(find.text('Stopped on this device'), findsOneWidget);
+        expect(find.text('Microphone: stopped'), findsOneWidget);
+        expect(find.text('Service: disconnected'), findsOneWidget);
+        expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
+
+        // Deliberately complete with a stale but recoverable call snapshot.
+        recovery.complete(_recoverableReply(_activeWireStatus()));
+        await tester.pumpAndSettle();
+        expect(find.text('Stopped on this device'), findsOneWidget);
+        expect(find.text('Start voice'), findsOneWidget);
+        expect(find.text('Voice session open'), findsNothing);
+        expect(find.text('Microphone: stopped'), findsOneWidget);
+        expect(find.text('Service: disconnected'), findsOneWidget);
+        expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
+        expect(transport.stopCommands, 1);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        harness.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'recovery started during Stop is fenced, then a fresh settled read applies',
+    (tester) async {
+      _setViewport(tester, const Size(390, 844));
+      final transport = _RaceVoiceTransport();
+      final voice = AppWireVoiceGateway(transport);
+      final runtimeGateway = _ControlledRuntimeGateway();
+      final harness = await _mount(
+        tester,
+        gateway: voice,
+        runtimeGateway: runtimeGateway,
+      );
+      try {
+        await tester.tap(find.text('Stop voice'));
+        await tester.pump();
+        expect(transport.stopCommands, 1);
+
+        final lateRecovery = transport.holdNextRecovery();
+        await _notifyReady(runtimeGateway, harness.runtime, tester, 'during');
+        expect(transport.recoverableQueries, 2);
+
+        transport.stopResult.complete(_stopReply());
+        await tester.pumpAndSettle();
+        expect(find.text('Stopped on this device'), findsOneWidget);
+        expect(find.text('Start voice'), findsOneWidget);
+        lateRecovery.complete(_recoverableReply(_activeWireStatus()));
+        await tester.pumpAndSettle();
+        expect(find.text('Stopped on this device'), findsOneWidget);
+        expect(find.text('Microphone: stopped'), findsOneWidget);
+        expect(find.text('Service: disconnected'), findsOneWidget);
+        expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isTrue);
+        expect(transport.stopCommands, 1);
+
+        final freshRecovery = transport.holdNextRecovery();
+        await _notifyReady(runtimeGateway, harness.runtime, tester, 'fresh');
+        freshRecovery.complete(_recoverableReply(_activeWireStatus()));
+        await tester.pumpAndSettle();
+        expect(find.text('Voice session open'), findsOneWidget);
+        expect(find.text('Stop voice'), findsOneWidget);
+        expect(find.text('Microphone: on'), findsOneWidget);
+        expect(find.text('Service: connected'), findsOneWidget);
+        expect(transport.recoverableQueries, 3);
+        expect(transport.stopCommands, 1);
+        expect(transport.commands, hasLength(1));
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        harness.dispose();
+      }
+    },
+  );
+
+  testWidgets('a pending runtime recovery completing after disposal is inert', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(390, 844));
+    final transport = _RaceVoiceTransport();
+    final voice = AppWireVoiceGateway(transport);
+    final runtimeGateway = _ControlledRuntimeGateway();
+    final harness = await _mount(
+      tester,
+      gateway: voice,
+      runtimeGateway: runtimeGateway,
+    );
+    final recovery = transport.holdNextRecovery();
+    await _notifyReady(runtimeGateway, harness.runtime, tester, 'dispose');
+    expect(transport.recoverableQueries, 2);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    recovery.complete(_recoverableReply(_activeWireStatus()));
+    await tester.pumpAndSettle();
+
+    expect(transport.commands, isEmpty);
+    expect(transport.statusReads, 0);
+    expect(tester.takeException(), isNull);
+    harness.dispose();
+  });
+
+  testWidgets('a pending Stop receipt completing after disposal is inert', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(390, 844));
+    final transport = _RaceVoiceTransport();
+    final voice = AppWireVoiceGateway(transport);
+    final harness = await _mount(
+      tester,
+      gateway: voice,
+      runtimeGateway: _ControlledRuntimeGateway(),
+    );
+
+    await tester.tap(find.text('Stop voice'));
+    await tester.pump();
+    expect(transport.stopCommands, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    transport.stopResult.complete(_stopReply());
+    await tester.pumpAndSettle();
+
+    expect(transport.stopCommands, 1);
+    expect(tester.takeException(), isNull);
+    harness.dispose();
+  });
 }
 
 void _setViewport(
@@ -301,11 +523,12 @@ void _setViewport(
 
 Future<_Harness> _mount(
   WidgetTester tester, {
-  required _SyntheticVoiceGateway gateway,
+  required VoiceGateway gateway,
+  RuntimeGateway? runtimeGateway,
   double textScale = 1,
 }) async {
   final runtime = RuntimeController(
-    gateway: _SyntheticRuntimeGateway(),
+    gateway: runtimeGateway ?? _SyntheticRuntimeGateway(),
     personId: 'synthetic-person',
   );
   await runtime.open();
@@ -367,11 +590,176 @@ Future<void> _loadBundledFonts() async {
 final class _Harness {
   _Harness(this.runtime, this.gateway);
   final RuntimeController runtime;
-  final _SyntheticVoiceGateway gateway;
+  final VoiceGateway gateway;
   void dispose() {
     runtime.dispose();
   }
 }
+
+final class _ControlledRuntimeGateway implements RuntimeGateway {
+  final List<Completer<RuntimeReadinessSnapshot>> _readiness = [];
+  int readinessCalls = 0;
+
+  Completer<RuntimeReadinessSnapshot> holdNextReadiness() {
+    final completer = Completer<RuntimeReadinessSnapshot>();
+    _readiness.add(completer);
+    return completer;
+  }
+
+  @override
+  Future<RuntimeReadinessSnapshot> readiness(String requestId) {
+    readinessCalls++;
+    if (_readiness.isEmpty) {
+      return Future.value(
+        const RuntimeReadinessSnapshot(state: RuntimeReadinessState.ready),
+      );
+    }
+    return _readiness.removeAt(0).future;
+  }
+
+  @override
+  Future<RuntimePreparationResult> prepare(String operationId) async =>
+      throw StateError('Synthetic voice race never prepares the Runtime.');
+
+  @override
+  Future<RuntimePreparationResult> getPreparation(String operationId) async =>
+      throw StateError('Synthetic voice race never polls the Runtime.');
+
+  @override
+  Future<RuntimePreparationResult> acknowledge(String operationId) async =>
+      throw StateError('Synthetic voice race never acknowledges the Runtime.');
+}
+
+final class _RaceVoiceTransport implements AppWireTransport {
+  final List<Map<String, dynamic>> commands = [];
+  final List<Completer<Map<String, dynamic>>> _heldRecoveries = [];
+  final Completer<Map<String, dynamic>> stopResult = Completer();
+  int recoverableQueries = 0;
+  int statusReads = 0;
+
+  int get stopCommands => commands
+      .where((request) => request['command']?['kind'] == 'voice.stop')
+      .length;
+
+  Completer<Map<String, dynamic>> holdNextRecovery() {
+    final completer = Completer<Map<String, dynamic>>();
+    _heldRecoveries.add(completer);
+    return completer;
+  }
+
+  @override
+  Future<Map<String, dynamic>> commandV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    commands.add(request);
+    if (request['command']?['kind'] != 'voice.stop') {
+      throw StateError('The synthetic race permits only the requested Stop.');
+    }
+    return stopResult.future;
+  }
+
+  @override
+  Future<Map<String, dynamic>> queryV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) {
+    final kind = request['query']?['kind'];
+    if (kind == 'voice.start.recoverable') {
+      recoverableQueries++;
+      if (recoverableQueries == 1) {
+        return Future.value(_recoverableReply(_activeWireStatus()));
+      }
+      if (_heldRecoveries.isEmpty) {
+        throw StateError('No synthetic recoverable read was queued.');
+      }
+      return _heldRecoveries.removeAt(0).future;
+    }
+    if (kind == 'voice.start.status') {
+      statusReads++;
+      return Future.value(_statusReply(_stoppedWireStatus()));
+    }
+    throw StateError('Unexpected synthetic Voice query: $kind');
+  }
+
+  @override
+  Future<Map<String, dynamic>> eventsV2(
+    Map<String, dynamic> request, {
+    Duration timeout = const Duration(seconds: 3),
+  }) async => throw StateError('The synthetic race has no event transport.');
+
+  @override
+  Future<void> close() async {}
+}
+
+Future<void> _notifyReady(
+  _ControlledRuntimeGateway gateway,
+  RuntimeController runtime,
+  WidgetTester tester,
+  String incident,
+) async {
+  final readiness = gateway.holdNextReadiness();
+  runtime.reportFailure(
+    AppOwnerException.fromAppWire(
+      'vault_locked',
+      ownerFailure: OwnerFailure(
+        domain: 'vault',
+        category: 'user_configuration',
+        reason: 'vault_locked',
+        incidentId: 'synthetic-$incident',
+        correlationId: 'synthetic-correlation-$incident',
+        reloadRequired: true,
+        sealSession: true,
+        recovery: 'reobserve',
+        safeActions: const {'retry'},
+      ),
+    ),
+  );
+  await tester.pump();
+  expect(gateway.readinessCalls, greaterThan(1));
+  readiness.complete(
+    const RuntimeReadinessSnapshot(state: RuntimeReadinessState.ready),
+  );
+  // Stop owns an indeterminate-duration loading indicator, so settle only a
+  // bounded pair of frames while the synthetic recovery request is held.
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 1));
+}
+
+Map<String, dynamic> _recoverableReply(Map<String, dynamic>? status) => {
+  'kind': 'voice.start.recoverable',
+  'status': status,
+};
+
+Map<String, dynamic> _statusReply(Map<String, dynamic>? status) => {
+  'kind': 'voice.start.status',
+  'status': status,
+};
+
+Map<String, dynamic> _stopReply() => {
+  'kind': 'voice.stop',
+  'status': _stoppedWireStatus(),
+};
+
+Map<String, dynamic> _activeWireStatus() => {
+  'command_id': _SyntheticVoiceGateway._commandId,
+  'surface_session_id': _SyntheticVoiceGateway._surfaceId,
+  'state': 'bound',
+  'media': 'capturing',
+  'remote': 'connected',
+  'stop_requested': false,
+  'local_lease_released': false,
+};
+
+Map<String, dynamic> _stoppedWireStatus() => {
+  'command_id': _SyntheticVoiceGateway._commandId,
+  'surface_session_id': _SyntheticVoiceGateway._surfaceId,
+  'state': 'bound',
+  'media': 'stopped',
+  'remote': 'closed',
+  'stop_requested': true,
+  'local_lease_released': true,
+};
 
 final class _SyntheticRuntimeGateway implements RuntimeGateway {
   @override

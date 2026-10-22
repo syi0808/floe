@@ -38,6 +38,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
   bool _loading = true;
   bool _busy = false;
   bool _stopping = false;
+  int _statusLoadRevision = 0;
 
   VoiceGateway? get _gateway => widget.ownerGateways.voice;
 
@@ -73,11 +74,14 @@ class _VoiceScreenState extends State<VoiceScreen> {
   }
 
   Future<void> _loadSessionAndStatus() async {
+    final revision = ++_statusLoadRevision;
     AgentSession? session;
     try {
       session = await widget.agentGateway?.resumeConversation(widget.personId);
     } on Object catch (error) {
-      if (mounted) setState(() => _message = _errorMessage(error));
+      if (_canApplyStatusLoad(revision)) {
+        setState(() => _message = _errorMessage(error));
+      }
     }
     VoiceStartStatus? status;
     final gateway = _gateway;
@@ -86,16 +90,21 @@ class _VoiceScreenState extends State<VoiceScreen> {
       try {
         status = await gateway.recoverPendingStart();
       } on Object catch (error) {
-        if (mounted) setState(() => _message = _errorMessage(error));
+        if (_canApplyStatusLoad(revision)) {
+          setState(() => _message = _errorMessage(error));
+        }
       }
     }
-    if (!mounted) return;
+    if (!_canApplyStatusLoad(revision)) return;
     setState(() {
       _session = session;
       _status = status;
       _loading = false;
     });
   }
+
+  bool _canApplyStatusLoad(int revision) =>
+      mounted && revision == _statusLoadRevision && !_busy && !_stopping;
 
   Future<void> _start() async {
     final session = _session;
@@ -191,6 +200,10 @@ class _VoiceScreenState extends State<VoiceScreen> {
   Future<void> _stop() async {
     final gateway = _gateway;
     if (gateway == null || _busy) return;
+    // Fence older recovery reads and any that begin during this Stop. The
+    // second increment in finally prevents a read started during Stop from
+    // becoming current after this command settles.
+    _statusLoadRevision++;
     setState(() {
       _busy = true;
       _stopping = true;
@@ -223,6 +236,7 @@ class _VoiceScreenState extends State<VoiceScreen> {
       });
     } finally {
       if (mounted) {
+        _statusLoadRevision++;
         setState(() {
           _busy = false;
           _stopping = false;
