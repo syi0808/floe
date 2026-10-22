@@ -187,6 +187,106 @@ void main() {
     },
   );
 
+  testWidgets(
+    'middle source remains visible after the host resizes while its detail is open',
+    (tester) async {
+      final fixture = await _fixture();
+      final scroll = ScrollController();
+      addTearDown(() {
+        fixture.controller.dispose();
+        fixture.runtime.dispose();
+        scroll.dispose();
+      });
+      _setViewport(tester, width: 360, height: 720);
+
+      await tester.pumpWidget(_app(fixture.controller, scroll));
+      await _pump(tester);
+      const sourceName = '$_sourcePrefix 12';
+      final sourceFinder = find.text(sourceName);
+      expect(tester.getRect(sourceFinder).top, greaterThan(720));
+      await tester.ensureVisible(sourceFinder);
+      await tester.pumpAndSettle();
+      final listOffset = scroll.offset;
+      expect(_visible(tester.getRect(sourceFinder), 360, 720), isTrue);
+      final sourceFocus = _cardFocus(tester, sourceFinder);
+      await _activate(tester, sourceFocus);
+      await tester.pumpAndSettle();
+      expect(find.text('Launch planning calendar 18'), findsOneWidget);
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+      expect(
+        _visible(tester.getRect(find.text('Back to connections')), 360, 720),
+        isTrue,
+      );
+
+      tester.view.physicalSize = const Size(900, 760);
+      await tester.pumpWidget(
+        _app(fixture.controller, scroll, width: 900, height: 760),
+      );
+      await tester.pumpAndSettle();
+      await _activateBack(tester, width: 900, height: 760);
+      await tester.pumpAndSettle();
+
+      final returnedRect = tester.getRect(sourceFinder);
+      expect(
+        _visible(returnedRect, 900, 760),
+        isTrue,
+        reason: 'offset=$listOffset, returned=$returnedRect',
+      );
+      expect(scroll.offset, lessThan(listOffset));
+      expect(sourceFocus.hasPrimaryFocus, isTrue);
+      expect(fixture.gateway.unexpectedCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'moved source stays visible after Back while preserving useful list offset',
+    (tester) async {
+      final fixture = await _fixture();
+      final scroll = ScrollController();
+      addTearDown(() {
+        fixture.controller.dispose();
+        fixture.runtime.dispose();
+        scroll.dispose();
+      });
+      _setViewport(tester, width: 360, height: 720);
+
+      await tester.pumpWidget(_app(fixture.controller, scroll));
+      await _pump(tester);
+      const sourceName = '$_sourcePrefix 12';
+      final sourceFinder = find.text(sourceName);
+      await tester.ensureVisible(sourceFinder);
+      await tester.pumpAndSettle();
+      final listOffset = scroll.offset;
+      final sourceFocus = _cardFocus(tester, sourceFinder);
+      await _activate(tester, sourceFocus);
+      await tester.pumpAndSettle();
+      expect(find.text('Launch planning calendar 18'), findsOneWidget);
+      expect(scroll.position.maxScrollExtent, greaterThan(0));
+
+      fixture.gateway.value = _overview(
+        kind: _CardKind.source,
+        sourcePrefix: fixture.sourcePrefix,
+        moveMiddleSourceToEnd: true,
+      );
+      await fixture.controller.load();
+      await tester.pumpAndSettle();
+      await _activateBack(tester, width: 360, height: 720);
+      await tester.pumpAndSettle();
+
+      final returnedRect = tester.getRect(sourceFinder);
+      expect(
+        _visible(returnedRect, 360, 720),
+        isTrue,
+        reason: 'offset=$listOffset, returned=$returnedRect',
+      );
+      expect(returnedRect.bottom, greaterThan(660));
+      expect(sourceFocus.hasPrimaryFocus, isTrue);
+      expect(fixture.gateway.unexpectedCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   for (final (width, textScale) in [(360.0, 2.0), (900.0, 1.0)]) {
     testWidgets(
       'source detail entry fits ${width.toInt()}px at ${textScale}x text',
@@ -272,6 +372,172 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('pending Back cannot steal focus into a replacement Scrollable', (
+    tester,
+  ) async {
+    final fixture = await _fixture();
+    final firstScroll = ScrollController();
+    final replacementScroll = ScrollController();
+    addTearDown(() {
+      fixture.controller.dispose();
+      fixture.runtime.dispose();
+      firstScroll.dispose();
+      replacementScroll.dispose();
+    });
+    _setViewport(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(fixture.controller, firstScroll));
+    await _pump(tester);
+    const sourceName = '$_sourcePrefix $_targetIndex';
+    final sourceFinder = find.text(sourceName);
+    await tester.ensureVisible(sourceFinder);
+    await tester.pumpAndSettle();
+    final sourceFocus = _cardFocus(tester, sourceFinder);
+    await _activate(tester, sourceFocus);
+    await tester.pumpAndSettle();
+    await _queueBack(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(
+      _app(
+        fixture.controller,
+        replacementScroll,
+        hostKey: const ValueKey('replacement-connections-host-scroll'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(replacementScroll.offset, 0);
+    expect(sourceFocus.hasPrimaryFocus, isFalse);
+    expect(find.text(sourceName), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending Back cannot target a replacement host controller', (
+    tester,
+  ) async {
+    final fixture = await _fixture();
+    final firstScroll = ScrollController();
+    final replacementScroll = ScrollController();
+    addTearDown(() {
+      fixture.controller.dispose();
+      fixture.runtime.dispose();
+      firstScroll.dispose();
+      replacementScroll.dispose();
+    });
+    _setViewport(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(fixture.controller, firstScroll));
+    await _pump(tester);
+    const sourceName = '$_sourcePrefix $_targetIndex';
+    final sourceFinder = find.text(sourceName);
+    await tester.ensureVisible(sourceFinder);
+    await tester.pumpAndSettle();
+    final sourceFocus = _cardFocus(tester, sourceFinder);
+    await _activate(tester, sourceFocus);
+    await tester.pumpAndSettle();
+    await _queueBack(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(fixture.controller, replacementScroll));
+    await tester.pumpAndSettle();
+    expect(replacementScroll.offset, 0);
+    expect(sourceFocus.hasPrimaryFocus, isFalse);
+    expect(find.text(sourceName), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending Back is invalidated by controller replacement', (
+    tester,
+  ) async {
+    final first = await _fixture();
+    final replacement = await _fixture(sourcePrefix: 'Replacement source');
+    final scroll = ScrollController();
+    addTearDown(() {
+      first.controller.dispose();
+      first.runtime.dispose();
+      replacement.controller.dispose();
+      replacement.runtime.dispose();
+      scroll.dispose();
+    });
+    _setViewport(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(first.controller, scroll));
+    await _pump(tester);
+    const originalName = '$_sourcePrefix $_targetIndex';
+    final originalFinder = find.text(originalName);
+    await tester.ensureVisible(originalFinder);
+    await tester.pumpAndSettle();
+    final originalFocus = _cardFocus(tester, originalFinder);
+    await _activate(tester, originalFocus);
+    await tester.pumpAndSettle();
+    await _queueBack(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(replacement.controller, scroll));
+    await tester.pumpAndSettle();
+    expect(find.text(originalName), findsNothing);
+    expect(find.text('Replacement source $_targetIndex'), findsOneWidget);
+    expect(originalFocus.hasPrimaryFocus, isFalse);
+    expect(replacement.gateway.unexpectedCalls, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pending Back is invalidated by a new source identity', (
+    tester,
+  ) async {
+    final fixture = await _fixture();
+    final scroll = ScrollController();
+    addTearDown(() {
+      fixture.controller.dispose();
+      fixture.runtime.dispose();
+      scroll.dispose();
+    });
+    _setViewport(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(fixture.controller, scroll));
+    await _pump(tester);
+    const originalName = '$_sourcePrefix $_targetIndex';
+    final originalFinder = find.text(originalName);
+    await tester.ensureVisible(originalFinder);
+    await tester.pumpAndSettle();
+    final originalFocus = _cardFocus(tester, originalFinder);
+    await _activate(tester, originalFocus);
+    await tester.pumpAndSettle();
+    await _queueBack(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(
+      _app(fixture.controller, scroll, initialSourceRef: SourceRef(_uuid(1))),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('$_sourcePrefix 1'), findsOneWidget);
+    expect(find.text('Launch planning calendar 1'), findsNothing);
+    expect(originalFocus.hasPrimaryFocus, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unmount invalidates a pending Back restoration', (tester) async {
+    final fixture = await _fixture();
+    final scroll = ScrollController();
+    addTearDown(() {
+      fixture.controller.dispose();
+      fixture.runtime.dispose();
+      scroll.dispose();
+    });
+    _setViewport(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(_app(fixture.controller, scroll));
+    await _pump(tester);
+    const sourceName = '$_sourcePrefix $_targetIndex';
+    final sourceFinder = find.text(sourceName);
+    await tester.ensureVisible(sourceFinder);
+    await tester.pumpAndSettle();
+    final sourceFocus = _cardFocus(tester, sourceFinder);
+    await _activate(tester, sourceFocus);
+    await tester.pumpAndSettle();
+    await _queueBack(tester, width: 360, height: 720);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(sourceFocus.hasPrimaryFocus, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final kind in _CardKind.values) {
     testWidgets(
       '${kind.name} removal cancels stale focus and scroll restoration',
@@ -345,6 +611,15 @@ Future<void> _activateBack(
   required double width,
   required double height,
 }) async {
+  await _queueBack(tester, width: width, height: height);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _queueBack(
+  WidgetTester tester, {
+  required double width,
+  required double height,
+}) async {
   final back = find.text('Back to connections');
   final button = find.ancestor(of: back, matching: find.byType(TextButton));
   expect(button, findsOneWidget);
@@ -361,7 +636,6 @@ Future<void> _activateBack(
   expect(focusNode.hasPrimaryFocus, isTrue);
   expect(_visible(tester.getRect(back), width, height), isTrue);
   await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-  await tester.pumpAndSettle();
 }
 
 FocusNode _focusFor(WidgetTester tester, Finder focusElementFinder) {
@@ -387,6 +661,8 @@ Widget _app(
   double height = 720,
   double textScale = 1,
   bool disableAnimations = false,
+  SourceRef? initialSourceRef,
+  Key hostKey = const ValueKey('connections-host-scroll'),
 }) => MaterialApp(
   theme: FloeTheme.light,
   locale: const Locale('en'),
@@ -406,12 +682,15 @@ Widget _app(
         child: ColoredBox(
           color: FloeColor.canvas,
           child: SingleChildScrollView(
-            key: const ValueKey('connections-host-scroll'),
+            key: hostKey,
             controller: scroll,
             padding: width < 620
                 ? const EdgeInsets.fromLTRB(16, 64, 16, 96)
                 : const EdgeInsets.fromLTRB(120, 24, 36, 24),
-            child: ConnectorScreen(controller: controller),
+            child: ConnectorScreen(
+              controller: controller,
+              initialSourceRef: initialSourceRef,
+            ),
           ),
         ),
       ),
@@ -461,6 +740,7 @@ ConnectionsOverview _overview({
   required _CardKind kind,
   String sourcePrefix = _sourcePrefix,
   int count = _targetIndex,
+  bool moveMiddleSourceToEnd = false,
 }) {
   final sources = <SourceSummary>[];
   final integrations = <IntegrationSummary>[];
@@ -477,10 +757,14 @@ ConnectionsOverview _overview({
           displayLabels: ['$sourcePrefix $index'],
           availability: 'available',
           selectedResources: [
-            for (var item = 1; item <= (index == _targetIndex ? 18 : 1); item++)
+            for (
+              var item = 1;
+              item <= (index == _targetIndex || index == 12 ? 18 : 1);
+              item++
+            )
               ResourceSummary(
                 resourceRef: ResourceRef(_uuid(10000 + index * 32 + item)),
-                label: index == _targetIndex
+                label: index == _targetIndex || index == 12
                     ? 'Launch planning calendar $item'
                     : 'Synthetic resource $item',
                 group: group,
@@ -503,6 +787,9 @@ ConnectionsOverview _overview({
         ),
       );
     }
+  }
+  if (moveMiddleSourceToEnd && sources.length > 12) {
+    sources.add(sources.removeAt(11));
   }
   return ConnectionsOverview(
     gateways: const [],

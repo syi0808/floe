@@ -5,6 +5,7 @@ import 'service_presentation.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_badge.dart';
@@ -111,11 +112,13 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     final focusNode = _cardFocusNodes[identity];
     if (current == null || focusNode == null) return;
 
-    final position = Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+    final scrollable = Scrollable.maybeOf(context, axis: Axis.vertical);
+    final position = scrollable?.position;
     final restore = _ConnectionNavigationReturn(
       controller: current,
       identity: identity,
-      position: position,
+      scrollable: scrollable,
+      scrollController: scrollable?.widget.controller,
       offset: position?.pixels,
       focusNode: focusNode,
     );
@@ -180,15 +183,19 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
         return;
       }
 
-      final currentPosition = Scrollable.maybeOf(
+      final currentScrollable = Scrollable.maybeOf(
         context,
         axis: Axis.vertical,
-      )?.position;
-      final position = restore.position;
-      if (position != null &&
-          position.hasContentDimensions &&
-          identical(currentPosition, position) &&
-          restore.offset != null) {
+      );
+      if (!identical(currentScrollable, restore.scrollable) ||
+          currentScrollable?.widget.controller != restore.scrollController) {
+        return;
+      }
+      final position = currentScrollable?.position;
+      if (position != null && !position.hasContentDimensions) return;
+      if (restore.offset != null && position == null) return;
+
+      if (position != null && restore.offset != null) {
         position.jumpTo(
           restore.offset!.clamp(0, position.maxScrollExtent).toDouble(),
         );
@@ -198,9 +205,40 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
       if (focusNode == restore.focusNode &&
           focusNode?.context != null &&
           focusNode!.canRequestFocus) {
+        if (position != null) _revealCardIfNeeded(position, focusNode);
         focusNode.requestFocus();
       }
     });
+  }
+
+  void _revealCardIfNeeded(ScrollPosition position, FocusNode focusNode) {
+    final target = focusNode.context?.findRenderObject();
+    if (target == null || !target.attached) return;
+    final viewport = RenderAbstractViewport.maybeOf(target);
+    if (viewport == null) {
+      return;
+    }
+
+    final start = viewport
+        .getOffsetToReveal(target, 0, axis: Axis.vertical)
+        .offset;
+    final end = viewport
+        .getOffsetToReveal(target, 1, axis: Axis.vertical)
+        .offset;
+    final lowerVisibleOffset = start < end ? start : end;
+    final upperVisibleOffset = start > end ? start : end;
+    final currentOffset = position.pixels;
+    final desiredOffset = currentOffset < lowerVisibleOffset
+        ? lowerVisibleOffset
+        : currentOffset > upperVisibleOffset
+        ? upperVisibleOffset
+        : null;
+    if (desiredOffset == null) return;
+
+    final clampedOffset = desiredOffset
+        .clamp(0, position.maxScrollExtent)
+        .toDouble();
+    if (clampedOffset != currentOffset) position.jumpTo(clampedOffset);
   }
 
   bool _hasListCard(String identity) {
@@ -586,14 +624,16 @@ final class _ConnectionNavigationReturn {
   const _ConnectionNavigationReturn({
     required this.controller,
     required this.identity,
-    required this.position,
+    required this.scrollable,
+    required this.scrollController,
     required this.offset,
     required this.focusNode,
   });
 
   final ConnectionsController controller;
   final String identity;
-  final ScrollPosition? position;
+  final ScrollableState? scrollable;
+  final ScrollController? scrollController;
   final double? offset;
   final FocusNode focusNode;
 }
