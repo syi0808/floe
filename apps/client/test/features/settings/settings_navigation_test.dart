@@ -16,7 +16,9 @@ import 'package:floe_client/features/conversation/assistant_features/application
 import 'package:floe_client/features/conversation/assistant_features/domain/assistant_feature.dart';
 import 'package:floe_client/features/conversation/domain/agent_interaction.dart';
 import 'package:floe_client/features/knowledge/application/agent_memory_controller.dart';
+import 'package:floe_client/features/knowledge/application/memory_gateway.dart';
 import 'package:floe_client/features/knowledge/domain/agent_memory.dart';
+import 'package:floe_client/features/knowledge/domain/memory_review.dart';
 import 'package:floe_client/features/settings/presentation/settings_screen.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 
@@ -124,11 +126,19 @@ void main() {
       _expectSectionFocus(tester, 'dataPrivacy');
       _expectHeadingVisible(tester, 'Memory');
       expect(find.byKey(const ValueKey('memory-back')), findsOneWidget);
+      final intro = find.text(
+        'Personal details Floe can use in future conversations.',
+      );
+      expect(intro, findsOneWidget);
       expect(find.text('Saved memories'), findsOneWidget);
+      expect(
+        tester.getRect(intro).bottom,
+        lessThan(tester.getRect(find.text('Saved memories')).top),
+      );
       expect(_textScale(tester), 2);
       await expectLater(
         find.byKey(const ValueKey('settings-screen')),
-        matchesGoldenFile('goldens/v022-memory-390x900-200.png'),
+        matchesGoldenFile('goldens/v028-memory-390x900-200.png'),
       );
 
       expect(scroll.position.maxScrollExtent, greaterThan(200));
@@ -158,6 +168,54 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Memory intro remains general while proposals await review', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(390, 900));
+    final reviewGateway = _ReadOnlyMemoryReviewGateway();
+    final fixture = await _fixture(reviewGateway: reviewGateway);
+    addTearDown(fixture.dispose);
+
+    await _mountSettings(
+      tester,
+      fixture,
+      width: 390,
+      height: 900,
+      textScale: 2,
+    );
+    await _selectSection(tester, 'dataPrivacy');
+    final manage = find.byKey(const ValueKey('manage-memory'));
+    await tester.ensureVisible(manage);
+    await tester.tap(manage);
+    await tester.pumpAndSettle();
+
+    final intro = find.text(
+      'Personal details Floe can use in future conversations.',
+    );
+    final reviewHeading = find.text('Memory review');
+    final savedHeading = find.text('Saved memories');
+    expect(intro, findsOneWidget);
+    expect(reviewHeading, findsOneWidget);
+    expect(savedHeading, findsOneWidget);
+    expect(find.text('Synthetic pending preference.'), findsOneWidget);
+    expect(
+      find.text(
+        'Floe only saves proposed personal knowledge after you approve it.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getRect(intro).bottom,
+      lessThan(tester.getRect(reviewHeading).top),
+    );
+    expect(
+      tester.getRect(reviewHeading).bottom,
+      lessThan(tester.getRect(savedHeading).top),
+    );
+    expect(reviewGateway.commandAttempts, 0);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'external assistant review target and controller replacement start at context',
@@ -352,7 +410,9 @@ void _expectHeadingVisible(WidgetTester tester, String label) {
   expect(heading.bottom, lessThanOrEqualTo(viewport.bottom));
 }
 
-Future<_SettingsFixture> _fixture() async {
+Future<_SettingsFixture> _fixture({
+  AgentMemoryReviewGateway? reviewGateway,
+}) async {
   final runtime = RuntimeController(
     gateway: _ReadyRuntimeGateway(),
     personId: _personId,
@@ -369,7 +429,7 @@ Future<_SettingsFixture> _fixture() async {
   );
   final memory = AgentMemoryController(
     memoryGateway: _ReadOnlyMemoryGateway(),
-    reviewGateway: null,
+    reviewGateway: reviewGateway,
     personId: _personId,
     canOperate: () => runtime.ready,
     onFatalFailure: (_) {},
@@ -518,6 +578,48 @@ final class _ReadOnlyMemoryGateway implements AgentMemoryGateway {
         ),
     ],
   );
+}
+
+final class _ReadOnlyMemoryReviewGateway implements AgentMemoryReviewGateway {
+  int commandAttempts = 0;
+
+  @override
+  String? get pendingCommandId => null;
+
+  @override
+  AgentMemoryDecision? get pendingDecision => null;
+
+  @override
+  String? get pendingCandidateId => null;
+
+  @override
+  Future<AgentMemoryReviewOverview> readMemoryReview() async =>
+      AgentMemoryReviewOverview(
+        personId: _personId,
+        candidates: [
+          AgentMemoryCandidate(
+            id: _uuid(3001),
+            operation: 'create',
+            statement: 'Synthetic pending preference.',
+            memoryKind: 'preference',
+            epistemicStatus: 'inference',
+            confidenceMillis: 700,
+            sourceCount: 2,
+            createdAt: DateTime.utc(2026, 10, 1),
+            allowedActions: const [
+              AgentMemoryDecision.approve,
+              AgentMemoryDecision.reject,
+            ],
+          ),
+        ],
+        hasMore: false,
+      );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    commandAttempts++;
+    throw StateError('Synthetic Settings review is read-only.');
+  }
 }
 
 String _uuid(int number) =>

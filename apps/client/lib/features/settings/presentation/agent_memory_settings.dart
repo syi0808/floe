@@ -145,7 +145,7 @@ final class _AgentMemorySettingsState extends State<AgentMemorySettings> {
           Text('Memory', style: FloeType.headlineLarge.copyWith(fontSize: 22)),
           const SizedBox(height: FloeSpace.sm),
           Text(
-            'These are the personal details Floe can use to make future conversations more useful.',
+            'Personal details Floe can use in future conversations.',
             style: FloeType.body.copyWith(color: FloePalette.neutral600),
           ),
           if (controller.hasReview) ...[
