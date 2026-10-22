@@ -337,7 +337,7 @@ void main() {
             final now = DateTime.now();
             final selectedDate = isToday
                 ? now
-                : DateTime(now.year, now.month - 1, 30, 12);
+                : DateTime(now.year, now.month, now.day - 1, 12);
             final query = DayQuery.local(
               personId: _personId,
               date: selectedDate,
@@ -420,6 +420,42 @@ void main() {
       }
     }
   }
+
+  testWidgets('fixed long date restores its full form when resized', (
+    tester,
+  ) async {
+    final query = DayQuery.local(
+      personId: _personId,
+      date: DateTime(2026, 9, 30, 12),
+      now: DateTime.now(),
+    );
+    _setViewport(tester, width: 320, height: 844, textScale: 2);
+    await tester.pumpWidget(
+      _app(gateway: FakeDayGateway(), query: query, textScale: 2),
+    );
+    await tester.pumpAndSettle();
+
+    final dateFinder = find.byKey(const Key('day-selected-date'));
+    final fullDate = DateFormat.MMMEd('en').format(query.date);
+    final shortDate = DateFormat.MMMd('en').format(query.date);
+    final semantics = tester.ensureSemantics();
+    try {
+      expect(fullDate, 'Wed, Sep 30');
+      expect(tester.widget<Text>(dateFinder).data, shortDate);
+      expect(tester.widget<Text>(dateFinder).semanticsLabel, fullDate);
+      expect(tester.getSemantics(dateFinder).label, fullDate);
+
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Text>(dateFinder).data, fullDate);
+      expect(tester.widget<Text>(dateFinder).semanticsLabel, fullDate);
+      expect(tester.getSemantics(dateFinder).label, fullDate);
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets('compact dock keeps destination focus and selected semantics', (
     tester,
