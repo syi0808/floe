@@ -429,6 +429,44 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                         ],
                       ),
                     ),
+                    if (confirmedEmpty && widget.draftStartsAt == null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          80,
+                          FloeSpace.sm,
+                          FloeSpace.lg,
+                          FloeSpace.sm,
+                        ),
+                        child: _EmptyDayBanner(
+                          compact: MediaQuery.sizeOf(context).width <= 780,
+                        ),
+                      ),
+                    if (empty &&
+                        widget.draftStartsAt == null &&
+                        !confirmedEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          80,
+                          FloeSpace.sm,
+                          FloeSpace.lg,
+                          FloeSpace.sm,
+                        ),
+                        child: _EmptyDayStatus(
+                          onConnections: widget.onConnections,
+                          onRefresh: widget.onRefresh,
+                          status:
+                              !widget.observationCurrent ||
+                                  snapshot
+                                          .calendarCoverage
+                                          ?.sources
+                                          .isNotEmpty ==
+                                      true
+                              ? AppLocalizations.of(context)
+                                    .dayStatusNeedsRefresh
+                              : AppLocalizations.of(context)
+                                    .dayCalendarStatusUnavailable,
+                        ),
+                      ),
                     const FloeDivider(key: Key('zoom-toolbar-divider')),
                     Expanded(
                       child: Stack(
@@ -727,41 +765,6 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                               ),
                             ),
                           ),
-                          if (confirmedEmpty && widget.draftStartsAt == null)
-                            Positioned(
-                              top: FloeSpace.base,
-                              left: 80,
-                              right: FloeSpace.lg,
-                              child: IgnorePointer(
-                                child: _EmptyDayBanner(
-                                  compact:
-                                      MediaQuery.sizeOf(context).width <= 780,
-                                ),
-                              ),
-                            ),
-                          if (empty &&
-                              widget.draftStartsAt == null &&
-                              !confirmedEmpty)
-                            Positioned(
-                              top: FloeSpace.base,
-                              left: 80,
-                              right: FloeSpace.lg,
-                              child: _EmptyDayStatus(
-                                onConnections: widget.onConnections,
-                                onRefresh: widget.onRefresh,
-                                status:
-                                    !widget.observationCurrent ||
-                                        snapshot
-                                                .calendarCoverage
-                                                ?.sources
-                                                .isNotEmpty ==
-                                            true
-                                    ? AppLocalizations.of(context)
-                                          .dayStatusNeedsRefresh
-                                    : AppLocalizations.of(context)
-                                          .dayCalendarStatusUnavailable,
-                              ),
-                            ),
                         ],
                       ),
                     ),

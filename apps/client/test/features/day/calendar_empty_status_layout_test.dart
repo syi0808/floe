@@ -66,6 +66,7 @@ Widget _calendar({
   bool loading = false,
   VoidCallback? onConnections,
   VoidCallback? onRefresh,
+  ValueChanged<DateTime>? onCreateEvent,
 }) => MaterialApp(
   theme: FloeTheme.light,
   locale: const Locale('en'),
@@ -84,6 +85,7 @@ Widget _calendar({
       loading: loading,
       onConnections: onConnections ?? () {},
       onRefresh: onRefresh ?? () {},
+      onCreateEvent: onCreateEvent,
     ),
   ),
 );
@@ -138,8 +140,22 @@ void main() {
               find.byKey(const Key('empty-day-status')),
             );
             await tester.pumpAndSettle();
+            final statusRect = tester.getRect(
+              find.byKey(const Key('empty-day-status')),
+            );
+            final gridRect = tester.getRect(
+              find.byKey(const Key('calendar-scroll')),
+            );
 
             expect(find.text('Calendar status unavailable'), findsOneWidget);
+            expect(statusRect.bottom, lessThanOrEqualTo(gridRect.top));
+            expect(
+              tester
+                  .getSemantics(find.byKey(const Key('empty-day-status')))
+                  .flagsCollection
+                  .isLiveRegion,
+              isTrue,
+            );
             expect(
               find.text(
                 'Connect a calendar to create and collect events here.',
@@ -170,6 +186,7 @@ void main() {
           final retained = _emptySnapshot(query, coverage: coverage);
           var refreshes = 0;
           var connections = 0;
+          final createdEvents = <DateTime>[];
 
           await tester.pumpWidget(
             _calendar(
@@ -179,11 +196,25 @@ void main() {
               textScale: scale,
               onConnections: () => connections++,
               onRefresh: () => refreshes++,
+              onCreateEvent: createdEvents.add,
             ),
           );
           await tester.pumpAndSettle();
           expect(find.text('A little breathing room.'), findsOneWidget);
           expect(find.byKey(const Key('empty-day-status')), findsNothing);
+          final bannerRect = tester.getRect(
+            find.byKey(const Key('empty-day-banner')),
+          );
+          final gridRect = tester.getRect(
+            find.byKey(const Key('calendar-scroll')),
+          );
+          expect(bannerRect.bottom, lessThanOrEqualTo(gridRect.top));
+          final openGridPoint = Offset(gridRect.left + 100, gridRect.top + 32);
+          await tester.tapAt(openGridPoint);
+          await tester.pump(const Duration(milliseconds: 50));
+          await tester.tapAt(openGridPoint);
+          await tester.pump();
+          expect(createdEvents, hasLength(1));
 
           // A failed read keeps its previous complete empty snapshot, but the
           // UI must not continue presenting that old observation as current.
@@ -229,7 +260,9 @@ void main() {
     }
   }
 
-  testWidgets('stale narrow status golden at 200% text', (tester) async {
+  testWidgets('stale narrow status stays outside grid at 200% text', (
+    tester,
+  ) async {
     final query = _query();
     tester.view.physicalSize = const Size(390, 1000);
     tester.view.devicePixelRatio = 1;
@@ -245,6 +278,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    final statusRect = tester.getRect(
+      find.byKey(const Key('empty-day-status')),
+    );
+    final gridRect = tester.getRect(find.byKey(const Key('calendar-scroll')));
+    expect(statusRect.bottom, lessThanOrEqualTo(gridRect.top));
     await expectLater(
       find.byKey(const Key('timeline-card')),
       matchesGoldenFile('goldens/calendar_empty_stale_390_2x.png'),

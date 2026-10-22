@@ -89,6 +89,7 @@ class CalendarContextRail extends StatelessWidget {
               snapshot: snapshot,
               query: query,
               observationCurrent: observationCurrent,
+              hideEmptyStatus: true,
             ),
           ],
         ],
@@ -103,9 +104,11 @@ class CalendarCoverageDetails extends StatelessWidget {
     required this.snapshot,
     required this.query,
     this.observationCurrent = true,
+    this.hideEmptyStatus = false,
   });
 
   final bool observationCurrent;
+  final bool hideEmptyStatus;
   final DaySnapshot snapshot;
   final DayQuery query;
 
@@ -114,21 +117,28 @@ class CalendarCoverageDetails extends StatelessWidget {
     final coverage = snapshot.calendarCoverage;
     final complete =
         observationCurrent && hasCompleteCalendarCoverage(snapshot, query);
+    final hasEvents = snapshot.items.any((item) => item is EventItem);
+    final title = !hasEvents && hideEmptyStatus
+        ? AppLocalizations.of(context).eventCalendarDetails
+        : !observationCurrent
+        ? AppLocalizations.of(context).dayStatusNeedsRefresh
+        : complete
+        ? 'Calendars synced for this date'
+        : coverage == null || coverage.sources.isEmpty
+        ? AppLocalizations.of(context).dayCalendarStatusUnavailable
+        : 'Some calendar data may be missing or out of date';
+    final showCoverageStatus = hasEvents || !hideEmptyStatus;
     return ExpansionTile(
       tilePadding: const EdgeInsets.symmetric(horizontal: FloeSpace.md),
       childrenPadding: const EdgeInsets.all(FloeSpace.md),
       shape: const Border(),
       collapsedShape: const Border(),
       title: Text(
-        !observationCurrent
-            ? AppLocalizations.of(context).dayStatusNeedsRefresh
-            : complete
-            ? 'Calendars synced for this date'
-            : coverage == null || coverage.sources.isEmpty
-            ? AppLocalizations.of(context).dayCalendarStatusUnavailable
-            : 'Some calendar data may be missing or out of date',
+        title,
         style: FloeType.bodySmall.copyWith(
-          color: complete ? FloePalette.neutral600 : FloePalette.warning600,
+          color: !showCoverageStatus || complete
+              ? FloePalette.neutral600
+              : FloePalette.warning600,
         ),
       ),
       children: [

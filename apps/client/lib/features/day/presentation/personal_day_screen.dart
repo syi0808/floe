@@ -383,7 +383,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       loading: controller.loadState == DayLoadState.loading,
       observationCurrent: controller.hasCurrentObservation,
       onConnections: () => _selectDestination(_DestinationView.connections),
-      onRefresh: controller.canRefresh ? controller.refresh : null,
+      // The fixed Day toolbar is the full-screen Refresh action.
+      onRefresh: null,
       onCreateEvent: !calendarChangesAvailable
           ? null
           : (startsAt) => _openCalendarEditor(startsAt),
@@ -518,24 +519,6 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                             ),
                         ],
                       ),
-                      if (compactTimeline &&
-                          (!controller.hasCurrentObservation ||
-                              !hasCompleteCalendarCoverage(
-                                snapshot,
-                                controller.query,
-                              )))
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: FloeButton.text(
-                            onPressed: openDayDetails,
-                            child: Text(
-                              copy.dayStatusNeedsRefresh,
-                              style: FloeType.bodySmall.copyWith(
-                                color: FloePalette.warning600,
-                              ),
-                            ),
-                          ),
-                        ),
                     ],
                   ),
                 ),
