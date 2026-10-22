@@ -1526,4 +1526,36 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get voiceStopBeforeClosing => 'Stop voice before closing';
+
+  @override
+  String get dayNow => 'Now';
+
+  @override
+  String get dayNext => 'Next';
+
+  @override
+  String get daySchedule => 'Schedule';
+
+  @override
+  String get dayTimeline => 'Timeline';
+
+  @override
+  String get dayDetails => 'Tasks and calendar status';
+
+  @override
+  String dayEarlierCount(int count) {
+    return 'Earlier · $count';
+  }
+
+  @override
+  String get dayNoEvents => 'No events scheduled for this day.';
+
+  @override
+  String get dayNoEventsLoaded => 'No events loaded for this day.';
+
+  @override
+  String get dayStatusNeedsRefresh => 'Calendar status needs refresh';
+
+  @override
+  String get dayOtherEvents => 'Also today';
 }

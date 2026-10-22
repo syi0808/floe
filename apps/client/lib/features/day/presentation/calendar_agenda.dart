@@ -291,72 +291,73 @@ class _CalendarAgendaState extends State<CalendarAgenda> {
                 ignoring: widget.loading,
                 child: Column(
                   children: [
-                    ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: 120),
-                      child: SingleChildScrollView(
-                        primary: false,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 16,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            SizedBox(
-                              width: 72,
-                              child: Padding(
-                                padding: EdgeInsets.only(top: 8),
-                                child: Text(
-                                  AppLocalizations.of(context).allDay,
-                                  style: FloeType.caption.copyWith(
-                                    color: FloePalette.neutral600,
+                    if (allDay.isNotEmpty) ...[
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxHeight: 120),
+                        child: SingleChildScrollView(
+                          primary: false,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 16,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 72,
+                                child: Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    AppLocalizations.of(context).allDay,
+                                    style: FloeType.caption.copyWith(
+                                      color: FloePalette.neutral600,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  if (allDay.isEmpty)
-                                    SizedBox(height: 24, child: Text('—')),
-                                  for (final event in allDay)
-                                    SizedBox(
-                                      height: 32,
-                                      child: interactiveEvent(
-                                        event,
-                                        FloeTextLink(
-                                          color: FloePalette.neutral950,
-                                          leading: Container(
-                                            width: 10,
-                                            height: 10,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: DayAppearance.tone(
-                                                context,
-                                                event.id,
-                                                ItemTone.mint,
-                                              ).accent,
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    for (final event in allDay)
+                                      SizedBox(
+                                        height: 32,
+                                        child: interactiveEvent(
+                                          event,
+                                          FloeTextLink(
+                                            color: FloePalette.neutral950,
+                                            leading: Container(
+                                              width: 10,
+                                              height: 10,
+                                              decoration: BoxDecoration(
+                                                shape: BoxShape.circle,
+                                                color: DayAppearance.tone(
+                                                  context,
+                                                  event.id,
+                                                  ItemTone.mint,
+                                                ).accent,
+                                              ),
                                             ),
-                                          ),
-                                          label:
-                                              '${event.title}${event.calendarLabel == null ? '' : '   ${event.calendarLabel}'}',
-                                          onPressed: () => openCalendarEvent(
-                                            context,
-                                            event,
-                                            snapshot,
+                                            label:
+                                                '${event.title}${event.calendarLabel == null ? '' : '   ${event.calendarLabel}'}',
+                                            onPressed: () => openCalendarEvent(
+                                              context,
+                                              event,
+                                              snapshot,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    FloeDivider(),
+                      FloeDivider(),
+                    ],
                     Padding(
                       padding: EdgeInsets.symmetric(
                         horizontal: 20,

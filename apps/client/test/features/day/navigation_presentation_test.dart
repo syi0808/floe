@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_selection.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/preview/calendar_fixture.dart';
 import 'package:floe_client/preview/product_fixture.dart';
@@ -38,6 +39,26 @@ void main() {
           expect(find.byTooltip('Notes'), findsOneWidget);
           expect(find.byTooltip('Voice'), findsNothing);
           expect(find.text('Activity'), findsNothing);
+          if (width <= 780) {
+            expect(find.byKey(const Key('timeline-card')), findsNothing);
+            await tester.tap(find.text('Timeline'));
+            await tester.pumpAndSettle();
+            expect(find.byKey(const Key('timeline-card')), findsOneWidget);
+            await tester.tap(find.byTooltip('Tasks and calendar status'));
+            await tester.pumpAndSettle();
+            expect(find.text('Calendar status unavailable'), findsOneWidget);
+            await tester.tap(find.byType(FloeCheckbox));
+            await tester.pumpAndSettle();
+            expect(find.text('No tasks for this day.'), findsOneWidget);
+            await tester.tap(find.byKey(const Key('day-details-close')));
+            await tester.pumpAndSettle();
+            await tester.tap(find.byTooltip('Close')); // Completion toast.
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('Schedule'));
+            await tester.pumpAndSettle();
+            expect(find.byKey(const Key('timeline-card')), findsNothing);
+          }
+
           await tester.tap(find.byTooltip('Notes'));
           await tester.pumpAndSettle();
           await tester.tap(find.text('Personal only'));

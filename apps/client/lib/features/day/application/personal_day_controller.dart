@@ -56,12 +56,13 @@ final class PersonalDayController extends ChangeNotifier {
 
   /// Only the latest successful read can decorate another feature's source rows.
   /// Retained Day content after a read failure is not current correlation evidence.
-  DayCalendarCoverage? get calendarCoverage =>
+  bool get hasCurrentObservation =>
       !_disposed &&
-          loadState == DayLoadState.ready &&
-          _observedGeneration == _loadGeneration
-      ? snapshot?.calendarCoverage
-      : null;
+      loadState == DayLoadState.ready &&
+      _observedGeneration == _loadGeneration;
+
+  DayCalendarCoverage? get calendarCoverage =>
+      hasCurrentObservation ? snapshot?.calendarCoverage : null;
 
   bool _automaticActive = false;
   Timer? _automaticTimer;

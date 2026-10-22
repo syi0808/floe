@@ -552,5 +552,16 @@
   "back": "Back",
   "conversationUnavailable": "Conversation is unavailable in this session.",
   "voiceBackToFloe": "Back to Floe",
-  "voiceStopBeforeClosing": "Stop voice before closing"
+  "voiceStopBeforeClosing": "Stop voice before closing",
+  "dayNow": "Now",
+  "dayNext": "Next",
+  "daySchedule": "Schedule",
+  "dayTimeline": "Timeline",
+  "dayDetails": "Tasks and calendar status",
+  "dayEarlierCount": "Earlier · {count}",
+  "@dayEarlierCount": {"placeholders": {"count": {"type": "int"}}},
+  "dayNoEvents": "No events scheduled for this day.",
+  "dayNoEventsLoaded": "No events loaded for this day.",
+  "dayStatusNeedsRefresh": "Calendar status needs refresh",
+  "dayOtherEvents": "Also today"
 }

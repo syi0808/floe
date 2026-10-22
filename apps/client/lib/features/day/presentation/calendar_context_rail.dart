@@ -18,7 +18,11 @@ class CalendarContextRail extends StatelessWidget {
     required this.complete,
     required this.onTasks,
     required this.onOpenTask,
+    this.showCoverage = true,
+    this.observationCurrent = true,
   });
+  final bool showCoverage;
+  final bool observationCurrent;
   final DaySnapshot snapshot;
   final DayQuery query;
   final bool disabled;
@@ -79,31 +83,46 @@ class CalendarContextRail extends StatelessWidget {
                 ),
               ],
             ),
-          const SizedBox(height: FloeSpace.lg),
-          _CalendarCoverageCard(snapshot: snapshot, query: query),
+          if (showCoverage) ...[
+            const SizedBox(height: FloeSpace.lg),
+            CalendarCoverageDetails(
+              snapshot: snapshot,
+              query: query,
+              observationCurrent: observationCurrent,
+            ),
+          ],
         ],
       ),
     );
   }
 }
 
-class _CalendarCoverageCard extends StatelessWidget {
-  const _CalendarCoverageCard({required this.snapshot, required this.query});
+class CalendarCoverageDetails extends StatelessWidget {
+  const CalendarCoverageDetails({
+    super.key,
+    required this.snapshot,
+    required this.query,
+    this.observationCurrent = true,
+  });
 
+  final bool observationCurrent;
   final DaySnapshot snapshot;
   final DayQuery query;
 
   @override
   Widget build(BuildContext context) {
     final coverage = snapshot.calendarCoverage;
-    final complete = hasCompleteCalendarCoverage(snapshot, query);
+    final complete =
+        observationCurrent && hasCompleteCalendarCoverage(snapshot, query);
     return ExpansionTile(
       tilePadding: const EdgeInsets.symmetric(horizontal: FloeSpace.md),
       childrenPadding: const EdgeInsets.all(FloeSpace.md),
       shape: const Border(),
       collapsedShape: const Border(),
       title: Text(
-        complete
+        !observationCurrent
+            ? AppLocalizations.of(context).dayStatusNeedsRefresh
+            : complete
             ? 'Calendars synced for this date'
             : coverage == null
             ? 'Calendar status unavailable'

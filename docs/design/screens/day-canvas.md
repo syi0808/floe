@@ -17,7 +17,7 @@ Local toolbar: date · Today · Day/Week/Month
 └──────────────────────────────────┴───────────────┘
 ```
 
-The timeline is primary. The rail order is tasks, related note/context, then Floe. Rail cards use one shared system.
+On wide screens the timeline is primary. A quiet context column places the owner-selected Now and Next before relevant tasks. Use readable open rows; do not add a card for every group or duplicate the global Floe invocation.
 
 ## Primary content
 
@@ -38,7 +38,9 @@ A time-specific suggestion appears first as one 52×52 white `sq-md` button with
 
 ## Narrow composition
 
-Order content as toolbar, Now/Next, timeline, high-priority tasks, optional suggestion, and related note. Secondary tasks and detail collapse behind explicit controls. No horizontal timeline scrolling is required for the primary day view.
+Use a single scrolling Schedule list by default: source coverage, Now/Next when applicable, all-day and remaining events, collapsible Earlier events, then tasks. A visible Timeline switch preserves the full interactive grid; do not squeeze it above a fixed 30% task panel. Timeline mode retains a visible incomplete/stale status and a Tasks and calendar status control. Keep both modes available and preserve the selected view during ordinary destination changes.
+
+Now/Next follow the owner snapshot IDs and observation time, never a new UI prioritization policy. Other overlapping and tied events remain visible in the list. Suppress live focus labels after a failed latest read, even if its error is dismissed. All-day membership comes from the owner-selected civil-date projection, not UTC instant filtering. Empty or stale coverage must not imply an unoccupied day.
 
 ## Interaction
 
@@ -63,7 +65,7 @@ Detailed create, drag, context-menu and authority behavior follows
 
 ## Empty and exceptional states
 
-- Empty day: keep the full calendar grid interactive. Show `A little breathing
+- Empty day in Timeline mode: keep the full calendar grid interactive. Show `A little breathing
   room` as a compact inline status with gesture-appropriate creation guidance;
   never blur, dim, overlay or disable the grid.
 - Conflict: explain which items conflict before offering a resolution.
@@ -74,3 +76,7 @@ Detailed create, drag, context-menu and authority behavior follows
 ## Prohibited
 
 No speech bubbles or free-floating mascot heads over the timeline; the single standardized Floe squircle button is the only exception. No automatic assistant modal. No productivity score, streak, celebratory completion, or full-card categorical gradient.
+
+## Content density
+
+Omit the timeline's empty All day strip. The Schedule list uses title, time and an optional calendar label, with provenance and actions in the existing event detail/menu. Current events have a restrained violet emphasis; other rows remain neutral. Large text and overlapping events must expand list rows rather than clipping titles into miniature calendar blocks.

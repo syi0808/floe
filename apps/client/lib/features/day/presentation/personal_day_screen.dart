@@ -29,6 +29,7 @@ import 'package:floe_client/features/day/application/personal_day_controller.dar
 import 'package:floe_client/features/day/domain/day_models.dart';
 import 'package:floe_client/features/day/presentation/day_appearance.dart';
 import 'package:floe_client/features/day/presentation/calendar_agenda.dart';
+import 'package:floe_client/features/day/presentation/day_overview.dart';
 import 'package:floe_client/features/day/presentation/calendar_context_rail.dart';
 import 'package:floe_client/features/day/presentation/manual_calendar_activity.dart';
 import 'package:floe_client/features/connections/presentation/connector_screen.dart';
@@ -79,6 +80,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   OperationPolicyController? operationPolicyController;
   ConversationController? agentController;
   bool assistantOpen = false;
+  bool compactTimeline = false;
   SourceRef? selectedConnectionSource;
   AgentAssistantFeatureSourceTarget? assistantFeatureSourceTarget;
   Future<void> Function()? onAssistantFeatureConfigured;
@@ -387,9 +389,20 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     final rail = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (!narrow)
+          DayOverview(
+            snapshot: snapshot,
+            query: controller.query,
+            loading: controller.loadState == DayLoadState.loading,
+            focusOnly: true,
+            observationCurrent: controller.hasCurrentObservation,
+            onEdit: calendarChangesAvailable ? _editCalendarEvent : null,
+            onDelete: calendarChangesAvailable ? _deleteCalendarEvent : null,
+          ),
         CalendarContextRail(
           snapshot: snapshot,
           query: controller.query,
+          observationCurrent: controller.hasCurrentObservation,
           disabled: controller.commandPending,
           complete: _setTaskCompleted,
           onTasks: () => _selectDestination(_DestinationView.tasks),
@@ -400,12 +413,162 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     return LayoutBuilder(
       builder: (context, constraints) {
         if (constraints.maxWidth <= 800) {
+          final copy = AppLocalizations.of(context);
+          void openDayDetails() => showFloeSheet<void>(
+            context,
+            (sheetContext) => SafeArea(
+              child: SizedBox(
+                height: MediaQuery.sizeOf(sheetContext).height * .7,
+                child: FloeCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(copy.dayDetails, style: FloeType.title),
+                          ),
+                          FloeButton.icon(
+                            key: const Key('day-details-close'),
+                            tooltip: copy.close,
+                            onPressed: () => Navigator.pop(sheetContext),
+                            icon: const Icon(LucideIcons.x, size: 18),
+                          ),
+                        ],
+                      ),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: AnimatedBuilder(
+                            animation: controller,
+                            builder: (context, _) => CalendarContextRail(
+                              snapshot: controller.snapshot ?? snapshot,
+                              query: controller.query,
+                              observationCurrent:
+                                  controller.hasCurrentObservation,
+                              disabled: controller.commandPending,
+                              complete: _setTaskCompleted,
+                              onTasks: () {
+                                Navigator.pop(sheetContext);
+                                _selectDestination(_DestinationView.tasks);
+                              },
+                              onOpenTask: (task) {
+                                Navigator.pop(sheetContext);
+                                _openTask(task);
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(flex: 7, child: primary),
-              SizedBox(height: narrow ? 16 : 24),
-              Expanded(flex: 3, child: SingleChildScrollView(child: rail)),
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  Text(
+                    compactTimeline ? copy.dayTimeline : copy.daySchedule,
+                    style: FloeType.title,
+                  ),
+                  FloeButton.text(
+                    onPressed: () =>
+                        setState(() => compactTimeline = !compactTimeline),
+                    icon: Icon(
+                      compactTimeline
+                          ? LucideIcons.list
+                          : LucideIcons.calendarDays,
+                      size: 16,
+                    ),
+                    child: Text(
+                      compactTimeline ? copy.daySchedule : copy.dayTimeline,
+                    ),
+                  ),
+                  if (compactTimeline)
+                    FloeButton.icon(
+                      tooltip: copy.dayDetails,
+                      onPressed: openDayDetails,
+                      icon: const Icon(LucideIcons.ellipsis, size: 18),
+                    ),
+                ],
+              ),
+              if (compactTimeline &&
+                  (!controller.hasCurrentObservation ||
+                      !hasCompleteCalendarCoverage(snapshot, controller.query)))
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: FloeButton.text(
+                    onPressed: openDayDetails,
+                    child: Text(
+                      copy.dayStatusNeedsRefresh,
+                      style: FloeType.bodySmall.copyWith(
+                        color: FloePalette.warning600,
+                      ),
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: compactTimeline
+                    ? LayoutBuilder(
+                        builder: (context, size) => SingleChildScrollView(
+                          child: SizedBox(
+                            height: size.maxHeight < 420 ? 420 : size.maxHeight,
+                            child: primary,
+                          ),
+                        ),
+                      )
+                    : SingleChildScrollView(
+                        key: PageStorageKey(
+                          'day-overview-${controller.query.date.toIso8601String()}',
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            CalendarCoverageDetails(
+                              observationCurrent:
+                                  controller.hasCurrentObservation,
+                              snapshot: snapshot,
+                              query: controller.query,
+                            ),
+                            const SizedBox(height: 16),
+                            DayOverview(
+                              observationCurrent:
+                                  controller.hasCurrentObservation,
+                              snapshot: snapshot,
+                              query: controller.query,
+                              loading:
+                                  controller.loadState == DayLoadState.loading,
+                              onEdit: calendarChangesAvailable
+                                  ? _editCalendarEvent
+                                  : null,
+                              onDelete: calendarChangesAvailable
+                                  ? _deleteCalendarEvent
+                                  : null,
+                            ),
+                            const SizedBox(height: 16),
+                            CalendarContextRail(
+                              snapshot: snapshot,
+                              query: controller.query,
+                              showCoverage: false,
+                              observationCurrent:
+                                  controller.hasCurrentObservation,
+                              disabled: controller.commandPending,
+                              complete: _setTaskCompleted,
+                              onTasks: () =>
+                                  _selectDestination(_DestinationView.tasks),
+                              onOpenTask: _openTask,
+                            ),
+                          ],
+                        ),
+                      ),
+              ),
             ],
           );
         }

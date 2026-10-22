@@ -2721,6 +2721,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Stop voice before closing'**
   String get voiceStopBeforeClosing;
+
+  /// No description provided for @dayNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Now'**
+  String get dayNow;
+
+  /// No description provided for @dayNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next'**
+  String get dayNext;
+
+  /// No description provided for @daySchedule.
+  ///
+  /// In en, this message translates to:
+  /// **'Schedule'**
+  String get daySchedule;
+
+  /// No description provided for @dayTimeline.
+  ///
+  /// In en, this message translates to:
+  /// **'Timeline'**
+  String get dayTimeline;
+
+  /// No description provided for @dayDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Tasks and calendar status'**
+  String get dayDetails;
+
+  /// No description provided for @dayEarlierCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Earlier · {count}'**
+  String dayEarlierCount(int count);
+
+  /// No description provided for @dayNoEvents.
+  ///
+  /// In en, this message translates to:
+  /// **'No events scheduled for this day.'**
+  String get dayNoEvents;
+
+  /// No description provided for @dayNoEventsLoaded.
+  ///
+  /// In en, this message translates to:
+  /// **'No events loaded for this day.'**
+  String get dayNoEventsLoaded;
+
+  /// No description provided for @dayStatusNeedsRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendar status needs refresh'**
+  String get dayStatusNeedsRefresh;
+
+  /// No description provided for @dayOtherEvents.
+  ///
+  /// In en, this message translates to:
+  /// **'Also today'**
+  String get dayOtherEvents;
 }
 
 class _AppLocalizationsDelegate

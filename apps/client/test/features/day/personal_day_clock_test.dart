@@ -7,6 +7,33 @@ import 'package:floe_client/features/day/domain/day_models.dart';
 
 void main() {
   test(
+    'failed latest observation stays stale even after dismissing its error',
+    () async {
+      var now = DateTime.utc(2026, 10, 22, 10);
+      final gateway = _Gateway();
+      final controller = PersonalDayController(
+        gateway: gateway,
+        query: _query(now),
+        clock: () => now,
+      );
+      addTearDown(controller.dispose);
+      await controller.load();
+      expect(controller.hasCurrentObservation, isTrue);
+      final observed = controller.snapshot;
+      now = now.add(const Duration(minutes: 2));
+      gateway.failRead = true;
+      await controller.load();
+      expect(controller.snapshot, same(observed));
+      expect(controller.hasCurrentObservation, isFalse);
+      controller.clearError();
+      expect(controller.hasCurrentObservation, isFalse);
+      gateway.failRead = false;
+      await controller.load();
+      expect(controller.hasCurrentObservation, isTrue);
+    },
+  );
+
+  test(
     'new reads advance now without changing selected date or DST bounds',
     () async {
       var now = DateTime.utc(2026, 11, 1, 5, 30);
@@ -214,6 +241,7 @@ CompletedDayRefresh _complete(DayQuery query) => CompletedDayRefresh(
 );
 
 final class _Gateway implements DayGateway, DayRefreshGateway {
+  bool failRead = false;
   final reads = <DayQuery>[];
   final refreshes = <DayQuery>[];
   final commandIds = <String>[];
@@ -223,6 +251,7 @@ final class _Gateway implements DayGateway, DayRefreshGateway {
   @override
   Future<DaySnapshot> loadDay(DayQuery query) async {
     reads.add(query);
+    if (failRead) throw StateError('Synthetic read failed');
     return _snapshot(query);
   }
 
