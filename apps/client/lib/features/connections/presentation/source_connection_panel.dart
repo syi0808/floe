@@ -203,13 +203,9 @@ final class _SourceConnectionPanelState extends State<SourceConnectionPanel> {
           ServiceDetailHeader(
             presentation: presentation,
             status: FloeBadge(
-              label: switch (source.availability) {
-                'available' => 'Connected',
-                'permission_required' => 'Finish setup',
-                'identity_changed' => 'Reconnect needed',
-                'disconnected' => 'Disconnected',
-                _ => 'Unavailable',
-              },
+              label: ServicePresentation.sourceAvailabilityLabel(
+                source.availability,
+              ),
               tone: source.availability == 'available'
                   ? FloeBadgeTone.success
                   : FloeBadgeTone.warning,

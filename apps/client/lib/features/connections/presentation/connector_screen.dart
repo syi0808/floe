@@ -274,8 +274,7 @@ final class _ConnectorScreenState extends State<ConnectorScreen> {
     key: ValueKey('source-${source.sourceRef.value}'),
     icon: LucideIcons.plug,
     name: source.displayLabels.join(' · '),
-    description: 'Manage the resources and access reviewed for this source.',
-    status: source.availability.replaceAll('_', ' '),
+    status: ServicePresentation.sourceAvailabilityLabel(source.availability),
     tone: source.availability == 'available'
         ? FloeBadgeTone.success
         : FloeBadgeTone.neutral,
@@ -320,14 +319,14 @@ final class _ConnectionCard extends StatelessWidget {
     super.key,
     required this.icon,
     required this.name,
-    required this.description,
+    this.description,
     required this.status,
     required this.tone,
     required this.onPressed,
   });
   final IconData icon;
   final String name;
-  final String description;
+  final String? description;
   final String status;
   final FloeBadgeTone tone;
   final VoidCallback onPressed;
@@ -364,14 +363,16 @@ final class _ConnectionCard extends StatelessWidget {
           ),
           const SizedBox(height: 20),
           Text(name, style: FloeType.title),
-          const SizedBox(height: FloeSpace.sm),
-          Text(
-            description,
-            style: FloeType.bodySmall.copyWith(
-              height: 1.6,
-              color: FloePalette.neutral600,
+          if (description case final value?) ...[
+            const SizedBox(height: FloeSpace.sm),
+            Text(
+              value,
+              style: FloeType.bodySmall.copyWith(
+                height: 1.6,
+                color: FloePalette.neutral600,
+              ),
             ),
-          ),
+          ],
         ],
       ),
     ),

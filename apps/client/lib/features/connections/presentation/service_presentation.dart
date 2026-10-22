@@ -13,6 +13,15 @@ final class ServicePresentation {
   final String description;
   final IconData icon;
 
+  static String sourceAvailabilityLabel(String availability) =>
+      switch (availability) {
+        'available' => 'Connected',
+        'permission_required' => 'Finish setup',
+        'identity_changed' => 'Reconnect needed',
+        'disconnected' => 'Disconnected',
+        _ => 'Unavailable',
+      };
+
   factory ServicePresentation.forIntegration(
     IntegrationSummary integration,
     AppLocalizations strings,
