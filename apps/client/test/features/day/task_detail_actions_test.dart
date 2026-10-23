@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
@@ -132,6 +134,15 @@ void main() {
       final deleteRect = tester.getRect(deleteButton);
       expect(deleteRect.width, greaterThanOrEqualTo(44));
       expect(deleteRect.height, greaterThanOrEqualTo(44));
+      final deleteTextButton = tester.widget<TextButton>(
+        find.descendant(of: deleteButton, matching: find.byType(TextButton)),
+      );
+      final deleteForeground = deleteTextButton.style!.foregroundColor!;
+      expect(deleteForeground.resolve({}), FloePalette.neutral600);
+      expect(
+        deleteForeground.resolve({WidgetState.focused}),
+        FloePalette.error700,
+      );
       final semantics = tester.ensureSemantics();
       try {
         expect(find.bySemanticsLabel(copy.deleteTask), findsOneWidget);
@@ -295,6 +306,65 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(_firstTaskTitle), findsNothing);
     expect(find.byKey(const Key('tasks-collection')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a pending delete preserves a newer task detail', (tester) async {
+    final gateway = _TaskActionGateway()..deleteGate = Completer<void>();
+    await _openTasks(tester, gateway);
+    await _openDetail(tester, _firstTaskTitle);
+    final copy = AppLocalizations.of(
+      tester.element(find.byKey(const Key('task-detail-delete'))),
+    );
+
+    await _confirmDelete(tester, copy);
+    await tester.pump();
+    expect(gateway.deleteCalls, 1);
+
+    await tester.tap(find.byKey(const Key('task-detail-back')));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Notes'));
+    await tester.pump();
+    await tester.tap(find.byTooltip('Tasks'));
+    await tester.pump();
+
+    const secondTaskTitle = 'Send the revised timeline to Maya';
+    final semantics = tester.ensureSemantics();
+    try {
+      final row = _rowButton(secondTaskTitle);
+      expect(row, findsOneWidget);
+      expect(row.hitTestable(), findsNothing);
+      final node = tester.getSemantics(row);
+      expect(
+        node.getSemanticsData().hasAction(ui.SemanticsAction.tap),
+        isFalse,
+        reason: 'the pending command blocks activation of another task',
+      );
+    } finally {
+      semantics.dispose();
+    }
+
+    // Exercise the real row navigation callback as a newer screen transition
+    // while the deferred delete is still unresolved. Normal pointer, keyboard,
+    // and accessibility activation remain blocked by the loading overlay.
+    tester.widget<TextButton>(_rowButton(secondTaskTitle)).onPressed!.call();
+    await tester.pump();
+    expect(find.text(secondTaskTitle), findsOneWidget);
+    expect(find.byKey(const Key('task-detail-back')), findsOneWidget);
+    gateway.deleteGate!.complete();
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.text(secondTaskTitle), findsOneWidget);
+    expect(find.byKey(const Key('task-detail-back')), findsOneWidget);
+    expect(find.byKey(const Key('task-detail-delete')), findsOneWidget);
+    expect(
+      tester
+          .widget<FloeButton>(find.byKey(const Key('task-detail-delete')))
+          .onPressed,
+      isNotNull,
+    );
+    expect(gateway.tasks.any((task) => task.id == _firstTaskId), isFalse);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });

@@ -12,7 +12,7 @@ Use one readable primary column for title, relevant description, due state and c
 
 ## Local toolbar
 
-Show a contextual back action such as `Back to today`. Keep completion primary and expose destructive removal as a clearly labeled, low-emphasis action in the detail view; do not use a one-action overflow menu. Do not carry `Day / Week / Month` into Task Detail. Back restores the originating list or day position and keyboard focus.
+Show a contextual back action such as `Back to today`. Keep completion primary and expose destructive removal as a clearly labeled, low-emphasis action in the detail view; use neutral color at rest and reserve destructive color for hover, focus, press, and confirmation. Do not use a one-action overflow menu. Do not carry `Day / Week / Month` into Task Detail. Back restores the originating list or day position and keyboard focus.
 
 ## Primary column
 
@@ -48,4 +48,4 @@ Place summary and required fields first, then subtasks, related notes, and an op
 
 ## Content and action integrity
 
-Use a single readable content column with title, relevant description, due state and the real completion action. Keep a plainly labeled Delete task action available in detail, confirm it by naming the task, and disable repeated actions while a command is pending. Omit empty metadata sections, invented update timestamps and generic assistant advice. Preview-only subtasks and notes may supply visual context, but must not expose mutation controls without an owning service. Review and snooze controls require real proposals and durable behavior; hiding a card is neither review nor snooze. The completion action reflects pending state and ignores repeat input until the owner responds. Keep command failures visible with the detail and its retryable actions. Back restores the originating day or task collection, including scroll position and keyboard focus.
+Use a single readable content column with title, relevant description, due state and the real completion action. Keep a plainly labeled Delete task action available in detail, confirm it by naming the task, and disable repeated actions while a command is pending. Omit empty metadata sections, invented update timestamps and generic assistant advice. Preview-only subtasks and notes may supply visual context, but must not expose mutation controls without an owning service. Review and snooze controls require real proposals and durable behavior; hiding a card is neither review nor snooze. The completion action reflects pending state and ignores repeat input until the owner responds. Keep command failures visible with the detail and its retryable actions. A late delete completion must not replace newer navigation or move focus away from it. Back restores the originating day or task collection, including scroll position and keyboard focus.

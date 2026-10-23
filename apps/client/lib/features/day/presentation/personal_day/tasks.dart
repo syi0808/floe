@@ -241,7 +241,7 @@ class _TaskDetailScreenState extends State<_TaskDetailScreen> {
                             states.contains(WidgetState.focused)) {
                           return FloePalette.error700;
                         }
-                        return FloePalette.error600;
+                        return FloePalette.neutral600;
                       }),
                     ),
                     icon: const Icon(LucideIcons.trash2, size: 18),

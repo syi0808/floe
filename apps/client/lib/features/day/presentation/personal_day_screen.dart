@@ -110,6 +110,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   String? selectedTaskId;
   _DestinationView? selectedTaskOrigin;
   int? selectedTaskOriginIndex;
+  int _taskNavigationGeneration = 0;
   final FocusNode _tasksHeadingFocus = FocusNode(
     debugLabel: 'tasks-heading-return',
   );
@@ -731,9 +732,16 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     () => FocusNode(debugLabel: 'task-row-$taskId'),
   );
 
-  void _requestFocusAfterBuild(FocusNode focusNode) {
+  void _requestFocusAfterBuild(
+    FocusNode focusNode, {
+    required int navigationGeneration,
+  }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && focusNode.canRequestFocus) focusNode.requestFocus();
+      if (mounted &&
+          navigationGeneration == _taskNavigationGeneration &&
+          focusNode.canRequestFocus) {
+        focusNode.requestFocus();
+      }
     });
   }
 
@@ -742,6 +750,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
         controller.snapshot?.items.whereType<TaskItem>().toList() ??
         const <TaskItem>[];
     final index = tasks.indexWhere((candidate) => candidate.id == task.id);
+    _taskNavigationGeneration++;
     setState(() {
       selectedTaskId = task.id;
       selectedTaskOrigin = destination;
@@ -753,6 +762,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   void _returnFromTaskDetail() {
     final taskId = selectedTaskId;
     final returnToTasks = selectedTaskOrigin == _DestinationView.tasks;
+    final navigationGeneration = ++_taskNavigationGeneration;
     setState(() {
       selectedTaskId = null;
       selectedTaskOrigin = null;
@@ -760,24 +770,50 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     });
     _updateRefreshVisibility();
     if (returnToTasks && taskId != null) {
-      _requestFocusAfterBuild(_taskRowFocusNode(taskId));
+      _requestFocusAfterBuild(
+        _taskRowFocusNode(taskId),
+        navigationGeneration: navigationGeneration,
+      );
     }
   }
 
   Future<bool> _deleteTaskFromDetail(TaskItem task) async {
+    final taskIdAtStart = selectedTaskId;
+    final originAtStart = selectedTaskOrigin;
+    final originIndexAtStart = selectedTaskOriginIndex;
+    final navigationGenerationAtStart = _taskNavigationGeneration;
     final deleted = await controller.deleteItem(task);
     if (!mounted || !deleted) return deleted;
+
+    _taskRowFocusNodes.remove(task.id)?.dispose();
+
+    if (navigationGenerationAtStart != _taskNavigationGeneration ||
+        taskIdAtStart != task.id ||
+        selectedTaskId != task.id) {
+      // Navigation may continue while a delete is pending. Only close the
+      // detail that initiated this command; never replace a newer destination
+      // or focus its controls from an older completion.
+      if (selectedTaskId == task.id) {
+        setState(() {
+          selectedTaskId = null;
+          selectedTaskOrigin = null;
+          selectedTaskOriginIndex = null;
+        });
+        _updateRefreshVisibility();
+      }
+      return true;
+    }
 
     final remainingTasks =
         controller.snapshot?.items.whereType<TaskItem>().toList() ??
         const <TaskItem>[];
     final FocusNode? returnFocus;
-    if (selectedTaskOrigin == _DestinationView.tasks &&
+    if (originAtStart == _DestinationView.tasks &&
         controller.loadState != DayLoadState.failure) {
       if (remainingTasks.isEmpty) {
         returnFocus = _tasksHeadingFocus;
       } else {
-        final index = (selectedTaskOriginIndex ?? 0)
+        final index = (originIndexAtStart ?? 0)
             .clamp(0, remainingTasks.length - 1)
             .toInt();
         returnFocus = _taskRowFocusNode(remainingTasks[index].id);
@@ -785,18 +821,23 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     } else {
       returnFocus = null;
     }
-    _taskRowFocusNodes.remove(task.id)?.dispose();
     setState(() {
       selectedTaskId = null;
       selectedTaskOrigin = null;
       selectedTaskOriginIndex = null;
     });
     _updateRefreshVisibility();
-    if (returnFocus != null) _requestFocusAfterBuild(returnFocus);
+    if (returnFocus != null) {
+      _requestFocusAfterBuild(
+        returnFocus,
+        navigationGeneration: navigationGenerationAtStart,
+      );
+    }
     return true;
   }
 
   void _selectDestination(_DestinationView value, {SourceRef? sourceRef}) {
+    _taskNavigationGeneration++;
     setState(() {
       assistantOpen = false;
       selectedConnectionSource = sourceRef;
