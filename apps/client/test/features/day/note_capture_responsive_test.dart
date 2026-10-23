@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/floe_loading.dart';
+import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/features/day/application/day_gateway.dart';
 import 'package:floe_client/features/day/application/fake_day_gateway.dart';
@@ -103,6 +105,8 @@ Widget _app(
 );
 
 Future<void> _openComposer(WidgetTester tester) async {
+  await tester.ensureVisible(find.byKey(const Key('notes-new-note')));
+  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('notes-new-note')));
   await tester.pumpAndSettle();
 }
@@ -179,6 +183,11 @@ void main() {
           .onPressed,
       isNull,
     );
+    await expectLater(
+      find.byKey(const Key('capture-screen')),
+      matchesGoldenFile('goldens/v036-notes-capture-1280-empty.png'),
+    );
+    expect(find.text('Note'), findsNothing);
     await tester.enterText(
       find.byKey(const Key('new-note-content')),
       _longDraft,
@@ -221,12 +230,38 @@ void main() {
     await tester.tap(find.byTooltip('Notes'));
     await tester.pumpAndSettle();
     await _openComposer(tester);
-    await tester.enterText(
-      find.byKey(const Key('new-note-content')),
-      _shortDraft,
+    final field = find.byKey(const Key('new-note-content'));
+    final fieldSemantics = tester.ensureSemantics();
+    try {
+      final data = tester.getSemantics(field).getSemanticsData();
+      expect(data.label, contains('Note'));
+      expect(data.flagsCollection.isTextField, isTrue);
+      expect(data.hasAction(ui.SemanticsAction.setText), isTrue);
+    } finally {
+      fieldSemantics.dispose();
+    }
+    final editor = tester.widget<TextField>(field);
+    expect(editor.decoration?.labelText, isNull);
+    expect(editor.style?.fontSize, FloeType.bodyLarge.fontSize);
+    expect(editor.style?.height, 1.65);
+    expect(editor.cursorColor, FloePalette.primary600);
+    expect(editor.decoration?.focusedBorder, isA<UnderlineInputBorder>());
+    await expectLater(
+      find.byKey(const Key('capture-screen')),
+      matchesGoldenFile('goldens/v036-notes-capture-390-empty.png'),
     );
+    await tester.enterText(field, _shortDraft);
     await tester.pumpAndSettle();
-
+    await expectLater(
+      find.byKey(const Key('capture-screen')),
+      matchesGoldenFile('goldens/v036-notes-capture-390.png'),
+    );
+    await tester.enterText(field, _longDraft);
+    await tester.pumpAndSettle();
+    await expectLater(
+      find.byKey(const Key('capture-screen')),
+      matchesGoldenFile('goldens/v036-notes-capture-390-long.png'),
+    );
     final composer = find.byKey(const Key('new-note-composer'));
     expect(tester.getSize(composer), const Size(390, 844));
     expect(find.byType(Dialog), findsNothing);
@@ -239,10 +274,6 @@ void main() {
       findsNothing,
     );
     expect(tester.takeException(), isNull);
-    await expectLater(
-      find.byKey(const Key('capture-screen')),
-      matchesGoldenFile('goldens/v036-notes-capture-390.png'),
-    );
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -292,6 +323,61 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('short 320px viewport scrolls instead of collapsing the editor', (
+    tester,
+  ) async {
+    _setViewport(tester, width: 320, height: 568, textScale: 2);
+    final gateway = _CaptureGateway(initialItems: _notes());
+    await tester.pumpWidget(
+      _app(
+        gateway,
+        textScale: 2,
+        reduceMotion: true,
+        captureKey: const Key('capture-screen'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Notes'));
+    await tester.pumpAndSettle();
+    await _openComposer(tester);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    await tester.enterText(
+      find.byKey(const Key('new-note-content')),
+      _shortDraft,
+    );
+    await tester.pumpAndSettle();
+
+    final editor = tester.getRect(find.byKey(const Key('new-note-content')));
+    final scrollable = find
+        .descendant(
+          of: find.byKey(const Key('new-note-scroll')),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    final scrollState = tester.state<ScrollableState>(scrollable);
+    expect(editor.height, greaterThanOrEqualTo(160));
+    expect(scrollState.position.maxScrollExtent, greaterThan(0));
+
+    await tester.ensureVisible(find.byKey(const Key('new-note-save')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getRect(find.byKey(const Key('new-note-save'))).bottom,
+      lessThanOrEqualTo(288),
+    );
+    expect(tester.takeException(), isNull);
+    await expectLater(
+      find.byKey(const Key('capture-screen')),
+      matchesGoldenFile('goldens/v036-notes-capture-320-200-short-footer.png'),
+    );
+    await tester.tap(find.byKey(const Key('new-note-save')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('new-note-composer')), findsNothing);
+    expect(gateway.submissions, 1);
+    expect(gateway.classifications, 1);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'capture retry preserves draft and selection without resubmitting',
     (tester) async {
@@ -306,11 +392,7 @@ void main() {
       const draft = '  Keep this draft exactly while retrying.  ';
       final field = find.byKey(const Key('new-note-content'));
       await tester.enterText(field, draft);
-      final controller = tester
-          .widget<TextField>(
-            find.descendant(of: field, matching: find.byType(TextField)),
-          )
-          .controller!;
+      final controller = tester.widget<TextField>(field).controller!;
       controller.selection = const TextSelection.collapsed(offset: 10);
       await tester.pump();
       await tester.tap(find.byKey(const Key('new-note-save')));
@@ -319,6 +401,18 @@ void main() {
       expect(gateway.submissions, 1);
       expect(gateway.classifications, 1);
       expect(find.text('Could not save. Please try again.'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('new-note-composer')),
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Semantics &&
+                widget.properties.liveRegion == true &&
+                widget.properties.label == 'Could not save. Please try again.',
+          ),
+        ),
+        findsOneWidget,
+      );
       expect(controller.text, draft);
       expect(controller.selection, const TextSelection.collapsed(offset: 10));
       await tester.tap(find.byKey(const Key('new-note-save')));
@@ -361,6 +455,12 @@ void main() {
             .widget<FloeButton>(find.byKey(const Key('new-note-save')))
             .onPressed,
         isNull,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('new-note-content')))
+            .enabled,
+        isFalse,
       );
       await tester.tap(find.byKey(const Key('new-note-save')));
       await tester.pump();

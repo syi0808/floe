@@ -337,19 +337,61 @@ class _NewNoteComposerState extends State<_NewNoteComposer> {
   @override
   Widget build(BuildContext context) {
     final copy = AppLocalizations.of(context);
-    final input = FloeInput(
-      key: const Key('new-note-content'),
+    final errorText = failed ? copy.couldNotSavePleaseTryAgain : null;
+    Widget input({required bool expands}) => Semantics(
       label: copy.note,
-      controller: content,
-      autofocus: true,
-      enabled: !pending,
-      minLines: widget.fullPage ? null : 3,
-      maxLines: widget.fullPage ? null : 8,
-      expands: widget.fullPage,
-      textAlignVertical: widget.fullPage ? TextAlignVertical.top : null,
-      onChanged: (_) => setState(() {}),
-      errorText: failed ? copy.couldNotSavePleaseTryAgain : null,
+      child: TextField(
+        key: const Key('new-note-content'),
+        controller: content,
+        autofocus: true,
+        enabled: !pending,
+        minLines: expands ? null : 3,
+        maxLines: expands ? null : 8,
+        expands: expands,
+        textAlignVertical: TextAlignVertical.top,
+        style: FloeType.bodyLarge.copyWith(
+          height: 1.65,
+          color: pending ? FloeColor.textSecondary : FloeColor.textPrimary,
+        ),
+        cursorColor: FloePalette.primary600,
+        decoration: InputDecoration(
+          isCollapsed: true,
+          filled: false,
+          contentPadding: EdgeInsets.zero,
+          border: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloeColor.border),
+          ),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloeColor.border),
+          ),
+          disabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloePalette.neutral100),
+          ),
+          focusedBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloeColor.focus, width: 1.5),
+          ),
+          errorBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloePalette.error600),
+          ),
+          focusedErrorBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: FloePalette.error600, width: 1.5),
+          ),
+        ),
+        onChanged: (_) => setState(() {}),
+      ),
     );
+    final error = errorText == null
+        ? null
+        : Semantics(
+            liveRegion: true,
+            label: errorText,
+            child: ExcludeSemantics(
+              child: Text(
+                errorText,
+                style: FloeType.bodySmall.copyWith(color: FloePalette.error700),
+              ),
+            ),
+          );
     final actions = [
       FloeButton.text(
         key: const Key('new-note-cancel'),
@@ -369,20 +411,19 @@ class _NewNoteComposerState extends State<_NewNoteComposer> {
             backgroundColor: FloeColor.surface,
             resizeToAvoidBottomInset: true,
             body: SafeArea(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Padding(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final header = Padding(
                     padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
                     child: Text(copy.newNote, style: FloeType.titleLarge),
-                  ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                      child: input,
-                    ),
-                  ),
-                  Padding(
+                  );
+                  final errorRow = error == null
+                      ? null
+                      : Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                          child: error,
+                        );
+                  final footer = Padding(
                     padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
                     child: Wrap(
                       alignment: WrapAlignment.end,
@@ -390,15 +431,58 @@ class _NewNoteComposerState extends State<_NewNoteComposer> {
                       runSpacing: FloeSpace.sm,
                       children: actions,
                     ),
-                  ),
-                ],
+                  );
+
+                  if (constraints.maxHeight < 400) {
+                    return SingleChildScrollView(
+                      key: const Key('new-note-scroll'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          header,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                            child: input(expands: false),
+                          ),
+                          ?errorRow,
+                          footer,
+                        ],
+                      ),
+                    );
+                  }
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      header,
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                          child: input(expands: true),
+                        ),
+                      ),
+                      ?errorRow,
+                      footer,
+                    ],
+                  );
+                },
               ),
             ),
           )
         : FloeDialog(
             key: const Key('new-note-composer'),
             title: Text(copy.newNote),
-            content: input,
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                input(expands: false),
+                if (error != null) ...[
+                  const SizedBox(height: FloeSpace.sm),
+                  error,
+                ],
+              ],
+            ),
             actions: actions,
             maxWidth: 640,
           );

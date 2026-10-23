@@ -41,7 +41,7 @@ The current note projection carries the complete original content in `NoteItem.t
 
 ## Capture surface
 
-Use a bounded 640px compose dialog on wide layouts, with a quiet `New note` title, a flexible writing area and a compact Cancel/Save footer. On narrow layouts, use a full-page surface with the writing area filling the space between the title and actions. Keep the actions above the on-screen keyboard; allow them to wrap at large text sizes. Respect reduced-motion preferences and preserve the existing pending-save close guard and retry behavior.
+Use a bounded 640px compose dialog on wide layouts, with a quiet `New note` title, a flexible writing area and a compact Cancel/Save footer. Match the reader's body type, line height and 24px text inset. Keep the field visually quiet, omit a duplicate visible body label, and expose its localized name to assistive technology. Use the caret and a restrained active baseline to show focus. On narrow layouts, use a full-page surface with the writing area filling the space between the title and actions. Keep the actions above the on-screen keyboard; allow them to wrap at large text sizes. When the viewport cannot fit the editor and footer together, preserve a usable editor height and let the page scroll. Respect reduced-motion preferences and preserve the existing pending-save close guard and retry behavior.
 
 Keep the composer as one unsplit body field. Do not infer a heading or display creation-date metadata before save. The existing post-save feedback remains the authority for the note's actual creation day.
 
@@ -62,3 +62,4 @@ New notes keep their actual creation timestamp, even while another display day i
 - Note cards contain no proactive assistant overlays.
 - Keyboard navigation follows visual order at every responsive column count.
 - At 320px and 200% text, the composer body and Cancel/Save actions remain reachable above the on-screen keyboard.
+- At 320px by 568px and 200% text, a simulated keyboard inset does not collapse the writing area; scrolling keeps Save reachable.
