@@ -76,6 +76,8 @@ class _NotesScreenState extends State<_NotesScreen> {
         ? matchingLabel!
         : NumberFormat.decimalPattern(copy.localeName)
               .format(widget.notes.length);
+    final countSemantics =
+        matchingLabel ?? copy.notesCount(widget.notes.length);
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -90,23 +92,16 @@ class _NotesScreenState extends State<_NotesScreen> {
           runSpacing: FloeSpace.xxs,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            if (matchingLabel case final label?)
-              Semantics(
-                label: label,
-                child: ExcludeSemantics(
-                  child: Text(
-                    visibleCount,
-                    key: const Key('notes-count'),
-                    style: FloeType.bodySmall,
-                  ),
+            Semantics(
+              label: countSemantics,
+              child: ExcludeSemantics(
+                child: Text(
+                  visibleCount,
+                  key: const Key('notes-count'),
+                  style: FloeType.bodySmall,
                 ),
-              )
-            else
-              Text(
-                visibleCount,
-                key: const Key('notes-count'),
-                style: FloeType.bodySmall,
               ),
+            ),
             const ExcludeSemantics(child: Text('·')),
             Text(
               dateLabel,
@@ -150,7 +145,7 @@ class _NotesScreenState extends State<_NotesScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: EdgeInsets.only(top: 12, bottom: widget.narrow ? 16 : 12),
+          padding: EdgeInsets.only(bottom: widget.narrow ? 16 : 12),
           child: widget.narrow || MediaQuery.sizeOf(context).width < 1000
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

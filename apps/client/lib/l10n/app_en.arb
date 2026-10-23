@@ -320,6 +320,7 @@
     }
   },
   "overdueItem": "{label} · {subtitle} · Overdue",
+  "overdue": "Overdue",
   "@overdueItem": {
     "placeholders": {
       "label": {

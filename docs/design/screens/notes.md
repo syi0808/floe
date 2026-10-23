@@ -8,7 +8,7 @@ Make recent and relevant notes easy to scan without making Notes feel like a sep
 
 ## Toolbar
 
-Use `Notes · count` with the selected display date, followed by search and one `New note` action. This view is the selected day’s notes from the day snapshot, not an account-wide collection. Keep the date visible while searching. Do not show `Day / Week / Month`.
+Use `Notes` as the page title with a quiet count and selected display date, followed by search and one `New note` action. The visible count may stay compact, while its accessible name retains the localized note-count meaning. This view is the selected day’s notes from the day snapshot, not an account-wide collection. Keep the date visible while searching. Do not show `Day / Week / Month`.
 
 ## Collection
 

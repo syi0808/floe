@@ -21,6 +21,7 @@ class FloeApp extends StatefulWidget {
     required this.personId,
     required this.ownerGateways,
     this.query,
+    this.clock,
     this.agentGateway,
     this.connectionsController,
     this.onDisposeGateway,
@@ -32,6 +33,7 @@ class FloeApp extends StatefulWidget {
   final String personId;
 
   final DayQuery? query;
+  final DateTime Function()? clock;
   final AgentConversationGateway? agentGateway;
   final ConnectionsController? connectionsController;
   final LocalOwnerGateways ownerGateways;
@@ -52,7 +54,7 @@ class _FloeAppState extends State<FloeApp> {
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
+    final now = (widget.clock ?? DateTime.now)();
     final effectiveQuery =
         widget.query ??
         DayQuery.local(
@@ -64,6 +66,7 @@ class _FloeAppState extends State<FloeApp> {
       child: PersonalDayScreen(
         gateway: widget.gateway,
         query: effectiveQuery,
+        clock: widget.clock,
         agentGateway: widget.agentGateway,
         connectionsController: widget.connectionsController,
         ownerGateways: widget.ownerGateways,

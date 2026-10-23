@@ -78,11 +78,13 @@ class PersonalDayScreen extends StatefulWidget {
     required this.gateway,
     required this.query,
     required this.ownerGateways,
+    this.clock,
     this.agentGateway,
     this.connectionsController,
   });
   final DayGateway gateway;
   final DayQuery query;
+  final DateTime Function()? clock;
   final AgentConversationGateway? agentGateway;
   final ConnectionsController? connectionsController;
   final LocalOwnerGateways ownerGateways;
@@ -116,6 +118,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     controller = PersonalDayController(
       gateway: widget.gateway,
       query: widget.query,
+      clock: widget.clock,
     );
     WidgetsBinding.instance.addObserver(this);
     appActive =
@@ -862,7 +865,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     EventItem? event,
   }) async {
     final date = controller.query.date;
-    final now = DateTime.now();
+    final now = (widget.clock ?? DateTime.now)();
     final createStart =
         initialStart ??
         (DateUtils.isSameDay(date, now)

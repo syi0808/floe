@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:floe_client/app/floe_app.dart';
 import 'package:floe_client/app/design_tokens.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
@@ -110,7 +111,7 @@ List<DayItem> _items() => [
     title: 'Collect feedback from the beta team',
     revision: 1,
     createdAt: _query.now,
-    deadline: null,
+    deadline: DateTime(2026, 10, 23, 9),
   ),
   NoteItem(
     id: 'quick-thought',
@@ -205,6 +206,7 @@ Widget _app({double scale = 1, bool reduceMotion = false}) =>
         personId: _query.personId,
         gateway: _CurrentDayGateway(),
         query: _query,
+        clock: () => _query.now,
         ownerGateways: const LocalOwnerGateways(),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(
@@ -245,6 +247,16 @@ void main() {
 
       expect(find.textContaining('Studio planning'), findsOneWidget);
       expect(find.text('Calendar status unavailable'), findsNothing);
+      if (width <= 780) {
+        final dock = find.byKey(const Key('compact-dock-slot'));
+        expect(tester.getRect(dock).bottom, lessThanOrEqualTo(height));
+        for (final label in ['Today', 'Tasks', 'Notes', 'Floe']) {
+          expect(
+            find.descendant(of: dock, matching: find.text(label)),
+            findsOneWidget,
+          );
+        }
+      }
       await expectLater(
         find.byKey(const Key('v033-screen-capture')),
         matchesGoldenFile('goldens/v033-day-$suffix.png'),
@@ -263,6 +275,9 @@ void main() {
         tester.widget<Text>(find.byKey(const Key('tasks-page-summary'))).style,
         FloeType.bodySmall,
       );
+      final tasksTitleTop = tester
+          .getRect(find.byKey(const Key('tasks-page-title')))
+          .top;
       final taskSummaryRect = tester.getRect(
         find.byKey(const Key('tasks-page-summary')),
       );
@@ -270,6 +285,37 @@ void main() {
         find.text('Prepare the launch brief for partner review'),
       );
       expect(firstTaskRect.top - taskSummaryRect.bottom, lessThan(48));
+      final taskCollection = find.byKey(const Key('tasks-collection'));
+      final collectionRect = tester.getRect(taskCollection);
+      expect(collectionRect.width, closeTo(width > 1000 ? 840 : width - 24, 1));
+      expect(find.text('Task · Time not set'), findsNothing);
+      expect(find.textContaining('Overdue · Due '), findsOneWidget);
+      final taskDelete = find.byTooltip(
+        AppLocalizations.of(tester.element(taskCollection))
+            .deleteItemLabel('Prepare the launch brief for partner review'),
+      );
+      expect(taskDelete.hitTestable(), findsOneWidget);
+      final deleteRect = tester.getRect(taskDelete);
+      expect(deleteRect.width, greaterThanOrEqualTo(44));
+      expect(deleteRect.height, greaterThanOrEqualTo(44));
+      if (width > 1000) {
+        expect(deleteRect.right, lessThan(1000));
+      }
+      final taskSemantics = tester.ensureSemantics();
+      try {
+        expect(
+          find.bySemanticsLabel(
+            'Prepare the launch brief for partner review. Time not set',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.bySemanticsLabel(RegExp(r'Overdue · Due .*')),
+          findsOneWidget,
+        );
+      } finally {
+        taskSemantics.dispose();
+      }
       await expectLater(
         find.byKey(const Key('v033-screen-capture')),
         matchesGoldenFile('goldens/v033-tasks-$suffix.png'),
@@ -281,13 +327,21 @@ void main() {
       expect(find.text('4'), findsOneWidget);
       expect(find.text('Quick thought'), findsOneWidget);
       expect(find.text('Launch plan'), findsOneWidget);
+      final notesTitleRect = tester.getRect(
+        find.byKey(const Key('notes-page-title')),
+      );
+      expect(
+        notesTitleRect.top,
+        closeTo(tasksTitleTop, 1),
+        reason: 'collection headings share a top rhythm at $suffix px',
+      );
       expect(
         tester.widget<Text>(find.byKey(const Key('notes-page-title'))).style,
         FloeType.pageTitle,
       );
       final semantics = tester.ensureSemantics();
       try {
-        expect(find.bySemanticsLabel('4'), findsOneWidget);
+        expect(find.bySemanticsLabel('Notes · 4'), findsOneWidget);
       } finally {
         semantics.dispose();
       }

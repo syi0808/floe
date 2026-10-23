@@ -1804,6 +1804,12 @@ abstract class AppLocalizations {
   /// **'{label} · {subtitle} · Overdue'**
   String overdueItem(String label, String subtitle);
 
+  /// No description provided for @overdue.
+  ///
+  /// In en, this message translates to:
+  /// **'Overdue'**
+  String get overdue;
+
   /// No description provided for @deleteItemLabel.
   ///
   /// In en, this message translates to:

@@ -48,6 +48,13 @@ content begins about 24px below the heading/context block. Keep the selected Day
 date as a contextual toolbar headline beside its calendar controls rather than
 recasting it as a collection-page title.
 
+The Tasks destination reads as a checklist: task titles lead, due information is
+quiet supporting type, and rows omit the repeated item-kind label. A missing
+optional deadline stays available to assistive technology without taking a
+visible line in every row. Keep overdue state explicit and warning-colored. On
+wide layouts, bound the collection to a readable column so each row's actions
+stay visually grouped with its task.
+
 ## State and continuity
 
 Each destination preserves its scroll position, current filter, and selected object during ordinary switching. Task detail provides Back to the originating collection or day. Notes preserve filters across destination switches. Deep links restore the destination and object. Back returns to the previous product context, not an arbitrary default date.

@@ -984,6 +984,9 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get overdue => 'Overdue';
+
+  @override
   String deleteItemLabel(String title) {
     return 'Delete $title';
   }

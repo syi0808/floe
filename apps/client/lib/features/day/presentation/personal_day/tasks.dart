@@ -19,63 +19,74 @@ class _TasksScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final tasks = snapshot.items.whereType<TaskItem>().toList();
     final remaining = tasks.where((task) => !task.isCompleted).length;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
+    return Align(
+      alignment: Alignment.topLeft,
+      child: ConstrainedBox(
+        key: const Key('tasks-collection'),
+        constraints: const BoxConstraints(maxWidth: 840),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    AppLocalizations.of(context).tasks,
-                    key: const Key('tasks-page-title'),
-                    style: FloeType.pageTitle,
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        AppLocalizations.of(context).tasks,
+                        key: const Key('tasks-page-title'),
+                        style: FloeType.pageTitle,
+                      ),
+                      SizedBox(height: FloeSpace.xs),
+                      Text(
+                        AppLocalizations.of(context)
+                            .taskSummary(remaining, tasks.length),
+                        key: const Key('tasks-page-summary'),
+                        style: FloeType.bodySmall,
+                      ),
+                    ],
                   ),
-                  SizedBox(height: FloeSpace.xs),
-                  Text(
-                    AppLocalizations.of(context)
-                        .taskSummary(remaining, tasks.length),
-                    key: const Key('tasks-page-summary'),
-                    style: FloeType.bodySmall,
-                  ),
-                ],
+                ),
+              ],
+            ),
+            SizedBox(height: FloeSpace.base),
+            Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: 0,
+                vertical: FloeSpace.sm,
               ),
+              child: tasks.isEmpty
+                  ? Padding(
+                      padding: EdgeInsets.symmetric(vertical: FloeSpace.xxxl),
+                      child: Center(
+                        child: Text(
+                          AppLocalizations.of(context).noTasksYet,
+                          style: FloeType.body,
+                        ),
+                      ),
+                    )
+                  : Column(
+                      children: [
+                        for (final (index, task) in tasks.indexed) ...[
+                          _DayRow(
+                            item: task,
+                            snapshot: snapshot,
+                            disabled: disabled,
+                            complete: onComplete,
+                            delete: onDelete,
+                            onOpen: () => onOpen(task),
+                            taskCollection: true,
+                          ),
+                          if (index < tasks.length - 1)
+                            FloeDivider(height: 1, indent: 56),
+                        ],
+                      ],
+                    ),
             ),
           ],
         ),
-        SizedBox(height: FloeSpace.base),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 0, vertical: FloeSpace.sm),
-          child: tasks.isEmpty
-              ? Padding(
-                  padding: EdgeInsets.symmetric(vertical: FloeSpace.xxxl),
-                  child: Center(
-                    child: Text(
-                      AppLocalizations.of(context).noTasksYet,
-                      style: FloeType.body,
-                    ),
-                  ),
-                )
-              : Column(
-                  children: [
-                    for (final (index, task) in tasks.indexed) ...[
-                      _DayRow(
-                        item: task,
-                        snapshot: snapshot,
-                        disabled: disabled,
-                        complete: onComplete,
-                        delete: onDelete,
-                        onOpen: () => onOpen(task),
-                      ),
-                      if (index < tasks.length - 1)
-                        FloeDivider(height: 1, indent: 56),
-                    ],
-                  ],
-                ),
-        ),
-      ],
+      ),
     );
   }
 }

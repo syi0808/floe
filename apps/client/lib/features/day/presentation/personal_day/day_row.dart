@@ -8,6 +8,7 @@ class _DayRow extends StatelessWidget {
     required this.complete,
     required this.delete,
     this.onOpen,
+    this.taskCollection = false,
   });
   final DayItem item;
   final DaySnapshot snapshot;
@@ -15,9 +16,11 @@ class _DayRow extends StatelessWidget {
   final Future<void> Function(TaskItem, bool) complete;
   final Future<void> Function(DayItem) delete;
   final VoidCallback? onOpen;
+  final bool taskCollection;
   @override
   Widget build(BuildContext context) {
     final task = item is TaskItem ? item as TaskItem : null;
+    final copy = AppLocalizations.of(context);
     final isCalendarEvent =
         item is EventItem && item.source is CalendarDayItemSource;
     final overdue =
@@ -29,15 +32,41 @@ class _DayRow extends StatelessWidget {
         '${_time(context, startsAt)}–${_time(context, endsAt)}',
       TaskItem(:final deadline) =>
         deadline == null
-            ? AppLocalizations.of(context).timeNotSet
-            : AppLocalizations.of(context).dueAt(_deadline(context, deadline)),
-      NoteItem() => AppLocalizations.of(context).todaySThought,
+            ? copy.timeNotSet
+            : copy.dueAt(_deadline(context, deadline)),
+      NoteItem() => copy.todaySThought,
     };
     final label = switch (item) {
-      EventItem() => AppLocalizations.of(context).event,
-      TaskItem() => AppLocalizations.of(context).task,
-      NoteItem() => AppLocalizations.of(context).note,
+      EventItem() => copy.event,
+      TaskItem() => copy.task,
+      NoteItem() => copy.note,
     };
+    final titleText = Text(
+      item.title,
+      maxLines: 3,
+      overflow: TextOverflow.ellipsis,
+      style: FloeType.bodyLarge.copyWith(
+        fontWeight: taskCollection ? FontWeight.w500 : null,
+        decoration: task?.isCompleted == true
+            ? TextDecoration.lineThrough
+            : null,
+      ),
+    );
+    final title = taskCollection && task?.deadline == null
+        ? Semantics(
+            label: '${item.title}. ${copy.timeNotSet}',
+            child: ExcludeSemantics(child: titleText),
+          )
+        : titleText;
+    final taskCollectionSubtitle = task == null || task.deadline == null
+        ? null
+        : Text(
+            overdue ? '${copy.overdue} · $subtitle' : subtitle,
+            semanticsLabel: overdue ? '${copy.overdue} · $subtitle' : null,
+            style: FloeType.bodySmall.copyWith(
+              color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
+            ),
+          );
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 72),
       child: FloeListRow(
@@ -64,24 +93,19 @@ class _DayRow extends StatelessWidget {
                   ),
           ),
         ),
-        title: Text(
-          item.title,
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: FloeType.bodyLarge.copyWith(
-            decoration: task?.isCompleted == true
-                ? TextDecoration.lineThrough
-                : null,
-          ),
-        ),
-        subtitle: Text(
-          overdue
-              ? AppLocalizations.of(context).overdueItem(label, subtitle)
-              : '$label · $subtitle',
-          style: FloeType.body.copyWith(
-            color: overdue ? FloePalette.warning600 : FloePalette.neutral500,
-          ),
-        ),
+        title: title,
+        subtitle: taskCollection
+            ? taskCollectionSubtitle
+            : Text(
+                overdue
+                    ? copy.overdueItem(label, subtitle)
+                    : '$label · $subtitle',
+                style: FloeType.body.copyWith(
+                  color: overdue
+                      ? FloePalette.warning600
+                      : FloePalette.neutral500,
+                ),
+              ),
         trailing: isCalendarEvent
             ? const SizedBox(width: 40)
             : FloeButton.icon(
