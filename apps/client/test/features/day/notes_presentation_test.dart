@@ -124,7 +124,7 @@ void main() {
         );
         await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
-        expect(find.text('Notes · 1'), findsOneWidget);
+        expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
       }
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -171,7 +171,11 @@ void main() {
           tester.widget<Text>(date).data,
           DateFormat.yMMMd('en').format(day),
         );
-        expect(find.text('Notes · 4'), findsOneWidget);
+        expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('notes-count'))).data,
+          '4',
+        );
         final cards = find.byWidgetPredicate(
           (widget) =>
               widget is Semantics &&
@@ -204,13 +208,23 @@ void main() {
           DateFormat.yMMMd('en').format(day),
         );
         expect(find.text('Matching notes · 0'), findsOneWidget);
+        final semantics = tester.ensureSemantics();
+        try {
+          expect(find.bySemanticsLabel('Matching notes · 0'), findsOneWidget);
+        } finally {
+          semantics.dispose();
+        }
         expect(tester.takeException(), isNull);
       },
     );
 
     testWidgets('search is preserved and reversible at $width', (tester) async {
       await openNotes(tester, width: width);
-      expect(find.text('Notes · 1'), findsOneWidget);
+      expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('notes-count'))).data,
+        '1',
+      );
       expect(find.text('Personal only'), findsNothing);
       expect(find.text('Work'), findsNothing);
       await tester.enterText(find.byType(TextField).first, 'launch');
@@ -231,7 +245,11 @@ void main() {
       expect(find.text('Clear search'), findsOneWidget);
       await tester.tap(find.text('Clear search'));
       await tester.pumpAndSettle();
-      expect(find.text('Notes · 1'), findsOneWidget);
+      expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('notes-count'))).data,
+        '1',
+      );
       expect(find.text('Launch plan'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

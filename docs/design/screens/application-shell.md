@@ -40,6 +40,14 @@ Activity, Connected services and Settings live in a secondary More menu. Context
 - Replace assistant panels and dialogs with sheets when space requires.
 - Never shrink desktop columns side-by-side below readable width.
 
+## Page heading rhythm
+
+Collection pages lead with the shared `pageTitle` role (28px/700). Counts and
+selected dates remain supporting `bodySmall` context, and the first collection
+content begins about 24px below the heading/context block. Keep the selected Day
+date as a contextual toolbar headline beside its calendar controls rather than
+recasting it as a collection-page title.
+
 ## State and continuity
 
 Each destination preserves its scroll position, current filter, and selected object during ordinary switching. Task detail provides Back to the originating collection or day. Notes preserve filters across destination switches. Deep links restore the destination and object. Back returns to the previous product context, not an arbitrary default date.

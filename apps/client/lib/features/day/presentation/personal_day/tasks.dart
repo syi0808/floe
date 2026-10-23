@@ -30,20 +30,22 @@ class _TasksScreen extends StatelessWidget {
                 children: [
                   Text(
                     AppLocalizations.of(context).tasks,
-                    style: FloeType.display,
+                    key: const Key('tasks-page-title'),
+                    style: FloeType.pageTitle,
                   ),
                   SizedBox(height: FloeSpace.xs),
                   Text(
                     AppLocalizations.of(context)
                         .taskSummary(remaining, tasks.length),
-                    style: FloeType.body,
+                    key: const Key('tasks-page-summary'),
+                    style: FloeType.bodySmall,
                   ),
                 ],
               ),
             ),
           ],
         ),
-        SizedBox(height: FloeSpace.xl),
+        SizedBox(height: FloeSpace.base),
         Padding(
           padding: EdgeInsets.symmetric(horizontal: 0, vertical: FloeSpace.sm),
           child: tasks.isEmpty

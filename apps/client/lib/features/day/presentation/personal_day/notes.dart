@@ -68,21 +68,52 @@ class _NotesScreenState extends State<_NotesScreen> {
           });
     final filtered = query.isNotEmpty;
     final copy = AppLocalizations.of(context);
+    final dateLabel = DateFormat.yMMMd(copy.localeName).format(widget.date);
+    final matchingLabel = filtered
+        ? copy.notesMatchingCount(notes.length)
+        : null;
+    final visibleCount = filtered
+        ? matchingLabel!
+        : NumberFormat.decimalPattern(copy.localeName)
+              .format(widget.notes.length);
     final heading = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          filtered
-              ? copy.notesMatchingCount(notes.length)
-              : copy.notesCount(widget.notes.length),
-          style: FloeType.titleLarge.copyWith(height: 1.2),
+          copy.notes,
+          key: const Key('notes-page-title'),
+          style: FloeType.pageTitle,
         ),
         const SizedBox(height: FloeSpace.xs),
-        Text(
-          DateFormat.yMMMd(Localizations.localeOf(context).toString())
-              .format(widget.date),
-          key: const Key('notes-selected-date'),
-          style: FloeType.bodySmall.copyWith(color: FloeColor.textSecondary),
+        Wrap(
+          spacing: FloeSpace.sm,
+          runSpacing: FloeSpace.xxs,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            if (matchingLabel case final label?)
+              Semantics(
+                label: label,
+                child: ExcludeSemantics(
+                  child: Text(
+                    visibleCount,
+                    key: const Key('notes-count'),
+                    style: FloeType.bodySmall,
+                  ),
+                ),
+              )
+            else
+              Text(
+                visibleCount,
+                key: const Key('notes-count'),
+                style: FloeType.bodySmall,
+              ),
+            const ExcludeSemantics(child: Text('·')),
+            Text(
+              dateLabel,
+              key: const Key('notes-selected-date'),
+              style: FloeType.bodySmall,
+            ),
+          ],
         ),
       ],
     );
@@ -150,7 +181,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                   ],
                 ),
         ),
-        SizedBox(height: widget.narrow ? 4 : 8),
+        SizedBox(height: widget.narrow ? FloeSpace.sm : FloeSpace.md),
         if (notes.isEmpty)
           Padding(
             padding: EdgeInsets.symmetric(vertical: widget.narrow ? 48 : 80),
@@ -198,7 +229,7 @@ class _NotesScreenState extends State<_NotesScreen> {
                   : MediaQuery.sizeOf(context).width > 1080
                   ? 3
                   : 2;
-              final gap = widget.narrow ? 14.0 : 22.0;
+              final gap = widget.narrow ? FloeSpace.base : FloeSpace.lg;
               final width =
                   (constraints.maxWidth - gap * (columns - 1)) / columns;
               return Wrap(
@@ -339,7 +370,7 @@ class _NotePreviewCard extends StatelessWidget {
           onPressed: onOpen,
           child: ExcludeSemantics(
             child: Padding(
-              padding: EdgeInsets.all(mobile ? 25 : 29),
+              padding: const EdgeInsets.all(24),
               child: IntrinsicHeight(
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: mobile ? 124 : 151),

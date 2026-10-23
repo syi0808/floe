@@ -165,7 +165,7 @@ void main() {
         expect(tester.getRect(close).bottom, lessThanOrEqualTo(740));
         await tester.tap(close);
         await tester.pumpAndSettle();
-        expect(find.text('Notes · 1'), findsOneWidget);
+        expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
         final retained =
             (await gateway.loadDay(query)).items.single as NoteItem;
         expect(identical(retained, note), isTrue);

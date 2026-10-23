@@ -24,7 +24,10 @@ Each note preview includes:
 
 Do not invent categories or show a `Personal only` filter: the current note contract has no category field. Search the original saved content, not synthetic preview metadata.
 
-Cards use `sq-lg`, a white or step-50 surface, and a 1px border. Any preview tint remains subtle and does not imply a category. Selected state uses focus and border in addition to color.
+Cards use `sq-lg`, a white or step-50 surface, a 1px border, and a 24px inset.
+Use a 16px narrow-layout or 24px wide-layout gap. Any preview tint remains
+subtle and does not imply a category. Selected state uses focus and border in
+addition to color.
 
 ## Floe behavior
 
