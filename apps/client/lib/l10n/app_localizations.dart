@@ -1090,6 +1090,24 @@ abstract class AppLocalizations {
   /// **'Delete'**
   String get delete;
 
+  /// No description provided for @deleteTask.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete task'**
+  String get deleteTask;
+
+  /// No description provided for @deletingTask.
+  ///
+  /// In en, this message translates to:
+  /// **'Deleting task'**
+  String get deletingTask;
+
+  /// No description provided for @updatingTask.
+  ///
+  /// In en, this message translates to:
+  /// **'Updating task'**
+  String get updatingTask;
+
   /// No description provided for @dismissCapture.
   ///
   /// In en, this message translates to:

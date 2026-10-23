@@ -6,23 +6,21 @@ class _DayRow extends StatelessWidget {
     required this.snapshot,
     required this.disabled,
     required this.complete,
-    required this.delete,
     this.onOpen,
     this.taskCollection = false,
+    this.focusNode,
   });
   final DayItem item;
   final DaySnapshot snapshot;
   final bool disabled;
   final Future<void> Function(TaskItem, bool) complete;
-  final Future<void> Function(DayItem) delete;
   final VoidCallback? onOpen;
   final bool taskCollection;
+  final FocusNode? focusNode;
   @override
   Widget build(BuildContext context) {
     final task = item is TaskItem ? item as TaskItem : null;
     final copy = AppLocalizations.of(context);
-    final isCalendarEvent =
-        item is EventItem && item.source is CalendarDayItemSource;
     final overdue =
         task != null &&
         !task.isCompleted &&
@@ -94,6 +92,7 @@ class _DayRow extends StatelessWidget {
           ),
         ),
         title: title,
+        focusNode: focusNode,
         subtitle: taskCollection
             ? taskCollectionSubtitle
             : Text(
@@ -106,39 +105,7 @@ class _DayRow extends StatelessWidget {
                       : FloePalette.neutral500,
                 ),
               ),
-        trailing: isCalendarEvent
-            ? const SizedBox(width: 40)
-            : FloeButton.icon(
-                tooltip: AppLocalizations.of(context)
-                    .deleteItemLabel(item.title),
-                onPressed: disabled ? null : () => _confirmDelete(context),
-                icon: Icon(Icons.more_horiz, size: 20),
-              ),
       ),
     );
-  }
-
-  Future<void> _confirmDelete(BuildContext context) async {
-    final confirmed = await showFloeDialog<bool>(
-      context,
-      (context) => FloeDialog(
-        title: Text(AppLocalizations.of(context).deleteThisItem),
-        content: Text(
-          AppLocalizations.of(context).deleteItemMessage(item.title),
-        ),
-        actions: [
-          FloeButton.text(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(AppLocalizations.of(context).cancel),
-          ),
-          FloeButton.filled(
-            onPressed: () => Navigator.pop(context, true),
-            style: FloeTheme.destructiveButtonStyle,
-            child: Text(AppLocalizations.of(context).delete),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true) await delete(item);
   }
 }

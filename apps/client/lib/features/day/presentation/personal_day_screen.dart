@@ -108,6 +108,12 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
   late final Listenable screenState;
   _DestinationView destination = _DestinationView.today;
   String? selectedTaskId;
+  _DestinationView? selectedTaskOrigin;
+  int? selectedTaskOriginIndex;
+  final FocusNode _tasksHeadingFocus = FocusNode(
+    debugLabel: 'tasks-heading-return',
+  );
+  final Map<String, FocusNode> _taskRowFocusNodes = {};
   DateTime? draftEventStart;
   bool appActive = true;
   String? connectionSelection;
@@ -158,6 +164,10 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     agentController?.dispose();
     conversationComposerDraft.dispose();
     assistantEntryFocus.dispose();
+    _tasksHeadingFocus.dispose();
+    for (final focusNode in _taskRowFocusNodes.values) {
+      focusNode.dispose();
+    }
     super.dispose();
   }
 
@@ -349,13 +359,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (controller.errorMessage case final message?)
+            _ErrorNotice(message: message, dismiss: controller.clearError),
           Align(
             alignment: Alignment.centerLeft,
             child: FloeButton.text(
-              onPressed: () {
-                setState(() => selectedTaskId = null);
-                _updateRefreshVisibility();
-              },
+              key: const Key('task-detail-back'),
+              onPressed: _returnFromTaskDetail,
               icon: const Icon(LucideIcons.arrowLeft, size: 18),
               child: Text(AppLocalizations.of(context).back),
             ),
@@ -367,6 +377,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
             narrow: narrow,
             disabled: controller.commandPending,
             onComplete: _setTaskCompleted,
+            onDelete: _deleteTaskFromDetail,
           ),
         ],
       );
@@ -422,7 +433,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                 disabled: controller.commandPending,
                 onComplete: _setTaskCompleted,
                 onOpen: _openTask,
-                onDelete: controller.deleteItem,
+                rowFocusNode: _taskRowFocusNode,
+                headingFocusNode: _tasksHeadingFocus,
               ),
               _DestinationView.connections => SizedBox.shrink(),
               _DestinationView.activity => SizedBox.shrink(),
@@ -714,9 +726,74 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
     );
   }
 
+  FocusNode _taskRowFocusNode(String taskId) => _taskRowFocusNodes.putIfAbsent(
+    taskId,
+    () => FocusNode(debugLabel: 'task-row-$taskId'),
+  );
+
+  void _requestFocusAfterBuild(FocusNode focusNode) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && focusNode.canRequestFocus) focusNode.requestFocus();
+    });
+  }
+
   void _openTask(TaskItem task) {
-    setState(() => selectedTaskId = task.id);
+    final tasks =
+        controller.snapshot?.items.whereType<TaskItem>().toList() ??
+        const <TaskItem>[];
+    final index = tasks.indexWhere((candidate) => candidate.id == task.id);
+    setState(() {
+      selectedTaskId = task.id;
+      selectedTaskOrigin = destination;
+      selectedTaskOriginIndex = index < 0 ? null : index;
+    });
     _updateRefreshVisibility();
+  }
+
+  void _returnFromTaskDetail() {
+    final taskId = selectedTaskId;
+    final returnToTasks = selectedTaskOrigin == _DestinationView.tasks;
+    setState(() {
+      selectedTaskId = null;
+      selectedTaskOrigin = null;
+      selectedTaskOriginIndex = null;
+    });
+    _updateRefreshVisibility();
+    if (returnToTasks && taskId != null) {
+      _requestFocusAfterBuild(_taskRowFocusNode(taskId));
+    }
+  }
+
+  Future<bool> _deleteTaskFromDetail(TaskItem task) async {
+    final deleted = await controller.deleteItem(task);
+    if (!mounted || !deleted) return deleted;
+
+    final remainingTasks =
+        controller.snapshot?.items.whereType<TaskItem>().toList() ??
+        const <TaskItem>[];
+    final FocusNode? returnFocus;
+    if (selectedTaskOrigin == _DestinationView.tasks &&
+        controller.loadState != DayLoadState.failure) {
+      if (remainingTasks.isEmpty) {
+        returnFocus = _tasksHeadingFocus;
+      } else {
+        final index = (selectedTaskOriginIndex ?? 0)
+            .clamp(0, remainingTasks.length - 1)
+            .toInt();
+        returnFocus = _taskRowFocusNode(remainingTasks[index].id);
+      }
+    } else {
+      returnFocus = null;
+    }
+    _taskRowFocusNodes.remove(task.id)?.dispose();
+    setState(() {
+      selectedTaskId = null;
+      selectedTaskOrigin = null;
+      selectedTaskOriginIndex = null;
+    });
+    _updateRefreshVisibility();
+    if (returnFocus != null) _requestFocusAfterBuild(returnFocus);
+    return true;
   }
 
   void _selectDestination(_DestinationView value, {SourceRef? sourceRef}) {
@@ -725,6 +802,8 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       selectedConnectionSource = sourceRef;
       destination = value;
       selectedTaskId = null;
+      selectedTaskOrigin = null;
+      selectedTaskOriginIndex = null;
       if (value != _DestinationView.settings) {
         assistantFeatureSourceTarget = null;
         onAssistantFeatureConfigured = null;

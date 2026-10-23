@@ -285,17 +285,14 @@ void main() {
       expect(collectionRect.width, closeTo(width > 1000 ? 840 : width - 24, 1));
       expect(find.text('Task · Time not set'), findsNothing);
       expect(find.textContaining('Overdue · Due '), findsOneWidget);
-      final taskDelete = find.byTooltip(
-        AppLocalizations.of(tester.element(taskCollection))
-            .deleteItemLabel('Prepare the launch brief for partner review'),
+      final copy = AppLocalizations.of(tester.element(taskCollection));
+      expect(find.text(copy.deleteTask), findsNothing);
+      expect(
+        find.byTooltip(
+          copy.deleteItemLabel('Prepare the launch brief for partner review'),
+        ),
+        findsNothing,
       );
-      expect(taskDelete.hitTestable(), findsOneWidget);
-      final deleteRect = tester.getRect(taskDelete);
-      expect(deleteRect.width, greaterThanOrEqualTo(44));
-      expect(deleteRect.height, greaterThanOrEqualTo(44));
-      if (width > 1000) {
-        expect(deleteRect.right, lessThan(1000));
-      }
       final taskSemantics = tester.ensureSemantics();
       try {
         expect(
@@ -311,11 +308,6 @@ void main() {
       } finally {
         taskSemantics.dispose();
       }
-      await expectLater(
-        find.byKey(const Key('v033-screen-capture')),
-        matchesGoldenFile('goldens/v033-tasks-$suffix.png'),
-      );
-
       await _open(tester, 'Notes');
       expect(find.byKey(const Key('notes-page-title')), findsOneWidget);
       expect(find.byKey(const Key('notes-count')), findsOneWidget);

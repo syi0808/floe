@@ -217,6 +217,7 @@ final class FloeListRow extends StatelessWidget {
     this.leading,
     this.trailing,
     this.onPressed,
+    this.focusNode,
     super.key,
   });
 
@@ -225,6 +226,7 @@ final class FloeListRow extends StatelessWidget {
   final Widget? leading;
   final Widget? trailing;
   final VoidCallback? onPressed;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) => FloeSquircle(
@@ -233,6 +235,7 @@ final class FloeListRow extends StatelessWidget {
     borderWidth: 0,
     child: FloeButton.text(
       onPressed: onPressed,
+      focusNode: focusNode,
       style: const ButtonStyle(
         alignment: Alignment.centerLeft,
         padding: WidgetStatePropertyAll(EdgeInsets.all(FloeSpace.md)),

@@ -304,9 +304,9 @@ final class PersonalDayController extends ChangeNotifier {
     return succeeded ? acknowledged : null;
   }
 
-  Future<void> deleteItem(DayItem item) async {
+  Future<bool> deleteItem(DayItem item) async {
     final query = _query = _atCurrentTime(_query);
-    await _run(() async {
+    return _run(() async {
       final result = await _gateway.deleteItem(item, query);
       await _displayAfterMutation(result, query);
     });

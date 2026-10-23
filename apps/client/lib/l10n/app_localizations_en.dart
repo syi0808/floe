@@ -563,6 +563,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get delete => 'Delete';
 
   @override
+  String get deleteTask => 'Delete task';
+
+  @override
+  String get deletingTask => 'Deleting task';
+
+  @override
+  String get updatingTask => 'Updating task';
+
+  @override
   String get dismissCapture => 'Dismiss capture';
 
   @override
