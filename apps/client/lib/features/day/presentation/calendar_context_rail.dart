@@ -1,6 +1,7 @@
 import 'package:floe_client/app/floe_primitives.dart';
 import 'package:floe_client/features/day/presentation/calendar_layout.dart';
 import 'package:intl/intl.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:floe_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 
@@ -125,7 +126,7 @@ class CalendarCoverageDetails extends StatelessWidget {
         : !observationCurrent
         ? AppLocalizations.of(context).dayStatusNeedsRefresh
         : complete
-        ? 'Calendars synced for this date'
+        ? AppLocalizations.of(context).dayCalendarsSyncedForDate
         : coverage == null || coverage.sources.isEmpty
         ? AppLocalizations.of(context).dayCalendarStatusUnavailable
         : 'Some calendar data may be missing or out of date';
@@ -196,6 +197,54 @@ class CalendarCoverageDetails extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// A compact healthy-only entry to the existing full Calendar details view.
+/// Incomplete and unavailable coverage continues to use the prominent status.
+class CalendarHealthyDetailsButton extends StatelessWidget {
+  const CalendarHealthyDetailsButton({
+    super.key,
+    required this.onPressed,
+    this.compactLabel = false,
+  });
+
+  final VoidCallback onPressed;
+  final bool compactLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = AppLocalizations.of(context);
+    final fullLabel = copy.dayCalendarsSyncedForDate;
+    return Semantics(
+      key: const Key('day-calendar-healthy-details'),
+      label: fullLabel,
+      button: true,
+      onTap: onPressed,
+      child: ExcludeSemantics(
+        child: FloeTooltip(
+          message: fullLabel,
+          child: FloeButton.text(
+            onPressed: onPressed,
+            style: ButtonStyle(
+              foregroundColor: const WidgetStatePropertyAll(
+                FloeColor.textSecondary,
+              ),
+              padding: const WidgetStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: FloeSpace.sm, vertical: 8),
+              ),
+              minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+            ),
+            icon: Icon(LucideIcons.circleCheck, size: 16),
+            child: Text(
+              compactLabel
+                  ? copy.dayCalendarSyncedShort
+                  : copy.dayCalendarsSynced,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

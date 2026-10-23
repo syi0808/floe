@@ -218,26 +218,32 @@ class _DayToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final copy = AppLocalizations.of(context);
+    final fullDate = _date(context, controller.query.date);
+    final dateStyle = DefaultTextStyle.of(context).style
+        .merge(FloeType.headline);
+    final shortDate = DateFormat.MMMd(copy.localeName)
+        .format(controller.query.date);
+    double measureDate(String value) {
+      final painter = TextPainter(
+        text: TextSpan(text: value, style: dateStyle),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        locale: Localizations.localeOf(context),
+        maxLines: 1,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }
+
+    final fullDateWidth = measureDate(fullDate);
+    final shortDateWidth = measureDate(shortDate);
     final date = LayoutBuilder(
       builder: (context, constraints) {
-        final fullDate = _date(context, controller.query.date);
-        final dateStyle = DefaultTextStyle.of(context).style
-            .merge(FloeType.headline);
-        final fullDatePainter = TextPainter(
-          text: TextSpan(text: fullDate, style: dateStyle),
-          textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context),
-          locale: Localizations.localeOf(context),
-          maxLines: 1,
-        )..layout();
-        final fullDateFits = fullDatePainter.width <= constraints.maxWidth;
-        fullDatePainter.dispose();
+        final fullDateFits = fullDateWidth <= constraints.maxWidth;
         return Text(
           key: const Key('day-selected-date'),
-          fullDateFits
-              ? fullDate
-              : DateFormat.MMMd(AppLocalizations.of(context).localeName)
-                    .format(controller.query.date),
+          fullDateFits ? fullDate : shortDate,
           semanticsLabel: fullDate,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -246,6 +252,7 @@ class _DayToolbar extends StatelessWidget {
       },
     );
     final today = FloeButton.text(
+      key: const Key('day-go-today'),
       onPressed:
           DateUtils.isSameDay(controller.query.date, controller.query.now)
           ? null
@@ -265,6 +272,61 @@ class _DayToolbar extends StatelessWidget {
           ),
         ),
     ];
+    Widget dateNavigation() {
+      Widget arrow(int direction) => FloeButton.icon(
+        tooltip: direction == -1 ? copy.previousDay : copy.nextDay,
+        onPressed: () => controller.moveDay(direction),
+        constraints: const BoxConstraints.tightFor(width: 48, height: 48),
+        icon: Icon(
+          direction == -1 ? LucideIcons.chevronLeft : LucideIcons.chevronRight,
+          size: 20,
+        ),
+      );
+
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          const arrowWidth = 48.0;
+          const gap = 4.0;
+          final availableDateWidth =
+              (constraints.maxWidth - arrowWidth * 2 - gap * 2).clamp(
+                0.0,
+                double.infinity,
+              );
+          final displayDate = fullDateWidth <= availableDateWidth
+              ? fullDate
+              : shortDate;
+          final displayWidth =
+              (displayDate == fullDate ? fullDateWidth : shortDateWidth).clamp(
+                0.0,
+                availableDateWidth,
+              );
+          return SizedBox(
+            key: const Key('day-date-navigation'),
+            width: arrowWidth * 2 + gap * 2 + displayWidth,
+            child: Row(
+              children: [
+                arrow(-1),
+                const SizedBox(width: gap),
+                SizedBox(
+                  width: displayWidth,
+                  child: Text(
+                    key: const Key('day-selected-date'),
+                    displayDate,
+                    semanticsLabel: fullDate,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: dateStyle,
+                  ),
+                ),
+                const SizedBox(width: gap),
+                arrow(1),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
     final actions = [
       if (onCreateEvent != null)
         FloeButton.icon(
@@ -314,20 +376,24 @@ class _DayToolbar extends StatelessWidget {
           ),
         ),
     ];
+    final needsToday = !DateUtils.isSameDay(
+      controller.query.date,
+      controller.query.now,
+    );
+    final compactActions = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [if (needsToday) today, ...actions],
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 8, bottom: 12),
       child: narrow
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(child: date),
-                    today,
-                  ],
-                ),
-                Row(children: [...arrows, const Spacer(), ...actions]),
-              ],
+          ? Wrap(
+              key: const Key('day-compact-toolbar'),
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 4,
+              runSpacing: 4,
+              children: [dateNavigation(), compactActions],
             )
           : Row(
               children: [

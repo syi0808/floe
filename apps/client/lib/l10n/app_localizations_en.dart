@@ -1561,6 +1561,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get dayCalendarStatusUnavailable => 'Calendar status unavailable';
 
   @override
+  String get dayCalendarsSynced => 'Calendars synced';
+
+  @override
+  String get dayCalendarsSyncedForDate => 'Calendars synced for this date';
+
+  @override
+  String get dayCalendarSyncedShort => 'Synced';
+
+  @override
   String get dayOtherEvents => 'Also today';
 
   @override

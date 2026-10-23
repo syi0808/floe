@@ -286,8 +286,8 @@ void main() {
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
       expect(find.byTooltip('Refresh calendar'), findsOneWidget);
 
-      // There is one Day details opener for this narrow Timeline destination.
-      final details = find.byTooltip('Tasks and calendar status');
+      // The quiet healthy disclosure opens the same full Day details view.
+      final details = find.byTooltip('Calendars synced for this date');
       expect(details, findsOneWidget);
       await tester.tap(details);
       await tester.pumpAndSettle();
@@ -330,7 +330,7 @@ void main() {
       expect(find.text('A little breathing room.'), findsOneWidget);
       expect(find.byKey(const Key('empty-day-status')), findsNothing);
       expect(find.byKey(const Key('day-status-warning')), findsNothing);
-      expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+      expect(find.byTooltip('Calendars synced for this date'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -640,7 +640,10 @@ void main() {
         expect(find.text('Synthetic event'), findsOneWidget);
         expect(find.byTooltip('Calendar status needs refresh'), findsNothing);
         expect(find.byKey(const Key('day-status-warning')), findsNothing);
-        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        expect(
+          find.byTooltip('Calendars synced for this date'),
+          findsOneWidget,
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       },
@@ -667,7 +670,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Synthetic event'), findsOneWidget);
-        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        expect(
+          find.byTooltip('Calendars synced for this date'),
+          findsOneWidget,
+        );
         gateway.failNextRefresh = true;
         await tester.tap(find.byTooltip('Refresh calendar'));
         await tester.pumpAndSettle();
@@ -711,7 +717,10 @@ void main() {
         expect(find.text('Synthetic event'), findsOneWidget);
         expect(find.byTooltip('Calendar status needs refresh'), findsNothing);
         expect(find.byKey(const Key('day-status-warning')), findsNothing);
-        expect(find.byTooltip('Tasks and calendar status'), findsOneWidget);
+        expect(
+          find.byTooltip('Calendars synced for this date'),
+          findsOneWidget,
+        );
         expect(tester.takeException(), isNull);
         await tester.pumpWidget(const SizedBox.shrink());
       },

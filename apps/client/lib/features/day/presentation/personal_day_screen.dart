@@ -517,6 +517,7 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
       builder: (context, constraints) {
         if (constraints.maxWidth <= 800) {
           final copy = AppLocalizations.of(context);
+          final largeText = MediaQuery.textScalerOf(context).scale(1) >= 1.5;
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -540,6 +541,11 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                                 : copy.daySchedule,
                             style: FloeType.title,
                           ),
+                          if (status.observationComplete && largeText)
+                            CalendarHealthyDetailsButton(
+                              compactLabel: true,
+                              onPressed: onDayDetails,
+                            ),
                           FloeButton.text(
                             onPressed: () => setState(
                               () => compactTimeline = !compactTimeline,
@@ -556,7 +562,13 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                                   : copy.dayTimeline,
                             ),
                           ),
-                          if (compactTimeline && !showToolbarStatus)
+                          if (status.observationComplete && !largeText)
+                            CalendarHealthyDetailsButton(
+                              onPressed: onDayDetails,
+                            ),
+                          if (compactTimeline &&
+                              !showToolbarStatus &&
+                              !status.observationComplete)
                             FloeButton.icon(
                               key: const Key('day-details-opener'),
                               tooltip: copy.dayDetails,
@@ -587,13 +599,15 @@ class _PersonalDayScreenState extends State<PersonalDayScreen>
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            CalendarCoverageDetails(
-                              observationCurrent:
-                                  controller.hasCurrentObservation,
-                              snapshot: snapshot,
-                              query: controller.query,
-                            ),
-                            const SizedBox(height: 16),
+                            if (!status.observationComplete) ...[
+                              CalendarCoverageDetails(
+                                observationCurrent:
+                                    controller.hasCurrentObservation,
+                                snapshot: snapshot,
+                                query: controller.query,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                             DayOverview(
                               observationCurrent:
                                   controller.hasCurrentObservation,

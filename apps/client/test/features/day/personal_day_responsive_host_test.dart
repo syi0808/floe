@@ -6,6 +6,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:floe_client/app/floe_app.dart';
+import 'package:floe_client/app/floe_button.dart';
 import 'package:floe_client/app/runtime/local_owner_gateways_scope.dart';
 import 'package:floe_client/app/runtime/runtime_controller.dart';
 import 'package:floe_client/app/runtime/runtime_gateway.dart';
@@ -395,21 +396,22 @@ void main() {
               expect(displayedDatePainter.width, lessThanOrEqualTo(dateWidth));
               displayedDatePainter.dispose();
 
-              final dayViewport = find.byKey(
-                const Key('personal-day-middle-viewport'),
-              );
-              final todayText = find.descendant(
-                of: dayViewport,
-                matching: find.text('Today'),
-              );
-              final toolbarToday = find
-                  .ancestor(of: todayText, matching: find.byType(TextButton))
-                  .first;
-              expect(
-                tester.widget<TextButton>(toolbarToday).onPressed == null,
-                isToday,
-                reason: 'toolbar Today is disabled only on the current day',
-              );
+              final toolbarToday = find.byKey(const Key('day-go-today'));
+              if (isToday) {
+                expect(
+                  toolbarToday,
+                  findsNothing,
+                  reason: 'omit the disabled redundant Today control',
+                );
+              } else {
+                expect(toolbarToday, findsOneWidget);
+                expect(
+                  tester.widget<FloeButton>(toolbarToday).onPressed,
+                  isNotNull,
+                  reason:
+                      'return-to-Today remains available off the current day',
+                );
+              }
             } finally {
               semantics.dispose();
             }

@@ -2782,6 +2782,24 @@ abstract class AppLocalizations {
   /// **'Calendar status unavailable'**
   String get dayCalendarStatusUnavailable;
 
+  /// No description provided for @dayCalendarsSynced.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars synced'**
+  String get dayCalendarsSynced;
+
+  /// No description provided for @dayCalendarsSyncedForDate.
+  ///
+  /// In en, this message translates to:
+  /// **'Calendars synced for this date'**
+  String get dayCalendarsSyncedForDate;
+
+  /// No description provided for @dayCalendarSyncedShort.
+  ///
+  /// In en, this message translates to:
+  /// **'Synced'**
+  String get dayCalendarSyncedShort;
+
   /// No description provided for @dayOtherEvents.
   ///
   /// In en, this message translates to:
