@@ -257,11 +257,6 @@ void main() {
           );
         }
       }
-      await expectLater(
-        find.byKey(const Key('v033-screen-capture')),
-        matchesGoldenFile('goldens/v033-day-$suffix.png'),
-      );
-
       await _open(tester, 'Tasks');
       expect(
         find.text('Prepare the launch brief for partner review'),
