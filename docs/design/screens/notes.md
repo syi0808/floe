@@ -39,6 +39,12 @@ Opening a note preserves the collection's query and scroll position. Back restor
 
 The current note projection carries the complete original content in `NoteItem.title`; it is not a separate heading. Render that exact content as selectable body text, preserving internal whitespace and newlines. Never substitute preview/appearance excerpts for the original. Derive a short first-line heading and at most three preview lines for collection cards without modifying the stored content. Do not show unsupported editing controls or placeholder editing explanations.
 
+## Capture surface
+
+Use a bounded 640px compose dialog on wide layouts, with a quiet `New note` title, a flexible writing area and a compact Cancel/Save footer. On narrow layouts, use a full-page surface with the writing area filling the space between the title and actions. Keep the actions above the on-screen keyboard; allow them to wrap at large text sizes. Respect reduced-motion preferences and preserve the existing pending-save close guard and retry behavior.
+
+Keep the composer as one unsplit body field. Do not infer a heading or display creation-date metadata before save. The existing post-save feedback remains the authority for the note's actual creation day.
+
 New notes keep their actual creation timestamp, even while another display day is selected. After saving outside the current day view, confirm that the note belongs to today and offer an explicit `View notes` action. Never silently backdate a note or change the selected day before the user chooses that action.
 
 ## States
@@ -55,3 +61,4 @@ New notes keep their actual creation timestamp, even while another display day i
 - Screen readers announce a bounded heading/excerpt preview and an open action, not the entire hidden note body. The reader exposes the complete original.
 - Note cards contain no proactive assistant overlays.
 - Keyboard navigation follows visual order at every responsive column count.
+- At 320px and 200% text, the composer body and Cancel/Save actions remain reachable above the on-screen keyboard.

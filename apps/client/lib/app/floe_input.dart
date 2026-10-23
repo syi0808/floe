@@ -24,6 +24,8 @@ class FloeInput extends StatelessWidget {
     this.obscureText = false,
     this.minLines,
     this.maxLines = 1,
+    this.expands = false,
+    this.textAlignVertical,
     this.inputFormatters,
     this.onChanged,
     this.onSubmitted,
@@ -51,6 +53,8 @@ class FloeInput extends StatelessWidget {
   final bool obscureText;
   final int? minLines;
   final int? maxLines;
+  final bool expands;
+  final TextAlignVertical? textAlignVertical;
   final List<TextInputFormatter>? inputFormatters;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
@@ -74,6 +78,8 @@ class FloeInput extends StatelessWidget {
     obscureText: obscureText,
     minLines: minLines,
     maxLines: maxLines,
+    expands: expands,
+    textAlignVertical: textAlignVertical,
     inputFormatters: inputFormatters,
     onChanged: onChanged,
     onFieldSubmitted: onSubmitted,

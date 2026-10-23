@@ -36,10 +36,10 @@ class _NotesScreenState extends State<_NotesScreen> {
           ?.writeState(context, search.text, identifier: 'notes-search');
 
   Future<void> _create() async {
-    final saved = await showFloeDialog<bool>(
-      context,
-      (context) => _NewNoteDialog(save: widget.onCreate),
-      barrierDismissible: false,
+    final saved = await _showNewNoteComposer(
+      context: context,
+      narrow: widget.narrow,
+      save: widget.onCreate,
     );
     if (saved == true && mounted) {
       setState(() {
@@ -136,6 +136,7 @@ class _NotesScreenState extends State<_NotesScreen> {
       ),
     );
     final create = FloeButton.filled(
+      key: const Key('notes-new-note'),
       onPressed: widget.pending ? null : _create,
       loading: widget.pending,
       icon: Icon(LucideIcons.plus, size: 18),
@@ -248,15 +249,43 @@ class _NotesScreenState extends State<_NotesScreen> {
   }
 }
 
-class _NewNoteDialog extends StatefulWidget {
-  const _NewNoteDialog({required this.save});
-  final Future<bool> Function(String) save;
+Future<bool?> _showNewNoteComposer({
+  required BuildContext context,
+  required bool narrow,
+  required Future<bool> Function(String) save,
+}) {
+  Widget page(BuildContext context) =>
+      _NewNoteComposer(save: save, fullPage: true);
 
-  @override
-  State<_NewNoteDialog> createState() => _NewNoteDialogState();
+  if (!narrow) {
+    return showFloeDialog<bool>(
+      context,
+      (context) => _NewNoteComposer(save: save),
+      barrierDismissible: false,
+    );
+  }
+
+  final route = FloeMotion.reduceMotion(context)
+      ? PageRouteBuilder<bool>(
+          pageBuilder: (context, _, _) => page(context),
+          transitionDuration: Duration.zero,
+          reverseTransitionDuration: Duration.zero,
+          fullscreenDialog: true,
+        )
+      : MaterialPageRoute<bool>(builder: page, fullscreenDialog: true);
+  return Navigator.of(context).push(route);
 }
 
-class _NewNoteDialogState extends State<_NewNoteDialog> {
+class _NewNoteComposer extends StatefulWidget {
+  const _NewNoteComposer({required this.save, this.fullPage = false});
+  final Future<bool> Function(String) save;
+  final bool fullPage;
+
+  @override
+  State<_NewNoteComposer> createState() => _NewNoteComposerState();
+}
+
+class _NewNoteComposerState extends State<_NewNoteComposer> {
   final content = TextEditingController();
   bool pending = false;
   bool failed = false;
@@ -269,6 +298,7 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
 
   Future<void> _save() async {
     if (pending || content.text.trim().isEmpty) return;
+    final route = ModalRoute.of(context);
     setState(() {
       pending = true;
       failed = false;
@@ -276,7 +306,7 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
     final saved = await FloeLoading.run(() => widget.save(content.text.trim()));
     if (!mounted) return;
     if (saved) {
-      Navigator.pop(context, true);
+      _finishSave(route);
     } else {
       setState(() {
         pending = false;
@@ -285,40 +315,102 @@ class _NewNoteDialogState extends State<_NewNoteDialog> {
     }
   }
 
+  void _cancel() {
+    if (pending) return;
+    final route = ModalRoute.of(context);
+    if (route == null || !route.isCurrent) return;
+    Navigator.of(context).maybePop();
+  }
+
+  void _finishSave(ModalRoute<dynamic>? route) {
+    if (route == null || !route.isActive) return;
+    final navigator = Navigator.of(context);
+    if (route.isCurrent) {
+      navigator.pop(true);
+    } else {
+      // A save may finish while another route is above the composer. Remove
+      // this route by identity so a late completion never pops that newer page.
+      navigator.removeRoute(route, true);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: !pending,
-    child: FloeDialog(
-      title: Text(AppLocalizations.of(context).newNote),
-      content: SizedBox(
-        width: 420,
-        child: FloeInput(
-          key: Key('new-note-content'),
-          label: AppLocalizations.of(context).note,
-          controller: content,
-          autofocus: true,
-          enabled: !pending,
-          minLines: 3,
-          maxLines: 8,
-          onChanged: (_) => setState(() {}),
-          errorText: failed
-              ? AppLocalizations.of(context).couldNotSavePleaseTryAgain
-              : null,
-        ),
+  Widget build(BuildContext context) {
+    final copy = AppLocalizations.of(context);
+    final input = FloeInput(
+      key: const Key('new-note-content'),
+      label: copy.note,
+      controller: content,
+      autofocus: true,
+      enabled: !pending,
+      minLines: widget.fullPage ? null : 3,
+      maxLines: widget.fullPage ? null : 8,
+      expands: widget.fullPage,
+      textAlignVertical: widget.fullPage ? TextAlignVertical.top : null,
+      onChanged: (_) => setState(() {}),
+      errorText: failed ? copy.couldNotSavePleaseTryAgain : null,
+    );
+    final actions = [
+      FloeButton.text(
+        key: const Key('new-note-cancel'),
+        onPressed: pending ? null : _cancel,
+        child: Text(copy.cancel),
       ),
-      actions: [
-        FloeButton.text(
-          onPressed: pending ? null : () => Navigator.pop(context),
-          child: Text(AppLocalizations.of(context).cancel),
-        ),
-        FloeButton.filled(
-          onPressed: pending || content.text.trim().isEmpty ? null : _save,
-          loading: pending,
-          child: Text(AppLocalizations.of(context).saveNote),
-        ),
-      ],
-    ),
-  );
+      FloeButton.filled(
+        key: const Key('new-note-save'),
+        onPressed: pending || content.text.trim().isEmpty ? null : _save,
+        loading: pending,
+        child: Text(copy.saveNote),
+      ),
+    ];
+    final Widget surface = widget.fullPage
+        ? Scaffold(
+            key: const Key('new-note-composer'),
+            backgroundColor: FloeColor.surface,
+            resizeToAvoidBottomInset: true,
+            body: SafeArea(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+                    child: Text(copy.newNote, style: FloeType.titleLarge),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                      child: input,
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: FloeSpace.sm,
+                      runSpacing: FloeSpace.sm,
+                      children: actions,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        : FloeDialog(
+            key: const Key('new-note-composer'),
+            title: Text(copy.newNote),
+            content: input,
+            actions: actions,
+            maxWidth: 640,
+          );
+
+    return PopScope(
+      canPop: !pending,
+      child: CallbackShortcuts(
+        bindings: {const SingleActivator(LogicalKeyboardKey.escape): _cancel},
+        child: surface,
+      ),
+    );
+  }
 }
 
 class _NotePreviewCard extends StatelessWidget {
@@ -488,16 +580,25 @@ class _NoteDetail extends StatelessWidget {
         ),
       ],
     );
-    if (fullPage) return content;
-    return FloeSquircle(
-      size: FloeSquircleSize.xl,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 640,
-          maxHeight: MediaQuery.sizeOf(context).height * .85,
-        ),
-        child: content,
-      ),
+    final Widget surface = fullPage
+        ? content
+        : FloeSquircle(
+            size: FloeSquircleSize.xl,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: 640,
+                maxHeight: MediaQuery.sizeOf(context).height * .85,
+              ),
+              child: content,
+            ),
+          );
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          unawaited(Navigator.of(context).maybePop());
+        },
+      },
+      child: Focus(autofocus: true, child: surface),
     );
   }
 }
